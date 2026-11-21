@@ -291,12 +291,7 @@ async function edit(db:PoolClient,ctx:MutationContext,id:string,input:OrderInput
   const t=ctx.installationId,b=input.branchId,o=await lockOrder(db,t,b,id);
   requireRevision(ctx.expectedRevision,Number(o.revision));
   if(o.status==="CANCELLED")throw new SalesError(409,"ORDER_CANCELLED");
-  // Active warehouse demand blocks commercial amendment/cancellation until released.
-  // SELECT FOR SHARE on Sales Order in reservation creation serializes this check.
-  const active=await db.query(
-    "SELECT 1 FROM inventory_reservation WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3 AND state='ACTIVE' LIMIT 1",
-    [t,b,id]);
-  if(active.rowCount)throw new SalesError(409,"ACTIVE_STOCK_RESERVATION");
+
   const v=o.current_version;
   const state=await db.query<{state:string}>(`SELECT state FROM sales_order_version
     WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3 AND version_no=$4 FOR UPDATE`,
@@ -429,6 +424,12 @@ async function cancel(db:PoolClient,ctx:MutationContext,id:string,b:string,reaso
   const t=ctx.installationId,o=await lockOrder(db,t,b,id);
   requireRevision(ctx.expectedRevision,Number(o.revision));
   if(o.status==="CANCELLED")throw new SalesError(409,"ORDER_CANCELLED");
+  // Active warehouse demand blocks commercial amendment/cancellation until released.
+  // SELECT FOR SHARE on Sales Order in reservation creation serializes this check.
+  const active=await db.query(
+    "SELECT 1 FROM inventory_reservation WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3 AND state='ACTIVE' LIMIT 1",
+    [t,b,id]);
+  if(active.rowCount)throw new SalesError(409,"ACTIVE_STOCK_RESERVATION");
   if(o.fulfillment_status!=="NOT_ALLOCATED"||o.delivery_status!=="NOT_DISPATCHED"||
     o.payment_status!=="NOT_DUE")throw new SalesError(409,"ORDER_ALREADY_EXECUTING");
   await db.query(`UPDATE sales_order_version SET state='CANCELLED'
