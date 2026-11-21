@@ -16,8 +16,9 @@ class SalesWorkspace extends StatefulWidget {
 class _OrderLine {
   String sellSkuId;
   final TextEditingController quantity;
+  final FocusNode quantityFocus=FocusNode();
   _OrderLine(this.sellSkuId,String value):quantity=TextEditingController(text:value);
-  void dispose()=>quantity.dispose();
+  void dispose(){quantity.dispose();quantityFocus.dispose();}
 }
 class _SalesWorkspaceState extends State<SalesWorkspace> {
   List<Map<String,dynamic>> branches=[],orders=[];
@@ -267,9 +268,16 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       skuSearch.clear();
       skuSearchGeneration++;
       skuResultsFor=null;
-      skuFocus.requestFocus();
       skuMatches=[];
       invalidate(refresh);
+      // Fast entry: select the new row's quantity, not the search field.
+      final selectedLine=lines.last;
+      WidgetsBinding.instance.addPostFrameCallback((_){
+        if(selectedLine.quantityFocus.context==null)return;
+        selectedLine.quantityFocus.requestFocus();
+        selectedLine.quantity.selection=TextSelection(
+          baseOffset:0,extentOffset:selectedLine.quantity.text.length);
+      });
     }
     Future<void> findSkus(BuildContext ctx,StateSetter refresh,{bool addOnEnter=false})async{
       final term=skuSearch.text.trim();
@@ -523,73 +531,92 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       ]),
                     ),
                     const SizedBox(height:12),
-                    for(var i=0;i<lines.length;i++)Padding(
-                      padding:const EdgeInsets.only(bottom:10),
-                      child:Container(
-                        padding:const EdgeInsets.all(10),
-                        decoration:BoxDecoration(
-                          color:i.isEven?ErpTokens.mint:Colors.white,
-                          border:Border.all(color:ErpTokens.border),
-                          borderRadius:BorderRadius.circular(6)),
-                        child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
-                          if(narrow)Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
-                            DropdownButtonFormField<String>(
-                              key:ValueKey('sales-product-'+i.toString()+'-'+lines[i].sellSkuId),
-                              initialValue:lines[i].sellSkuId,isExpanded:true,
-                              decoration:InputDecoration(labelText:'SKU / Đơn vị · dòng '+(i+1).toString()),
-                              items:skus.map((x)=>DropdownMenuItem<String>(
-                                value:x['id'] as String,
-                                child:Text(skuLabel(x),overflow:TextOverflow.ellipsis))).toList(),
-                              onChanged:(v){if(v!=null){
-                                lines[i].sellSkuId=v;starterUntouched=false;invalidate(refresh);
-                              }}),
-                            const SizedBox(height:7),
+                    if(lines.isNotEmpty&&!narrow)Padding(
+                      padding:const EdgeInsets.symmetric(horizontal:8,vertical:7),
+                      child:Row(children:[
+                        const Expanded(flex:5,child:Text('HÀNG HÓA / SKU',
+                          style:TextStyle(fontWeight:FontWeight.w700,fontSize:11,color:ErpTokens.muted))),
+                        const SizedBox(width:60,child:Text('ĐVT',style:TextStyle(fontSize:11,color:ErpTokens.muted))),
+                        const SizedBox(width:112,child:Text('SỐ LƯỢNG',style:TextStyle(fontSize:11,color:ErpTokens.muted))),
+                        const SizedBox(width:112,child:Text('ĐƠN GIÁ',textAlign:TextAlign.right,
+                          style:TextStyle(fontSize:11,color:ErpTokens.muted))),
+                        const SizedBox(width:130,child:Text('THÀNH TIỀN',textAlign:TextAlign.right,
+                          style:TextStyle(fontSize:11,color:ErpTokens.muted))),
+                        const SizedBox(width:42),
+                      ])),
+                    for(var i=0;i<lines.length;i++)Builder(builder:(rowContext){
+                      final entry=lines[i];
+                      final sku=skus.firstWhere((x)=>x['id']==entry.sellSkuId);
+                      final name=(sku['productName']??sku['name']??'Sản phẩm').toString();
+                      final code=(sku['code']??sku['sku']??'').toString();
+                      final unit=(sku['unitCode']??'').toString();
+                      final quote=ready&&i<quotes!.length?quotes![i]:null;
+                      final price=quote==null?'—':money(quote['unitPrice']);
+                      final lineTotal=quote==null?'—':money(quote['lineTotal']);
+                      final productName=Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+                        Text(name,style:const TextStyle(color:ErpTokens.ink,fontWeight:FontWeight.w700),
+                          maxLines:2,overflow:TextOverflow.ellipsis),
+                        Text('SKU $code',style:const TextStyle(color:ErpTokens.muted,fontSize:12),
+                          maxLines:1,overflow:TextOverflow.ellipsis),
+                      ]);
+                      final quantityField=SizedBox(width:narrow?118:100,
+                        child:TextField(
+                          key:ValueKey('sales-qty-$i'),
+                          controller:entry.quantity,focusNode:entry.quantityFocus,
+                          onTap:()=>entry.quantity.selection=TextSelection(
+                            baseOffset:0,extentOffset:entry.quantity.text.length),
+                          onChanged:(_)=>invalidate(refresh),
+                          onSubmitted:(_)=>skuFocus.requestFocus(),
+                          keyboardType:const TextInputType.numberWithOptions(decimal:true),
+                          textInputAction:TextInputAction.next,
+                          textAlign:TextAlign.center,
+                          decoration:const InputDecoration(
+                            isDense:true,labelText:'Số lượng',
+                            border:UnderlineInputBorder(),
+                            contentPadding:EdgeInsets.symmetric(horizontal:4,vertical:8)),
+                        ));
+                      final remove=IconButton(
+                        key:ValueKey('sales-remove-$i'),
+                        tooltip:'Bỏ dòng hàng',
+                        onPressed:(){lines.removeAt(i).dispose();invalidate(refresh);},
+                        icon:const Icon(Icons.close,size:18,color:ErpTokens.muted));
+                      return Container(
+                        key:ValueKey('sales-line-$i'),
+                        padding:const EdgeInsets.symmetric(horizontal:8,vertical:9),
+                        decoration:const BoxDecoration(
+                          border:Border(bottom:BorderSide(color:ErpTokens.border))),
+                        child:narrow?
+                          Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
                             Row(children:[
-                              Expanded(child:TextField(
-                                key:ValueKey('sales-qty-'+i.toString()),controller:lines[i].quantity,
-                                onChanged:(_){starterUntouched=false;invalidate(refresh);},
-                                keyboardType:const TextInputType.numberWithOptions(decimal:true),
-                                decoration:const InputDecoration(labelText:'Số lượng'))),
-                              IconButton(tooltip:'Bỏ dòng hàng',onPressed:lines.length==1?null:(){
-                                lines.removeAt(i).dispose();invalidate(refresh);
-                              },icon:const Icon(Icons.remove_circle_outline)),
+                              Text((i+1).toString()+'. ',style:const TextStyle(color:ErpTokens.muted)),
+                              Expanded(child:productName),
+                              remove,
                             ]),
-                          ])else Row(children:[
-                            Expanded(child:DropdownButtonFormField<String>(
-                              key:ValueKey('sales-product-'+i.toString()+'-'+lines[i].sellSkuId),
-                              initialValue:lines[i].sellSkuId,isExpanded:true,
-                              decoration:InputDecoration(labelText:'SKU / Đơn vị · dòng '+(i+1).toString()),
-                              items:skus.map((x)=>DropdownMenuItem<String>(
-                                value:x['id'] as String,
-                                child:Text(skuLabel(x),overflow:TextOverflow.ellipsis))).toList(),
-                              onChanged:(v){if(v!=null){
-                                lines[i].sellSkuId=v;starterUntouched=false;invalidate(refresh);
-                              }})),
-                            const SizedBox(width:8),
-                            SizedBox(width:130,child:TextField(
-                              key:ValueKey('sales-qty-'+i.toString()),controller:lines[i].quantity,
-                              onChanged:(_){starterUntouched=false;invalidate(refresh);},
-                              keyboardType:const TextInputType.numberWithOptions(decimal:true),
-                              decoration:const InputDecoration(labelText:'Số lượng'))),
-                            IconButton(tooltip:'Bỏ dòng hàng',onPressed:lines.length==1?null:(){
-                              lines.removeAt(i).dispose();invalidate(refresh);
-                            },icon:const Icon(Icons.remove_circle_outline)),
+                            const SizedBox(height:5),
+                            Row(children:[
+                              Text(unit,style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
+                              const SizedBox(width:12),
+                              quantityField,
+                              const Spacer(),
+                              Column(crossAxisAlignment:CrossAxisAlignment.end,children:[
+                                Text(price,style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
+                                Text(lineTotal,style:const TextStyle(
+                                  color:ErpTokens.ink,fontWeight:FontWeight.w800)),
+                              ]),
+                            ]),
+                          ]):
+                          Row(children:[
+                            Expanded(flex:5,child:productName),
+                            SizedBox(width:60,child:Text(unit,
+                              style:const TextStyle(color:ErpTokens.muted))),
+                            SizedBox(width:112,child:quantityField),
+                            SizedBox(width:112,child:Text(price,textAlign:TextAlign.right)),
+                            SizedBox(width:130,child:Text(lineTotal,textAlign:TextAlign.right,
+                              style:const TextStyle(fontWeight:FontWeight.w800))),
+                            SizedBox(width:42,child:remove),
                           ]),
-                          if(ready&&i<quotes!.length)Padding(
-                            padding:const EdgeInsets.only(top:7),
-                            child:Wrap(spacing:16,runSpacing:5,children:[
-                              Text('Đơn giá: '+money(quotes![i]['unitPrice']),
-                                style:const TextStyle(color:ErpTokens.ink,fontWeight:FontWeight.w700)),
-                              Text('Thành tiền: '+money(quotes![i]['lineTotal']),
-                                style:const TextStyle(color:ErpTokens.ink,fontWeight:FontWeight.w700)),
-                              Text('Quy đổi: '+(quotes![i]['normalizedBaseQuantity']??'').toString(),
-                                style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
-                              Text('Nguồn giá: '+((quotes![i]['trace'] as List?)?.length??0).toString()+' quy tắc',
-                                style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
-                            ]),
-                          ),
-                        ]),
-                      )),
+                      );
+                    }),
                     if(lines.isEmpty)const Padding(
                       padding:EdgeInsets.symmetric(vertical:12),
                       child:Text('Chưa có dòng hàng. Tìm theo mã, tên hoặc barcode rồi nhấn Enter để thêm.',
