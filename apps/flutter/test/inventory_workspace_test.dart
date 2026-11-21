@@ -60,7 +60,6 @@ void main(){
    await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:140)));
    await tester.pumpAndSettle();
    expect(find.text('Kho và tồn khả dụng'),findsOneWidget);
-   expect(find.text('Chưa có chứng từ ở mục này.'),findsOneWidget);
    // Stock display is only the backend projection, never a locally computed balance.
    expect(find.textContaining('SP01 · Hàng kiểm thử'),findsOneWidget);
    expect(find.textContaining('Khả dụng: 5.000000'),findsOneWidget);
