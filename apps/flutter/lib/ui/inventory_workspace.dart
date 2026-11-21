@@ -147,7 +147,7 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
       catch(_){notify('Không tìm được sản phẩm. Vui lòng thử lại.',bad:true);}
     }
     try{
-      final selection=await showDialog<Map<String,String>>(context:context,
+      final route=DialogRoute<Map<String,String>>(context:context,
         builder:(dctx)=>StatefulBuilder(builder:(dctx,refresh)=>AlertDialog(
           title:const Text('Ghi tồn đầu kỳ'),
           content:SizedBox(width:420,child:Column(mainAxisSize:MainAxisSize.min,children:[
@@ -180,6 +180,8 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
               'product':product!,'quantity':qty.text.trim()}),
               child:const Text('Xác nhận'))],
         )));
+      final selection=await Navigator.of(context,rootNavigator:true).push(route);
+      await route.completed; // Release controllers only after the dialog's exit animation.
       if(selection==null)return;
       final amount=selection['quantity']??'';
       if(!RegExp(r'^(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,6})?$').hasMatch(amount)||
@@ -217,7 +219,7 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
     }
     String? picked;
     try{
-      picked=await showDialog<String>(context:context,builder:(ctx)=>
+      final route=DialogRoute<String>(context:context,builder:(ctx)=>
         StatefulBuilder(builder:(ctx,refresh)=>AlertDialog(
           title:const Text('Chọn đơn để giữ hàng'),
           content:SizedBox(width:440,child:Column(
@@ -247,6 +249,8 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
             FilledButton(onPressed:chosen==null?null:()=>Navigator.pop(ctx,chosen),
               child:const Text('Tiếp tục'))],
         )));
+      picked=await Navigator.of(context,rootNavigator:true).push(route);
+      await route.completed; // The search field is no longer mounted.
     }finally{search.dispose();}
     if(picked==null)return;
     Map<String,dynamic> detail;
