@@ -116,6 +116,17 @@ test("R3 real PostgreSQL: on-hand, hold, release, no oversell, exact replay, RBA
   assert.equal(stock.body.items[0].onHand,"5.000000");
   assert.equal(stock.body.items[0].reserved,"3.000000");
   assert.equal(stock.body.items[0].available,"2.000000");
+  // Database-level guard protects against bypassing the HTTP posting service.
+  await assert.rejects(pool.query(
+   `INSERT INTO inventory_reservation (installation_id,branch_id,warehouse_id,
+     product_id,order_id,version_no,line_no,quantity_base,actor_id,request_id)
+     VALUES($1,$2,$3,$4,$5,1,1,3,$6,'direct-stock-test')`,
+   [t,b,w,productId,orders[loser]!,root.actorId]),/exceeds available stock/i);
+  await assert.rejects(pool.query(
+   `INSERT INTO inventory_ledger (installation_id,branch_id,warehouse_id,product_id,
+     kind,source_type,source_id,source_line,delta_base,actor_id,request_id)
+     VALUES($1,$2,$3,$4,'ISSUE','FULFILLMENT',$5,1,-3,$6,'direct-issue-test')`,
+   [t,b,w,productId,randomUUID(),root.actorId]),/insufficient available stock/i);
   const heldOrder=orders[winner]!;
   assert.equal((await make("/v1/sales/orders/"+heldOrder+"/amend",
    {branchId:b,reason:"Change planned order"},1)).status,409);
@@ -128,7 +139,7 @@ test("R3 real PostgreSQL: on-hand, hold, release, no oversell, exact replay, RBA
   const releaseKey="release-"+randomUUID();
   const released=await make(releasePath,{branchId:b,warehouseId:w},0,releaseKey);
   assert.equal(released.status,200,JSON.stringify(released.body));
-  assert.equal(released.body.stock.reserved,"0");
+  assert.equal(released.body.stock.reserved,"0.000000");
   assert.equal((await make(releasePath,{branchId:b,warehouseId:w},0,
    "different-release-"+randomUUID())).status,409);
   assert.deepEqual((await make(releasePath,{branchId:b,warehouseId:w},0,releaseKey)).body,
