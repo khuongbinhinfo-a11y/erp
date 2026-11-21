@@ -26,8 +26,21 @@ void main(){
          {'id':branch,'name':'Chi nhánh chính'}]}),200,headers:const {'content-type':'application/json; charset=utf-8'});
        if(req.url.path=='/v1/catalog/warehouses')return http.Response(jsonEncode({'items':[
          {'id':warehouse,'name':'Kho chính','branchId':branch}]}),200,headers:const {'content-type':'application/json; charset=utf-8'});
-       if(req.url.path=='/v1/catalog/products')return http.Response(jsonEncode({'items':[
-         {'id':product,'code':'SP01','name':'Hàng kiểm thử','active':true}]}),200,headers:const {'content-type':'application/json; charset=utf-8'});
+       if(req.url.path=='/v1/catalog/products'){
+         final q=req.url.queryParameters['q'];
+         return http.Response(jsonEncode({'items':[q=='SP101'
+           ?{'id':'00000000-0000-4000-8000-000000000101','code':'SP101',
+             'name':'Sản phẩm ngoài trang đầu','active':true}
+           :{'id':product,'code':'SP01','name':'Hàng kiểm thử','active':true}]}),
+           200,headers:const {'content-type':'application/json; charset=utf-8'});
+       }
+       if(req.url.path=='/v1/sales/orders'&&req.method=='GET'){
+         final q=req.url.queryParameters['q'];
+         return http.Response(jsonEncode({'items':q=='SO-OLD'?[
+           {'id':'00000000-0000-4000-8000-000000000102','documentNo':'SO-OLD',
+             'customerName':'Khách A','status':'CONFIRMED','versionStatus':'CONFIRMED'}
+         ]:[]}),200,headers:const {'content-type':'application/json; charset=utf-8'});
+       }
        if(req.url.path=='/v1/inventory/balances')return http.Response(jsonEncode({'items':onHand?[
          {'productId':product,'sku':'SP01','name':'Hàng kiểm thử',
           'onHand':'5.000000','reserved':'0.000000','available':'5.000000'}
@@ -55,6 +68,8 @@ void main(){
        const IdentityGrant(roleId:'a',permission:'inventory.read',
           branchId:branch,warehouseId:warehouse),
        const IdentityGrant(roleId:'b',permission:'inventory.post',
+          branchId:branch,warehouseId:warehouse),
+       const IdentityGrant(roleId:'c',permission:'inventory.reserve',
           branchId:branch,warehouseId:warehouse),
      ]);
    // Verify that the same mock transport returns canonical inventory data before mounting.
@@ -104,6 +119,40 @@ void main(){
      await tester.pumpAndSettle();
    }
    expect(find.text('Chưa có chứng từ ở mục này.'),findsOneWidget);
+   // Product beyond catalog's first 100 can be located by server-side SKU search.
+   await tester.tap(find.text('Tồn đầu kỳ'));
+   for(var i=0;i<3;i++){
+     await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:80)));
+     await tester.pumpAndSettle();
+   }
+   expect(find.text('Ghi tồn đầu kỳ'),findsOneWidget);
+   await tester.enterText(find.byKey(const ValueKey('inventory-product-search')),'SP101');
+   await tester.tap(find.byTooltip('Tìm sản phẩm'));
+   for(var i=0;i<3;i++){
+     await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:80)));
+     await tester.pumpAndSettle();
+   }
+   expect(find.text('SP101 · Sản phẩm ngoài trang đầu'),findsOneWidget);
+   await tester.tap(find.descendant(of:find.byType(AlertDialog),
+      matching:find.text('Đóng')));
+   await tester.pumpAndSettle();
+   // Confirmed order outside the initial capped listing is still reservable by number.
+   await tester.tap(find.text('Giữ hàng'));
+   for(var i=0;i<3;i++){
+     await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:80)));
+     await tester.pumpAndSettle();
+   }
+   expect(find.text('Không có đơn phù hợp. Nhập số đơn để tìm thêm.'),findsOneWidget);
+   await tester.enterText(find.byKey(const ValueKey('inventory-order-search')),'SO-OLD');
+   await tester.tap(find.byTooltip('Tìm đơn bán'));
+   for(var i=0;i<3;i++){
+     await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:80)));
+     await tester.pumpAndSettle();
+   }
+   expect(find.text('SO-OLD · Khách A'),findsOneWidget);
+   await tester.tap(find.descendant(of:find.byType(AlertDialog),
+      matching:find.text('Đóng')));
+   await tester.pumpAndSettle();
  });
 testWidgets('R3 paginates 101 ACTIVE holds separately from release history',
  (tester)async{
