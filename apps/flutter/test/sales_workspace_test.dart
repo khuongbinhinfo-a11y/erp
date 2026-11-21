@@ -314,6 +314,13 @@ void main(){
     expect(find.byKey(const ValueKey('sales-line-0')),findsOneWidget);
     expect(tester.widget<TextField>(find.byKey(const ValueKey('sales-qty-0')))
       .focusNode?.hasFocus,isTrue,reason:'Selecting a SKU must focus its quantity');
+    // Escape cannot silently discard a composed sale.
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.text('Bỏ thay đổi đơn hàng?'),findsOneWidget);
+    await tester.tap(find.text('Tiếp tục nhập'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('sales-line-0')),findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('sales-quote')));
     await tester.pumpAndSettle();
     await tester.runAsync(() async=>Future<void>.delayed(const Duration(milliseconds:120)));
