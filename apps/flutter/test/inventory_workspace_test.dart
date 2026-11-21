@@ -69,6 +69,9 @@ void main(){
    expect(calls,contains('/v1/inventory/balances'));
    expect(find.text('Kho và tồn khả dụng'),findsOneWidget);
    // Stock display is only the backend projection, never a locally computed balance.
+   // Synthetic UI debugging only; no real business data or credentials.
+   print('R3_TEST_RENDERED='+tester.widgetList<Text>(find.byType(Text))
+       .map((x)=>x.data).whereType<String>().take(25).toList().toString());
    expect(find.textContaining('SP01 · Hàng kiểm thử'),findsOneWidget);
    expect(find.textContaining('Khả dụng: 5.000000'),findsOneWidget);
    // A client preserves the immutable request body/key for a retry after lost ACK.
