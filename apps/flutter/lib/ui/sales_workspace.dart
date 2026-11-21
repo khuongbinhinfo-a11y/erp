@@ -190,6 +190,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       customer??'',list??'',channel??'',
       ...lines.map((x)=>x.sellSkuId+':'+x.quantity.text.trim()),
     ].join('|');
+    final originalStamp=stamp(),originalNote=note.text.trim();
     void invalidate(StateSetter refresh)=>refresh((){
       quotes=null;quotedStamp=null;previewGrandTotal=null;previewSubtotal=null;
       previewDiscountTotal=null;previewTaxTotal=null;formError=null;
@@ -363,6 +364,23 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         '_confirmAfterSave':confirm,
       });
     }
+    Future<void> requestClose(BuildContext ctx)async{
+      if(stamp()==originalStamp&&note.text.trim()==originalNote){
+        Navigator.pop(ctx);return;
+      }
+      final discard=await showDialog<bool>(context:ctx,builder:(confirmCtx)=>
+        AlertDialog(
+          title:const Text('Bỏ thay đổi đơn hàng?'),
+          content:const Text('Thông tin vừa nhập chưa được lưu.'),
+          actions:[
+            TextButton(onPressed:()=>Navigator.pop(confirmCtx,false),
+              child:const Text('Tiếp tục nhập')),
+            FilledButton(onPressed:()=>Navigator.pop(confirmCtx,true),
+              child:const Text('Bỏ thay đổi')),
+          ],
+        ));
+      if(discard==true&&ctx.mounted)Navigator.pop(ctx);
+    }
     try{
       return await showDialog<Map<String,dynamic>>(
         context:context,barrierDismissible:false,
@@ -385,9 +403,10 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                 baseOffset:0,extentOffset:customerSearch.text.length);
               return KeyEventResult.handled;
             }
-            if(event.logicalKey==LogicalKeyboardKey.escape&&
-              (skuMatches.isNotEmpty||customerMatches.isNotEmpty)){
-              refresh((){skuMatches=[];customerMatches=[];});
+            if(event.logicalKey==LogicalKeyboardKey.escape){
+              if(skuMatches.isNotEmpty||customerMatches.isNotEmpty){
+                refresh((){skuMatches=[];customerMatches=[];});
+              }else{requestClose(ctx);}
               return KeyEventResult.handled;
             }
             return KeyEventResult.ignored;
@@ -409,7 +428,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       Text('Chi nhánh đang chọn · Giá xác nhận từ máy chủ',
                         style:const TextStyle(color:Colors.white70,fontSize:12)),
                     ])),
-                    IconButton(tooltip:'Đóng',onPressed:()=>Navigator.pop(ctx),
+                    IconButton(tooltip:'Đóng',onPressed:()=>requestClose(ctx),
                       icon:const Icon(Icons.close,color:Colors.white)),
                   ]),
                 ),
@@ -745,7 +764,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         style:const TextStyle(color:ErpTokens.ink,fontSize:16,
                           fontWeight:FontWeight.w800)),
                       Wrap(spacing:8,runSpacing:7,children:[
-                        TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Đóng')),
+                        TextButton(onPressed:()=>requestClose(ctx),child:const Text('Đóng')),
                         OutlinedButton.icon(
                           key:const ValueKey('sales-quote'),
                           onPressed:quoteBusy?null:()=>preview(ctx,refresh),
