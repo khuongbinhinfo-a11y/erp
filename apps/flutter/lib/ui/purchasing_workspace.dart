@@ -389,10 +389,10 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
    if(loading)const LinearProgressIndicator(),
    if(!loading&&error==null&&orders.isEmpty)const Padding(
     padding:EdgeInsets.all(18),child:Text('Chưa có đơn mua tại kho này.')),
-()=>end+`
+   if(!loading&&error==null)for(final row in orders)orderLine(row),
    if(!loading&&error==null&&hasMore)
     TextButton(onPressed:loadingMore||busy?null:loadMore,
-      child:Text(loadingMore?'Đang tải tiếp...':'Tải thêm đơn mua')),`
+      child:Text(loadingMore?'Đang tải tiếp...':'Tải thêm đơn mua')),
   ]);
  }
 }
