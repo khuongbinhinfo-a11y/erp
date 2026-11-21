@@ -185,7 +185,11 @@ test("R3 real PostgreSQL: on-hand, hold, release, no oversell, exact replay, RBA
   assert.equal(releasedList.status,200);
   assert.equal(releasedList.body.items.length,100);
   assert.equal(releasedList.body.hasMore,true);
-  assert.equal(releasedList.body.items[0].id,accepted.body.id);
+  const releasedTail=await call("/v1/inventory/reservations?branchId="+b+
+    "&warehouseId="+w+"&state=RELEASED&offset=100","GET",undefined,token);
+  assert.equal(releasedTail.body.items.length,6);
+  assert.equal(releasedTail.body.items.some(
+    (x:Record<string,string>)=>x.id===accepted.body.id),true);
 
   assert.equal((await make(releasePath,{branchId:b,warehouseId:w},0,
    "different-release-"+randomUUID())).status,409);
