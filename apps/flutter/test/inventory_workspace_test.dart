@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
@@ -110,6 +111,8 @@ testWidgets('R3 paginates 101 ACTIVE holds separately from release history',
   const warehouse='00000000-0000-4000-8000-000000000002';
   const actor='00000000-0000-4000-8000-000000000003';
   final requests=<String>[];
+  Completer<http.Response>? staleSecondPage;
+  var delayNextPage=true;
   final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
     httpClient:MockClient((req)async{
       requests.add(req.url.toString());
@@ -138,8 +141,14 @@ testWidgets('R3 paginates 101 ACTIVE holds separately from release history',
               'sku':'SP01','quantityBase':'1','state':'ACTIVE'}]
           :List.generate(100,(i)=>{'id':'active$i','documentNo':'SO-$i',
               'sku':'SP01','quantityBase':'1','state':'ACTIVE'});
-        return http.Response(jsonEncode({'items':items,'hasMore':offset!='100'}),
-          200,headers:headers);
+        final response=http.Response(
+          jsonEncode({'items':items,'hasMore':offset!='100'}),200,headers:headers);
+        if(offset=='100'&&delayNextPage){
+          delayNextPage=false;
+          staleSecondPage=Completer<http.Response>();
+          return staleSecondPage!.future;
+        }
+        return response;
       }
       return http.Response(jsonEncode({'error':{'code':'NOT_FOUND'}}),404,headers:headers);
     }));
@@ -168,6 +177,28 @@ testWidgets('R3 paginates 101 ACTIVE holds separately from release history',
   expect(find.text('SO-99 · SP01'),findsOneWidget);
   expect(find.text('SO-100 · SP01'),findsNothing);
   final load=find.text('Tải thêm phiếu giữ hàng');
+  await tester.ensureVisible(load);
+  await tester.tap(load);
+  await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:80)));
+  await tester.pump();
+  expect(staleSecondPage,isNotNull);
+  // Refresh invalidates the older page request. Its late ACK must not lock load-more.
+  final refresh=find.byTooltip('Tải lại dữ liệu kho');
+  await tester.ensureVisible(refresh);
+  await tester.tap(refresh);
+  for(var i=0;i<3;i++){
+    await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:80)));
+    await tester.pumpAndSettle();
+  }
+  expect(tester.widget<TextButton>(
+    find.widgetWithText(TextButton,'Tải thêm phiếu giữ hàng')).onPressed,isNotNull);
+  staleSecondPage!.complete(http.Response(
+    jsonEncode({'items':[{'id':'stale','documentNo':'SO-STALE',
+      'sku':'SP01','quantityBase':'1','state':'ACTIVE'}],'hasMore':false}),
+    200,headers:const {'content-type':'application/json; charset=utf-8'}));
+  await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:80)));
+  await tester.pumpAndSettle();
+  expect(find.text('SO-STALE · SP01'),findsNothing);
   await tester.ensureVisible(load);
   await tester.tap(load);
   for(var i=0;i<4;i++){
