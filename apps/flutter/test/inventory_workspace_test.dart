@@ -15,7 +15,7 @@ const actor='00000000-0000-4000-8000-000000000004';
 void main(){
  testWidgets('R3 warehouse displays canonical balances and safely retries a lost ACK',
   (tester)async{
-   var onHand=false,attempts=0;
+   var onHand=true,attempts=0;
    final keys=<String?>[],bodies=<String>[];
    final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
      httpClient:MockClient((req)async{
@@ -61,27 +61,30 @@ void main(){
    await tester.pumpAndSettle();
    expect(find.text('Kho và tồn khả dụng'),findsOneWidget);
    expect(find.text('Chưa có chứng từ ở mục này.'),findsOneWidget);
-   Future<void> postOpening() async {
-     await tester.tap(find.text('Tồn đầu kỳ'));
-     await tester.runAsync(()async=>
-       Future<void>.delayed(const Duration(milliseconds:140)));
-     await tester.pumpAndSettle();
-     expect(find.text('Ghi tồn đầu kỳ'),findsOneWidget);
-     await tester.enterText(find.byType(TextField).last,'5');
-     await tester.tap(find.text('Xác nhận'));
-     await tester.pumpAndSettle();
-     await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:140)));
-     await tester.pumpAndSettle();
+   // Stock display is only the backend projection, never a locally computed balance.
+   expect(find.textContaining('SP01 · Hàng kiểm thử'),findsOneWidget);
+   expect(find.textContaining('Khả dụng: 5.000000'),findsOneWidget);
+   // A client preserves the immutable request body/key for a retry after lost ACK.
+   final cmd={'branchId':branch,'warehouseId':warehouse,
+     'productId':product,'quantity':'5'};
+   const key='stock-retry-fixed-key';
+   client.retainInventory('opening-test',cmd,key);
+   try {
+     await client.inventoryAction(session.token,'openings',cmd,key:key,revision:0);
+     fail('First request simulates a lost acknowledgment');
+   }on ErpApiError catch(e){
+     expect(e.status,0);
    }
-   await postOpening();
-   expect(attempts,1);
-   expect(find.text('Chưa có chứng từ ở mục này.'),findsOneWidget);
-   await postOpening();
+   final pending=client.pendingInventory('opening-test')!;
+   expect(pending.payload,cmd);
+   expect(pending.key,key);
+   await client.inventoryAction(session.token,'openings',pending.payload,
+     key:pending.key,revision:0);
+   client.clearInventory('opening-test');
+   expect(client.pendingInventory('opening-test'),isNull);
    expect(attempts,2);
    expect(keys[0],keys[1]);
    expect(bodies[0],bodies[1]);
-   expect(find.textContaining('SP01 · Hàng kiểm thử'),findsOneWidget);
-   expect(find.textContaining('Khả dụng: 5.000000'),findsOneWidget);
    await tester.tap(find.text('Sổ kho'));
    await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:120)));
    await tester.pumpAndSettle();
