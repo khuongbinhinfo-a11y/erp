@@ -303,9 +303,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         if(available.isEmpty)refresh(()=>
           formError='Không tìm thấy SKU đang bán. Kiểm tra mã hàng hoặc barcode.');
       }on ErpApiError catch(e){
-        if(ctx.mounted)refresh((){skuBusy=false;formError=e.message;});
+        if(ctx.mounted&&requestGeneration==skuSearchGeneration)refresh((){
+          skuBusy=false;formError=e.message;
+        });
       }catch(_){
-        if(ctx.mounted)refresh((){
+        if(ctx.mounted&&requestGeneration==skuSearchGeneration)refresh((){
           skuBusy=false;formError='Không tìm được sản phẩm. Vui lòng thử lại.';
         });
       }
@@ -503,7 +505,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       Expanded(child:DropdownButtonFormField<String>(
                         key:ValueKey('sales-customer-'+customer.toString()),
                         initialValue:customers.any((x)=>x['id']==customer)?customer:null,
-                        isExpanded:true,decoration:const InputDecoration(labelText:'Khách hàng'),
+                        isExpanded:true,decoration:const InputDecoration(labelText:'Khách hàng',border:UnderlineInputBorder()),
                         items:customers.map((x)=>DropdownMenuItem<String>(
                           value:x['id'] as String,
                           child:Text(customerLabel(x),overflow:TextOverflow.ellipsis))).toList(),
@@ -512,7 +514,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       Expanded(child:DropdownButtonFormField<String>(
                         key:ValueKey('sales-price-list-'+list.toString()),
                         initialValue:lists.any((x)=>x['id']==list)?list:null,
-                        isExpanded:true,decoration:const InputDecoration(labelText:'Bảng giá'),
+                        isExpanded:true,decoration:const InputDecoration(labelText:'Bảng giá',border:UnderlineInputBorder()),
                         items:lists.map((x)=>DropdownMenuItem<String>(
                           value:x['id'] as String,child:Text((x['name']??'').toString(),
                             overflow:TextOverflow.ellipsis))).toList(),
@@ -521,7 +523,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       Expanded(child:DropdownButtonFormField<String>(
                         key:ValueKey('sales-channel-'+channel.toString()),
                         initialValue:channels.any((x)=>x['id']==channel)?channel:null,
-                        isExpanded:true,decoration:const InputDecoration(labelText:'Kênh bán'),
+                        isExpanded:true,decoration:const InputDecoration(labelText:'Kênh bán',border:UnderlineInputBorder()),
                         items:[
                           const DropdownMenuItem<String>(value:null,child:Text('Bán trực tiếp')),
                           ...channels.map((x)=>DropdownMenuItem<String>(
@@ -533,7 +535,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       DropdownButtonFormField<String>(
                         key:ValueKey('sales-customer-'+customer.toString()),
                         initialValue:customers.any((x)=>x['id']==customer)?customer:null,
-                        isExpanded:true,decoration:const InputDecoration(labelText:'Khách hàng'),
+                        isExpanded:true,decoration:const InputDecoration(labelText:'Khách hàng',border:UnderlineInputBorder()),
                         items:customers.map((x)=>DropdownMenuItem<String>(
                           value:x['id'] as String,
                           child:Text(customerLabel(x),overflow:TextOverflow.ellipsis))).toList(),
@@ -542,7 +544,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       DropdownButtonFormField<String>(
                         key:ValueKey('sales-price-list-'+list.toString()),
                         initialValue:lists.any((x)=>x['id']==list)?list:null,
-                        isExpanded:true,decoration:const InputDecoration(labelText:'Bảng giá'),
+                        isExpanded:true,decoration:const InputDecoration(labelText:'Bảng giá',border:UnderlineInputBorder()),
                         items:lists.map((x)=>DropdownMenuItem<String>(
                           value:x['id'] as String,
                           child:Text((x['name']??'').toString(),overflow:TextOverflow.ellipsis))).toList(),
@@ -551,7 +553,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       DropdownButtonFormField<String>(
                         key:ValueKey('sales-channel-'+channel.toString()),
                         initialValue:channels.any((x)=>x['id']==channel)?channel:null,
-                        isExpanded:true,decoration:const InputDecoration(labelText:'Kênh bán'),
+                        isExpanded:true,decoration:const InputDecoration(labelText:'Kênh bán',border:UnderlineInputBorder()),
                         items:[
                           const DropdownMenuItem<String>(value:null,child:Text('Bán trực tiếp')),
                           ...channels.map((x)=>DropdownMenuItem<String>(
@@ -729,7 +731,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         style:TextStyle(color:ErpTokens.muted))),
                     const Divider(height:24),
                     TextField(controller:note,maxLines:2,
-                      decoration:const InputDecoration(labelText:'Ghi chú đơn hàng')),
+                      decoration:const InputDecoration(labelText:'Ghi chú đơn hàng',border:UnderlineInputBorder())),
                     const SizedBox(height:8),
                     const Text('Giá và thành tiền do máy chủ tính, kiểm tra lại khi xác nhận. Xác nhận đơn không tự xuất kho hoặc thu tiền.',
                       style:TextStyle(fontSize:12,color:ErpTokens.muted)),
