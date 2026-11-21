@@ -89,4 +89,89 @@ void main(){
   await tester.pump(const Duration(seconds:5));
   await tester.pumpAndSettle();
  });
+
+testWidgets('R3.2 replays the original receipt revision/key after 503 and PO revision change',
+ (tester)async{
+  var attempts=0;
+  final observedKeys=<String?>[];
+  final observedRevisions=<String?>[];
+  final observedBodies=<String>[];
+  final calls=<String>[];
+  final payload=<String,dynamic>{'branchId':branch,'warehouseId':warehouse,
+    'lines':[{'orderLineNo':1,'quantity':'2'}]};
+  final expectedPath='orders/$order/receipts';
+  const expectedKey='purchase-lost-ack-synthetic-key';
+  final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+   httpClient:MockClient((req)async{
+    calls.add(req.url.path);
+    const headers={'content-type':'application/json; charset=utf-8'};
+    if(req.url.path=='/v1/catalog/branches'){
+     return http.Response(jsonEncode({'items':[{'id':branch,'name':'Chi nhánh chính'}]}),
+       200,headers:headers);
+    }
+    if(req.url.path=='/v1/catalog/warehouses'){
+     return http.Response(jsonEncode({'items':[{'id':warehouse,'name':'Kho chính'}]}),
+       200,headers:headers);
+    }
+    if(req.url.path=='/v1/purchasing/orders'&&req.method=='GET'){
+     return http.Response(jsonEncode({'items':[{
+       'id':order,'documentNo':'PO-00000001','supplierName':'Nhà cung cấp A',
+       'warehouseId':warehouse,'status':'PARTIALLY_RECEIVED','revision':2,
+       'lineCount':1,'receiptCount':1}],'hasMore':false}),200,headers:headers);
+    }
+    if(req.url.path=='/v1/purchasing/$expectedPath'&&req.method=='POST'){
+     attempts++;observedKeys.add(req.headers['idempotency-key']);
+     observedRevisions.add(req.headers['if-match']);
+     observedBodies.add(req.body);
+     if(attempts==1)return http.Response(
+       jsonEncode({'error':{'code':'PURCHASE_UNAVAILABLE'}}),503,headers:headers);
+     return http.Response(jsonEncode({
+       'id':'00000000-0000-4000-8000-000000000011',
+       'purchaseRevision':2,'purchaseStatus':'PARTIALLY_RECEIVED','status':'POSTED'}),
+       201,headers:headers);
+    }
+    return http.Response(jsonEncode({'error':{'code':'NOT_FOUND'}}),404,headers:headers);
+   }));
+  addTearDown(client.dispose);
+  final scope='$actor:$branch:$warehouse';
+  client.retainPurchase(scope,payload,expectedKey,path:expectedPath,revision:1);
+  tester.view.devicePixelRatio=1;
+  tester.view.physicalSize=const Size(1280,900);
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
+  final session=IdentitySession(actorId:actor,token:'local-synthetic-token',
+    expiresAt:DateTime.now().add(const Duration(hours:1)),grants:const [
+      IdentityGrant(roleId:'a',permission:'purchase.read',branchId:branch),
+      IdentityGrant(roleId:'b',permission:'purchase.receive',
+        branchId:branch,warehouseId:warehouse),
+      IdentityGrant(roleId:'c',permission:'inventory.read',
+        branchId:branch,warehouseId:warehouse),
+    ]);
+  await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
+   home:Scaffold(body:SingleChildScrollView(
+     child:PurchasingWorkspace(client:client,session:session)))));
+  for(var i=0;i<5;i++){
+    await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:80)));
+    await tester.pumpAndSettle();
+  }
+  expect(find.text('Xác minh lệnh đang chờ'),findsOneWidget);
+  expect(find.text('Nhận hàng'),findsNothing);
+  await tester.tap(find.text('Xác minh lệnh đang chờ'));
+  await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:100)));
+  await tester.pumpAndSettle();
+  expect(attempts,1);
+  expect(client.pendingPurchase(scope),isNotNull);
+  await tester.tap(find.text('Xác minh lệnh đang chờ'));
+  await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:100)));
+  await tester.pumpAndSettle();
+  expect(attempts,2);
+  expect(observedKeys,[expectedKey,expectedKey]);
+  expect(observedRevisions,['1','1']);
+  expect(observedBodies[0],observedBodies[1]);
+  expect(jsonDecode(observedBodies[0]),payload);
+  expect(client.pendingPurchase(scope),isNull);
+  expect(calls.where((s)=>s=='/v1/purchasing/orders/$order').isEmpty,true);
+  await tester.pump(const Duration(seconds:5));
+  await tester.pumpAndSettle();
+});
 }

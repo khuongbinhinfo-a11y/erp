@@ -94,6 +94,26 @@ test("R3.2 PostgreSQL: multi-receipt, concurrent arrivals, exact replay, RBAC, r
   assert.equal(detail.status,200);
   assert.equal(detail.body.order.lines.length,2);
   assert.equal(detail.body.order.lines[0].orderedBase,"5.000000");
+  // Codex P2: 105 newer drafts must not hide an older confirmed PO awaiting goods.
+  await db.query(
+   `INSERT INTO purchase_order(installation_id,branch_id,supplier_id,warehouse_id,
+      created_by,request_id)
+    SELECT $1,$2,$3,$4,$5,('ci-seed-'||g::text)
+      FROM generate_series(1,105) AS g`,
+   [t,b,supplier.body.id,w,root.actorId]);
+  const pendingPage=await call("/v1/purchasing/orders?branchId="+b+
+    "&warehouseId="+w+"&offset=0","GET",undefined,token);
+  assert.equal(pendingPage.status,200);
+  assert.equal(pendingPage.body.items.length,100);
+  assert.equal(pendingPage.body.items[0].id,id);
+  assert.equal(pendingPage.body.hasMore,true);
+  const nextPage=await call("/v1/purchasing/orders?branchId="+b+
+    "&warehouseId="+w+"&offset=100","GET",undefined,token);
+  assert.equal(nextPage.status,200);
+  assert.equal(nextPage.body.items.length,6);
+  assert.equal(nextPage.body.hasMore,false);
+  assert.equal((await call("/v1/purchasing/orders?branchId="+b+
+    "&warehouseId="+w+"&offset=101","GET",undefined,token)).status,400);
   const receiptPath="/v1/purchasing/orders/"+id+"/receipts";
   const receipt1={branchId:b,warehouseId:w,lines:[{orderLineNo:1,quantity:"2"}]};
   const receiveKey="receipt-"+randomUUID();
