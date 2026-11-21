@@ -227,7 +227,7 @@ test("R3 real PostgreSQL: on-hand, hold, release, no oversell, exact replay, RBA
     {branchId:b})).status,200);
   const amended=await make("/v1/sales/orders/"+olderSale.body.id+"/amend",
     {branchId:b,reason:"Regression for 0010-only sales"},1);
-  assert.equal(amended.status,200,JSON.stringify(amended.body));
+  assert.equal(amended.status,201,JSON.stringify(amended.body));
   const cancelled=await make("/v1/sales/orders/"+olderSale.body.id+"/cancel",
     {branchId:b,reason:"Regression for 0010-only sales"},2);
   assert.equal(cancelled.status,200,JSON.stringify(cancelled.body));
