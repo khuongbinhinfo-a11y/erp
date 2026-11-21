@@ -774,11 +774,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           label:Text(quoteBusy?'Đang tra giá…':'Tra giá')),
                         FilledButton(
                           key:const ValueKey('sales-save'),
-                          onPressed:quoteBusy?null:()=>submitForm(ctx,refresh,confirm:false),
+                          onPressed:quoteBusy||!ready?null:()=>submitForm(ctx,refresh,confirm:false),
                           child:const Text('Lưu đơn hàng')),
                         if(can('orders.confirm'))FilledButton.icon(
                           key:const ValueKey('sales-save-confirm'),
-                          onPressed:quoteBusy?null:()=>submitForm(ctx,refresh,confirm:true),
+                          onPressed:quoteBusy||!ready?null:()=>submitForm(ctx,refresh,confirm:true),
                           icon:const Icon(Icons.verified_outlined),
                           label:const Text('Lưu và xác nhận')),
                       ]),
