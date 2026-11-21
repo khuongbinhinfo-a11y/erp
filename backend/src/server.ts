@@ -5,6 +5,7 @@ import { handleIdentityHttp, type IdentityOptions } from "./identity_http.ts";
 import { handleCatalogHttp } from "./catalog_http.ts";
 import { handleR1Http } from "./r1_catalog_http.ts";
 import { handleSalesHttp } from "./sales_http.ts";
+import { handleInventoryHttp } from "./inventory_http.ts";
 
 function requestId(req: IncomingMessage): string {
   const raw = req.headers["x-request-id"];
@@ -79,6 +80,10 @@ export function buildApp(
     }
     if (url.pathname.startsWith("/v1/catalog/")) {
       void handleCatalogHttp(req,res,id,url,identityOptions,checkReady);
+      return;
+    }
+    if (url.pathname.startsWith("/v1/inventory/")) {
+      void handleInventoryHttp(req,res,id,url,identityOptions,checkReady);
       return;
     }
     if (url.pathname.startsWith("/v1/sales/")) {
