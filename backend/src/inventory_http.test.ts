@@ -135,11 +135,58 @@ test("R3 real PostgreSQL: on-hand, hold, release, no oversell, exact replay, RBA
   const held=await call("/v1/inventory/reservations?branchId="+b+"&warehouseId="+w,
    "GET",undefined,token);
   assert.equal(held.status,200);assert.equal(held.body.items.length,1);
+  assert.equal(held.body.hasMore,false);
+  assert.equal(held.body.items[0].state,"ACTIVE");
+  // Regression for Codex P2: 105 newer RELEASED events must not conceal an old ACTIVE hold.
+  const smallOrder=await make("/v1/sales/orders",{...orderData,
+    lines:[{productId,quantity:"1"}]});
+  assert.equal(smallOrder.status,201,JSON.stringify(smallOrder.body));
+  assert.equal((await make("/v1/sales/orders/"+smallOrder.body.id+"/confirm",
+    {branchId:b})).status,200);
+  const setupInsert=`INSERT INTO inventory_reservation
+   (installation_id,branch_id,warehouse_id,product_id,order_id,
+    version_no,line_no,quantity_base,actor_id,request_id)
+   VALUES($1,$2,$3,$4,$5,1,1,1,$6,'history-fixture')
+   RETURNING id`;
+  for(let i=0;i<105;i++){
+    const id=(await pool.query<{id:string}>(setupInsert,
+     [t,b,w,productId,smallOrder.body.id,root.actorId])).rows[0]!.id;
+    await pool.query(
+     "UPDATE inventory_reservation SET state='RELEASED',revision=1,released_at=now() WHERE installation_id=$1 AND branch_id=$2 AND id=$3",
+     [t,b,id]);
+  }
+  const activePage=await call("/v1/inventory/reservations?branchId="+b+
+    "&warehouseId="+w+"&state=ACTIVE","GET",undefined,token);
+  assert.equal(activePage.status,200,JSON.stringify(activePage.body));
+  assert.equal(activePage.body.items.length,1);
+  assert.equal(activePage.body.items[0].id,accepted.body.id);
+  assert.equal(activePage.body.hasMore,false);
+  const historyPage=await call("/v1/inventory/reservations?branchId="+b+
+    "&warehouseId="+w+"&state=RELEASED","GET",undefined,token);
+  assert.equal(historyPage.status,200);
+  assert.equal(historyPage.body.items.length,100);
+  assert.equal(historyPage.body.hasMore,true);
+  const lastHistory=await call("/v1/inventory/reservations?branchId="+b+
+    "&warehouseId="+w+"&state=RELEASED&offset=100","GET",undefined,token);
+  assert.equal(lastHistory.status,200);
+  assert.equal(lastHistory.body.items.length,5);
+  assert.equal(lastHistory.body.hasMore,false);
+  const badPage=await call("/v1/inventory/reservations?branchId="+b+
+    "&warehouseId="+w+"&state=RELEASED&offset=-1","GET",undefined,token);
+  assert.equal(badPage.status,400);
+
   const releasePath="/v1/inventory/reservations/"+accepted.body.id+"/release";
   const releaseKey="release-"+randomUUID();
   const released=await make(releasePath,{branchId:b,warehouseId:w},0,releaseKey);
   assert.equal(released.status,200,JSON.stringify(released.body));
   assert.equal(released.body.stock.reserved,"0.000000");
+  const releasedList=await call("/v1/inventory/reservations?branchId="+b+
+    "&warehouseId="+w+"&state=RELEASED","GET",undefined,token);
+  assert.equal(releasedList.status,200);
+  assert.equal(releasedList.body.items.length,100);
+  assert.equal(releasedList.body.hasMore,true);
+  assert.equal(releasedList.body.items[0].id,accepted.body.id);
+
   assert.equal((await make(releasePath,{branchId:b,warehouseId:w},0,
    "different-release-"+randomUUID())).status,409);
   assert.deepEqual((await make(releasePath,{branchId:b,warehouseId:w},0,releaseKey)).body,

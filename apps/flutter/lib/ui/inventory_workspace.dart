@@ -14,8 +14,8 @@ class InventoryWorkspace extends StatefulWidget {
 class _InventoryWorkspaceState extends State<InventoryWorkspace> {
   List<Map<String,dynamic>> branches=[],warehouses=[],rows=[];
   String? branchId,warehouseId,error;
-  String tab='balances';
-  bool busy=false,loading=true;
+  String tab='balances',reservationState='ACTIVE';
+  bool busy=false,loading=true,loadingMore=false,hasMore=false;
   int serial=0;
   @override void initState(){super.initState();loadBranches();}
   @override void didUpdateWidget(covariant InventoryWorkspace old){
@@ -69,14 +69,41 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
     final b=branchId,w=warehouseId;if(b==null||w==null)return;
     final n=++serial;setState((){loading=true;error=null;});
     try{
-      final data=await widget.client.inventoryItems(widget.session.token,tab,
-        branchId:b,warehouseId:w);
-      if(mounted&&n==serial)setState((){rows=data;loading=false;});
+      if(tab=='reservations'){
+        final page=await widget.client.inventoryReservationPage(widget.session.token,
+          branchId:b,warehouseId:w,state:reservationState,offset:0);
+        if(mounted&&n==serial)setState((){
+          rows=page.items;hasMore=page.hasMore;loading=false;
+        });
+      }else{
+        final data=await widget.client.inventoryItems(widget.session.token,tab,
+          branchId:b,warehouseId:w);
+        if(mounted&&n==serial)setState((){
+          rows=data;hasMore=false;loading=false;
+        });
+      }
     }on ErpApiError catch(e){
       if(mounted&&n==serial)setState((){loading=false;error=e.message;});
     }catch(_){
       if(mounted&&n==serial)setState((){loading=false;error='Không tải được số liệu kho.';});
     }
+  }
+  Future<void> loadMore()async{
+    final b=branchId,w=warehouseId;
+    if(b==null||w==null||tab!='reservations'||!hasMore||loadingMore||loading)return;
+    final n=serial,scopeState=reservationState,offset=rows.length;
+    setState(()=>loadingMore=true);
+    try{
+      final page=await widget.client.inventoryReservationPage(widget.session.token,
+        branchId:b,warehouseId:w,state:scopeState,offset:offset);
+      if(mounted&&n==serial&&tab=='reservations'&&scopeState==reservationState){
+        setState((){
+          rows=[...rows,...page.items];hasMore=page.hasMore;loadingMore=false;
+        });
+      }
+    }on ErpApiError catch(e){
+      if(mounted&&n==serial)setState(()=>error=e.message);
+    }finally{if(mounted&&n==serial)setState(()=>loadingMore=false);}
   }
   Future<void> send(String action,Map<String,dynamic> body,
       {required String intent,int revision=0})async{
@@ -264,6 +291,11 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
             child:Text(t.$2,style:TextStyle(
               fontWeight:tab==t.$1?FontWeight.bold:FontWeight.normal,
               decoration:tab==t.$1?TextDecoration.underline:TextDecoration.none))),
+        if(tab=='reservations')
+          TextButton(onPressed:busy||loading?null:(){
+            setState(()=>reservationState=reservationState=='ACTIVE'?'RELEASED':'ACTIVE');
+            reload();
+          },child:Text(reservationState=='ACTIVE'?'Xem lịch sử đã giải phóng':'Xem hàng đang giữ')),
         if(can('inventory.post'))OutlinedButton.icon(
           onPressed:busy?null:openStock,icon:const Icon(Icons.add),
           label:const Text('Tồn đầu kỳ')),
@@ -281,6 +313,9 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
         const Padding(padding:EdgeInsets.all(18),child:Text('Chưa có chứng từ ở mục này.')),
       if(!loading&&error==null)
         for(final row in rows)line(row),
+      if(tab=='reservations'&&hasMore&&!loading&&error==null)
+        TextButton(onPressed:loadingMore||busy?null:loadMore,
+          child:Text(loadingMore?'Đang tải thêm...':'Tải thêm phiếu giữ hàng')),
     ]);
   }
 }
