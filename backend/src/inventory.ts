@@ -5,7 +5,11 @@ import { requireRevision } from "./mutation.ts";
 /** R3.1: warehouse locking serializes all stock/reservation writers in one scope.
  * The ledger is the sole stock authority, never a cached client balance. */
 export class InventoryFault extends Error {
-  constructor(readonly status:number, readonly code:string){super(code);}
+  readonly status:number;
+  readonly code:string;
+  constructor(status:number, code:string){
+    super(code);this.status=status;this.code=code;
+  }
 }
 export type WarehouseScope={branchId:string;warehouseId:string};
 export type OpeningInput=WarehouseScope&{productId:string;quantity:string};
