@@ -183,7 +183,8 @@ test("R3 real PostgreSQL: on-hand, hold, release, no oversell, exact replay, RBA
   const releasedList=await call("/v1/inventory/reservations?branchId="+b+
     "&warehouseId="+w+"&state=RELEASED","GET",undefined,token);
   assert.equal(releasedList.status,200);
-  assert.equal(releasedList.body.items.length,1);
+  assert.equal(releasedList.body.items.length,100);
+  assert.equal(releasedList.body.hasMore,true);
   assert.equal(releasedList.body.items[0].id,accepted.body.id);
 
   assert.equal((await make(releasePath,{branchId:b,warehouseId:w},0,
