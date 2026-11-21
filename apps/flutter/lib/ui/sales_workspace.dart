@@ -701,16 +701,25 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                               remove,
                             ]),
                             const SizedBox(height:5),
+                            // Keep quantity input on its own line: long
+                            // server-quoted amounts must not compete for
+                            // horizontal space on 320px/360px phones.
                             Row(children:[
-                              Text(unit,style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
+                              Flexible(child:Text(unit,maxLines:2,
+                                overflow:TextOverflow.ellipsis,
+                                style:const TextStyle(color:ErpTokens.muted,fontSize:12))),
                               const SizedBox(width:12),
                               quantityField,
-                              const Spacer(),
-                              Column(crossAxisAlignment:CrossAxisAlignment.end,children:[
-                                Text(price,style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
-                                Text(lineTotal,style:const TextStyle(
-                                  color:ErpTokens.ink,fontWeight:FontWeight.w800)),
-                              ]),
+                            ]),
+                            const SizedBox(height:6),
+                            Column(crossAxisAlignment:CrossAxisAlignment.end,children:[
+                              Text('Đơn giá: $price',textAlign:TextAlign.right,
+                                softWrap:true,style:const TextStyle(
+                                  color:ErpTokens.muted,fontSize:12)),
+                              Text('Thành tiền: $lineTotal',
+                                textAlign:TextAlign.right,softWrap:true,
+                                style:const TextStyle(color:ErpTokens.ink,
+                                  fontWeight:FontWeight.w800)),
                             ]),
                           ]):
                           Row(children:[
