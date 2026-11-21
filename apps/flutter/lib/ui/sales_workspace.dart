@@ -1019,9 +1019,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     }
     Widget statusInfo(String title,String value,IconData icon)=>Container(
       width:195,padding:const EdgeInsets.all(12),
-      decoration:BoxDecoration(color:ErpTokens.mint,
-        borderRadius:BorderRadius.circular(6),
-        border:Border.all(color:ErpTokens.border)),
+      decoration:const BoxDecoration(
+        border:Border(bottom:BorderSide(color:ErpTokens.border))),
       child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
         Row(children:[Icon(icon,color:ErpTokens.primary,size:18),
           const SizedBox(width:6),Expanded(child:Text(title,
@@ -1081,14 +1080,15 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                   fontWeight:FontWeight.w800,color:ErpTokens.ink,fontSize:16)),
                 const SizedBox(height:8),
                 for(final line in (item['lines'] as List<dynamic>))
-                  Container(margin:const EdgeInsets.only(bottom:8),
-                    padding:const EdgeInsets.all(12),
-                    decoration:BoxDecoration(color:ErpTokens.surface,
-                      border:Border.all(color:ErpTokens.border),
-                      borderRadius:BorderRadius.circular(6)),
+                  Container(
+                    padding:const EdgeInsets.symmetric(horizontal:6,vertical:12),
+                    decoration:const BoxDecoration(
+                      border:Border(bottom:BorderSide(color:ErpTokens.border))),
                     child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
-                      Text((line['sku']??'').toString()+' · '+(line['productName']??'').toString(),
+                      Text((line['productName']??'').toString(),
                         style:const TextStyle(color:ErpTokens.ink,fontWeight:FontWeight.w700)),
+                      Text('SKU '+(line['sku']??'').toString(),
+                        style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
                       const SizedBox(height:6),
                       Wrap(spacing:16,runSpacing:6,children:[
                         Text('Số lượng: '+line['quantity'].toString()+' '+line['unitCode'].toString()),
@@ -1165,7 +1165,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
 
   }
   @override Widget build(BuildContext context){
-    return Card(clipBehavior:Clip.antiAlias,child:Padding(
+    return Padding(
       padding:const EdgeInsets.all(18),
       child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
         Wrap(alignment:WrapAlignment.spaceBetween,
@@ -1226,6 +1226,30 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         else if(orders.isEmpty)const Center(child:Padding(
           padding:EdgeInsets.all(26),child:Text('Chưa có đơn hàng.',
             style:TextStyle(color:ErpTokens.muted))))
+        else if(MediaQuery.sizeOf(context).width<720)
+          Column(children:[
+            for(final o in orders)InkWell(
+              onTap:saving?null:()=>openOrder(o),
+              child:Container(
+                padding:const EdgeInsets.symmetric(horizontal:8,vertical:11),
+                decoration:const BoxDecoration(
+                  border:Border(bottom:BorderSide(color:ErpTokens.border))),
+                child:Row(children:[
+                  Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+                    Text(o['documentNo'] as String? ?? 'Chưa cấp số',
+                      style:const TextStyle(fontWeight:FontWeight.w700,color:ErpTokens.ink)),
+                    Text((o['customerName']??'').toString(),maxLines:1,
+                      overflow:TextOverflow.ellipsis),
+                    Text(stateOf(o),style:const TextStyle(
+                      color:ErpTokens.muted,fontSize:12)),
+                  ])),
+                  const SizedBox(width:10),
+                  Text(money(o['total']),style:const TextStyle(
+                    color:ErpTokens.ink,fontWeight:FontWeight.w700)),
+                  const Icon(Icons.chevron_right,color:ErpTokens.muted),
+                ]),
+              )),
+          ])
         else SingleChildScrollView(scrollDirection:Axis.horizontal,child:DataTable(
           headingRowColor:const WidgetStatePropertyAll(ErpTokens.mint),
           headingTextStyle:const TextStyle(fontWeight:FontWeight.w700,color:ErpTokens.ink),
@@ -1249,6 +1273,6 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           onPressed:loading?null:reload,icon:const Icon(Icons.refresh),
           label:const Text('Làm mới'))),
       ]),
-    ));
+    );
   }
 }
