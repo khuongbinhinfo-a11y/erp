@@ -114,7 +114,7 @@ CREATE VIEW inventory_stock_balance AS
 
 -- DB backstop: all movement writers, including future domains, share the warehouse lock.
 -- Direct INSERT cannot create negative stock, consume held stock, or forge a reversal.
-CREATE FUNCTION erp_inventory_movement_insert_guard() RETURNS trigger LANGUAGE plpgsql AS $
+CREATE FUNCTION erp_inventory_movement_insert_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   available_now numeric;
   prior_delta numeric;
@@ -152,13 +152,13 @@ BEGIN
     RAISE EXCEPTION 'Inventory insufficient available stock';
   END IF;
   RETURN NEW;
-END; $;
+END; $$;
 CREATE TRIGGER inventory_movement_insert_guard BEFORE INSERT ON inventory_ledger
  FOR EACH ROW EXECUTE FUNCTION erp_inventory_movement_insert_guard();
 
 -- A reservation always matches the immutable confirmed Sales line base quantity;
 -- a direct INSERT cannot reserve more than the warehouse has available.
-CREATE FUNCTION erp_inventory_reservation_insert_guard() RETURNS trigger LANGUAGE plpgsql AS $
+CREATE FUNCTION erp_inventory_reservation_insert_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   order_status text;
   version_status text;
@@ -210,7 +210,7 @@ BEGIN
     RAISE EXCEPTION 'Reservation exceeds available stock';
   END IF;
   RETURN NEW;
-END; $;
+END; $$;
 CREATE TRIGGER inventory_reservation_insert_guard BEFORE INSERT ON inventory_reservation
  FOR EACH ROW EXECUTE FUNCTION erp_inventory_reservation_insert_guard();
 
