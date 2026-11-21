@@ -144,6 +144,14 @@ test("R3 real PostgreSQL: on-hand, hold, release, no oversell, exact replay, RBA
    "different-release-"+randomUUID())).status,409);
   assert.deepEqual((await make(releasePath,{branchId:b,warehouseId:w},0,releaseKey)).body,
    released.body);
+  // A released row is immutable audit history; the same sales line may be held again.
+  const reheld=await make("/v1/inventory/reservations",reservation(heldOrder));
+  assert.equal(reheld.status,201,JSON.stringify(reheld.body));
+  assert.equal(reheld.body.state,"ACTIVE");
+  assert.notEqual(reheld.body.id,accepted.body.id);
+  const reRelease=await make("/v1/inventory/reservations/"+reheld.body.id+"/release",
+   {branchId:b,warehouseId:w},0);
+  assert.equal(reRelease.status,200,JSON.stringify(reRelease.body));
   assert.equal((await make("/v1/inventory/reservations",
    reservation(orders[loser]!))).status,201);
   assert.equal((await make("/v1/sales/orders/"+heldOrder+"/cancel",
@@ -210,6 +218,19 @@ test("R3 real PostgreSQL: on-hand, hold, release, no oversell, exact replay, RBA
    {...opening,warehouseId:newWh.rows[0]!.id})).status,403);
   assert.equal((await call("/v1/inventory/balances?branchId="+b+
    "&warehouseId="+newWh.rows[0]!.id,"GET",undefined,token)).status,403);
+  // Simulate a production installation still on Sales 0010 while Inventory 0011 awaits approval.
+  // Existing legitimate commercial actions must remain available without the new relation.
+  await pool.query("DROP TABLE inventory_reservation CASCADE");
+  const olderSale=await make("/v1/sales/orders",orderData);
+  assert.equal(olderSale.status,201,JSON.stringify(olderSale.body));
+  assert.equal((await make("/v1/sales/orders/"+olderSale.body.id+"/confirm",
+    {branchId:b})).status,200);
+  const amended=await make("/v1/sales/orders/"+olderSale.body.id+"/amend",
+    {branchId:b,reason:"Regression for 0010-only sales"},1);
+  assert.equal(amended.status,201,JSON.stringify(amended.body));
+  const cancelled=await make("/v1/sales/orders/"+olderSale.body.id+"/cancel",
+    {branchId:b,reason:"Regression for 0010-only sales"},2);
+  assert.equal(cancelled.status,200,JSON.stringify(cancelled.body));
  } finally {
   if(server)await new Promise<void>(ok=>server!.close(()=>ok()));
   if(pool)await pool.end();

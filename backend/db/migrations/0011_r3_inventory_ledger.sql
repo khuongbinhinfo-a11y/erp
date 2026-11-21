@@ -63,7 +63,6 @@ CREATE TABLE inventory_reservation (
   created_at timestamptz NOT NULL DEFAULT now(),
   released_at timestamptz,
   PRIMARY KEY (installation_id,branch_id,id),
-  UNIQUE (installation_id,branch_id,order_id,version_no,line_no),
   FOREIGN KEY (installation_id,branch_id,warehouse_id)
     REFERENCES warehouse(installation_id,branch_id,id),
   FOREIGN KEY (installation_id,branch_id,product_id)
@@ -76,6 +75,10 @@ CREATE TABLE inventory_reservation (
 );
 CREATE INDEX inventory_reservation_active_idx
  ON inventory_reservation(installation_id,branch_id,warehouse_id,product_id)
+ WHERE state='ACTIVE';
+-- Released holds remain audit history but must not permanently block a new hold.
+CREATE UNIQUE INDEX inventory_reservation_one_active_orderline
+ ON inventory_reservation(installation_id,branch_id,order_id,version_no,line_no)
  WHERE state='ACTIVE';
 CREATE FUNCTION erp_inventory_reservation_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
