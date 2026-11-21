@@ -85,5 +85,8 @@ void main(){
   expect(postedKey,isNotNull);
   expect(find.text('PO-00000001'),findsOneWidget);
   expect(find.textContaining('Nhà cung cấp A · Đã xác nhận'),findsOneWidget);
+  // A successful server ACK shows a transient toast; drain its 4-second timer.
+  await tester.pump(const Duration(seconds:5));
+  await tester.pumpAndSettle();
  });
 }
