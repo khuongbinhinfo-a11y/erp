@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'erp_tokens.dart';
@@ -237,9 +238,12 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     final skuSearch=TextEditingController();
     final customerSearch=TextEditingController();
     final skuFocus=FocusNode();
+    final customerFocus=FocusNode();
+    Timer? skuDebounce,customerDebounce;
     List<Map<String,dynamic>> skuMatches=[];
     List<Map<String,dynamic>> customerMatches=[];
     int selectedSkuIndex=0,skuSearchGeneration=0;
+    int selectedCustomerIndex=0,customerSearchGeneration=0;
     String? skuResultsFor;
     bool skuBusy=false,customerBusy=false,starterUntouched=order==null;
     String skuLabel(Map<String,dynamic> x)=>
@@ -309,21 +313,36 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         });
       }
     }
+    void chooseCustomer(Map<String,dynamic> item,StateSetter refresh){
+      if(!customers.any((x)=>x['id']==item['id']))customers.add(item);
+      customer=item['id'] as String;
+      customerSearch.clear();customerMatches=[];
+      customerSearchGeneration++;
+      invalidate(refresh);
+      skuFocus.requestFocus();
+    }
     Future<void> findCustomers(BuildContext ctx,StateSetter refresh)async{
       final term=customerSearch.text.trim();
       if(term.isEmpty){refresh(()=>customerMatches=[]);return;}
+      final run=++customerSearchGeneration;
       refresh(()=>customerBusy=true);
       try{
         final values=await widget.client.catalogItems(widget.session.token,'customers',
           branchId:branch,query:term);
-        if(ctx.mounted)refresh((){
-          customerBusy=false;
+        if(!ctx.mounted||run!=customerSearchGeneration||
+          term!=customerSearch.text.trim())return;
+        refresh((){
+          customerBusy=false;selectedCustomerIndex=0;
           customerMatches=values.where((x)=>x['active']==true).toList();
         });
       }on ErpApiError catch(e){
-        if(ctx.mounted)refresh((){customerBusy=false;formError=e.message;});
+        if(ctx.mounted&&run==customerSearchGeneration)refresh((){
+          customerBusy=false;formError=e.message;
+        });
       }catch(_){
-        if(ctx.mounted)refresh((){customerBusy=false;formError='Không tìm được khách hàng.';});
+        if(ctx.mounted&&run==customerSearchGeneration)refresh((){
+          customerBusy=false;formError='Không tìm được khách hàng.';
+        });
       }
     }
     String totalQuoted()=>previewGrandTotal??'0';
@@ -356,7 +375,27 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           final narrow=media.width<720;
           final width=media.width*0.96>1440?1440.0:media.width*0.96;
           final ready=quotes!=null&&quotedStamp==stamp();
-          return Dialog(
+          return Focus(onKeyEvent:(node,event){
+            if(event is! KeyDownEvent)return KeyEventResult.ignored;
+            if(event.logicalKey==LogicalKeyboardKey.f3){
+              skuFocus.requestFocus();
+              skuSearch.selection=TextSelection(
+                baseOffset:0,extentOffset:skuSearch.text.length);
+              return KeyEventResult.handled;
+            }
+            if(event.logicalKey==LogicalKeyboardKey.f4){
+              customerFocus.requestFocus();
+              customerSearch.selection=TextSelection(
+                baseOffset:0,extentOffset:customerSearch.text.length);
+              return KeyEventResult.handled;
+            }
+            if(event.logicalKey==LogicalKeyboardKey.escape&&
+              (skuMatches.isNotEmpty||customerMatches.isNotEmpty)){
+              refresh((){skuMatches=[];customerMatches=[];});
+              return KeyEventResult.handled;
+            }
+            return KeyEventResult.ignored;
+          },child:Dialog(
             insetPadding:const EdgeInsets.symmetric(horizontal:8,vertical:10),
             clipBehavior:Clip.antiAlias,
             child:SizedBox(width:width,height:media.height*0.94,
@@ -677,11 +716,13 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                     ]),
                 ),
               ])),
-          );
+          ));
         }),
       );
     }finally{
-      note.dispose();skuSearch.dispose();customerSearch.dispose();skuFocus.dispose();
+      skuDebounce?.cancel();customerDebounce?.cancel();
+      note.dispose();skuSearch.dispose();customerSearch.dispose();
+      skuFocus.dispose();customerFocus.dispose();
       for(final line in lines){line.dispose();}
     }
   }
