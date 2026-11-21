@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -295,12 +296,24 @@ void main(){
     expect(find.byKey(const ValueKey('sales-sku-search')),findsOneWidget,
       reason:'Actual calls: $traces; visible text: ${tester.widgetList<Text>(find.byType(Text)).map((t)=>t.data).take(30).toList()}');
     expect(find.byKey(const ValueKey('sales-save-confirm')),findsOneWidget);
+    // Fast-sale shortcuts navigate without closing the composer.
+    await tester.sendKeyEvent(LogicalKeyboardKey.f3);
+    await tester.pump();
+    expect(tester.widget<TextField>(find.byKey(const ValueKey('sales-sku-search')))
+      .focusNode?.hasFocus,isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.f4);
+    await tester.pump();
+    expect(tester.widget<TextField>(find.byKey(const ValueKey('sales-customer-search')))
+      .focusNode?.hasFocus,isTrue);
     await tester.enterText(find.byKey(const ValueKey('sales-sku-search')),'BARCODE-A1');
     await tester.testTextInput.receiveAction(TextInputAction.search);
     await tester.pumpAndSettle();
     await tester.runAsync(() async=>Future<void>.delayed(const Duration(milliseconds:120)));
     await tester.pumpAndSettle();
     expect(skuSearchCount,greaterThanOrEqualTo(1));
+    expect(find.byKey(const ValueKey('sales-line-0')),findsOneWidget);
+    expect(tester.widget<TextField>(find.byKey(const ValueKey('sales-qty-0')))
+      .focusNode?.hasFocus,isTrue,reason:'Selecting a SKU must focus its quantity');
     await tester.tap(find.byKey(const ValueKey('sales-quote')));
     await tester.pumpAndSettle();
     await tester.runAsync(() async=>Future<void>.delayed(const Duration(milliseconds:120)));
