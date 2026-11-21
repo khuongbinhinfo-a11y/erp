@@ -112,6 +112,108 @@ CREATE VIEW inventory_stock_balance AS
  ) f
  GROUP BY installation_id,branch_id,warehouse_id,product_id;
 
+-- DB backstop: all movement writers, including future domains, share the warehouse lock.
+-- Direct INSERT cannot create negative stock, consume held stock, or forge a reversal.
+CREATE FUNCTION erp_inventory_movement_insert_guard() RETURNS trigger LANGUAGE plpgsql AS $
+DECLARE
+  available_now numeric;
+  prior_delta numeric;
+BEGIN
+  PERFORM 1 FROM warehouse WHERE installation_id=NEW.installation_id
+   AND branch_id=NEW.branch_id AND id=NEW.warehouse_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Warehouse scope invalid'; END IF;
+  IF (NEW.kind='OPENING' AND NEW.source_type<>'OPENING')
+    OR (NEW.kind='RECEIPT' AND NEW.source_type<>'PURCHASE_RECEIPT')
+    OR (NEW.kind='ISSUE' AND NEW.source_type<>'FULFILLMENT')
+    OR (NEW.kind IN ('TRANSFER_IN','TRANSFER_OUT') AND NEW.source_type<>'TRANSFER')
+    OR (NEW.kind='REVERSAL' AND NEW.source_type<>'REVERSAL') THEN
+    RAISE EXCEPTION 'Inventory source domain invalid';
+  END IF;
+  IF NEW.kind='OPENING' AND EXISTS (
+    SELECT 1 FROM inventory_ledger WHERE installation_id=NEW.installation_id
+    AND branch_id=NEW.branch_id AND warehouse_id=NEW.warehouse_id
+    AND product_id=NEW.product_id
+  ) THEN
+    RAISE EXCEPTION 'Opening must be first inventory movement';
+  END IF;
+  IF NEW.kind='REVERSAL' THEN
+    SELECT delta_base INTO prior_delta FROM inventory_ledger WHERE
+     installation_id=NEW.installation_id AND branch_id=NEW.branch_id
+     AND warehouse_id=NEW.warehouse_id AND id=NEW.reversal_of FOR SHARE;
+    IF prior_delta IS NULL OR NEW.delta_base<>-prior_delta THEN
+      RAISE EXCEPTION 'Reversal delta must negate one posted movement';
+    END IF;
+  END IF;
+  SELECT COALESCE((SELECT available FROM inventory_stock_balance WHERE
+    installation_id=NEW.installation_id AND branch_id=NEW.branch_id
+    AND warehouse_id=NEW.warehouse_id AND product_id=NEW.product_id),0)
+    INTO available_now;
+  IF NEW.delta_base<0 AND available_now+NEW.delta_base<0 THEN
+    RAISE EXCEPTION 'Inventory insufficient available stock';
+  END IF;
+  RETURN NEW;
+END; $;
+CREATE TRIGGER inventory_movement_insert_guard BEFORE INSERT ON inventory_ledger
+ FOR EACH ROW EXECUTE FUNCTION erp_inventory_movement_insert_guard();
+
+-- A reservation always matches the immutable confirmed Sales line base quantity;
+-- a direct INSERT cannot reserve more than the warehouse has available.
+CREATE FUNCTION erp_inventory_reservation_insert_guard() RETURNS trigger LANGUAGE plpgsql AS $
+DECLARE
+  order_status text;
+  version_status text;
+  current_ver integer;
+  pricing text;
+  qty numeric;
+  unit_code text;
+  base_unit text;
+  snapshot jsonb;
+  demand numeric;
+  available_now numeric;
+BEGIN
+  PERFORM 1 FROM warehouse WHERE installation_id=NEW.installation_id
+   AND branch_id=NEW.branch_id AND id=NEW.warehouse_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Warehouse scope invalid'; END IF;
+  SELECT o.status,v.state,o.current_version,l.pricing_engine,l.quantity,
+         l.unit_code,p.base_unit,l.price_snapshot
+  INTO order_status,version_status,current_ver,pricing,qty,unit_code,base_unit,snapshot
+  FROM sales_order o
+   JOIN sales_order_version v ON v.installation_id=o.installation_id
+     AND v.branch_id=o.branch_id AND v.order_id=o.id AND v.version_no=NEW.version_no
+   JOIN sales_order_line l ON l.installation_id=v.installation_id
+     AND l.branch_id=v.branch_id AND l.order_id=v.order_id AND l.version_no=v.version_no
+     AND l.line_no=NEW.line_no AND l.product_id=NEW.product_id
+   JOIN catalog_product p ON p.installation_id=l.installation_id
+     AND p.branch_id=l.branch_id AND p.id=l.product_id
+  WHERE o.installation_id=NEW.installation_id AND o.branch_id=NEW.branch_id
+    AND o.id=NEW.order_id FOR SHARE OF o;
+  IF order_status IS DISTINCT FROM 'CONFIRMED'
+     OR version_status IS DISTINCT FROM 'CONFIRMED'
+     OR current_ver IS DISTINCT FROM NEW.version_no THEN
+    RAISE EXCEPTION 'Reservation requires current confirmed Sales version';
+  END IF;
+  IF pricing='R1' THEN
+    demand := (snapshot->>'normalizedBaseQuantity')::numeric;
+  ELSIF pricing='LEGACY' AND unit_code=base_unit THEN
+    demand := qty;
+  ELSE
+    RAISE EXCEPTION 'Reservation lacks immutable base quantity';
+  END IF;
+  IF demand IS NULL OR demand<=0 OR NEW.quantity_base<>demand THEN
+    RAISE EXCEPTION 'Reservation base quantity differs from snapshot';
+  END IF;
+  SELECT COALESCE((SELECT available FROM inventory_stock_balance WHERE
+    installation_id=NEW.installation_id AND branch_id=NEW.branch_id
+    AND warehouse_id=NEW.warehouse_id AND product_id=NEW.product_id),0)
+  INTO available_now;
+  IF available_now<NEW.quantity_base THEN
+    RAISE EXCEPTION 'Reservation exceeds available stock';
+  END IF;
+  RETURN NEW;
+END; $;
+CREATE TRIGGER inventory_reservation_insert_guard BEFORE INSERT ON inventory_reservation
+ FOR EACH ROW EXECUTE FUNCTION erp_inventory_reservation_insert_guard();
+
 INSERT INTO role_permission(installation_id,role_id,permission_code)
  SELECT installation_id,id,'inventory.reserve' FROM app_role
  WHERE code='PRIMARY_OWNER_MAIN' ON CONFLICT DO NOTHING;
