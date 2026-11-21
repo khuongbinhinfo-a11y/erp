@@ -104,4 +104,88 @@ void main(){
    }
    expect(find.text('Chưa có chứng từ ở mục này.'),findsOneWidget);
  });
+testWidgets('R3 paginates 101 ACTIVE holds separately from release history',
+ (tester)async{
+  const branch='00000000-0000-4000-8000-000000000001';
+  const warehouse='00000000-0000-4000-8000-000000000002';
+  const actor='00000000-0000-4000-8000-000000000003';
+  final requests=<String>[];
+  final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+    httpClient:MockClient((req)async{
+      requests.add(req.url.toString());
+      const headers={'content-type':'application/json; charset=utf-8'};
+      if(req.url.path=='/v1/catalog/branches'){
+        return http.Response(jsonEncode({'items':[{'id':branch,'name':'Chi nhánh chính'}]}),
+          200,headers:headers);
+      }
+      if(req.url.path=='/v1/catalog/warehouses'){
+        return http.Response(jsonEncode({'items':[{'id':warehouse,'name':'Kho chính'}]}),
+          200,headers:headers);
+      }
+      if(req.url.path=='/v1/inventory/balances'){
+        return http.Response(jsonEncode({'items':[]}),200,headers:headers);
+      }
+      if(req.url.path=='/v1/inventory/reservations'){
+        final state=req.url.queryParameters['state'];
+        final offset=req.url.queryParameters['offset'];
+        if(state=='RELEASED'){
+          return http.Response(jsonEncode({'items':[{'id':'history1',
+            'documentNo':'SO-HISTORY','sku':'SP01','quantityBase':'1',
+            'state':'RELEASED'}],'hasMore':false}),200,headers:headers);
+        }
+        final items=offset=='100'
+          ?[{'id':'active100','documentNo':'SO-100',
+              'sku':'SP01','quantityBase':'1','state':'ACTIVE'}]
+          :List.generate(100,(i)=>{'id':'active$i','documentNo':'SO-$i',
+              'sku':'SP01','quantityBase':'1','state':'ACTIVE'});
+        return http.Response(jsonEncode({'items':items,'hasMore':offset!='100'}),
+          200,headers:headers);
+      }
+      return http.Response(jsonEncode({'error':{'code':'NOT_FOUND'}}),404,headers:headers);
+    }));
+  addTearDown(client.dispose);
+  tester.view.devicePixelRatio=1;
+  tester.view.physicalSize=const Size(1280,900);
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
+  final session=IdentitySession(actorId:actor,token:'synthetic-token',
+    expiresAt:DateTime.now().add(const Duration(hours:1)),grants:const [
+      IdentityGrant(roleId:'a',permission:'inventory.read',
+        branchId:branch,warehouseId:warehouse),
+    ]);
+  await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
+    home:Scaffold(body:SingleChildScrollView(
+      child:InventoryWorkspace(client:client,session:session)))));
+  for(var i=0;i<5;i++){
+    await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:80)));
+    await tester.pumpAndSettle();
+  }
+  await tester.tap(find.text('Hàng đã giữ'));
+  for(var i=0;i<4;i++){
+    await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:80)));
+    await tester.pumpAndSettle();
+  }
+  expect(find.text('SO-99 · SP01'),findsOneWidget);
+  expect(find.text('SO-100 · SP01'),findsNothing);
+  final load=find.text('Tải thêm phiếu giữ hàng');
+  await tester.ensureVisible(load);
+  await tester.tap(load);
+  for(var i=0;i<4;i++){
+    await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:80)));
+    await tester.pumpAndSettle();
+  }
+  expect(find.text('SO-100 · SP01'),findsOneWidget);
+  expect(find.text('Tải thêm phiếu giữ hàng'),findsNothing);
+  expect(requests.any((x)=>x.contains('offset=100')),true);
+  final history=find.text('Xem lịch sử đã giải phóng');
+  await tester.ensureVisible(history);
+  await tester.tap(history);
+  for(var i=0;i<4;i++){
+    await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:80)));
+    await tester.pumpAndSettle();
+  }
+  expect(find.text('SO-HISTORY · SP01'),findsOneWidget);
+  expect(find.text('SO-100 · SP01'),findsNothing);
+});
+
 }
