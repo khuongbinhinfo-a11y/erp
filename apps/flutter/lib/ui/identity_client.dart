@@ -73,7 +73,7 @@ class ErpIdentityClient {
   ErpIdentityClient({this.apiOrigin=erpApiOrigin,http.Client? httpClient}):_http=httpClient??http.Client();
   bool get configured=>Uri.tryParse(apiOrigin)?.scheme=='https'&&
     Uri.tryParse(apiOrigin)?.host.isNotEmpty==true;
-  void dispose(){_r1Pending.clear();_http.close();}
+  void dispose(){_r1Pending.clear();_inventoryPending.clear();_http.close();}
   String _key()=>'erp-'+DateTime.now().microsecondsSinceEpoch.toString()+'-${++_sequence}';
   Future<Map<String,dynamic>> _request(String method,String path,{
     String? token,Map<String,dynamic>? body,int? revision,String? idempotencyKey,
@@ -151,7 +151,7 @@ class ErpIdentityClient {
     }
   }
   Future<IdentitySession> login(String username,String password)async{
-    _r1Pending.clear();
+    _r1Pending.clear();_inventoryPending.clear();
     final raw=await _request('POST','/v1/auth/login',body:{'loginName':username,'password':password});
     final token=raw['token'] as String;
     try{
@@ -173,7 +173,7 @@ class ErpIdentityClient {
   Future<IdentitySession> refresh(IdentitySession current)=>restore(current.token);
   Future<void> logout(String token)async{
     try{await _request('POST','/v1/auth/logout',token:token);}
-    finally{_r1Pending.clear();}
+    finally{_r1Pending.clear();_inventoryPending.clear();}
   }
   Future<List<IdentityUser>> users(String token)async{
     final r=await _request('GET','/v1/admin/users',token:token);
@@ -273,6 +273,33 @@ class ErpIdentityClient {
     _request('POST','/v1/sales/orders/$id/$action',token:token,
       body:{'branchId':branchId,if(reason!=null)'reason':reason},
       revision:revision,idempotencyKey:key);
+
+  /// Warehouse data is always authorized by the backend for one branch/warehouse.
+  Future<List<Map<String,dynamic>>> inventoryItems(String token,String kind,{
+    required String branchId,required String warehouseId,
+  })async{
+    if(!const {'balances','movements','reservations'}.contains(kind)){
+      throw const ErpApiError(400,'Yêu cầu kho không hợp lệ.');
+    }
+    final q=Uri(queryParameters:{'branchId':branchId,'warehouseId':warehouseId}).query;
+    final r=await _request('GET','/v1/inventory/$kind?$q',token:token);
+    return (r['items'] as List<dynamic>)
+      .map((x)=>Map<String,dynamic>.from(x as Map)).toList();
+  }
+  /// A pending request uses an identical command body and key until the server ACKs.
+  final Map<String,({Map<String,dynamic> payload,String key})> _inventoryPending={};
+  ({Map<String,dynamic> payload,String key})? pendingInventory(String id){
+    final p=_inventoryPending[id];
+    return p==null?null:(payload:Map<String,dynamic>.from(p.payload),key:p.key);
+  }
+  void retainInventory(String id,Map<String,dynamic> payload,String key){
+    _inventoryPending[id]=(payload:Map<String,dynamic>.from(payload),key:key);
+  }
+  void clearInventory(String id){_inventoryPending.remove(id);}
+  Future<Map<String,dynamic>> inventoryAction(String token,String action,
+      Map<String,dynamic> body,{required String key,required int revision})=>
+    _request('POST','/v1/inventory/$action',token:token,
+      body:body,revision:revision,idempotencyKey:key);
 
   Future<IdentityUser> createUser(String token,String username,String password)async{
     final r=await _request('POST','/v1/admin/users',token:token,revision:0,
