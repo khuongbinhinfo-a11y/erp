@@ -78,6 +78,20 @@ CREATE TABLE purchase_receipt_line (
 CREATE INDEX purchase_receipt_line_po_idx
  ON purchase_receipt_line(installation_id,branch_id,order_id,order_line_no);
 
+-- Direct SQL cannot append a commercial line to a confirmed/received purchase.
+CREATE FUNCTION erp_purchase_order_line_insert_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE state_now text;
+BEGIN
+ SELECT status INTO state_now FROM purchase_order WHERE installation_id=NEW.installation_id
+   AND branch_id=NEW.branch_id AND id=NEW.order_id FOR UPDATE;
+ IF state_now IS DISTINCT FROM 'DRAFT' THEN
+   RAISE EXCEPTION 'Purchase order lines require an unconfirmed order';
+ END IF;
+ RETURN NEW;
+END; $$;
+CREATE TRIGGER purchase_order_line_insert_guard BEFORE INSERT ON purchase_order_line
+ FOR EACH ROW EXECUTE FUNCTION erp_purchase_order_line_insert_guard();
+
 -- Purchase lines and posted receipts are immutable. Corrections require new, referenced documents.
 CREATE FUNCTION erp_purchase_fact_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
