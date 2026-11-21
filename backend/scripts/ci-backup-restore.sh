@@ -47,7 +47,7 @@ RESTORE_URL="$restore_url" docker run --rm --network host --env RESTORE_URL --vo
 original_migrations="$(psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc 'SELECT count(*) FROM public.schema_migrations')"
 restored_migrations="$(psql "$restore_url" -v ON_ERROR_STOP=1 -Atc 'SELECT count(*) FROM public.schema_migrations')"
 test "$original_migrations" = "$restored_migrations"
-test "$restored_migrations" = "10"
+test "$restored_migrations" = "11"
 
 for relation in installation branch warehouse app_user app_role role_permission user_role mutation_receipt audit_event user_role_warehouse app_session auth_event auth_login_throttle catalog_customer catalog_supplier catalog_product_group catalog_product catalog_unit catalog_price_list catalog_price_entry sales_order sales_order_version sales_order_line sales_order_sequence catalog_sell_sku catalog_sku_barcode catalog_sales_channel catalog_sku_price_rule catalog_sku_price_retirement; do
   source_count="$(psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM public.$relation")"

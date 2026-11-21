@@ -29,7 +29,7 @@ CREATE TABLE inventory_ledger (
       OR kind='REVERSAL')
 );
 CREATE UNIQUE INDEX inventory_ledger_source_once
-  ON inventory_ledger(installation_id,branch_id,source_type,source_id,source_line)
+  ON inventory_ledger(installation_id,branch_id,warehouse_id,source_type,source_id,source_line)
   WHERE kind <> 'REVERSAL';
 CREATE UNIQUE INDEX inventory_ledger_reversal_once
   ON inventory_ledger(installation_id,branch_id,warehouse_id,reversal_of)
