@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'erp_tokens.dart';
@@ -16,8 +17,9 @@ class SalesWorkspace extends StatefulWidget {
 class _OrderLine {
   String sellSkuId;
   final TextEditingController quantity;
+  final FocusNode quantityFocus=FocusNode();
   _OrderLine(this.sellSkuId,String value):quantity=TextEditingController(text:value);
-  void dispose()=>quantity.dispose();
+  void dispose(){quantity.dispose();quantityFocus.dispose();}
 }
 class _SalesWorkspaceState extends State<SalesWorkspace> {
   List<Map<String,dynamic>> branches=[],orders=[];
@@ -188,6 +190,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       customer??'',list??'',channel??'',
       ...lines.map((x)=>x.sellSkuId+':'+x.quantity.text.trim()),
     ].join('|');
+    final originalStamp=stamp(),originalNote=note.text.trim();
     void invalidate(StateSetter refresh)=>refresh((){
       quotes=null;quotedStamp=null;previewGrandTotal=null;previewSubtotal=null;
       previewDiscountTotal=null;previewTaxTotal=null;formError=null;
@@ -236,15 +239,14 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     final skuSearch=TextEditingController();
     final customerSearch=TextEditingController();
     final skuFocus=FocusNode();
+    final customerFocus=FocusNode();
+    Timer? skuDebounce,customerDebounce;
     List<Map<String,dynamic>> skuMatches=[];
     List<Map<String,dynamic>> customerMatches=[];
     int selectedSkuIndex=0,skuSearchGeneration=0;
+    int selectedCustomerIndex=0,customerSearchGeneration=0;
     String? skuResultsFor;
     bool skuBusy=false,customerBusy=false,starterUntouched=order==null;
-    String skuLabel(Map<String,dynamic> x)=>
-      (x['code']??x['sku']??'').toString()+' · '+
-      (x['productName']??'').toString()+' · '+(x['unitCode']??'').toString()+
-      (x['barcode']==null?'':' · '+x['barcode'].toString());
     String customerLabel(Map<String,dynamic> x)=>
       (x['code']??'').toString()+' · '+(x['name']??'').toString();
     String selectedCustomer()=>customers.where((x)=>x['id']==customer).isEmpty
@@ -267,9 +269,16 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       skuSearch.clear();
       skuSearchGeneration++;
       skuResultsFor=null;
-      skuFocus.requestFocus();
       skuMatches=[];
       invalidate(refresh);
+      // Fast entry: select the new row's quantity, not the search field.
+      final selectedLine=lines.last;
+      WidgetsBinding.instance.addPostFrameCallback((_){
+        if(selectedLine.quantityFocus.context==null)return;
+        selectedLine.quantityFocus.requestFocus();
+        selectedLine.quantity.selection=TextSelection(
+          baseOffset:0,extentOffset:selectedLine.quantity.text.length);
+      });
     }
     Future<void> findSkus(BuildContext ctx,StateSetter refresh,{bool addOnEnter=false})async{
       final term=skuSearch.text.trim();
@@ -294,28 +303,45 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         if(available.isEmpty)refresh(()=>
           formError='Không tìm thấy SKU đang bán. Kiểm tra mã hàng hoặc barcode.');
       }on ErpApiError catch(e){
-        if(ctx.mounted)refresh((){skuBusy=false;formError=e.message;});
+        if(ctx.mounted&&requestGeneration==skuSearchGeneration)refresh((){
+          skuBusy=false;formError=e.message;
+        });
       }catch(_){
-        if(ctx.mounted)refresh((){
+        if(ctx.mounted&&requestGeneration==skuSearchGeneration)refresh((){
           skuBusy=false;formError='Không tìm được sản phẩm. Vui lòng thử lại.';
         });
       }
     }
+    void chooseCustomer(Map<String,dynamic> item,StateSetter refresh){
+      if(!customers.any((x)=>x['id']==item['id']))customers.add(item);
+      customer=item['id'] as String;
+      customerSearch.clear();customerMatches=[];
+      customerSearchGeneration++;
+      invalidate(refresh);
+      skuFocus.requestFocus();
+    }
     Future<void> findCustomers(BuildContext ctx,StateSetter refresh)async{
       final term=customerSearch.text.trim();
       if(term.isEmpty){refresh(()=>customerMatches=[]);return;}
+      final run=++customerSearchGeneration;
       refresh(()=>customerBusy=true);
       try{
         final values=await widget.client.catalogItems(widget.session.token,'customers',
           branchId:branch,query:term);
-        if(ctx.mounted)refresh((){
-          customerBusy=false;
+        if(!ctx.mounted||run!=customerSearchGeneration||
+          term!=customerSearch.text.trim())return;
+        refresh((){
+          customerBusy=false;selectedCustomerIndex=0;
           customerMatches=values.where((x)=>x['active']==true).toList();
         });
       }on ErpApiError catch(e){
-        if(ctx.mounted)refresh((){customerBusy=false;formError=e.message;});
+        if(ctx.mounted&&run==customerSearchGeneration)refresh((){
+          customerBusy=false;formError=e.message;
+        });
       }catch(_){
-        if(ctx.mounted)refresh((){customerBusy=false;formError='Không tìm được khách hàng.';});
+        if(ctx.mounted&&run==customerSearchGeneration)refresh((){
+          customerBusy=false;formError='Không tìm được khách hàng.';
+        });
       }
     }
     String totalQuoted()=>previewGrandTotal??'0';
@@ -340,6 +366,23 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         '_confirmAfterSave':confirm,
       });
     }
+    Future<void> requestClose(BuildContext ctx)async{
+      if(stamp()==originalStamp&&note.text.trim()==originalNote){
+        Navigator.pop(ctx);return;
+      }
+      final discard=await showDialog<bool>(context:ctx,builder:(confirmCtx)=>
+        AlertDialog(
+          title:const Text('Bỏ thay đổi đơn hàng?'),
+          content:const Text('Thông tin vừa nhập chưa được lưu.'),
+          actions:[
+            TextButton(onPressed:()=>Navigator.pop(confirmCtx,false),
+              child:const Text('Tiếp tục nhập')),
+            FilledButton(onPressed:()=>Navigator.pop(confirmCtx,true),
+              child:const Text('Bỏ thay đổi')),
+          ],
+        ));
+      if(discard==true&&ctx.mounted)Navigator.pop(ctx);
+    }
     try{
       return await showDialog<Map<String,dynamic>>(
         context:context,barrierDismissible:false,
@@ -348,7 +391,28 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           final narrow=media.width<720;
           final width=media.width*0.96>1440?1440.0:media.width*0.96;
           final ready=quotes!=null&&quotedStamp==stamp();
-          return Dialog(
+          return Focus(autofocus:true,onKeyEvent:(node,event){
+            if(event is! KeyDownEvent)return KeyEventResult.ignored;
+            if(event.logicalKey==LogicalKeyboardKey.f3){
+              skuFocus.requestFocus();
+              skuSearch.selection=TextSelection(
+                baseOffset:0,extentOffset:skuSearch.text.length);
+              return KeyEventResult.handled;
+            }
+            if(event.logicalKey==LogicalKeyboardKey.f4){
+              customerFocus.requestFocus();
+              customerSearch.selection=TextSelection(
+                baseOffset:0,extentOffset:customerSearch.text.length);
+              return KeyEventResult.handled;
+            }
+            if(event.logicalKey==LogicalKeyboardKey.escape){
+              if(skuMatches.isNotEmpty||customerMatches.isNotEmpty){
+                refresh((){skuMatches=[];customerMatches=[];});
+              }else{requestClose(ctx);}
+              return KeyEventResult.handled;
+            }
+            return KeyEventResult.ignored;
+          },child:Dialog(
             insetPadding:const EdgeInsets.symmetric(horizontal:8,vertical:10),
             clipBehavior:Clip.antiAlias,
             child:SizedBox(width:width,height:media.height*0.94,
@@ -366,7 +430,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       Text('Chi nhánh đang chọn · Giá xác nhận từ máy chủ',
                         style:const TextStyle(color:Colors.white70,fontSize:12)),
                     ])),
-                    IconButton(tooltip:'Đóng',onPressed:()=>Navigator.pop(ctx),
+                    IconButton(tooltip:'Đóng',onPressed:()=>requestClose(ctx),
                       icon:const Icon(Icons.close,color:Colors.white)),
                   ]),
                 ),
@@ -376,39 +440,72 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                     const Text('Người mua và chính sách giá',
                       style:TextStyle(color:ErpTokens.ink,fontSize:16,fontWeight:FontWeight.w700)),
                     const SizedBox(height:9),
-                    TextField(
+                    Focus(onKeyEvent:(node,event){
+                      if(event is! KeyDownEvent||customerMatches.isEmpty)
+                        return KeyEventResult.ignored;
+                      if(event.logicalKey==LogicalKeyboardKey.arrowDown){
+                        refresh(()=>selectedCustomerIndex=
+                          (selectedCustomerIndex+1)%customerMatches.length);
+                        return KeyEventResult.handled;
+                      }
+                      if(event.logicalKey==LogicalKeyboardKey.arrowUp){
+                        refresh(()=>selectedCustomerIndex=
+                          (selectedCustomerIndex-1+customerMatches.length)%customerMatches.length);
+                        return KeyEventResult.handled;
+                      }
+                      if(event.logicalKey==LogicalKeyboardKey.enter){
+                        chooseCustomer(customerMatches[selectedCustomerIndex],refresh);
+                        return KeyEventResult.handled;
+                      }
+                      return KeyEventResult.ignored;
+                    },child:TextField(
                       key:const ValueKey('sales-customer-search'),
-                      controller:customerSearch,
-                      onSubmitted:(_)=>findCustomers(ctx,refresh),
-                      decoration:InputDecoration(labelText:'Tìm khách theo mã, tên',
+                      controller:customerSearch,focusNode:customerFocus,
+                      onChanged:(_){
+                        customerDebounce?.cancel();
+                        customerSearchGeneration++;
+                        refresh((){
+                          customerMatches=[];selectedCustomerIndex=0;
+                          customerBusy=false;
+                        });
+                        if(customerSearch.text.trim().isNotEmpty){
+                          customerDebounce=Timer(const Duration(milliseconds:220),
+                            (){if(ctx.mounted)findCustomers(ctx,refresh);});
+                        }
+                      },
+                      onSubmitted:(_){
+                        customerDebounce?.cancel();
+                        if(customerMatches.isNotEmpty){
+                          chooseCustomer(customerMatches[selectedCustomerIndex],refresh);
+                        }else{findCustomers(ctx,refresh);}
+                      },
+                      decoration:InputDecoration(labelText:'Tìm khách theo mã, tên · F4',
                         hintText:selectedCustomer(),
                         prefixIcon:const Icon(Icons.person_search_outlined),
                         suffixIcon:IconButton(tooltip:'Tìm khách',onPressed:()=>findCustomers(ctx,refresh),
-                          icon:const Icon(Icons.search)))),
+                          icon:const Icon(Icons.search))))),
                     if(customerBusy)const LinearProgressIndicator(),
                     if(customerMatches.isNotEmpty)ConstrainedBox(
                       constraints:const BoxConstraints(maxHeight:148),
-                      child:ListView(shrinkWrap:true,children:customerMatches.map((item)=>
-                        ListTile(
-                          key:ValueKey('sales-customer-result-'+item['id'].toString()),
-                          dense:true,
-                          title:Text(customerLabel(item),maxLines:1,overflow:TextOverflow.ellipsis),
-                          subtitle:Text((item['deliveryAddress']??item['phone']??'').toString(),
+                      child:ListView(shrinkWrap:true,children:[
+                        for(var i=0;i<customerMatches.length;i++)ListTile(
+                          key:ValueKey('sales-customer-result-'+customerMatches[i]['id'].toString()),
+                          selected:i==selectedCustomerIndex,dense:true,
+                          title:Text(customerLabel(customerMatches[i]),
                             maxLines:1,overflow:TextOverflow.ellipsis),
-                          onTap:(){
-                            if(!customers.any((x)=>x['id']==item['id']))customers.add(item);
-                            customer=item['id'] as String;
-                            customerSearch.clear();customerMatches=[];
-                            invalidate(refresh);
-                          },
-                        )).toList()),
+                          subtitle:Text((customerMatches[i]['deliveryAddress']??
+                            customerMatches[i]['phone']??'').toString(),
+                            maxLines:1,overflow:TextOverflow.ellipsis),
+                          onTap:()=>chooseCustomer(customerMatches[i],refresh),
+                        ),
+                      ]),
                     ),
                     const SizedBox(height:8),
                     if(!narrow)Row(children:[
                       Expanded(child:DropdownButtonFormField<String>(
                         key:ValueKey('sales-customer-'+customer.toString()),
                         initialValue:customers.any((x)=>x['id']==customer)?customer:null,
-                        isExpanded:true,decoration:const InputDecoration(labelText:'Khách hàng'),
+                        isExpanded:true,decoration:const InputDecoration(labelText:'Khách hàng',border:UnderlineInputBorder()),
                         items:customers.map((x)=>DropdownMenuItem<String>(
                           value:x['id'] as String,
                           child:Text(customerLabel(x),overflow:TextOverflow.ellipsis))).toList(),
@@ -417,7 +514,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       Expanded(child:DropdownButtonFormField<String>(
                         key:ValueKey('sales-price-list-'+list.toString()),
                         initialValue:lists.any((x)=>x['id']==list)?list:null,
-                        isExpanded:true,decoration:const InputDecoration(labelText:'Bảng giá'),
+                        isExpanded:true,decoration:const InputDecoration(labelText:'Bảng giá',border:UnderlineInputBorder()),
                         items:lists.map((x)=>DropdownMenuItem<String>(
                           value:x['id'] as String,child:Text((x['name']??'').toString(),
                             overflow:TextOverflow.ellipsis))).toList(),
@@ -426,7 +523,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       Expanded(child:DropdownButtonFormField<String>(
                         key:ValueKey('sales-channel-'+channel.toString()),
                         initialValue:channels.any((x)=>x['id']==channel)?channel:null,
-                        isExpanded:true,decoration:const InputDecoration(labelText:'Kênh bán'),
+                        isExpanded:true,decoration:const InputDecoration(labelText:'Kênh bán',border:UnderlineInputBorder()),
                         items:[
                           const DropdownMenuItem<String>(value:null,child:Text('Bán trực tiếp')),
                           ...channels.map((x)=>DropdownMenuItem<String>(
@@ -438,7 +535,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       DropdownButtonFormField<String>(
                         key:ValueKey('sales-customer-'+customer.toString()),
                         initialValue:customers.any((x)=>x['id']==customer)?customer:null,
-                        isExpanded:true,decoration:const InputDecoration(labelText:'Khách hàng'),
+                        isExpanded:true,decoration:const InputDecoration(labelText:'Khách hàng',border:UnderlineInputBorder()),
                         items:customers.map((x)=>DropdownMenuItem<String>(
                           value:x['id'] as String,
                           child:Text(customerLabel(x),overflow:TextOverflow.ellipsis))).toList(),
@@ -447,7 +544,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       DropdownButtonFormField<String>(
                         key:ValueKey('sales-price-list-'+list.toString()),
                         initialValue:lists.any((x)=>x['id']==list)?list:null,
-                        isExpanded:true,decoration:const InputDecoration(labelText:'Bảng giá'),
+                        isExpanded:true,decoration:const InputDecoration(labelText:'Bảng giá',border:UnderlineInputBorder()),
                         items:lists.map((x)=>DropdownMenuItem<String>(
                           value:x['id'] as String,
                           child:Text((x['name']??'').toString(),overflow:TextOverflow.ellipsis))).toList(),
@@ -456,7 +553,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       DropdownButtonFormField<String>(
                         key:ValueKey('sales-channel-'+channel.toString()),
                         initialValue:channels.any((x)=>x['id']==channel)?channel:null,
-                        isExpanded:true,decoration:const InputDecoration(labelText:'Kênh bán'),
+                        isExpanded:true,decoration:const InputDecoration(labelText:'Kênh bán',border:UnderlineInputBorder()),
                         items:[
                           const DropdownMenuItem<String>(value:null,child:Text('Bán trực tiếp')),
                           ...channels.map((x)=>DropdownMenuItem<String>(
@@ -496,107 +593,145 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       child:TextField(
                         key:const ValueKey('sales-sku-search'),
                         controller:skuSearch,focusNode:skuFocus,
-                        onChanged:(_){skuSearchGeneration++;refresh((){
-                          skuMatches=[];skuResultsFor=null;selectedSkuIndex=0;
-                        });},
+                        onChanged:(_){
+                          skuDebounce?.cancel();
+                          skuSearchGeneration++;
+                          refresh((){
+                            skuMatches=[];skuResultsFor=null;
+                            selectedSkuIndex=0;skuBusy=false;
+                          });
+                          if(skuSearch.text.trim().isNotEmpty){
+                            skuDebounce=Timer(const Duration(milliseconds:220),
+                              (){if(ctx.mounted)findSkus(ctx,refresh);});
+                          }
+                        },
                         textInputAction:TextInputAction.search,
-                        onSubmitted:(_)=>findSkus(ctx,refresh,addOnEnter:true),
-                        decoration:InputDecoration(labelText:'Tìm sản phẩm theo tên, SKU, barcode',
+                        onSubmitted:(_){
+                          skuDebounce?.cancel();
+                          findSkus(ctx,refresh,addOnEnter:true);
+                        },
+                        decoration:InputDecoration(labelText:'Tìm sản phẩm theo tên, SKU, barcode · F3',
                           hintText:'Nhập mã hàng hoặc quét barcode rồi Enter',
                           prefixIcon:const Icon(Icons.qr_code_scanner_outlined),
                           suffixIcon:IconButton(
                             tooltip:'Tìm hàng',onPressed:()=>findSkus(ctx,refresh),
                             icon:const Icon(Icons.search)))),
                     ),
+                    const Padding(padding:EdgeInsets.only(top:4,bottom:2),
+                      child:Text('F3 tìm hàng · F4 tìm khách · ↑↓ chọn · Enter thêm',
+                        style:TextStyle(color:ErpTokens.muted,fontSize:11))),
                     if(skuBusy)const LinearProgressIndicator(),
                     if(skuMatches.isNotEmpty)ConstrainedBox(
                       constraints:const BoxConstraints(maxHeight:190),
                       child:ListView(shrinkWrap:true,children:[
                         for(var i=0;i<skuMatches.length;i++)ListTile(
                           key:ValueKey('sales-sku-result-'+i.toString()),
-                          selected:i==selectedSkuIndex,
-                          dense:true,
-                          title:Text(skuLabel(skuMatches[i]),maxLines:1,overflow:TextOverflow.ellipsis),
-                          subtitle:Text('Chọn đúng SKU và đơn vị'),
+                          selected:i==selectedSkuIndex,dense:true,
+                          title:Text((skuMatches[i]['productName']??'Sản phẩm').toString(),
+                            maxLines:1,overflow:TextOverflow.ellipsis),
+                          subtitle:Text(
+                            'SKU '+(skuMatches[i]['code']??skuMatches[i]['sku']??'').toString()+
+                            ' · '+(skuMatches[i]['unitCode']??'').toString()+
+                            ((skuMatches[i]['barcode']??'').toString().isEmpty?'':' · Barcode '+skuMatches[i]['barcode'].toString()),
+                            maxLines:2,overflow:TextOverflow.ellipsis),
                           onTap:()=>chooseSku(skuMatches[i],refresh),
                         ),
                       ]),
                     ),
                     const SizedBox(height:12),
-                    for(var i=0;i<lines.length;i++)Padding(
-                      padding:const EdgeInsets.only(bottom:10),
-                      child:Container(
-                        padding:const EdgeInsets.all(10),
-                        decoration:BoxDecoration(
-                          color:i.isEven?ErpTokens.mint:Colors.white,
-                          border:Border.all(color:ErpTokens.border),
-                          borderRadius:BorderRadius.circular(6)),
-                        child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
-                          if(narrow)Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
-                            DropdownButtonFormField<String>(
-                              key:ValueKey('sales-product-'+i.toString()+'-'+lines[i].sellSkuId),
-                              initialValue:lines[i].sellSkuId,isExpanded:true,
-                              decoration:InputDecoration(labelText:'SKU / Đơn vị · dòng '+(i+1).toString()),
-                              items:skus.map((x)=>DropdownMenuItem<String>(
-                                value:x['id'] as String,
-                                child:Text(skuLabel(x),overflow:TextOverflow.ellipsis))).toList(),
-                              onChanged:(v){if(v!=null){
-                                lines[i].sellSkuId=v;starterUntouched=false;invalidate(refresh);
-                              }}),
-                            const SizedBox(height:7),
+                    if(lines.isNotEmpty&&!narrow)Padding(
+                      padding:const EdgeInsets.symmetric(horizontal:8,vertical:7),
+                      child:Row(children:[
+                        const Expanded(flex:5,child:Text('HÀNG HÓA / SKU',
+                          style:TextStyle(fontWeight:FontWeight.w700,fontSize:11,color:ErpTokens.muted))),
+                        const SizedBox(width:60,child:Text('ĐVT',style:TextStyle(fontSize:11,color:ErpTokens.muted))),
+                        const SizedBox(width:112,child:Text('SỐ LƯỢNG',style:TextStyle(fontSize:11,color:ErpTokens.muted))),
+                        const SizedBox(width:112,child:Text('ĐƠN GIÁ',textAlign:TextAlign.right,
+                          style:TextStyle(fontSize:11,color:ErpTokens.muted))),
+                        const SizedBox(width:130,child:Text('THÀNH TIỀN',textAlign:TextAlign.right,
+                          style:TextStyle(fontSize:11,color:ErpTokens.muted))),
+                        const SizedBox(width:42),
+                      ])),
+                    for(var i=0;i<lines.length;i++)Builder(builder:(rowContext){
+                      final entry=lines[i];
+                      final sku=skus.firstWhere((x)=>x['id']==entry.sellSkuId);
+                      final name=(sku['productName']??sku['name']??'Sản phẩm').toString();
+                      final code=(sku['code']??sku['sku']??'').toString();
+                      final unit=(sku['unitCode']??'').toString();
+                      final quote=ready&&i<quotes!.length?quotes![i]:null;
+                      final price=quote==null?'—':money(quote['unitPrice']);
+                      final lineTotal=quote==null?'—':money(quote['lineTotal']);
+                      final productName=Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+                        Text(name,style:const TextStyle(color:ErpTokens.ink,fontWeight:FontWeight.w700),
+                          maxLines:2,overflow:TextOverflow.ellipsis),
+                        Text('SKU $code',style:const TextStyle(color:ErpTokens.muted,fontSize:12),
+                          maxLines:1,overflow:TextOverflow.ellipsis),
+                      ]);
+                      final quantityField=SizedBox(width:narrow?118:100,
+                        child:TextField(
+                          key:ValueKey('sales-qty-$i'),
+                          controller:entry.quantity,focusNode:entry.quantityFocus,
+                          onTap:()=>entry.quantity.selection=TextSelection(
+                            baseOffset:0,extentOffset:entry.quantity.text.length),
+                          onChanged:(_)=>invalidate(refresh),
+                          onSubmitted:(_)=>skuFocus.requestFocus(),
+                          keyboardType:const TextInputType.numberWithOptions(decimal:true),
+                          textInputAction:TextInputAction.next,
+                          textAlign:TextAlign.center,
+                          decoration:const InputDecoration(
+                            isDense:true,labelText:'Số lượng',
+                            border:UnderlineInputBorder(),
+                            contentPadding:EdgeInsets.symmetric(horizontal:4,vertical:8)),
+                        ));
+                      final remove=IconButton(
+                        key:ValueKey('sales-remove-$i'),
+                        tooltip:'Bỏ dòng hàng',
+                        onPressed:(){lines.removeAt(i).dispose();invalidate(refresh);},
+                        icon:const Icon(Icons.close,size:18,color:ErpTokens.muted));
+                      return Container(
+                        key:ValueKey('sales-line-$i'),
+                        padding:const EdgeInsets.symmetric(horizontal:8,vertical:9),
+                        decoration:const BoxDecoration(
+                          border:Border(bottom:BorderSide(color:ErpTokens.border))),
+                        child:narrow?
+                          Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
                             Row(children:[
-                              Expanded(child:TextField(
-                                key:ValueKey('sales-qty-'+i.toString()),controller:lines[i].quantity,
-                                onChanged:(_){starterUntouched=false;invalidate(refresh);},
-                                keyboardType:const TextInputType.numberWithOptions(decimal:true),
-                                decoration:const InputDecoration(labelText:'Số lượng'))),
-                              IconButton(tooltip:'Bỏ dòng hàng',onPressed:lines.length==1?null:(){
-                                lines.removeAt(i).dispose();invalidate(refresh);
-                              },icon:const Icon(Icons.remove_circle_outline)),
+                              Text((i+1).toString()+'. ',style:const TextStyle(color:ErpTokens.muted)),
+                              Expanded(child:productName),
+                              remove,
                             ]),
-                          ])else Row(children:[
-                            Expanded(child:DropdownButtonFormField<String>(
-                              key:ValueKey('sales-product-'+i.toString()+'-'+lines[i].sellSkuId),
-                              initialValue:lines[i].sellSkuId,isExpanded:true,
-                              decoration:InputDecoration(labelText:'SKU / Đơn vị · dòng '+(i+1).toString()),
-                              items:skus.map((x)=>DropdownMenuItem<String>(
-                                value:x['id'] as String,
-                                child:Text(skuLabel(x),overflow:TextOverflow.ellipsis))).toList(),
-                              onChanged:(v){if(v!=null){
-                                lines[i].sellSkuId=v;starterUntouched=false;invalidate(refresh);
-                              }})),
-                            const SizedBox(width:8),
-                            SizedBox(width:130,child:TextField(
-                              key:ValueKey('sales-qty-'+i.toString()),controller:lines[i].quantity,
-                              onChanged:(_){starterUntouched=false;invalidate(refresh);},
-                              keyboardType:const TextInputType.numberWithOptions(decimal:true),
-                              decoration:const InputDecoration(labelText:'Số lượng'))),
-                            IconButton(tooltip:'Bỏ dòng hàng',onPressed:lines.length==1?null:(){
-                              lines.removeAt(i).dispose();invalidate(refresh);
-                            },icon:const Icon(Icons.remove_circle_outline)),
+                            const SizedBox(height:5),
+                            Row(children:[
+                              Text(unit,style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
+                              const SizedBox(width:12),
+                              quantityField,
+                              const Spacer(),
+                              Column(crossAxisAlignment:CrossAxisAlignment.end,children:[
+                                Text(price,style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
+                                Text(lineTotal,style:const TextStyle(
+                                  color:ErpTokens.ink,fontWeight:FontWeight.w800)),
+                              ]),
+                            ]),
+                          ]):
+                          Row(children:[
+                            Expanded(flex:5,child:productName),
+                            SizedBox(width:60,child:Text(unit,
+                              style:const TextStyle(color:ErpTokens.muted))),
+                            SizedBox(width:112,child:quantityField),
+                            SizedBox(width:112,child:Text(price,textAlign:TextAlign.right)),
+                            SizedBox(width:130,child:Text(lineTotal,textAlign:TextAlign.right,
+                              style:const TextStyle(fontWeight:FontWeight.w800))),
+                            SizedBox(width:42,child:remove),
                           ]),
-                          if(ready&&i<quotes!.length)Padding(
-                            padding:const EdgeInsets.only(top:7),
-                            child:Wrap(spacing:16,runSpacing:5,children:[
-                              Text('Đơn giá: '+money(quotes![i]['unitPrice']),
-                                style:const TextStyle(color:ErpTokens.ink,fontWeight:FontWeight.w700)),
-                              Text('Thành tiền: '+money(quotes![i]['lineTotal']),
-                                style:const TextStyle(color:ErpTokens.ink,fontWeight:FontWeight.w700)),
-                              Text('Quy đổi: '+(quotes![i]['normalizedBaseQuantity']??'').toString(),
-                                style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
-                              Text('Nguồn giá: '+((quotes![i]['trace'] as List?)?.length??0).toString()+' quy tắc',
-                                style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
-                            ]),
-                          ),
-                        ]),
-                      )),
+                      );
+                    }),
                     if(lines.isEmpty)const Padding(
                       padding:EdgeInsets.symmetric(vertical:12),
                       child:Text('Chưa có dòng hàng. Tìm theo mã, tên hoặc barcode rồi nhấn Enter để thêm.',
                         style:TextStyle(color:ErpTokens.muted))),
                     const Divider(height:24),
                     TextField(controller:note,maxLines:2,
-                      decoration:const InputDecoration(labelText:'Ghi chú đơn hàng')),
+                      decoration:const InputDecoration(labelText:'Ghi chú đơn hàng',border:UnderlineInputBorder())),
                     const SizedBox(height:8),
                     const Text('Giá và thành tiền do máy chủ tính, kiểm tra lại khi xác nhận. Xác nhận đơn không tự xuất kho hoặc thu tiền.',
                       style:TextStyle(fontSize:12,color:ErpTokens.muted)),
@@ -631,7 +766,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         style:const TextStyle(color:ErpTokens.ink,fontSize:16,
                           fontWeight:FontWeight.w800)),
                       Wrap(spacing:8,runSpacing:7,children:[
-                        TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Đóng')),
+                        TextButton(onPressed:()=>requestClose(ctx),child:const Text('Đóng')),
                         OutlinedButton.icon(
                           key:const ValueKey('sales-quote'),
                           onPressed:quoteBusy?null:()=>preview(ctx,refresh),
@@ -639,22 +774,24 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           label:Text(quoteBusy?'Đang tra giá…':'Tra giá')),
                         FilledButton(
                           key:const ValueKey('sales-save'),
-                          onPressed:quoteBusy?null:()=>submitForm(ctx,refresh,confirm:false),
+                          onPressed:quoteBusy||!ready?null:()=>submitForm(ctx,refresh,confirm:false),
                           child:const Text('Lưu đơn hàng')),
                         if(can('orders.confirm'))FilledButton.icon(
                           key:const ValueKey('sales-save-confirm'),
-                          onPressed:quoteBusy?null:()=>submitForm(ctx,refresh,confirm:true),
+                          onPressed:quoteBusy||!ready?null:()=>submitForm(ctx,refresh,confirm:true),
                           icon:const Icon(Icons.verified_outlined),
                           label:const Text('Lưu và xác nhận')),
                       ]),
                     ]),
                 ),
               ])),
-          );
+          ));
         }),
       );
     }finally{
-      note.dispose();skuSearch.dispose();customerSearch.dispose();skuFocus.dispose();
+      skuDebounce?.cancel();customerDebounce?.cancel();
+      note.dispose();skuSearch.dispose();customerSearch.dispose();
+      skuFocus.dispose();customerFocus.dispose();
       for(final line in lines){line.dispose();}
     }
   }
@@ -903,9 +1040,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     }
     Widget statusInfo(String title,String value,IconData icon)=>Container(
       width:195,padding:const EdgeInsets.all(12),
-      decoration:BoxDecoration(color:ErpTokens.mint,
-        borderRadius:BorderRadius.circular(6),
-        border:Border.all(color:ErpTokens.border)),
+      decoration:const BoxDecoration(
+        border:Border(bottom:BorderSide(color:ErpTokens.border))),
       child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
         Row(children:[Icon(icon,color:ErpTokens.primary,size:18),
           const SizedBox(width:6),Expanded(child:Text(title,
@@ -965,14 +1101,15 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                   fontWeight:FontWeight.w800,color:ErpTokens.ink,fontSize:16)),
                 const SizedBox(height:8),
                 for(final line in (item['lines'] as List<dynamic>))
-                  Container(margin:const EdgeInsets.only(bottom:8),
-                    padding:const EdgeInsets.all(12),
-                    decoration:BoxDecoration(color:ErpTokens.surface,
-                      border:Border.all(color:ErpTokens.border),
-                      borderRadius:BorderRadius.circular(6)),
+                  Container(
+                    padding:const EdgeInsets.symmetric(horizontal:6,vertical:12),
+                    decoration:const BoxDecoration(
+                      border:Border(bottom:BorderSide(color:ErpTokens.border))),
                     child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
-                      Text((line['sku']??'').toString()+' · '+(line['productName']??'').toString(),
+                      Text((line['productName']??'').toString(),
                         style:const TextStyle(color:ErpTokens.ink,fontWeight:FontWeight.w700)),
+                      Text('SKU '+(line['sku']??'').toString(),
+                        style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
                       const SizedBox(height:6),
                       Wrap(spacing:16,runSpacing:6,children:[
                         Text('Số lượng: '+line['quantity'].toString()+' '+line['unitCode'].toString()),
@@ -1049,7 +1186,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
 
   }
   @override Widget build(BuildContext context){
-    return Card(clipBehavior:Clip.antiAlias,child:Padding(
+    return Padding(
       padding:const EdgeInsets.all(18),
       child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
         Wrap(alignment:WrapAlignment.spaceBetween,
@@ -1110,6 +1247,30 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         else if(orders.isEmpty)const Center(child:Padding(
           padding:EdgeInsets.all(26),child:Text('Chưa có đơn hàng.',
             style:TextStyle(color:ErpTokens.muted))))
+        else if(MediaQuery.sizeOf(context).width<720)
+          Column(children:[
+            for(final o in orders)InkWell(
+              onTap:saving?null:()=>openOrder(o),
+              child:Container(
+                padding:const EdgeInsets.symmetric(horizontal:8,vertical:11),
+                decoration:const BoxDecoration(
+                  border:Border(bottom:BorderSide(color:ErpTokens.border))),
+                child:Row(children:[
+                  Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+                    Text(o['documentNo'] as String? ?? 'Chưa cấp số',
+                      style:const TextStyle(fontWeight:FontWeight.w700,color:ErpTokens.ink)),
+                    Text((o['customerName']??'').toString(),maxLines:1,
+                      overflow:TextOverflow.ellipsis),
+                    Text(stateOf(o),style:const TextStyle(
+                      color:ErpTokens.muted,fontSize:12)),
+                  ])),
+                  const SizedBox(width:10),
+                  Text(money(o['total']),style:const TextStyle(
+                    color:ErpTokens.ink,fontWeight:FontWeight.w700)),
+                  const Icon(Icons.chevron_right,color:ErpTokens.muted),
+                ]),
+              )),
+          ])
         else SingleChildScrollView(scrollDirection:Axis.horizontal,child:DataTable(
           headingRowColor:const WidgetStatePropertyAll(ErpTokens.mint),
           headingTextStyle:const TextStyle(fontWeight:FontWeight.w700,color:ErpTokens.ink),
@@ -1133,6 +1294,6 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           onPressed:loading?null:reload,icon:const Icon(Icons.refresh),
           label:const Text('Làm mới'))),
       ]),
-    ));
+    );
   }
 }
