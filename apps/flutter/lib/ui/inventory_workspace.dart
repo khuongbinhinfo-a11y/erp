@@ -127,17 +127,42 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
   Future<void> openStock()async{
     final b=branchId,w=warehouseId;if(b==null||w==null||!can('inventory.post'))return;
     List<Map<String,dynamic>> products;
-    try {products=await widget.client.catalogItems(widget.session.token,'products',branchId:b);}
-    on ErpApiError catch(e){notify(e.message,bad:true);return;}
+    try{
+      products=await widget.client.catalogItems(
+        widget.session.token,'products',branchId:b);
+    }on ErpApiError catch(e){notify(e.message,bad:true);return;}
     if(products.isEmpty){notify('Cần tạo sản phẩm trước.',bad:true);return;}
-    final qty=TextEditingController();
-    String product=products.first['id'].toString();
+    final qty=TextEditingController(),lookupText=TextEditingController();
+    String? product=products.first['id'].toString();
+    Future<void> searchProduct(StateSetter refresh,BuildContext dctx)async{
+      try{
+        final found=await widget.client.catalogItems(widget.session.token,
+          'products',branchId:b,query:lookupText.text.trim());
+        if(!mounted||!dctx.mounted)return;
+        refresh((){
+          products=found.where((x)=>x['active']!=false).toList();
+          product=products.isEmpty?null:products.first['id'].toString();
+        });
+      }on ErpApiError catch(e){notify(e.message,bad:true);}
+      catch(_){notify('Không tìm được sản phẩm. Vui lòng thử lại.',bad:true);}
+    }
     try{
       final selection=await showDialog<Map<String,String>>(context:context,
         builder:(dctx)=>StatefulBuilder(builder:(dctx,refresh)=>AlertDialog(
           title:const Text('Ghi tồn đầu kỳ'),
-          content:SizedBox(width:400,child:Column(mainAxisSize:MainAxisSize.min,children:[
-            DropdownButtonFormField<String>(initialValue:product,isExpanded:true,
+          content:SizedBox(width:420,child:Column(mainAxisSize:MainAxisSize.min,children:[
+            TextField(key:const ValueKey('inventory-product-search'),
+              controller:lookupText,
+              onSubmitted:(_)=>searchProduct(refresh,dctx),
+              decoration:InputDecoration(labelText:'Tìm SKU hoặc tên sản phẩm',
+                suffixIcon:IconButton(tooltip:'Tìm sản phẩm',
+                  icon:const Icon(Icons.search),
+                  onPressed:()=>searchProduct(refresh,dctx)))),
+            const SizedBox(height:10),
+            if(products.isEmpty)const Text('Không tìm thấy sản phẩm phù hợp.'),
+            DropdownButtonFormField<String>(
+              key:ValueKey('inventory-opening-product-'+(product??'none')),
+              initialValue:product,isExpanded:true,
               decoration:const InputDecoration(labelText:'Sản phẩm'),
               items:products.map((p)=>DropdownMenuItem<String>(
                 value:p['id'].toString(),
@@ -145,14 +170,14 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
                   overflow:TextOverflow.ellipsis))).toList(),
               onChanged:(v){if(v!=null)refresh(()=>product=v);}),
             const SizedBox(height:12),
-            TextField(controller:qty,
+            TextField(key:const ValueKey('inventory-opening-qty'),controller:qty,
               keyboardType:const TextInputType.numberWithOptions(decimal:true),
               decoration:const InputDecoration(labelText:'Số lượng theo đơn vị gốc',
                 helperText:'Chỉ ghi một lần trước khi kho phát sinh chứng từ.')),
           ])),
           actions:[TextButton(onPressed:()=>Navigator.pop(dctx),child:const Text('Đóng')),
-            FilledButton(onPressed:()=>Navigator.pop(dctx,{
-              'product':product,'quantity':qty.text.trim()}),
+            FilledButton(onPressed:product==null?null:()=>Navigator.pop(dctx,{
+              'product':product!,'quantity':qty.text.trim()}),
               child:const Text('Xác nhận'))],
         )));
       if(selection==null)return;
@@ -164,7 +189,7 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
       await send('openings',{'branchId':b,'warehouseId':w,
         'productId':selection['product'],'quantity':amount},
         intent:'opening:'+selection['product']!);
-    }finally{qty.dispose();}
+    }finally{qty.dispose();lookupText.dispose();}
   }
   Future<void> reserve()async{
     final b=branchId,w=warehouseId;if(b==null||w==null||!can('inventory.reserve'))return;
@@ -175,21 +200,54 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
     }on ErpApiError catch(e){
       notify('Cần quyền xem đơn đã xác nhận. '+e.message,bad:true);return;
     }
-    if(orders.isEmpty){notify('Không có đơn đã xác nhận.',bad:true);return;}
-    String chosen=orders.first['id'].toString();
-    final picked=await showDialog<String>(context:context,builder:(ctx)=>
-      StatefulBuilder(builder:(ctx,refresh)=>AlertDialog(
-        title:const Text('Chọn đơn để giữ hàng'),
-        content:SizedBox(width:440,child:DropdownButtonFormField<String>(
-          initialValue:chosen,isExpanded:true,decoration:const InputDecoration(labelText:'Đơn bán'),
-          items:orders.map((o)=>DropdownMenuItem<String>(
-            value:o['id'].toString(),child:Text((o['documentNo']??'').toString()+
-              ' · '+(o['customerName']??'').toString(),overflow:TextOverflow.ellipsis))).toList(),
-          onChanged:(v){if(v!=null)refresh(()=>chosen=v);},
-        )),
-        actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Đóng')),
-          FilledButton(onPressed:()=>Navigator.pop(ctx,chosen),child:const Text('Tiếp tục'))],
-      )));
+    final search=TextEditingController();
+    String? chosen=orders.isEmpty?null:orders.first['id'].toString();
+    Future<void> searchOrders(StateSetter refresh,BuildContext ctx)async{
+      try{
+        final found=await widget.client.salesOrders(widget.session.token,b,
+          query:search.text.trim());
+        if(!mounted||!ctx.mounted)return;
+        refresh((){
+          orders=found.where((x)=>x['status']=='CONFIRMED'&&
+             x['versionStatus']=='CONFIRMED').toList();
+          chosen=orders.isEmpty?null:orders.first['id'].toString();
+        });
+      }on ErpApiError catch(e){notify(e.message,bad:true);}
+      catch(_){notify('Không tra cứu được đơn bán.',bad:true);}
+    }
+    String? picked;
+    try{
+      picked=await showDialog<String>(context:context,builder:(ctx)=>
+        StatefulBuilder(builder:(ctx,refresh)=>AlertDialog(
+          title:const Text('Chọn đơn để giữ hàng'),
+          content:SizedBox(width:440,child:Column(
+            mainAxisSize:MainAxisSize.min,children:[
+            TextField(key:const ValueKey('inventory-order-search'),
+              controller:search,
+              onSubmitted:(_)=>searchOrders(refresh,ctx),
+              decoration:InputDecoration(labelText:'Tìm số đơn hoặc khách hàng',
+                suffixIcon:IconButton(tooltip:'Tìm đơn bán',
+                  icon:const Icon(Icons.search),
+                  onPressed:()=>searchOrders(refresh,ctx)))),
+            const SizedBox(height:10),
+            if(orders.isEmpty)const Text('Không có đơn phù hợp. Nhập số đơn để tìm thêm.'),
+            DropdownButtonFormField<String>(
+              key:ValueKey('inventory-reserve-order-'+(chosen??'none')),
+              initialValue:chosen,isExpanded:true,
+              decoration:const InputDecoration(labelText:'Đơn bán đã xác nhận'),
+              items:orders.map((o)=>DropdownMenuItem<String>(
+                value:o['id'].toString(),
+                child:Text((o['documentNo']??'').toString()+
+                  ' · '+(o['customerName']??'').toString(),
+                  overflow:TextOverflow.ellipsis))).toList(),
+              onChanged:(v){if(v!=null)refresh(()=>chosen=v);},
+            ),
+          ])),
+          actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Đóng')),
+            FilledButton(onPressed:chosen==null?null:()=>Navigator.pop(ctx,chosen),
+              child:const Text('Tiếp tục'))],
+        )));
+    }finally{search.dispose();}
     if(picked==null)return;
     Map<String,dynamic> detail;
     try{detail=await widget.client.salesOrder(widget.session.token,picked,b);}
