@@ -286,6 +286,20 @@ class ErpIdentityClient {
     return (r['items'] as List<dynamic>)
       .map((x)=>Map<String,dynamic>.from(x as Map)).toList();
   }
+  /// Server-paginated reservations. ACTIVE and RELEASED never share one capped list.
+  Future<({List<Map<String,dynamic>> items,bool hasMore})> inventoryReservationPage(
+      String token,{required String branchId,required String warehouseId,
+      required String state,required int offset})async{
+    if(!const {'ACTIVE','RELEASED'}.contains(state)||offset<0||offset%100!=0){
+      throw const ErpApiError(400,'Trang phiếu giữ hàng không hợp lệ.');
+    }
+    final q=Uri(queryParameters:{'branchId':branchId,'warehouseId':warehouseId,
+      'state':state,'offset':'$offset'}).query;
+    final r=await _request('GET','/v1/inventory/reservations?$q',token:token);
+    return (items:(r['items'] as List<dynamic>).map((x)=>
+      Map<String,dynamic>.from(x as Map)).toList(),
+      hasMore:r['hasMore']==true);
+  }
   /// A pending request uses an identical command body and key until the server ACKs.
   final Map<String,({Map<String,dynamic> payload,String key})> _inventoryPending={};
   ({Map<String,dynamic> payload,String key})? pendingInventory(String id){

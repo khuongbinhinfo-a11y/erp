@@ -135,11 +135,23 @@ test("R3 real PostgreSQL: on-hand, hold, release, no oversell, exact replay, RBA
   const held=await call("/v1/inventory/reservations?branchId="+b+"&warehouseId="+w,
    "GET",undefined,token);
   assert.equal(held.status,200);assert.equal(held.body.items.length,1);
+  assert.equal(held.body.hasMore,false);
+  assert.equal(held.body.items[0].state,"ACTIVE");
+  const badPage=await call("/v1/inventory/reservations?branchId="+b+
+    "&warehouseId="+w+"&state=RELEASED&offset=-1","GET",undefined,token);
+  assert.equal(badPage.status,400);
+
   const releasePath="/v1/inventory/reservations/"+accepted.body.id+"/release";
   const releaseKey="release-"+randomUUID();
   const released=await make(releasePath,{branchId:b,warehouseId:w},0,releaseKey);
   assert.equal(released.status,200,JSON.stringify(released.body));
   assert.equal(released.body.stock.reserved,"0.000000");
+  const releasedList=await call("/v1/inventory/reservations?branchId="+b+
+    "&warehouseId="+w+"&state=RELEASED","GET",undefined,token);
+  assert.equal(releasedList.status,200);
+  assert.equal(releasedList.body.items.length,1);
+  assert.equal(releasedList.body.items[0].id,accepted.body.id);
+
   assert.equal((await make(releasePath,{branchId:b,warehouseId:w},0,
    "different-release-"+randomUUID())).status,409);
   assert.deepEqual((await make(releasePath,{branchId:b,warehouseId:w},0,releaseKey)).body,

@@ -57,7 +57,9 @@ export async function movements(db:PoolClient,t:string,s:WarehouseScope){
    ORDER BY l.posted_at DESC,l.id DESC LIMIT 100`,[t,s.branchId,s.warehouseId]);
  return r.rows;
 }
-export async function reservations(db:PoolClient,t:string,s:WarehouseScope){
+/** Each page includes only one reservation lifecycle; released history cannot hide ACTIVE holds. */
+export async function reservations(db:PoolClient,t:string,s:WarehouseScope,
+ state:"ACTIVE"|"RELEASED"="ACTIVE",offset=0){
  const r=await db.query(
   `SELECT r.id,r.product_id AS "productId",p.sku,p.name AS "productName",
     r.order_id AS "orderId",o.document_no AS "documentNo",r.version_no AS version,
@@ -68,9 +70,10 @@ export async function reservations(db:PoolClient,t:string,s:WarehouseScope){
       AND p.branch_id=r.branch_id AND p.id=r.product_id
     JOIN sales_order o ON o.installation_id=r.installation_id
       AND o.branch_id=r.branch_id AND o.id=r.order_id
-    WHERE r.installation_id=$1 AND r.branch_id=$2 AND r.warehouse_id=$3
-    ORDER BY r.created_at DESC,r.id DESC LIMIT 100`,[t,s.branchId,s.warehouseId]);
- return r.rows;
+    WHERE r.installation_id=$1 AND r.branch_id=$2 AND r.warehouse_id=$3 AND r.state=$4
+    ORDER BY r.created_at DESC,r.id DESC LIMIT 101 OFFSET $5`,
+    [t,s.branchId,s.warehouseId,state,offset]);
+ return {items:r.rows.slice(0,100),hasMore:r.rows.length>100};
 }
 export async function openStock(db:PoolClient,ctx:MutationContext,input:OpeningInput){
  if(!validBaseQty(input.quantity))throw new InventoryFault(400,"INVALID_QUANTITY");
