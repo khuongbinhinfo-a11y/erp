@@ -423,32 +423,65 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                     const Text('Người mua và chính sách giá',
                       style:TextStyle(color:ErpTokens.ink,fontSize:16,fontWeight:FontWeight.w700)),
                     const SizedBox(height:9),
-                    TextField(
+                    Focus(onKeyEvent:(node,event){
+                      if(event is! KeyDownEvent||customerMatches.isEmpty)
+                        return KeyEventResult.ignored;
+                      if(event.logicalKey==LogicalKeyboardKey.arrowDown){
+                        refresh(()=>selectedCustomerIndex=
+                          (selectedCustomerIndex+1)%customerMatches.length);
+                        return KeyEventResult.handled;
+                      }
+                      if(event.logicalKey==LogicalKeyboardKey.arrowUp){
+                        refresh(()=>selectedCustomerIndex=
+                          (selectedCustomerIndex-1+customerMatches.length)%customerMatches.length);
+                        return KeyEventResult.handled;
+                      }
+                      if(event.logicalKey==LogicalKeyboardKey.enter){
+                        chooseCustomer(customerMatches[selectedCustomerIndex],refresh);
+                        return KeyEventResult.handled;
+                      }
+                      return KeyEventResult.ignored;
+                    },child:TextField(
                       key:const ValueKey('sales-customer-search'),
-                      controller:customerSearch,
-                      onSubmitted:(_)=>findCustomers(ctx,refresh),
-                      decoration:InputDecoration(labelText:'Tìm khách theo mã, tên',
+                      controller:customerSearch,focusNode:customerFocus,
+                      onChanged:(_){
+                        customerDebounce?.cancel();
+                        customerSearchGeneration++;
+                        refresh((){
+                          customerMatches=[];selectedCustomerIndex=0;
+                          customerBusy=false;
+                        });
+                        if(customerSearch.text.trim().isNotEmpty){
+                          customerDebounce=Timer(const Duration(milliseconds:220),
+                            (){if(ctx.mounted)findCustomers(ctx,refresh);});
+                        }
+                      },
+                      onSubmitted:(_){
+                        customerDebounce?.cancel();
+                        if(customerMatches.isNotEmpty){
+                          chooseCustomer(customerMatches[selectedCustomerIndex],refresh);
+                        }else{findCustomers(ctx,refresh);}
+                      },
+                      decoration:InputDecoration(labelText:'Tìm khách theo mã, tên · F4',
                         hintText:selectedCustomer(),
                         prefixIcon:const Icon(Icons.person_search_outlined),
                         suffixIcon:IconButton(tooltip:'Tìm khách',onPressed:()=>findCustomers(ctx,refresh),
-                          icon:const Icon(Icons.search)))),
+                          icon:const Icon(Icons.search))))),
                     if(customerBusy)const LinearProgressIndicator(),
                     if(customerMatches.isNotEmpty)ConstrainedBox(
                       constraints:const BoxConstraints(maxHeight:148),
-                      child:ListView(shrinkWrap:true,children:customerMatches.map((item)=>
-                        ListTile(
-                          key:ValueKey('sales-customer-result-'+item['id'].toString()),
-                          dense:true,
-                          title:Text(customerLabel(item),maxLines:1,overflow:TextOverflow.ellipsis),
-                          subtitle:Text((item['deliveryAddress']??item['phone']??'').toString(),
+                      child:ListView(shrinkWrap:true,children:[
+                        for(var i=0;i<customerMatches.length;i++)ListTile(
+                          key:ValueKey('sales-customer-result-'+customerMatches[i]['id'].toString()),
+                          selected:i==selectedCustomerIndex,dense:true,
+                          title:Text(customerLabel(customerMatches[i]),
                             maxLines:1,overflow:TextOverflow.ellipsis),
-                          onTap:(){
-                            if(!customers.any((x)=>x['id']==item['id']))customers.add(item);
-                            customer=item['id'] as String;
-                            customerSearch.clear();customerMatches=[];
-                            invalidate(refresh);
-                          },
-                        )).toList()),
+                          subtitle:Text((customerMatches[i]['deliveryAddress']??
+                            customerMatches[i]['phone']??'').toString(),
+                            maxLines:1,overflow:TextOverflow.ellipsis),
+                          onTap:()=>chooseCustomer(customerMatches[i],refresh),
+                        ),
+                      ]),
                     ),
                     const SizedBox(height:8),
                     if(!narrow)Row(children:[
