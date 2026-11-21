@@ -108,7 +108,9 @@ jobs:
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM public.schema_migrations WHERE version='0010_r1_sales_price_snapshot.sql'" | grep -qx 1
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM public.schema_migrations WHERE version='0011_r3_inventory_ledger.sql'" | grep -qx 1
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('inventory_ledger','inventory_reservation')" | grep -qx 2
-          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM public.schema_migrations" | grep -qx 11
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM public.schema_migrations WHERE version='0012_r3_purchase_receipt.sql'" | grep -qx 1
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('purchase_order_sequence','purchase_order','purchase_order_line','purchase_receipt','purchase_receipt_line')" | grep -qx 5
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM public.schema_migrations" | grep -qx 12
       - name: Rehearse pg_dump + pg_restore and reconcile fresh CI PostgreSQL only
         env:
           ERP_DB_MIGRATION_TARGET: ci
