@@ -191,6 +191,7 @@ void main(){
   });
   testWidgets('R2: scan barcode, quote and recover lost confirm ACK without double posting', (tester)async{
     var saved=false,confirmed=false,confirmCount=0,quoteCount=0,skuSearchCount=0;
+    var useLongQuotedPrice=false;
     final traces=<String>[];
     http.Response reply(Object data,int status)=>http.Response(jsonEncode(data),status,
       headers:const {'content-type':'application/json; charset=utf-8'});
@@ -217,7 +218,7 @@ void main(){
           if(request.url.queryParameters['q']!=null)skuSearchCount++;
           return reply({'items':[{'id':sellSku,
             'productId':product,'code':'SKU-01','productName':'Sản phẩm A',
-            'barcode':'BARCODE-A1','unitCode':'cai','active':true}]},200);
+            'barcode':'BARCODE-A1','unitCode':'thùng','active':true}]},200);
         }
         if(path=='/v1/catalog/price-lists'){
           return reply({'items':[{'id':priceList,
@@ -242,13 +243,14 @@ void main(){
           final body=jsonDecode(request.body) as Map<String,dynamic>;
           expect(body['branchId'],branch);
           expect((body['lines'] as List).single['sellSkuId'],sellSku);
+          final amount=useLongQuotedPrice?'123456789012345':'35000';
           return reply({'quote':{
-            'lines':[{'sellSkuId':sellSku,'unitPrice':'35000','lineTotal':'35000',
+            'lines':[{'sellSkuId':sellSku,'unitPrice':amount,'lineTotal':amount,
               'normalizedBaseQuantity':'1.000000',
               'trace':[{'scope':'BASE_RULE'}],
               'priceSignature':'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'}],
-            'subtotal':'35000','discountTotal':'0','taxTotal':'0',
-            'grandTotal':'35000',
+            'subtotal':amount,'discountTotal':'0','taxTotal':'0',
+            'grandTotal':amount,
           }},200);
         }
         if(path=='/v1/sales/orders'&&request.method=='POST'){
@@ -327,14 +329,23 @@ void main(){
     await tester.pumpAndSettle();
     expect(quoteCount,1);
     expect(find.textContaining('35.000 ₫'),findsWidgets);
+    // Large server amounts and a carton unit must fit a 320px viewport.
+    useLongQuotedPrice=true;
+    await tester.tap(find.byKey(const ValueKey('sales-quote')));
+    await tester.pumpAndSettle();
+    await tester.runAsync(() async=>
+      Future<void>.delayed(const Duration(milliseconds:120)));
+    await tester.pumpAndSettle();
+    expect(quoteCount,2);
     for(final viewport in const [Size(1440,900),Size(1280,800),
-      Size(390,844),Size(360,740)]){
+      Size(390,844),Size(360,740),Size(320,700)]){
       tester.view.physicalSize=viewport;
       await tester.pumpAndSettle();
       expect(tester.takeException(),isNull,
         reason:'R2 order workspace must remain usable at $viewport');
       expect(find.byKey(const ValueKey('sales-quote')),findsOneWidget);
       expect(find.byKey(const ValueKey('sales-save-confirm')),findsOneWidget);
+      expect(find.byKey(const ValueKey('sales-line-0')),findsOneWidget);
     }
     tester.view.physicalSize=const Size(1366,768);
     await tester.pumpAndSettle();
