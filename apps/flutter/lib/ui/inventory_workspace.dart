@@ -32,7 +32,7 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
     if(mounted)ErpToast.show(context,message,isError:bad);
   }
   Future<void> loadBranches() async {
-    final n=++serial;setState((){loading=true;error=null;});
+    final n=++serial;setState((){loading=true;error=null;loadingMore=false;});
     try {
       final data=await widget.client.catalogItems(widget.session.token,'branches');
       if(!mounted||n!=serial)return;
@@ -49,7 +49,7 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
   }
   Future<void> loadWarehouses()async{
     final b=branchId;if(b==null)return;
-    final n=++serial;setState((){loading=true;error=null;rows=[];});
+    final n=++serial;setState((){loading=true;error=null;loadingMore=false;hasMore=false;rows=[];});
     try {
       final data=await widget.client.catalogItems(
         widget.session.token,'warehouses',branchId:b);
@@ -67,7 +67,7 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
   }
   Future<void> reload()async{
     final b=branchId,w=warehouseId;if(b==null||w==null)return;
-    final n=++serial;setState((){loading=true;error=null;});
+    final n=++serial;setState((){loading=true;error=null;loadingMore=false;});
     try{
       if(tab=='reservations'){
         final page=await widget.client.inventoryReservationPage(widget.session.token,
