@@ -73,7 +73,7 @@ class ErpIdentityClient {
   ErpIdentityClient({this.apiOrigin=erpApiOrigin,http.Client? httpClient}):_http=httpClient??http.Client();
   bool get configured=>Uri.tryParse(apiOrigin)?.scheme=='https'&&
     Uri.tryParse(apiOrigin)?.host.isNotEmpty==true;
-  void dispose(){_r1Pending.clear();_inventoryPending.clear();_http.close();}
+  void dispose(){_r1Pending.clear();_inventoryPending.clear();_purchasePending.clear();_http.close();}
   String _key()=>'erp-'+DateTime.now().microsecondsSinceEpoch.toString()+'-${++_sequence}';
   Future<Map<String,dynamic>> _request(String method,String path,{
     String? token,Map<String,dynamic>? body,int? revision,String? idempotencyKey,
@@ -151,7 +151,7 @@ class ErpIdentityClient {
     }
   }
   Future<IdentitySession> login(String username,String password)async{
-    _r1Pending.clear();_inventoryPending.clear();
+    _r1Pending.clear();_inventoryPending.clear();_purchasePending.clear();
     final raw=await _request('POST','/v1/auth/login',body:{'loginName':username,'password':password});
     final token=raw['token'] as String;
     try{
@@ -173,7 +173,7 @@ class ErpIdentityClient {
   Future<IdentitySession> refresh(IdentitySession current)=>restore(current.token);
   Future<void> logout(String token)async{
     try{await _request('POST','/v1/auth/logout',token:token);}
-    finally{_r1Pending.clear();_inventoryPending.clear();}
+    finally{_r1Pending.clear();_inventoryPending.clear();_purchasePending.clear();}
   }
   Future<List<IdentityUser>> users(String token)async{
     final r=await _request('GET','/v1/admin/users',token:token);
@@ -300,6 +300,34 @@ class ErpIdentityClient {
       Map<String,dynamic> body,{required String key,required int revision})=>
     _request('POST','/v1/inventory/$action',token:token,
       body:body,revision:revision,idempotencyKey:key);
+
+  /// Branch + warehouse scoped purchase orders. Only server-posted receipts alter stock.
+  Future<List<Map<String,dynamic>>> purchasingOrders(String token,
+      String branchId,String warehouseId)async{
+    final q=Uri(queryParameters:{'branchId':branchId,'warehouseId':warehouseId}).query;
+    final r=await _request('GET','/v1/purchasing/orders?$q',token:token);
+    return (r['items'] as List<dynamic>)
+      .map((v)=>Map<String,dynamic>.from(v as Map)).toList();
+  }
+  Future<Map<String,dynamic>> purchasingOrder(String token,String id,
+      String branchId,String warehouseId)async{
+    final q=Uri(queryParameters:{'branchId':branchId,'warehouseId':warehouseId}).query;
+    final r=await _request('GET','/v1/purchasing/orders/$id?$q',token:token);
+    return Map<String,dynamic>.from(r['order'] as Map);
+  }
+  Future<Map<String,dynamic>> purchasingCommand(String token,String path,
+      Map<String,dynamic> payload,{required int revision,required String key})=>
+    _request('POST','/v1/purchasing/$path',token:token,body:payload,
+      revision:revision,idempotencyKey:key);
+  final Map<String,({Map<String,dynamic> payload,String key})> _purchasePending={};
+  ({Map<String,dynamic> payload,String key})? pendingPurchase(String id){
+    final p=_purchasePending[id];
+    return p==null?null:(payload:Map<String,dynamic>.from(p.payload),key:p.key);
+  }
+  void retainPurchase(String id,Map<String,dynamic> payload,String key){
+    _purchasePending[id]=(payload:Map<String,dynamic>.from(payload),key:key);
+  }
+  void clearPurchase(String id)=>_purchasePending.remove(id);
 
   Future<IdentityUser> createUser(String token,String username,String password)async{
     final r=await _request('POST','/v1/admin/users',token:token,revision:0,
