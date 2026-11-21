@@ -22,17 +22,17 @@ void main(){
      httpClient:MockClient((req)async{
        calls.add(req.url.path);
        if(req.url.path=='/v1/catalog/branches')return http.Response(jsonEncode({'items':[
-         {'id':branch,'name':'Chi nhánh chính'}]}),200);
+         {'id':branch,'name':'Chi nhánh chính'}]}),200,headers:const {'content-type':'application/json; charset=utf-8'});
        if(req.url.path=='/v1/catalog/warehouses')return http.Response(jsonEncode({'items':[
-         {'id':warehouse,'name':'Kho chính','branchId':branch}]}),200);
+         {'id':warehouse,'name':'Kho chính','branchId':branch}]}),200,headers:const {'content-type':'application/json; charset=utf-8'});
        if(req.url.path=='/v1/catalog/products')return http.Response(jsonEncode({'items':[
-         {'id':product,'code':'SP01','name':'Hàng kiểm thử','active':true}]}),200);
+         {'id':product,'code':'SP01','name':'Hàng kiểm thử','active':true}]}),200,headers:const {'content-type':'application/json; charset=utf-8'});
        if(req.url.path=='/v1/inventory/balances')return http.Response(jsonEncode({'items':onHand?[
          {'productId':product,'sku':'SP01','name':'Hàng kiểm thử',
           'onHand':'5.000000','reserved':'0.000000','available':'5.000000'}
-       ]:[]}),200);
-       if(req.url.path=='/v1/inventory/movements')return http.Response(jsonEncode({'items':[]}),200);
-       if(req.url.path=='/v1/inventory/reservations')return http.Response(jsonEncode({'items':[]}),200);
+       ]:[]}),200,headers:const {'content-type':'application/json; charset=utf-8'});
+       if(req.url.path=='/v1/inventory/movements')return http.Response(jsonEncode({'items':[]}),200,headers:const {'content-type':'application/json; charset=utf-8'});
+       if(req.url.path=='/v1/inventory/reservations')return http.Response(jsonEncode({'items':[]}),200,headers:const {'content-type':'application/json; charset=utf-8'});
        if(req.url.path=='/v1/inventory/openings'){
          attempts++;keys.add(req.headers['idempotency-key']);bodies.add(req.body);
          final obj=jsonDecode(req.body) as Map<String,dynamic>;
@@ -40,9 +40,9 @@ void main(){
          if(attempts==1)throw http.ClientException('response lost after commit');
          onHand=true;
          return http.Response(jsonEncode({'id':'id',
-          'kind':'OPENING','deltaBase':'5.000000'}),201);
+          'kind':'OPENING','deltaBase':'5.000000'}),201,headers:const {'content-type':'application/json; charset=utf-8'});
        }
-       return http.Response(jsonEncode({'error':{'code':'NOT_FOUND'}}),404);
+       return http.Response(jsonEncode({'error':{'code':'NOT_FOUND'}}),404,headers:const {'content-type':'application/json; charset=utf-8'});
      }));
    addTearDown(client.dispose);
    tester.view.devicePixelRatio=1;
@@ -57,15 +57,9 @@ void main(){
           branchId:branch,warehouseId:warehouse),
      ]);
    // Verify that the same mock transport returns canonical inventory data before mounting.
-   try {
-     final direct=await client.inventoryItems(session.token,'balances',
-       branchId:branch,warehouseId:warehouse);
-     expect(direct.single['available'],'5.000000');
-   }catch(e,stack){
-     print('R3_MOCK_DIRECT_ERROR=${e.runtimeType}: $e');
-     print(stack.toString().split('\n').take(5).join(' | '));
-     rethrow;
-   }
+   final direct=await client.inventoryItems(session.token,'balances',
+     branchId:branch,warehouseId:warehouse);
+   expect(direct.single['available'],'5.000000');
    await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
      home:Scaffold(body:SingleChildScrollView(child:
        InventoryWorkspace(client:client,session:session)))));
@@ -79,9 +73,6 @@ void main(){
    expect(calls,contains('/v1/inventory/balances'));
    expect(find.text('Kho và tồn khả dụng'),findsOneWidget);
    // Stock display is only the backend projection, never a locally computed balance.
-   // Synthetic UI debugging only; no real business data or credentials.
-   print('R3_TEST_RENDERED='+tester.widgetList<Text>(find.byType(Text))
-       .map((x)=>x.data).whereType<String>().take(25).toList().toString());
    expect(find.textContaining('SP01 · Hàng kiểm thử'),findsOneWidget);
    expect(find.textContaining('Khả dụng: 5.000000'),findsOneWidget);
    // A client preserves the immutable request body/key for a retry after lost ACK.
