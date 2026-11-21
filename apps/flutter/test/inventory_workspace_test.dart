@@ -56,6 +56,16 @@ void main(){
        const IdentityGrant(roleId:'b',permission:'inventory.post',
           branchId:branch,warehouseId:warehouse),
      ]);
+   // Verify that the same mock transport returns canonical inventory data before mounting.
+   try {
+     final direct=await client.inventoryItems(session.token,'balances',
+       branchId:branch,warehouseId:warehouse);
+     expect(direct.single['available'],'5.000000');
+   }catch(e,stack){
+     print('R3_MOCK_DIRECT_ERROR=${e.runtimeType}: $e');
+     print(stack.toString().split('\n').take(5).join(' | '));
+     rethrow;
+   }
    await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
      home:Scaffold(body:SingleChildScrollView(child:
        InventoryWorkspace(client:client,session:session)))));
