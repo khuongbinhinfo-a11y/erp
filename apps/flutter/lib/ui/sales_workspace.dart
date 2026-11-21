@@ -576,28 +576,47 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       child:TextField(
                         key:const ValueKey('sales-sku-search'),
                         controller:skuSearch,focusNode:skuFocus,
-                        onChanged:(_){skuSearchGeneration++;refresh((){
-                          skuMatches=[];skuResultsFor=null;selectedSkuIndex=0;
-                        });},
+                        onChanged:(_){
+                          skuDebounce?.cancel();
+                          skuSearchGeneration++;
+                          refresh((){
+                            skuMatches=[];skuResultsFor=null;
+                            selectedSkuIndex=0;skuBusy=false;
+                          });
+                          if(skuSearch.text.trim().isNotEmpty){
+                            skuDebounce=Timer(const Duration(milliseconds:220),
+                              (){if(ctx.mounted)findSkus(ctx,refresh);});
+                          }
+                        },
                         textInputAction:TextInputAction.search,
-                        onSubmitted:(_)=>findSkus(ctx,refresh,addOnEnter:true),
-                        decoration:InputDecoration(labelText:'Tìm sản phẩm theo tên, SKU, barcode',
+                        onSubmitted:(_){
+                          skuDebounce?.cancel();
+                          findSkus(ctx,refresh,addOnEnter:true);
+                        },
+                        decoration:InputDecoration(labelText:'Tìm sản phẩm theo tên, SKU, barcode · F3',
                           hintText:'Nhập mã hàng hoặc quét barcode rồi Enter',
                           prefixIcon:const Icon(Icons.qr_code_scanner_outlined),
                           suffixIcon:IconButton(
                             tooltip:'Tìm hàng',onPressed:()=>findSkus(ctx,refresh),
                             icon:const Icon(Icons.search)))),
                     ),
+                    const Padding(padding:EdgeInsets.only(top:4,bottom:2),
+                      child:Text('F3 tìm hàng · F4 tìm khách · ↑↓ chọn · Enter thêm',
+                        style:TextStyle(color:ErpTokens.muted,fontSize:11))),
                     if(skuBusy)const LinearProgressIndicator(),
                     if(skuMatches.isNotEmpty)ConstrainedBox(
                       constraints:const BoxConstraints(maxHeight:190),
                       child:ListView(shrinkWrap:true,children:[
                         for(var i=0;i<skuMatches.length;i++)ListTile(
                           key:ValueKey('sales-sku-result-'+i.toString()),
-                          selected:i==selectedSkuIndex,
-                          dense:true,
-                          title:Text(skuLabel(skuMatches[i]),maxLines:1,overflow:TextOverflow.ellipsis),
-                          subtitle:Text('Chọn đúng SKU và đơn vị'),
+                          selected:i==selectedSkuIndex,dense:true,
+                          title:Text((skuMatches[i]['productName']??'Sản phẩm').toString(),
+                            maxLines:1,overflow:TextOverflow.ellipsis),
+                          subtitle:Text(
+                            'SKU '+(skuMatches[i]['code']??skuMatches[i]['sku']??'').toString()+
+                            ' · '+(skuMatches[i]['unitCode']??'').toString()+
+                            ((skuMatches[i]['barcode']??'').toString().isEmpty?'':' · Barcode '+skuMatches[i]['barcode'].toString()),
+                            maxLines:2,overflow:TextOverflow.ellipsis),
                           onTap:()=>chooseSku(skuMatches[i],refresh),
                         ),
                       ]),
