@@ -63,7 +63,10 @@ void main(){
    expect(find.text('Chưa có chứng từ ở mục này.'),findsOneWidget);
    Future<void> postOpening() async {
      await tester.tap(find.text('Tồn đầu kỳ'));
+     await tester.runAsync(()async=>
+       Future<void>.delayed(const Duration(milliseconds:140)));
      await tester.pumpAndSettle();
+     expect(find.text('Ghi tồn đầu kỳ'),findsOneWidget);
      await tester.enterText(find.byType(TextField).last,'5');
      await tester.tap(find.text('Xác nhận'));
      await tester.pumpAndSettle();
