@@ -269,6 +269,41 @@ test("R3 real PostgreSQL: on-hand, hold, release, no oversell, exact replay, RBA
    {...opening,warehouseId:newWh.rows[0]!.id})).status,403);
   assert.equal((await call("/v1/inventory/balances?branchId="+b+
    "&warehouseId="+newWh.rows[0]!.id,"GET",undefined,token)).status,403);
+  // Codex P2: never permanently hide stocked SKUs or movement facts after page 1.
+  const bulk=await pool.query<{id:string}>(`
+    INSERT INTO catalog_product(installation_id,branch_id,sku,name,base_unit)
+    SELECT $1,$2,'BULK'||g::text,'Bulk item '||g::text,'cai'
+    FROM generate_series(1,105) AS g RETURNING id`,[t,b]);
+  assert.equal(bulk.rows.length,105);
+  await pool.query(`INSERT INTO inventory_ledger
+    (installation_id,branch_id,warehouse_id,product_id,kind,source_type,
+      source_id,source_line,delta_base,actor_id,request_id)
+    SELECT $1,$2,$3,id,'OPENING','OPENING',id,1,1,$4,'bulk-inventory-fixture'
+    FROM catalog_product WHERE installation_id=$1 AND branch_id=$2 AND sku LIKE 'BULK%'`,
+    [t,b,w,root.actorId]);
+  const firstStock=await call("/v1/inventory/balances?branchId="+b+
+    "&warehouseId="+w+"&offset=0","GET",undefined,token);
+  assert.equal(firstStock.status,200);
+  assert.equal(firstStock.body.items.length,100);
+  assert.equal(firstStock.body.hasMore,true);
+  const lastStock=await call("/v1/inventory/balances?branchId="+b+
+    "&warehouseId="+w+"&offset=100","GET",undefined,token);
+  assert.equal(lastStock.status,200);
+  assert.equal(lastStock.body.items.length,6);
+  assert.equal(lastStock.body.hasMore,false);
+  const allSkus=[...firstStock.body.items,...lastStock.body.items]
+    .map((x:Record<string,string>)=>x.sku);
+  assert.equal(new Set(allSkus).size,106);
+  const firstMovements=await call("/v1/inventory/movements?branchId="+b+
+    "&warehouseId="+w+"&offset=0","GET",undefined,token);
+  assert.equal(firstMovements.body.items.length,100);
+  assert.equal(firstMovements.body.hasMore,true);
+  const lastMovements=await call("/v1/inventory/movements?branchId="+b+
+    "&warehouseId="+w+"&offset=100","GET",undefined,token);
+  assert.equal(lastMovements.body.items.length,8);
+  assert.equal(lastMovements.body.hasMore,false);
+  assert.equal((await call("/v1/inventory/balances?branchId="+b+
+    "&warehouseId="+w+"&offset=-1","GET",undefined,token)).status,400);
   // Simulate a production installation still on Sales 0010 while Inventory 0011 awaits approval.
   // Existing legitimate commercial actions must remain available without the new relation.
   await pool.query("DROP TABLE inventory_reservation CASCADE");

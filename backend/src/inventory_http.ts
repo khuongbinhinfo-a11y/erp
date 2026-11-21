@@ -111,20 +111,21 @@ export async function handleInventoryHttp(req:IncomingMessage,res:ServerResponse
    try{
     if(!await hasPermission(db,{installationId:tenant,actorId,
       permission:"inventory.read",...s}))throw new InventoryFault(403,"INVENTORY_READ_DENIED");
+    const rawOffset=url.searchParams.get("offset")??"0";
+    if(!/^(0|[1-9][0-9]{0,5})$/.test(rawOffset)||
+       Number(rawOffset)%100!==0)
+      throw new InventoryFault(400,"INVALID_INVENTORY_PAGE");
+    const offset=Number(rawOffset);
     if(url.pathname.endsWith("/reservations")){
      const state=url.searchParams.get("state")??"ACTIVE";
-     const rawOffset=url.searchParams.get("offset")??"0";
-     if(!["ACTIVE","RELEASED"].includes(state)||
-        !/^(0|[1-9][0-9]{0,5})$/.test(rawOffset)||
-        Number(rawOffset)%100!==0)
-      throw new InventoryFault(400,"INVALID_RESERVATION_PAGE");
-     const page=await reservations(db,tenant,s,state as "ACTIVE"|"RELEASED",
-       Number(rawOffset));
+     if(!["ACTIVE","RELEASED"].includes(state))
+      throw new InventoryFault(400,"INVALID_RESERVATION_STATE");
+     const page=await reservations(db,tenant,s,state as "ACTIVE"|"RELEASED",offset);
      send(res,200,{...page,requestId:id},id,cors);
     }else{
-     const items=url.pathname.endsWith("/balances")
-       ?await balances(db,tenant,s):await movements(db,tenant,s);
-     send(res,200,{items,requestId:id},id,cors);
+     const page=url.pathname.endsWith("/balances")
+       ?await balances(db,tenant,s,offset):await movements(db,tenant,s,offset);
+     send(res,200,{...page,requestId:id},id,cors);
     }
    }finally{db.release();}
    return;
