@@ -10,7 +10,7 @@ CREATE TABLE inventory_ledger (
   source_type text NOT NULL CHECK (source_type IN ('OPENING','PURCHASE_RECEIPT','FULFILLMENT','TRANSFER','REVERSAL')),
   source_id uuid NOT NULL,
   source_line integer NOT NULL CHECK (source_line BETWEEN 1 AND 10000),
-  delta_base numeric(24,6) NOT NULL CHECK (delta_base <> 0),
+  delta_base numeric(24,6) NOT NULL CHECK (delta_base <> 0 AND delta_base <> 'NaN'::numeric),
   reversal_of uuid,
   actor_id uuid NOT NULL,
   request_id text NOT NULL CHECK (length(request_id) BETWEEN 1 AND 80),
@@ -55,7 +55,7 @@ CREATE TABLE inventory_reservation (
   order_id uuid NOT NULL,
   version_no integer NOT NULL,
   line_no integer NOT NULL,
-  quantity_base numeric(24,6) NOT NULL CHECK (quantity_base > 0),
+  quantity_base numeric(24,6) NOT NULL CHECK (quantity_base > 0 AND quantity_base <> 'NaN'::numeric),
   state text NOT NULL DEFAULT 'ACTIVE' CHECK (state IN ('ACTIVE','RELEASED')),
   revision bigint NOT NULL DEFAULT 0 CHECK (revision >= 0),
   actor_id uuid NOT NULL,
@@ -118,6 +118,8 @@ CREATE FUNCTION erp_inventory_movement_insert_guard() RETURNS trigger LANGUAGE p
 DECLARE
   available_now numeric;
   prior_delta numeric;
+  prior_product uuid;
+  prior_kind text;
 BEGIN
   PERFORM 1 FROM warehouse WHERE installation_id=NEW.installation_id
    AND branch_id=NEW.branch_id AND id=NEW.warehouse_id FOR UPDATE;
@@ -137,11 +139,14 @@ BEGIN
     RAISE EXCEPTION 'Opening must be first inventory movement';
   END IF;
   IF NEW.kind='REVERSAL' THEN
-    SELECT delta_base INTO prior_delta FROM inventory_ledger WHERE
+    SELECT delta_base,product_id,kind INTO prior_delta,prior_product,prior_kind FROM inventory_ledger WHERE
      installation_id=NEW.installation_id AND branch_id=NEW.branch_id
      AND warehouse_id=NEW.warehouse_id AND id=NEW.reversal_of FOR SHARE;
-    IF prior_delta IS NULL OR NEW.delta_base<>-prior_delta THEN
-      RAISE EXCEPTION 'Reversal delta must negate one posted movement';
+    IF prior_delta IS NULL OR NEW.delta_base<>-prior_delta OR prior_kind='REVERSAL' THEN
+      RAISE EXCEPTION 'Reversal delta must negate one original posted movement';
+    END IF;
+    IF prior_product IS DISTINCT FROM NEW.product_id THEN
+      RAISE EXCEPTION 'Reversal product must match original movement';
     END IF;
   END IF;
   SELECT COALESCE((SELECT available FROM inventory_stock_balance WHERE

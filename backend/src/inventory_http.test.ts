@@ -152,6 +152,51 @@ test("R3 real PostgreSQL: on-hand, hold, release, no oversell, exact replay, RBA
    "GET",undefined,token);
   assert.equal(ledger.status,200);assert.equal(ledger.body.items.length,1);
   assert.equal(ledger.body.items[0].kind,"OPENING");
+  // Codex P1 regressions: reject numeric NaN and never credit a different SKU on reversal.
+  const otherProduct=await catalog("products",{
+    code:"P2",name:"Second synthetic SKU",baseUnit:"cai"});
+  assert.equal(otherProduct.status,201,JSON.stringify(otherProduct.body));
+  const otherId=otherProduct.body.id as string;
+  const directLedger=`INSERT INTO inventory_ledger(
+    installation_id,branch_id,warehouse_id,product_id,kind,source_type,
+    source_id,source_line,delta_base,actor_id,request_id)
+    VALUES($1,$2,$3,$4,$5,$6,$7,1,$8::numeric,$9,$10)
+    RETURNING id`;
+  await assert.rejects(pool.query(directLedger,[
+    t,b,w,otherId,"OPENING","OPENING",otherId,"NaN",root.actorId,"nan-rejected"
+  ]),/check constraint/i);
+  const otherAfterNan=await pool.query<{count:string}>(
+    "SELECT count(*)::text AS count FROM inventory_ledger WHERE installation_id=$1 AND product_id=$2",
+    [t,otherId]);
+  assert.equal(otherAfterNan.rows[0]?.count,"0");
+  const issueId=(await pool.query<{id:string}>(directLedger,[
+    t,b,w,productId,"ISSUE","FULFILLMENT",randomUUID(),"-1",root.actorId,"issue-for-reversal"
+  ])).rows[0]!.id;
+  const readStock=(id:string)=>pool!.query<{onHand:string;available:string}>(
+    `SELECT on_hand::text AS "onHand",available::text AS "available"
+     FROM inventory_stock_balance WHERE installation_id=$1 AND branch_id=$2
+       AND warehouse_id=$3 AND product_id=$4`,[t,b,w,id]);
+  const afterIssue=(await readStock(productId)).rows[0]!;
+  assert.equal(afterIssue.onHand,"4.000000");
+  const otherBefore=(await readStock(otherId)).rows;
+  assert.equal(otherBefore.length,0);
+  await assert.rejects(pool.query(
+    `INSERT INTO inventory_ledger(installation_id,branch_id,warehouse_id,product_id,
+       kind,source_type,source_id,source_line,delta_base,
+       reversal_of,actor_id,request_id)
+     VALUES($1,$2,$3,$4,'REVERSAL','REVERSAL',$5,1,1,$6,$7,'wrong-product-reversal')`,
+    [t,b,w,otherId,randomUUID(),issueId,root.actorId]
+  ),/Reversal product must match original movement/i);
+  assert.equal((await readStock(productId)).rows[0]?.onHand,afterIssue.onHand);
+  assert.equal((await readStock(otherId)).rows.length,0);
+  await pool.query(
+    `INSERT INTO inventory_ledger(installation_id,branch_id,warehouse_id,product_id,
+       kind,source_type,source_id,source_line,delta_base,
+       reversal_of,actor_id,request_id)
+     VALUES($1,$2,$3,$4,'REVERSAL','REVERSAL',$5,1,1,$6,$7,'valid-product-reversal')`,
+    [t,b,w,productId,randomUUID(),issueId,root.actorId]);
+  assert.equal((await readStock(productId)).rows[0]?.onHand,"5.000000");
+  assert.equal((await readStock(otherId)).rows.length,0);
   await assert.rejects(pool.query(
    "UPDATE inventory_ledger SET delta_base=100 WHERE installation_id=$1",
    [t]),/immutable/i);
