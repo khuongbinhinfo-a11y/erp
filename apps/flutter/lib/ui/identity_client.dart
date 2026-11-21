@@ -275,31 +275,31 @@ class ErpIdentityClient {
       revision:revision,idempotencyKey:key);
 
   /// Warehouse data is always authorized by the backend for one branch/warehouse.
-  Future<List<Map<String,dynamic>>> inventoryItems(String token,String kind,{
-    required String branchId,required String warehouseId,
-  })async{
-    if(!const {'balances','movements','reservations'}.contains(kind)){
-      throw const ErpApiError(400,'Yêu cầu kho không hợp lệ.');
-    }
-    final q=Uri(queryParameters:{'branchId':branchId,'warehouseId':warehouseId}).query;
-    final r=await _request('GET','/v1/inventory/$kind?$q',token:token);
-    return (r['items'] as List<dynamic>)
-      .map((x)=>Map<String,dynamic>.from(x as Map)).toList();
-  }
-  /// Server-paginated reservations. ACTIVE and RELEASED never share one capped list.
-  Future<({List<Map<String,dynamic>> items,bool hasMore})> inventoryReservationPage(
-      String token,{required String branchId,required String warehouseId,
-      required String state,required int offset})async{
-    if(!const {'ACTIVE','RELEASED'}.contains(state)||offset<0||offset%100!=0){
-      throw const ErpApiError(400,'Trang phiếu giữ hàng không hợp lệ.');
+  /// All inventory lists are server-paginated; no SKU can disappear past the first 100.
+  Future<({List<Map<String,dynamic>> items,bool hasMore})> inventoryPage(
+      String token,String kind,{required String branchId,required String warehouseId,
+      String state='ACTIVE',int offset=0})async{
+    if(!const {'balances','movements','reservations'}.contains(kind)||
+       offset<0||offset%100!=0||
+       (kind=='reservations'&&!const {'ACTIVE','RELEASED'}.contains(state))){
+      throw const ErpApiError(400,'Trang dữ liệu kho không hợp lệ.');
     }
     final q=Uri(queryParameters:{'branchId':branchId,'warehouseId':warehouseId,
-      'state':state,'offset':'$offset'}).query;
-    final r=await _request('GET','/v1/inventory/reservations?$q',token:token);
+      'offset':'$offset',if(kind=='reservations')'state':state}).query;
+    final r=await _request('GET','/v1/inventory/$kind?$q',token:token);
     return (items:(r['items'] as List<dynamic>).map((x)=>
       Map<String,dynamic>.from(x as Map)).toList(),
       hasMore:r['hasMore']==true);
   }
+  Future<List<Map<String,dynamic>>> inventoryItems(String token,String kind,{
+    required String branchId,required String warehouseId,
+  })async=>(await inventoryPage(token,kind,
+      branchId:branchId,warehouseId:warehouseId)).items;
+  Future<({List<Map<String,dynamic>> items,bool hasMore})> inventoryReservationPage(
+      String token,{required String branchId,required String warehouseId,
+      required String state,required int offset})=>
+    inventoryPage(token,'reservations',branchId:branchId,
+      warehouseId:warehouseId,state:state,offset:offset);
   /// A pending request uses an identical command body and key until the server ACKs.
   final Map<String,({Map<String,dynamic> payload,String key})> _inventoryPending={};
   ({Map<String,dynamic> payload,String key})? pendingInventory(String id){

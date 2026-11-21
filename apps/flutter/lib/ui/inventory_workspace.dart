@@ -69,19 +69,11 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
     final b=branchId,w=warehouseId;if(b==null||w==null)return;
     final n=++serial;setState((){loading=true;error=null;loadingMore=false;});
     try{
-      if(tab=='reservations'){
-        final page=await widget.client.inventoryReservationPage(widget.session.token,
-          branchId:b,warehouseId:w,state:reservationState,offset:0);
-        if(mounted&&n==serial)setState((){
-          rows=page.items;hasMore=page.hasMore;loading=false;
-        });
-      }else{
-        final data=await widget.client.inventoryItems(widget.session.token,tab,
-          branchId:b,warehouseId:w);
-        if(mounted&&n==serial)setState((){
-          rows=data;hasMore=false;loading=false;
-        });
-      }
+      final page=await widget.client.inventoryPage(widget.session.token,tab,
+        branchId:b,warehouseId:w,state:reservationState,offset:0);
+      if(mounted&&n==serial)setState((){
+        rows=page.items;hasMore=page.hasMore;loading=false;
+      });
     }on ErpApiError catch(e){
       if(mounted&&n==serial)setState((){loading=false;error=e.message;});
     }catch(_){
@@ -90,13 +82,13 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
   }
   Future<void> loadMore()async{
     final b=branchId,w=warehouseId;
-    if(b==null||w==null||tab!='reservations'||!hasMore||loadingMore||loading)return;
-    final n=serial,scopeState=reservationState,offset=rows.length;
+    if(b==null||w==null||!hasMore||loadingMore||loading)return;
+    final n=serial,scopeTab=tab,scopeState=reservationState,offset=rows.length;
     setState(()=>loadingMore=true);
     try{
-      final page=await widget.client.inventoryReservationPage(widget.session.token,
+      final page=await widget.client.inventoryPage(widget.session.token,scopeTab,
         branchId:b,warehouseId:w,state:scopeState,offset:offset);
-      if(mounted&&n==serial&&tab=='reservations'&&scopeState==reservationState){
+      if(mounted&&n==serial&&tab==scopeTab&&scopeState==reservationState){
         setState((){
           rows=[...rows,...page.items];hasMore=page.hasMore;loadingMore=false;
         });
@@ -313,9 +305,11 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
         const Padding(padding:EdgeInsets.all(18),child:Text('Chưa có chứng từ ở mục này.')),
       if(!loading&&error==null)
         for(final row in rows)line(row),
-      if(tab=='reservations'&&hasMore&&!loading&&error==null)
+      if(hasMore&&!loading&&error==null)
         TextButton(onPressed:loadingMore||busy?null:loadMore,
-          child:Text(loadingMore?'Đang tải thêm...':'Tải thêm phiếu giữ hàng')),
+          child:Text(loadingMore?'Đang tải thêm...':
+            tab=='reservations'?'Tải thêm phiếu giữ hàng':
+            tab=='balances'?'Tải thêm sản phẩm':'Tải thêm biến động')),
     ]);
   }
 }

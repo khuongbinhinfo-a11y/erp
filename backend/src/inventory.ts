@@ -32,7 +32,7 @@ export async function balance(db:PoolClient,t:string,s:WarehouseScope,productId:
   [t,s.branchId,s.warehouseId,productId]);
  return r.rows[0]??{onHand:"0",reserved:"0",available:"0"};
 }
-export async function balances(db:PoolClient,t:string,s:WarehouseScope){
+export async function balances(db:PoolClient,t:string,s:WarehouseScope,offset=0){
  const r=await db.query(
   `SELECT v.product_id AS "productId",p.sku,p.name,p.base_unit AS "baseUnit",
     v.on_hand::text AS "onHand",v.reserved::text AS "reserved",
@@ -41,10 +41,11 @@ export async function balances(db:PoolClient,t:string,s:WarehouseScope){
     JOIN catalog_product p ON p.installation_id=v.installation_id
       AND p.branch_id=v.branch_id AND p.id=v.product_id
     WHERE v.installation_id=$1 AND v.branch_id=$2 AND v.warehouse_id=$3
-    ORDER BY p.sku,v.product_id LIMIT 100`,[t,s.branchId,s.warehouseId]);
- return r.rows;
+    ORDER BY p.sku,v.product_id LIMIT 101 OFFSET $4`,
+      [t,s.branchId,s.warehouseId,offset]);
+ return {items:r.rows.slice(0,100),hasMore:r.rows.length>100};
 }
-export async function movements(db:PoolClient,t:string,s:WarehouseScope){
+export async function movements(db:PoolClient,t:string,s:WarehouseScope,offset=0){
  const r=await db.query(
   `SELECT l.id,l.product_id AS "productId",p.sku,p.name AS "productName",
        l.kind,l.source_type AS "sourceType",l.source_id AS "sourceId",
@@ -54,8 +55,9 @@ export async function movements(db:PoolClient,t:string,s:WarehouseScope){
    JOIN catalog_product p ON p.installation_id=l.installation_id
      AND p.branch_id=l.branch_id AND p.id=l.product_id
    WHERE l.installation_id=$1 AND l.branch_id=$2 AND l.warehouse_id=$3
-   ORDER BY l.posted_at DESC,l.id DESC LIMIT 100`,[t,s.branchId,s.warehouseId]);
- return r.rows;
+   ORDER BY l.posted_at DESC,l.id DESC LIMIT 101 OFFSET $4`,
+      [t,s.branchId,s.warehouseId,offset]);
+ return {items:r.rows.slice(0,100),hasMore:r.rows.length>100};
 }
 /** Each page includes only one reservation lifecycle; released history cannot hide ACTIVE holds. */
 export async function reservations(db:PoolClient,t:string,s:WarehouseScope,
