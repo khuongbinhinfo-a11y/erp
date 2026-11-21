@@ -121,8 +121,9 @@ export async function handleInventoryHttp(req:IncomingMessage,res:ServerResponse
   if(req.method==="POST"&&url.pathname==="/v1/inventory/openings"){
    const raw=await parseBody(req);
    allowFields(raw,["branchId","warehouseId","productId","quantity"]);
-   const input={...scope(raw),productId:uuid(raw.productId),quantity:raw.quantity};
-   if(!validBaseQty(input.quantity))throw new InventoryFault(400,"INVALID_QUANTITY");
+   const quantity=raw.quantity;
+   if(!validBaseQty(quantity))throw new InventoryFault(400,"INVALID_QUANTITY");
+   const input={...scope(raw),productId:uuid(raw.productId),quantity};
    const c=ctx(req,id,tenant,actorId,"inventory.opening.post",
      input as Record<string,unknown>,true);
    const outcome=await executeMutation(pool,c,{
