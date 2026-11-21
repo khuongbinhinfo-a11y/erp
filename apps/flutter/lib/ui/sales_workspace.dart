@@ -371,7 +371,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           final narrow=media.width<720;
           final width=media.width*0.96>1440?1440.0:media.width*0.96;
           final ready=quotes!=null&&quotedStamp==stamp();
-          return Focus(onKeyEvent:(node,event){
+          return Focus(autofocus:true,onKeyEvent:(node,event){
             if(event is! KeyDownEvent)return KeyEventResult.ignored;
             if(event.logicalKey==LogicalKeyboardKey.f3){
               skuFocus.requestFocus();
