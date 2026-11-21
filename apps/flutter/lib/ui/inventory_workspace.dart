@@ -96,9 +96,11 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
       notify('Máy chủ đã xác nhận chứng từ.');
       await reload();
     }on ErpApiError catch(e){
-      if(e.status!=0&&e.status!=502&&e.status!=504)widget.client.clearInventory(scope);
-      notify([0,502,504].contains(e.status)
-        ?'Chưa xác minh kết quả. Vui lòng gửi lại cùng yêu cầu.':e.message,bad:true);
+      // Any 5xx may mean COMMIT succeeded but the ACK was lost: retain exact key/body.
+      final uncertain=e.status==0||e.status>=500;
+      if(!uncertain)widget.client.clearInventory(scope);
+      notify(uncertain
+        ?'Chưa xác minh kết quả máy chủ. Gửi lại đúng yêu cầu trước.':e.message,bad:true);
     }catch(_){
       notify('Chưa xác minh kết quả máy chủ. Không ghi thêm yêu cầu mới.',bad:true);
     }finally{if(mounted)setState(()=>busy=false);}
