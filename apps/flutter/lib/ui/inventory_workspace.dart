@@ -116,7 +116,7 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
         builder:(dctx)=>StatefulBuilder(builder:(dctx,refresh)=>AlertDialog(
           title:const Text('Ghi tồn đầu kỳ'),
           content:SizedBox(width:400,child:Column(mainAxisSize:MainAxisSize.min,children:[
-            DropdownButtonFormField<String>(value:product,isExpanded:true,
+            DropdownButtonFormField<String>(initialValue:product,isExpanded:true,
               decoration:const InputDecoration(labelText:'Sản phẩm'),
               items:products.map((p)=>DropdownMenuItem<String>(
                 value:p['id'].toString(),
@@ -160,7 +160,7 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
       StatefulBuilder(builder:(ctx,refresh)=>AlertDialog(
         title:const Text('Chọn đơn để giữ hàng'),
         content:SizedBox(width:440,child:DropdownButtonFormField<String>(
-          value:chosen,isExpanded:true,decoration:const InputDecoration(labelText:'Đơn bán'),
+          initialValue:chosen,isExpanded:true,decoration:const InputDecoration(labelText:'Đơn bán'),
           items:orders.map((o)=>DropdownMenuItem<String>(
             value:o['id'].toString(),child:Text((o['documentNo']??'').toString()+
               ' · '+(o['customerName']??'').toString(),overflow:TextOverflow.ellipsis))).toList(),
@@ -181,7 +181,7 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
       StatefulBuilder(builder:(ctx,refresh)=>AlertDialog(
         title:const Text('Chọn hàng cần giữ'),
         content:SizedBox(width:440,child:DropdownButtonFormField<int>(
-          value:line,isExpanded:true,decoration:const InputDecoration(labelText:'Dòng sản phẩm'),
+          initialValue:line,isExpanded:true,decoration:const InputDecoration(labelText:'Dòng sản phẩm'),
           items:lines.map((x)=>DropdownMenuItem<int>(
             value:(x['lineNo'] as num).toInt(),
             child:Text((x['sku']??'').toString()+' · '+(x['productName']??'').toString(),
@@ -242,13 +242,13 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
       const SizedBox(height:18),
       Wrap(spacing:12,runSpacing:12,children:[
         SizedBox(width:small?300:260,child:DropdownButtonFormField<String>(
-          value:branchId,isExpanded:true,decoration:const InputDecoration(labelText:'Chi nhánh'),
+          key:ValueKey('inv-branch-'+(branchId??'')),initialValue:branchId,isExpanded:true,decoration:const InputDecoration(labelText:'Chi nhánh'),
           items:branches.map((b)=>DropdownMenuItem<String>(value:b['id'].toString(),
             child:Text((b['name']??'').toString(),overflow:TextOverflow.ellipsis))).toList(),
           onChanged:busy?null:(v){if(v!=null){setState(()=>branchId=v);loadWarehouses();}},
         )),
         SizedBox(width:small?300:260,child:DropdownButtonFormField<String>(
-          value:warehouseId,isExpanded:true,decoration:const InputDecoration(labelText:'Kho'),
+          key:ValueKey('inv-warehouse-'+(warehouseId??'')),initialValue:warehouseId,isExpanded:true,decoration:const InputDecoration(labelText:'Kho'),
           items:warehouses.map((w)=>DropdownMenuItem<String>(value:w['id'].toString(),
             child:Text((w['name']??'').toString(),overflow:TextOverflow.ellipsis))).toList(),
           onChanged:busy?null:(v){if(v!=null){setState(()=>warehouseId=v);reload();}},
