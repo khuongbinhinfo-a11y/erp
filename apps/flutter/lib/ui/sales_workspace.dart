@@ -246,10 +246,6 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     int selectedCustomerIndex=0,customerSearchGeneration=0;
     String? skuResultsFor;
     bool skuBusy=false,customerBusy=false,starterUntouched=order==null;
-    String skuLabel(Map<String,dynamic> x)=>
-      (x['code']??x['sku']??'').toString()+' · '+
-      (x['productName']??'').toString()+' · '+(x['unitCode']??'').toString()+
-      (x['barcode']==null?'':' · '+x['barcode'].toString());
     String customerLabel(Map<String,dynamic> x)=>
       (x['code']??'').toString()+' · '+(x['name']??'').toString();
     String selectedCustomer()=>customers.where((x)=>x['id']==customer).isEmpty
