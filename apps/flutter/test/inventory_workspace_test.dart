@@ -17,8 +17,10 @@ void main(){
   (tester)async{
    var onHand=true,attempts=0;
    final keys=<String?>[],bodies=<String>[];
+   final calls=<String>[];
    final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
      httpClient:MockClient((req)async{
+       calls.add(req.url.path);
        if(req.url.path=='/v1/catalog/branches')return http.Response(jsonEncode({'items':[
          {'id':branch,'name':'Chi nhánh chính'}]}),200);
        if(req.url.path=='/v1/catalog/warehouses')return http.Response(jsonEncode({'items':[
@@ -57,8 +59,14 @@ void main(){
    await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
      home:Scaffold(body:SingleChildScrollView(child:
        InventoryWorkspace(client:client,session:session)))));
-   await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:140)));
-   await tester.pumpAndSettle();
+   for(var i=0;i<6;i++){
+     await tester.runAsync(()async=>
+       Future<void>.delayed(const Duration(milliseconds:100)));
+     await tester.pumpAndSettle();
+   }
+   expect(calls,contains('/v1/catalog/branches'));
+   expect(calls,contains('/v1/catalog/warehouses'));
+   expect(calls,contains('/v1/inventory/balances'));
    expect(find.text('Kho và tồn khả dụng'),findsOneWidget);
    // Stock display is only the backend projection, never a locally computed balance.
    expect(find.textContaining('SP01 · Hàng kiểm thử'),findsOneWidget);
@@ -85,8 +93,11 @@ void main(){
    expect(keys[0],keys[1]);
    expect(bodies[0],bodies[1]);
    await tester.tap(find.text('Sổ kho'));
-   await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:120)));
-   await tester.pumpAndSettle();
+   for(var i=0;i<3;i++){
+     await tester.runAsync(()async=>
+       Future<void>.delayed(const Duration(milliseconds:100)));
+     await tester.pumpAndSettle();
+   }
    expect(find.text('Chưa có chứng từ ở mục này.'),findsOneWidget);
  });
 }
