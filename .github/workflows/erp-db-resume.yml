@@ -1,0 +1,86 @@
+name: ERP existing target resume - owner only
+# Only after cutover restored/migrated the EXISTING target, but stopped before backend switch.
+on:
+  issue_comment:
+    types: [created]
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+concurrency:
+  group: erp-db-resume-operator-only
+  cancel-in-progress: false
+jobs:
+  resume:
+    if: >-
+      github.repository == 'gustavjung24-ops/ERP' &&
+      github.ref == 'refs/heads/main' &&
+      github.event.issue.number == 19 &&
+      github.event.issue.pull_request == null &&
+      github.actor == 'gustavjung24-ops' &&
+      github.event.comment.user.login == 'gustavjung24-ops' &&
+      startsWith(github.event.comment.body, 'ERP_DB_RESUME ')
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify owner's exact resume command, main SHA and CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMENT: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          test "$COMMENT" = "ERP_DB_RESUME $sha"
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)" = "$sha"
+          count="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${sha}&event=push&per_page=40" --jq '[.workflow_runs[] | select(.name=="ERP quality gates" and .conclusion=="success")] | length')"
+          test "$count" -ge 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: oven-sh/setup-bun@v2
+      - name: Install backend deps
+        working-directory: backend
+        run: npm install --no-audit --no-fund
+      - name: Install Composer deps
+        working-directory: backend/deploy
+        run: npm install --no-audit --no-fund
+      - name: Compare protected source with existing 21-table target and stage runtime secret
+        working-directory: backend
+        env:
+          APPROVAL_COMMENT: ${{ github.event.comment.body }}
+          OWNER_COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          ERP_POSTGRES_DIRECT_URL: ${{ secrets.ERP_POSTGRES_DIRECT_URL }}
+        run: node scripts/db-cutover-resume.mjs
+      - name: Build ERP Compute target only
+        working-directory: backend
+        run: |
+          npm run build:compute
+          test -s dist/compute.mjs
+      - id: release
+        name: Deploy verified ERP-DB into existing Prisma Compute app
+        uses: prisma/cloud-deploy-action@v1
+        env:
+          ERP_INSTALLATION_ID: ${{ env.ERP_INSTALLATION_ID }}
+          ERP_UI_ORIGIN: ${{ env.ERP_UI_ORIGIN }}
+          ERP_THROTTLE_SECRET: ${{ env.ERP_THROTTLE_SECRET }}
+        with:
+          working-directory: backend/deploy
+          module: module.ts
+          build-command: none
+      - name: Smoke canonical production URL, admin login and customer/supplier listing
+        env:
+          DEPLOY_OUTCOME: ${{ steps.release.outputs.outcome }}
+          DEPLOY_URL: ${{ steps.release.outputs.url }}
+          DEPLOY_URLS: ${{ steps.release.outputs.urls }}
+          ERP_UI_ORIGIN: https://erp-gustavjung24-ops-projects.vercel.app
+          ERP_BRANCH_ID: ${{ env.ERP_BRANCH_ID }}
+          ADMIN_PASSWORD: ${{ secrets.ERP_BOOTSTRAP_ADMIN_PASSWORD }}
+        run: |
+          test "$DEPLOY_OUTCOME" = succeeded
+          node backend/scripts/cutover-smoke.mjs ready
+          echo ERP_DB_RESUME_TARGET_RELEASE_AND_SMOKE_PASS
+# Fail closed. This workflow NEVER restores, truncates, seeds, or runs SQL migrations.

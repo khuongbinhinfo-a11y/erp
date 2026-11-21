@@ -1,0 +1,139 @@
+name: ERP production DB cutover - owner only
+# No push/PR triggers: only explicit owner issue comment on exact GREEN main SHA.
+on:
+  issue_comment:
+    types: [created]
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+concurrency:
+  group: erp-prisma-compute-prod
+  cancel-in-progress: false
+jobs:
+  erp_db_cutover:
+    if: >-
+      github.repository == 'gustavjung24-ops/ERP' &&
+      github.ref == 'refs/heads/main' &&
+      github.event.issue.number == 19 &&
+      github.event.issue.pull_request == null &&
+      github.actor == 'gustavjung24-ops' &&
+      github.event.comment.user.login == 'gustavjung24-ops' &&
+      startsWith(github.event.comment.body, 'ERP_DB_CUTOVER ')
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: erp_rehearsal
+          POSTGRES_PASSWORD: erp_rehearsal_password
+          POSTGRES_DB: erp_restore_cutover
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U erp_rehearsal -d erp_restore_cutover"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Confirm exact main SHA, owner comment, and green CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER_COMMAND: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          test "$OWNER_COMMAND" = "ERP_DB_CUTOVER $sha"
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)" = "$sha"
+          green="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${sha}&event=push&per_page=40" --jq '[.workflow_runs[] | select(.name=="ERP quality gates" and .conclusion=="success")] | length')"
+          test "$green" -ge 1
+          echo EXACT_GREEN_SHA_AND_OWNER_COMMAND_PASS
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: oven-sh/setup-bun@v2
+      - name: Install PostgreSQL 17 client, age and awscli
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq curl ca-certificates gnupg
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc |
+            sudo gpg --dearmor -o /usr/share/keyrings/postgresql-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/postgresql-archive-keyring.gpg] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" |
+            sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql-client-17 age awscli >/dev/null
+          test "$(/usr/lib/postgresql/17/bin/pg_restore --version | sed -E 's/.* ([0-9]+)\..*/\1/')" = 17
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm install --no-audit --no-fund
+      - name: Install Composer dependencies
+        working-directory: backend/deploy
+        run: npm install --no-audit --no-fund
+      - name: Stage READ_ONLY maintenance on existing source runtime
+        working-directory: backend
+        env:
+          APPROVAL_COMMENT: ${{ github.event.comment.body }}
+          OWNER_COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          ERP_POSTGRES_DIRECT_URL: ${{ secrets.ERP_POSTGRES_DIRECT_URL }}
+        run: node scripts/db-cutover-maintenance.mjs
+      - name: Build reviewed backend for maintenance and final release
+        working-directory: backend
+        run: |
+          npm run build:compute
+          test -s dist/compute.mjs
+      - id: maintenance_release
+        name: Deploy READ_ONLY backend to existing Prisma Compute app
+        uses: prisma/cloud-deploy-action@v1
+        env:
+          ERP_INSTALLATION_ID: ${{ env.ERP_INSTALLATION_ID }}
+          ERP_UI_ORIGIN: ${{ env.ERP_UI_ORIGIN }}
+          ERP_THROTTLE_SECRET: ${{ env.ERP_THROTTLE_SECRET }}
+        with:
+          working-directory: backend/deploy
+          module: module.ts
+          build-command: none
+      - name: Verify live maintenance BEFORE reading snapshot
+        env:
+          DEPLOY_OUTCOME: ${{ steps.maintenance_release.outputs.outcome }}
+          DEPLOY_URL: ${{ steps.maintenance_release.outputs.url }}
+          DEPLOY_URLS: ${{ steps.maintenance_release.outputs.urls }}
+        run: |
+          test "$DEPLOY_OUTCOME" = succeeded
+          node backend/scripts/cutover-smoke.mjs freeze
+          echo 'ERP_PRODUCTION_WRITES_FROZEN=YES' >> "$GITHUB_ENV"
+      - name: Fresh backup, restore, reconcile, migrate and change Compute target secret
+        working-directory: backend
+        env:
+          APPROVAL_COMMENT: ${{ github.event.comment.body }}
+          OWNER_COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          ERP_POSTGRES_DIRECT_URL: ${{ secrets.ERP_POSTGRES_DIRECT_URL }}
+        run: node --experimental-strip-types scripts/db-cutover.mjs
+      - id: target_release
+        name: Deploy verified migrated ERP-DB backend
+        uses: prisma/cloud-deploy-action@v1
+        env:
+          ERP_INSTALLATION_ID: ${{ env.ERP_INSTALLATION_ID }}
+          ERP_UI_ORIGIN: ${{ env.ERP_UI_ORIGIN }}
+          ERP_THROTTLE_SECRET: ${{ env.ERP_THROTTLE_SECRET }}
+        with:
+          working-directory: backend/deploy
+          module: module.ts
+          build-command: none
+      - name: Final production smoke login and catalog
+        env:
+          DEPLOY_OUTCOME: ${{ steps.target_release.outputs.outcome }}
+          DEPLOY_URL: ${{ steps.target_release.outputs.url }}
+          DEPLOY_URLS: ${{ steps.target_release.outputs.urls }}
+          ERP_UI_ORIGIN: https://erp-gustavjung24-ops-projects.vercel.app
+          ERP_BRANCH_ID: ${{ env.ERP_BRANCH_ID }}
+          ADMIN_PASSWORD: ${{ secrets.ERP_BOOTSTRAP_ADMIN_PASSWORD }}
+        run: |
+          test "$DEPLOY_OUTCOME" = succeeded
+          node backend/scripts/cutover-smoke.mjs ready
+          echo ERP_DB_CUTOVER_AND_TARGET_SMOKE_PASS
+# On failure after maintenance deploy, keep old source read-only until an operator
+# reconciles the exact state; never perform destructive automatic rollback.

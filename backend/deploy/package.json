@@ -1,0 +1,19 @@
+{
+  "name": "@erp/prisma-compute-deploy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Manual production only; connects to existing erp-demo DB",
+  "dependencies": {
+    "@prisma/composer": "0.38.0",
+    "@prisma/composer-prisma-cloud": "0.38.0",
+    "arktype": "^2.1.28"
+  },
+  "devDependencies": {
+    "prisma": "8.0.0-rc.33",
+    "typescript": "^5.9.3"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

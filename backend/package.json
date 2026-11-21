@@ -1,0 +1,30 @@
+{
+  "name": "@erp/backend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "node --experimental-strip-types src/main.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test src/health.test.ts src/mutation.test.ts src/rbac.test.ts src/auth.test.ts src/identity_http.test.ts src/catalog_http.test.ts src/migrate_production.test.ts src/migrate_catalog_production.test.ts src/maintenance.test.ts src/cutover_gate.test.ts src/sales_http.test.ts src/r1_catalog_http.test.ts",
+    "test:integration": "node --experimental-strip-types --test src/mutation.test.ts src/rbac.test.ts src/auth.test.ts src/identity_http.test.ts src/catalog_http.test.ts src/sales_http.test.ts src/r1_catalog_http.test.ts",
+    "build": "tsc",
+    "start": "node dist/main.js",
+    "db:migrate:ci": "node --experimental-strip-types src/migrate.ts",
+    "db:migrate:approved": "node --experimental-strip-types src/migrate_production.ts",
+    "db:migrate:catalog:approved": "node --experimental-strip-types src/migrate_catalog_production.ts",
+    "bootstrap:approved": "node --experimental-strip-types src/bootstrap_cli.ts",
+    "build:compute": "bun build deploy/entry.ts --target=bun --outfile dist/compute.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.3",
+    "@types/pg": "^8.15.5"
+  },
+  "dependencies": {
+    "pg": "^8.16.3"
+  }
+}

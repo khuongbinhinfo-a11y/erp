@@ -1,0 +1,50 @@
+name: ERP DB relocation protected preflight
+on:
+  issue_comment:
+    types: [created]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: erp-db-relocation-protected
+  cancel-in-progress: false
+jobs:
+  preflight:
+    if: >-
+      github.event.issue.number == 19 &&
+      github.event.issue.pull_request == null &&
+      github.ref == 'refs/heads/main' &&
+      github.event.comment.user.login == 'gustavjung24-ops' &&
+      github.actor == 'gustavjung24-ops' &&
+      startsWith(github.event.comment.body, 'ERP_DB_PREFLIGHT ')
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Require exact owner command, main SHA and green CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMAND: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          test "$COMMAND" = "ERP_DB_PREFLIGHT $sha"
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)" = "$sha"
+          success="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${sha}&event=push&per_page=20" --jq '[.workflow_runs[] | select(.name=="ERP quality gates" and .conclusion=="success")] | length')"
+          test "$success" -ge 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install audited PostgreSQL client
+        working-directory: backend
+        run: npm install --no-audit --no-fund
+      - name: Read-only production source inventory — no writes or secrets logged
+        working-directory: backend
+        env:
+          ERP_POSTGRES_DIRECT_URL: ${{ secrets.ERP_POSTGRES_DIRECT_URL }}
+        run: node scripts/db-relocation-preflight.mjs
+# Nothing in this workflow reads destination credentials, creates schema,
+# restores a database, switches service secrets, or deploys. No auto production deploy.

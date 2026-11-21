@@ -1,0 +1,109 @@
+name: ERP R1 post-migration recovery - owner only
+# This workflow NEVER runs SQL migrations, restores, or writes business data.
+on:
+  issue_comment:
+    types: [created]
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+  id-token: write
+concurrency:
+  group: erp-r1-production-release
+  cancel-in-progress: false
+jobs:
+  resume_after_0009_0010:
+    if: >-
+      github.repository == 'gustavjung24-ops/ERP' &&
+      github.ref == 'refs/heads/main' &&
+      github.event.issue.number == 8 &&
+      github.event.issue.pull_request == null &&
+      github.actor == 'gustavjung24-ops' &&
+      github.event.comment.user.login == 'gustavjung24-ops' &&
+      startsWith(github.event.comment.body, 'ERP_R1_RESUME ')
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Confirm owner, exact merged main and green CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMAND: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          test "$COMMAND" = "ERP_R1_RESUME $sha"
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)" = "$sha"
+          echo R1_GIT_REF_READ_PASS
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/pulls/30" --jq .merged)" = "true"
+          echo R1_MERGE_STATE_READ_PASS
+          b1_merge="$(gh api "/repos/${GITHUB_REPOSITORY}/pulls/30" --jq .merge_commit_sha)"
+          test "${#b1_merge}" = 40
+          git merge-base --is-ancestor "$b1_merge" "$sha"
+          echo R1_MERGE_COMMIT_MATCH_PASS
+          count="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${sha}&event=push&per_page=50" --jq '[.workflow_runs[] | select(.name=="ERP quality gates" and .conclusion=="success")] | length')"
+          test "$count" -ge 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: oven-sh/setup-bun@v2
+      - name: Install AWS client for read-only backup readback
+        run: sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq awscli >/dev/null
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm install --no-audit --no-fund
+      - name: Install Compute deployment dependencies
+        working-directory: backend/deploy
+        run: npm install --no-audit --no-fund
+      - name: Confirm 0009_0010 checksums, unchanged business rows and durable backup evidence
+        working-directory: backend
+        env:
+          APPROVAL_COMMENT: ${{ github.event.comment.body }}
+          OWNER_COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+        run: |
+          node --check scripts/r1-resume-preflight.mjs
+          node scripts/r1-resume-preflight.mjs
+      - name: Stage NORMAL only after verified 0009_0010 resume preflight
+        working-directory: backend
+        env:
+          APPROVAL_COMMENT: ${{ github.event.comment.body }}
+          OWNER_COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+        run: node scripts/r1-maintenance.mjs normal
+      - name: Independently verify migrated ERP-DB and identity
+        working-directory: backend
+        run: node scripts/r1-target-preflight.mjs
+      - name: Build exact approved backend
+        working-directory: backend
+        run: |
+          npm run build:compute
+          test -s dist/compute.mjs
+      - id: compute
+        name: Deploy NORMAL backend to existing ERP Compute
+        uses: prisma/cloud-deploy-action@v1
+        env:
+          ERP_INSTALLATION_ID: ${{ env.ERP_INSTALLATION_ID }}
+          ERP_UI_ORIGIN: ${{ env.ERP_UI_ORIGIN }}
+          ERP_THROTTLE_SECRET: ${{ env.ERP_THROTTLE_SECRET }}
+        with:
+          working-directory: backend/deploy
+          module: module.ts
+          build-command: none
+      - name: Live canonical API health, login and catalog smoke
+        env:
+          DEPLOY_OUTCOME: ${{ steps.compute.outputs.outcome }}
+          DEPLOY_URL: ${{ steps.compute.outputs.url }}
+          DEPLOY_URLS: ${{ steps.compute.outputs.urls }}
+          ERP_BRANCH_ID: ${{ env.ERP_BRANCH_ID }}
+          ADMIN_PASSWORD: ${{ secrets.ERP_BOOTSTRAP_ADMIN_PASSWORD }}
+          ERP_UI_ORIGIN: https://erp-gustavjung24-ops-projects.vercel.app
+        run: |
+          set -euo pipefail
+          test "$DEPLOY_OUTCOME" = succeeded
+          node backend/scripts/smoke.mjs
+          node backend/scripts/cutover-smoke.mjs ready
+      - name: Release result
+        run: echo ERP_R1_POST_MIGRATION_RECOVERY_BACKEND_READY_FRONTEND_RELEASE_NEXT

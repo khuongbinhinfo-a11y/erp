@@ -1,0 +1,115 @@
+name: ERP identity migration candidate checks
+
+on:
+  push:
+    branches:
+      - agent/backup-restore-readiness
+
+permissions:
+  contents: read
+
+jobs:
+  operator-static:
+    name: operator-and-types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install backend
+        working-directory: backend
+        run: npm install --no-audit --no-fund
+      - name: Check TypeScript and build
+        working-directory: backend
+        run: |
+          npm run typecheck
+          npm run build
+      - name: Verify operator backup scripts fail closed without credentials
+        run: |
+          set -euo pipefail
+          bash -n backend/scripts/backup-restore-gate.sh
+          node --check backend/scripts/reconcile-isolated-restore.mjs
+          if env -u ERP_BACKUP_SOURCE_URL -u ERP_RESTORE_TARGET_URL -u ERP_BACKUP_STORE_URI \
+            -u ERP_BACKUP_AGE_RECIPIENT -u ERP_BACKUP_AGE_IDENTITY_FILE \
+            bash backend/scripts/backup-restore-gate.sh >/tmp/erp-backup-negative.log 2>&1; then
+            echo 'Backup operator must refuse missing credentials' >&2
+            exit 1
+          fi
+      - name: Verify production migrations reject CI
+        working-directory: backend
+        run: |
+          node --experimental-strip-types --test src/migrate_production.test.ts
+
+  pg-16-rehearsal:
+    name: pg16-fresh-replay-backup-and-identity
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: erp_ci
+          POSTGRES_PASSWORD: erp_ci_local_only
+          POSTGRES_DB: erp_ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U erp_ci -d erp_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://erp_ci:erp_ci_local_only@localhost:5432/erp_ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install backup and test tooling
+        run: sudo apt-get update -qq && sudo apt-get install -y postgresql-client
+      - name: Install dependencies
+        working-directory: backend
+        run: npm install --no-audit --no-fund
+      - name: Fresh and replay versioned migrations
+        working-directory: backend
+        env:
+          ERP_DB_MIGRATION_TARGET: ci
+        run: |
+          npm run db:migrate:ci
+          npm run db:migrate:ci
+      - name: Verify 5 versions
+        run: |
+          psql "$DATABASE_URL" -Atqc "SELECT count(*) FROM public.schema_migrations" | grep -qx 5
+      - name: Full PostgreSQL-backed identity tests
+        working-directory: backend
+        run: npm test
+      - name: Rehearse CI-only backup restore reconciliation
+        env:
+          ERP_DB_MIGRATION_TARGET: ci
+        run: bash backend/scripts/ci-backup-restore.sh
+
+  composer-build:
+    name: composer-identity-secrets-build-only
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: oven-sh/setup-bun@v2
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm install --no-audit --no-fund
+      - name: Install Composer dependencies
+        working-directory: backend/deploy
+        run: npm install --no-audit --no-fund
+      - name: Typecheck Composer service input wiring
+        working-directory: backend/deploy
+        run: npm run typecheck
+      - name: Bundle Compute backend without deployment
+        working-directory: backend
+        run: |
+          npm run build:compute
+          test -s dist/compute.mjs
+
+# Branch checks have no deployment, database credentials or production approval.
+# The main ERP quality workflow and separate owner migration gate remain unchanged.

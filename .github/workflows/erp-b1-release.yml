@@ -1,0 +1,176 @@
+name: ERP B1 - protected migration and backend release
+# Exact owner comment on issue #8 only. Never from PR/push/cron.
+on:
+  issue_comment:
+    types: [created]
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+  id-token: write
+concurrency:
+  group: erp-b1-production-release
+  cancel-in-progress: false
+jobs:
+  release_b1:
+    if: >-
+      github.repository == 'gustavjung24-ops/ERP' &&
+      github.ref == 'refs/heads/main' &&
+      github.event.issue.number == 8 &&
+      github.event.issue.pull_request == null &&
+      github.actor == 'gustavjung24-ops' &&
+      github.event.comment.user.login == 'gustavjung24-ops' &&
+      startsWith(github.event.comment.body, 'ERP_B1_MIGRATE ')
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: erp_rehearsal
+          POSTGRES_PASSWORD: erp_rehearsal_password
+          POSTGRES_DB: erp_restore_b1
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U erp_rehearsal -d erp_restore_b1"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Verify exact owner command, merged main SHA, and green push CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPROVAL_COMMENT: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          test "$APPROVAL_COMMENT" = "ERP_B1_MIGRATE $sha"
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)" = "$sha"
+          echo B1_GIT_REF_READ_PASS
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/pulls/24" --jq .merged)" = "true"
+          echo B1_MERGE_STATE_READ_PASS
+          b1_merge="$(gh api "/repos/${GITHUB_REPOSITORY}/pulls/24" --jq .merge_commit_sha)"
+          test "${#b1_merge}" = 40
+          git merge-base --is-ancestor "$b1_merge" "$sha"
+          echo B1_MERGE_COMMIT_MATCH_PASS
+          green="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${sha}&event=push&per_page=50" --jq '[.workflow_runs[] | select(.name=="ERP quality gates" and .conclusion=="success")] | length')"
+          test "$green" -ge 1
+          echo ERP_B1_APPROVED_EXACT_MAIN_SHA_AND_CI_PASS
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: oven-sh/setup-bun@v2
+      - name: Install PG17, age encryption and S3 client
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq curl ca-certificates gnupg
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc |
+            sudo gpg --dearmor -o /usr/share/keyrings/postgresql-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/postgresql-archive-keyring.gpg] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" |
+            sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql-client-17 age awscli >/dev/null
+          test "$(/usr/lib/postgresql/17/bin/pg_dump --version | sed -E 's/.* ([0-9]+)\..*/\1/')" = 17
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm install --no-audit --no-fund
+      - name: Install Compute deployment dependencies
+        working-directory: backend/deploy
+        run: npm install --no-audit --no-fund
+      - name: Freeze business writes on the existing Compute installation
+        working-directory: backend
+        env:
+          APPROVAL_COMMENT: ${{ github.event.comment.body }}
+          OWNER_COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+        run: node scripts/b1-maintenance.mjs freeze
+      - name: Build maintenance artifact from exact approved main
+        working-directory: backend
+        run: |
+          npm run build:compute
+          test -s dist/compute.mjs
+      - id: maintenance
+        name: Deploy READ_ONLY maintenance to existing erp-backend
+        uses: prisma/cloud-deploy-action@v1
+        env:
+          ERP_INSTALLATION_ID: ${{ env.ERP_INSTALLATION_ID }}
+          ERP_UI_ORIGIN: ${{ env.ERP_UI_ORIGIN }}
+          ERP_THROTTLE_SECRET: ${{ env.ERP_THROTTLE_SECRET }}
+        with:
+          working-directory: backend/deploy
+          module: module.ts
+          build-command: none
+      - name: Confirm deployed canonical API rejects business writes
+        env:
+          DEPLOY_OUTCOME: ${{ steps.maintenance.outputs.outcome }}
+          DEPLOY_URL: ${{ steps.maintenance.outputs.url }}
+          DEPLOY_URLS: ${{ steps.maintenance.outputs.urls }}
+        run: |
+          set -euo pipefail
+          node backend/scripts/cutover-smoke.mjs freeze
+          echo 'ERP_PRODUCTION_WRITES_FROZEN=YES' >> "$GITHUB_ENV"
+      - name: Encrypted ERP-DB backup, independent restore, reconciliation, versioned 0008
+        working-directory: backend
+        env:
+          APPROVAL_COMMENT: ${{ github.event.comment.body }}
+          OWNER_COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+        run: |
+          test "$ERP_PRODUCTION_WRITES_FROZEN" = YES
+          node --check scripts/b1-production-migration.mjs
+          node --experimental-strip-types scripts/b1-production-migration.mjs
+      - name: Stage normal business operation only after migration read-back
+        working-directory: backend
+        env:
+          APPROVAL_COMMENT: ${{ github.event.comment.body }}
+          OWNER_COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+        run: node scripts/b1-maintenance.mjs normal
+      - name: Verify eight ERP-DB migrations and installation identity
+        working-directory: backend
+        run: node scripts/compute-target-preflight.mjs
+      - name: Build B1 backend release
+        working-directory: backend
+        run: |
+          npm run build:compute
+          test -s dist/compute.mjs
+      - id: compute
+        name: Release B1 to existing erp-backend Compute app
+        uses: prisma/cloud-deploy-action@v1
+        env:
+          ERP_INSTALLATION_ID: ${{ env.ERP_INSTALLATION_ID }}
+          ERP_UI_ORIGIN: ${{ env.ERP_UI_ORIGIN }}
+          ERP_THROTTLE_SECRET: ${{ env.ERP_THROTTLE_SECRET }}
+        with:
+          working-directory: backend/deploy
+          module: module.ts
+          build-command: none
+      - name: Smoke live backend, database and sales route
+        env:
+          DEPLOY_OUTCOME: ${{ steps.compute.outputs.outcome }}
+          DEPLOY_URL: ${{ steps.compute.outputs.url }}
+          DEPLOY_URLS: ${{ steps.compute.outputs.urls }}
+          ERP_BRANCH_ID: ${{ env.ERP_BRANCH_ID }}
+          ADMIN_PASSWORD: ${{ secrets.ERP_BOOTSTRAP_ADMIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test "$DEPLOY_OUTCOME" = succeeded
+          node backend/scripts/smoke.mjs
+          node backend/scripts/cutover-smoke.mjs ready
+          node --input-type=module - <<'JS'
+          const urls=Object.values(JSON.parse(process.env.DEPLOY_URLS||'{}'));
+          if(process.env.DEPLOY_URL)urls.push(process.env.DEPLOY_URL);
+          const origins=[...new Set(urls.filter(x=>typeof x==='string'&&
+            x.startsWith('https://')).map(x=>new URL(x).origin))];
+          if(origins.length!==1)throw Error('B1_COMPUTE_URL_UNVERIFIED');
+          const response=await fetch(origins[0]+'/v1/sales/orders?branchId=00000000-0000-4000-8000-000000000001',{
+            headers:{origin:'https://erp-gustavjung24-ops-projects.vercel.app'},
+            signal:AbortSignal.timeout(15000)});
+          if(response.status!==401)throw Error('B1_SALES_UNAUTHENTICATED_DENY_FAIL_'+response.status);
+          console.info('ERP_B1_SALES_ROUTE_DENY_BY_DEFAULT_PASS');
+          JS
+      - name: Report operator completion
+        run: echo ERP_B1_DB_0008_AND_COMPUTE_LIVE_PASS_FRONTEND_RELEASE_NEXT
+# Frontend Vercel production release remains separate, after backend ACK.

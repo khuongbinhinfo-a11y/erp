@@ -1,0 +1,176 @@
+name: ERP initial installation operator (manual production)
+# This is an explicit manual operator action, never an automatic CI migration.
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Production ERP demo installation only
+        required: true
+        type: choice
+        options:
+          - erp-sales/erp-demo
+      action:
+        description: First migration+bootstrap, or recovery bootstrap only after a successful migration
+        required: true
+        type: choice
+        options:
+          - migrate-and-bootstrap
+          - bootstrap-only
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: erp-demo-initial-migration-and-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  activate:
+    if: github.repository == 'gustavjung24-ops/ERP' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify exact main SHA, explicit target, green CI and pre-existing snapshot proof
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPROVED_TARGET: ${{ inputs.target }}
+          ACTION: ${{ inputs.action }}
+        run: |
+          set -euo pipefail
+          test "$APPROVED_TARGET" = "erp-sales/erp-demo"
+          test "$ACTION" = "migrate-and-bootstrap" || test "$ACTION" = "bootstrap-only"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          latest="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
+          test "$GITHUB_SHA" = "$latest"
+          green="$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$GITHUB_SHA&event=push&per_page=30" --jq '[.workflow_runs[] | select(.name == "ERP quality gates" and .conclusion == "success")] | length')"
+          test "$green" -ge 1
+          grep -Fq '54ee2ed373e73db40748e2e98aaf9cabb02edca883506ebc06282df2bbccf051' docs/ERP_DEMO_BACKUP_GATE.md
+          grep -Fq 'Independent copy' docs/ERP_DEMO_BACKUP_GATE.md
+          echo "OWNER_TARGET_CI_AND_RECORDED_BACKUP_EVIDENCE_CHECK_PASS"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Ensure both operator-only credentials were provisioned
+        env:
+          ERP_POSTGRES_DIRECT_URL: ${{ secrets.ERP_POSTGRES_DIRECT_URL }}
+          ERP_BOOTSTRAP_ADMIN_PASSWORD: ${{ secrets.ERP_BOOTSTRAP_ADMIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$ERP_POSTGRES_DIRECT_URL" || { echo "Missing repository secret ERP_POSTGRES_DIRECT_URL" >&2; exit 1; }
+          test -n "$ERP_BOOTSTRAP_ADMIN_PASSWORD" || { echo "Missing repository secret ERP_BOOTSTRAP_ADMIN_PASSWORD" >&2; exit 1; }
+          node -e 'if(Buffer.byteLength(process.env.ERP_BOOTSTRAP_ADMIN_PASSWORD,"utf8") < 12) process.exit(1)'
+          echo "OPERATOR_SECRETS_PRESENT_NO_VALUES_PRINTED"
+      - name: Install backend dependency for versioned migration
+        working-directory: backend
+        run: npm install --no-audit --no-fund
+      - name: Read-only PostgreSQL target and operator preflight (never print secrets)
+        if: inputs.action == 'migrate-and-bootstrap'
+        working-directory: backend
+        env:
+          ERP_POSTGRES_DIRECT_URL: ${{ secrets.ERP_POSTGRES_DIRECT_URL }}
+        run: |
+          node --experimental-strip-types --input-type=module - <<'JS'
+          import { Pool } from 'pg';
+          const u = new URL(process.env.ERP_POSTGRES_DIRECT_URL);
+          const pool = new Pool({connectionString:process.env.ERP_POSTGRES_DIRECT_URL,max:1,connectionTimeoutMillis:10000});
+          try {
+            const probe = await pool.query(`SELECT (current_setting('server_version_num')::integer / 10000) AS major,
+              (SELECT count(*)::integer FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+                WHERE n.nspname NOT IN ('pg_catalog','information_schema')
+                  AND n.nspname NOT LIKE 'pg_%' AND c.relkind IN ('r','p','v','m','S')) AS user_objects,
+              (SELECT count(*)::integer FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+                WHERE n.nspname NOT IN ('pg_catalog','information_schema')
+                  AND n.nspname NOT LIKE 'pg_%' AND c.relkind IN ('r','p','v','m','S')
+                  AND NOT EXISTS (
+                    SELECT 1 FROM pg_depend d
+                    JOIN pg_extension e ON e.oid=d.refobjid
+                    WHERE d.classid='pg_class'::regclass AND d.objid=c.oid
+                      AND d.refclassid='pg_extension'::regclass
+                      AND d.deptype='e'
+                      AND e.extname IN ('prisma_postgres','pg_stat_statements')
+                  )) AS unmanaged_objects,
+              (SELECT count(*)::integer FROM information_schema.tables WHERE table_schema='public'
+                AND table_name IN ('installation','schema_migrations','app_user','app_session')) AS tenant_objects`);
+            const x = probe.rows[0];
+            console.log(JSON.stringify({
+              event:"read_only_production_schema_preflight",
+              major:x.major,
+              userObjects:x.user_objects,
+              unmanagedObjects:x.unmanaged_objects,
+              tenantObjects:x.tenant_objects,
+              directHostAccepted:u.hostname==="db.prisma.io",
+              sslModeAccepted:u.searchParams.get("sslmode")==="require",
+              operatorWorkflow:process.env.GITHUB_WORKFLOW_REF ?? "unknown"
+            }));
+          } catch (e) {
+            const code = typeof e?.code==="string" && /^[A-Z0-9]{5}$/.test(e.code) ? e.code : "NO_SQLSTATE";
+            console.error("DATABASE_PREFLIGHT_FAILED sqlstate="+code);
+            process.exitCode=1;
+          } finally { await pool.end(); }
+          JS
+      - name: Versioned PostgreSQL 0001-0005 migration (transactional; empty database only)
+        if: inputs.action == 'migrate-and-bootstrap'
+        working-directory: backend
+        env:
+          ERP_POSTGRES_DIRECT_URL: ${{ secrets.ERP_POSTGRES_DIRECT_URL }}
+          ERP_TRUSTED_OPERATOR_WORKFLOW: OWNER_APPROVED_MANUAL_ACTIVATION
+          ERP_MIGRATION_CONFIRM: OWNER_APPROVED_ERP_DEMO_SCHEMA_0001_0005
+          ERP_MIGRATION_APPROVAL_REFERENCE: OWNER-ERP-DEMO-20261119
+          ERP_TARGET_DATABASE_ID: db_xg7823erugsd1ym7c8lf0l9h
+          ERP_APPROVED_GIT_SHA: ${{ github.sha }}
+          ERP_BACKUP_OBJECT_KEY: erp-demo-20261119T-backup.dump.age
+          ERP_BACKUP_CIPHERTEXT_SHA256: 54ee2ed373e73db40748e2e98aaf9cabb02edca883506ebc06282df2bbccf051
+          ERP_RESTORE_REHEARSAL: PORTABLE_RESTORE_VERIFIED_WITH_EXTENSION_EXCEPTION
+          ERP_BACKUP_RETENTION_GATE: OWNER_WAIVER_EMPTY_DEMO_NON_WORM
+          ERP_PRODUCTION_WRITES_FROZEN: 'YES'
+        run: node --experimental-strip-types src/migrate_production.ts
+      - name: Verify readiness and pristine installation table before first admin
+        working-directory: backend
+        env:
+          DATABASE_URL: ${{ secrets.ERP_POSTGRES_DIRECT_URL }}
+        run: |
+          node --experimental-strip-types --input-type=module -e '
+            import { Pool } from "pg";
+            import { isDatabaseReady } from "./src/db.ts";
+            const pool = new Pool({connectionString:process.env.DATABASE_URL,max:1});
+            try {
+              if(!await isDatabaseReady(pool))throw new Error("MIGRATION_SCHEMA_NOT_READY");
+              const x=await pool.query("SELECT COUNT(*)::int AS n FROM installation");
+              if(x.rows[0]?.n!==0)throw new Error("INSTALLATION_ALREADY_PRESENT");
+              console.log("SCHEMA_READY_INITIAL_INSTALLATION_EMPTY");
+            } finally { await pool.end(); }
+          '
+      - name: Create exactly one primary ERP admin, main branch and warehouse
+        working-directory: backend
+        env:
+          DATABASE_URL: ${{ secrets.ERP_POSTGRES_DIRECT_URL }}
+          ERP_BOOTSTRAP_CONFIRM: OWNER_APPROVED_EMPTY_INSTALLATION
+          ERP_BOOTSTRAP_CODE: erp-demo
+          ERP_BOOTSTRAP_NAME: ERP Demo
+          ERP_BOOTSTRAP_ADMIN_LOGIN: admin
+          ERP_BOOTSTRAP_ADMIN_PASSWORD: ${{ secrets.ERP_BOOTSTRAP_ADMIN_PASSWORD }}
+        run: node --experimental-strip-types src/bootstrap_cli.ts
+      - name: Verify installation, admin, branch, warehouse and 5 history rows
+        working-directory: backend
+        env:
+          DATABASE_URL: ${{ secrets.ERP_POSTGRES_DIRECT_URL }}
+        run: |
+          node --experimental-strip-types --input-type=module -e '
+            import {Pool} from "pg";
+            const pool=new Pool({connectionString:process.env.DATABASE_URL,max:1});
+            try{
+              const x=await pool.query("SELECT (SELECT count(*) FROM installation)::int AS installation, (SELECT count(*) FROM app_user WHERE login_name=$1)::int AS admin, (SELECT count(*) FROM branch)::int AS branches, (SELECT count(*) FROM warehouse)::int AS warehouses, (SELECT count(*) FROM schema_migrations)::int AS migrations",["admin"]);
+              const r=x.rows[0];
+              if(r.installation!==1||r.admin!==1||r.branches!==1||r.warehouses!==1||r.migrations!==5)throw Error("IDENTITY_INITIALIZATION_MISMATCH");
+              console.log("POST_MIGRATION_INITIAL_ADMIN_AND_SCHEMA_COUNTS_PASS");
+            }finally{await pool.end()}
+          '
+
+# Never uses Prisma/Postgres credentials outside GitHub encrypted Actions secrets.
+# Manual workflow requires a successful CI on the exact current main SHA; no auto-deploy or rollback.
+# Vendor extension restoration is qualified, not full; empty-demo backup waiver is explicit.

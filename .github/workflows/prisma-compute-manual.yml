@@ -1,0 +1,234 @@
+name: ERP Prisma Compute manual-only release
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      approved_sha:
+        description: Exact main SHA approved by owner after CI PASS
+        required: true
+        type: string
+      target_project:
+        description: Must be the existing erp-backend project
+        required: true
+        type: choice
+        options:
+          - erp-backend
+
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+
+concurrency:
+  group: erp-prisma-compute-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'issue_comment' && github.event.issue.number == 6 && github.event.issue.pull_request == null && github.event.comment.user.login == 'gustavjung24-ops' && github.actor == 'gustavjung24-ops'))
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Confirm owner release target, exact SHA and green main CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ inputs.approved_sha }}
+          APPROVAL_COMMENT: ${{ github.event.comment.body }}
+          TRIGGER_EVENT: ${{ github.event_name }}
+          TARGET_PROJECT: ${{ github.event_name == 'issue_comment' && 'erp-backend' || inputs.target_project }}
+        run: |
+          set -euo pipefail
+          if [[ "$TRIGGER_EVENT" == "issue_comment" ]]; then
+            [[ "$APPROVAL_COMMENT" =~ ^ERP_DEPLOY[[:space:]]erp-backend[[:space:]]([0-9a-f]{40})$ ]] || exit 1
+            EXPECTED_SHA="${BASH_REMATCH[1]}"
+          fi
+          test "$TARGET_PROJECT" = "erp-backend"
+          test "$EXPECTED_SHA" = "$(git rev-parse HEAD)"
+          latest="$(gh api "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
+          test "$EXPECTED_SHA" = "$latest"
+          count="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${EXPECTED_SHA}&event=push&per_page=20" --jq '[.workflow_runs[] | select(.name=="ERP quality gates" and .conclusion=="success")] | length')"
+          test "$count" -ge 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: oven-sh/setup-bun@v2
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm install --no-audit --no-fund
+      - name: Install Composer dependencies
+        working-directory: backend/deploy
+        run: npm install --no-audit --no-fund
+      - name: Verify migrated ERP-DB and derive identity through OIDC (no source secret)
+        working-directory: backend
+        run: node scripts/compute-target-preflight.mjs
+      - name: Build Compute artifact (no deploy yet)
+        working-directory: backend
+        run: npm run build:compute
+      - id: deploy
+        name: Deploy to the existing Prisma project through OIDC
+        uses: prisma/cloud-deploy-action@v1
+        env:
+          ERP_INSTALLATION_ID: ${{ env.ERP_INSTALLATION_ID }}
+          ERP_UI_ORIGIN: ${{ env.ERP_UI_ORIGIN }}
+          ERP_THROTTLE_SECRET: ${{ env.ERP_THROTTLE_SECRET }}
+        with:
+          working-directory: backend/deploy
+          module: module.ts
+          build-command: none
+      - name: Smoke actual deployed API and report schema readiness separately
+        env:
+          DEPLOY_OUTCOME: ${{ steps.deploy.outputs.outcome }}
+          DEPLOY_URL: ${{ steps.deploy.outputs.url }}
+          DEPLOY_URLS: ${{ steps.deploy.outputs.urls }}
+        run: |
+          test "$DEPLOY_OUTCOME" = "succeeded"
+          node backend/scripts/smoke.mjs
+
+      - name: Verify actual production admin login (never log credentials or session token)
+        env:
+          DEPLOY_URL: ${{ steps.deploy.outputs.url }}
+          DEPLOY_URLS: ${{ steps.deploy.outputs.urls }}
+          ADMIN_PASSWORD: ${{ secrets.ERP_BOOTSTRAP_ADMIN_PASSWORD }}
+          ERP_UI_ORIGIN: https://erp-gustavjung24-ops-projects.vercel.app
+        run: |
+          node --input-type=module - <<'JS'
+          const origins=JSON.parse(process.env.DEPLOY_URLS||'{}');
+          const urls=Object.values(origins).filter(v=>typeof v==='string'&&v.startsWith('https://'));
+          if(process.env.DEPLOY_URL?.startsWith('https://'))urls.push(process.env.DEPLOY_URL);
+          const found=[...new Set(urls.map(x=>new URL(x).origin))];
+          if(found.length!==1)throw Error('PRODUCTION_API_URL_NOT_UNIQUE');
+          const base=found[0],headers={origin:process.env.ERP_UI_ORIGIN};
+          let config;
+          for(let attempt=0;attempt<8;attempt++){
+            config=await fetch(base+'/v1/auth/config',{headers,signal:AbortSignal.timeout(10000)});
+            if(config.status===200)break;
+            await new Promise(r=>setTimeout(r,1200));
+          }
+          if(config?.status!==200)throw Error('PRODUCTION_AUTH_CONFIG_NOT_READY_'+config?.status);
+          const c=await config.json();
+          if(c.enabled!==true)throw Error('PRODUCTION_AUTH_DISABLED');
+          const response=await fetch(base+'/v1/auth/login',{
+            method:'POST',headers:{...headers,'content-type':'application/json'},
+            body:JSON.stringify({loginName:'admin',password:process.env.ADMIN_PASSWORD}),
+            signal:AbortSignal.timeout(15000)
+          });
+          if(response.status!==200)throw Error('PRODUCTION_ADMIN_LOGIN_HTTP_'+response.status);
+          const payload=await response.json();
+          if(typeof payload.token!=='string'||payload.token.length!==43)
+            throw Error('PRODUCTION_ADMIN_SESSION_TOKEN_INVALID');
+          console.log('PRODUCTION_IDENTITY_CONFIG_AND_ADMIN_LOGIN_PASS');
+          JS
+
+
+  db_relocation_preflight:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 19 &&
+      github.event.issue.pull_request == null &&
+      github.ref == 'refs/heads/main' &&
+      github.event.comment.user.login == 'gustavjung24-ops' &&
+      github.actor == 'gustavjung24-ops' &&
+      startsWith(github.event.comment.body, 'ERP_DB_PREFLIGHT ')
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify exact owner command, head SHA and green CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMAND: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          test "$COMMAND" = "ERP_DB_PREFLIGHT $sha"
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)" = "$sha"
+          count="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${sha}&event=push&per_page=20" --jq '[.workflow_runs[] | select(.name=="ERP quality gates" and .conclusion=="success")] | length')"
+          test "$count" -ge 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install backend PostgreSQL client
+        working-directory: backend
+        run: npm install --no-audit --no-fund
+      - name: Check source database rows/migrations without writing
+        working-directory: backend
+        env:
+          ERP_POSTGRES_DIRECT_URL: ${{ secrets.ERP_POSTGRES_DIRECT_URL }}
+        run: node scripts/db-relocation-preflight.mjs
+
+
+  db_relocation_encrypted_backup:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 19 &&
+      github.event.issue.pull_request == null &&
+      github.ref == 'refs/heads/main' &&
+      github.event.comment.user.login == 'gustavjung24-ops' &&
+      github.actor == 'gustavjung24-ops' &&
+      startsWith(github.event.comment.body, 'ERP_DB_BACKUP ')
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: erp_rehearsal
+          POSTGRES_PASSWORD: erp_rehearsal_password
+          POSTGRES_DB: erp_restore_20261120
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U erp_rehearsal -d erp_restore_20261120"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate owner backup command and CI green on exact head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMAND: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          test "$COMMAND" = "ERP_DB_BACKUP $sha"
+          test "$(gh api "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)" = "$sha"
+          count="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${sha}&event=push&per_page=20" --jq '[.workflow_runs[] | select(.name=="ERP quality gates" and .conclusion=="success")] | length')"
+          test "$count" -ge 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install PostgreSQL 17 client and backup encryption and S3 tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq curl ca-certificates gnupg
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc |
+            sudo gpg --dearmor -o /usr/share/keyrings/postgresql-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/postgresql-archive-keyring.gpg] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" |
+            sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql-client-17 age awscli >/dev/null
+          test "$(/usr/lib/postgresql/17/bin/pg_dump --version | sed -E 's/.* ([0-9]+)\..*/\1/')" = "17"
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+      - name: Install audited Node Postgres client
+        working-directory: backend
+        run: npm install --no-audit --no-fund
+      - name: Encrypted durable backup, S3 readback, local PostgreSQL 17 restore and data reconciliation
+        working-directory: backend
+        env:
+          ERP_POSTGRES_DIRECT_URL: ${{ secrets.ERP_POSTGRES_DIRECT_URL }}
+        run: node scripts/db-relocation-backup.mjs
+
+# Owner-approved manual production releases only. Automatic production deploy OFF.
+# No schema migration in this release workflow. Main release uses ERP-DB after cutover;
+# protected source secret is used ONLY by explicit legacy preflight/backup jobs.

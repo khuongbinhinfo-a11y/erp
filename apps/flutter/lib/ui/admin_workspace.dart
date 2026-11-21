@@ -1,0 +1,261 @@
+import 'package:material_ui/material_ui.dart';
+
+import 'erp_tokens.dart';
+import 'erp_navigation_ui.dart';
+import 'identity_client.dart';
+import 'erp_toast.dart';
+
+class AdminWorkspace extends StatefulWidget {
+  final bool previewOnly;
+  final ErpIdentityClient? client;
+  final IdentitySession? session;
+  const AdminWorkspace({super.key,this.previewOnly=true,this.client,this.session});
+  @override State<AdminWorkspace> createState()=>_AdminWorkspaceState();
+}
+
+class _AdminWorkspaceState extends State<AdminWorkspace>{
+  int selected=0;
+  Future<List<IdentityUser>>? usersFuture;
+
+  static const permissions=<(String,String)>[
+    ('Người dùng','identity.users.read / manage'),
+    ('Vai trò','identity.roles.manage'),
+    ('Danh mục','catalog.read / write'),
+    ('Đơn hàng','orders.read / create'),
+    ('Kho','inventory.read / post'),
+    ('Công nợ','finance.receivables.read / payments.record'),
+    ('Giao hàng','delivery.read / update'),
+  ];
+  bool get real=>!widget.previewOnly&&widget.session!=null&&widget.client!=null;
+  bool allowed(String code)=>widget.session?.grants.any((g)=>g.permission==code)??false;
+  String get token=>widget.session!.token;
+
+  @override void initState(){
+    super.initState();
+    if(real&&allowed('identity.users.read'))usersFuture=widget.client!.users(token);
+  }
+  void reload(){
+    if(real&&allowed('identity.users.read')){
+      setState(()=>usersFuture=widget.client!.users(token));
+    }
+  }
+  void message(String text,{bool error=false}){
+    if(mounted)ErpToast.show(context,text,isError:error);
+  }
+  Future<void> createUser()async{
+    final login=TextEditingController(),password=TextEditingController();
+    try{
+      final result=await showDialog<Map<String,String>>(context:context,builder:(dialog)=>AlertDialog(
+        title:const Text('Tạo tài khoản'),
+        content:SizedBox(width:370,child:Column(mainAxisSize:MainAxisSize.min,children:[
+          TextField(controller:login,decoration:const InputDecoration(
+            labelText:'Tên đăng nhập',hintText:'vd: nhanvien_kho')),
+          const SizedBox(height:12),
+          TextField(controller:password,obscureText:true,
+            decoration:const InputDecoration(labelText:'Mật khẩu mới (ít nhất 12 ký tự)')),
+          const SizedBox(height:10),
+          const Text('Tài khoản mới chưa có quyền. Cấp quyền sau khi tạo.',
+            style:TextStyle(color:ErpTokens.muted,fontSize:12)),
+        ])),
+        actions:[
+          TextButton(onPressed:()=>Navigator.of(dialog).pop(),child:const Text('Hủy')),
+          FilledButton(onPressed:()=>Navigator.of(dialog).pop({
+            'login':login.text.trim().toLowerCase(),'password':password.text,
+          }),child:const Text('Tạo tài khoản')),
+        ],
+      ));
+      if(result==null||!mounted)return;
+      if(!RegExp(r'^[a-z][a-z0-9._-]{2,79}$').hasMatch(result['login']??'')||
+        (result['password']??'').length<12){message('Tên đăng nhập hoặc mật khẩu chưa hợp lệ.',error:true);return;}
+      await widget.client!.createUser(token,result['login']!,result['password']!);
+      message('Đã tạo tài khoản trên server. Chưa có quyền truy cập.');
+      reload();
+    }on ErpApiError catch(e){message(e.message,error:true);}
+    catch(_){message('Không tạo được tài khoản.',error:true);}
+    finally{login.dispose();password.dispose();}
+  }
+  Future<void> updateStatus(IdentityUser user)async{
+    try{
+      await widget.client!.setDisabled(token,user,!user.disabled);
+      message(user.disabled?'Đã mở khóa tài khoản.':'Đã khóa tài khoản.');
+      reload();
+    }on ErpApiError catch(e){message(e.message,error:true);reload();}
+  }
+  Future<void> addGrant(IdentityUser user)async{
+    final available=widget.session!.grants.where((g)=>
+      g.permission.isNotEmpty&&g.roleId.isNotEmpty).toList();
+    if(available.isEmpty){message('Tài khoản quản trị chưa có quyền để cấp.',error:true);return;}
+    final chosen=await showDialog<IdentityGrant>(context:context,builder:(dialog){
+      var index=0;
+      return StatefulBuilder(builder:(ctx,setLocal)=>AlertDialog(
+        title:Text('Cấp quyền: ${user.loginName}'),
+        content:SizedBox(width:440,child:Column(mainAxisSize:MainAxisSize.min,children:[
+          const Text('Chỉ được cấp quyền và phạm vi mà tài khoản quản trị hiện sở hữu.',
+            style:TextStyle(color:ErpTokens.muted,fontSize:12)),
+          const SizedBox(height:16),
+          DropdownButtonFormField<int>(
+            key:const ValueKey('admin-grant-selector'),
+            initialValue:index,
+            isExpanded:true,
+            decoration:const InputDecoration(labelText:'Quyền / phạm vi'),
+            items:List.generate(available.length,(i){
+              final g=available[i];
+              return DropdownMenuItem(value:i,
+                child:Text('${g.permission} · ${g.warehouseId??g.branchId??"Toàn installation"}',
+                  overflow:TextOverflow.ellipsis));
+            }),
+            onChanged:(i)=>setLocal(()=>index=i??0),
+          ),
+        ])),
+        actions:[
+          TextButton(onPressed:()=>Navigator.of(dialog).pop(),child:const Text('Hủy')),
+          FilledButton(onPressed:()=>Navigator.of(dialog).pop(available[index]),
+            child:const Text('Cấp quyền')),
+        ],
+      ));
+    });
+    if(chosen==null||!mounted)return;
+    try{
+      await widget.client!.grant(token,user,permission:chosen.permission,
+        branchId:chosen.branchId,warehouseId:chosen.warehouseId);
+      message('Đã cấp quyền sau xác nhận của server.');
+      reload();
+    }on ErpApiError catch(e){message(e.message,error:true);reload();}
+  }
+  Future<void> manageGrants(IdentityUser user)async{
+    List<IdentityGrant> grants;
+    try{grants=await widget.client!.grants(token,user.id);}
+    on ErpApiError catch(e){message(e.message,error:true);return;}
+    if(!mounted)return;
+    final roleId=await showDialog<String>(context:context,builder:(dialog)=>AlertDialog(
+      title:Text('Thu quyền: ${user.loginName}'),
+      content:SizedBox(width:460,height:270,child:grants.isEmpty
+        ? const Center(child:Text('Tài khoản chưa có quyền nào.'))
+        : ListView.builder(itemCount:grants.length,itemBuilder:(ctx,i){
+          final grant=grants[i];
+          return ListTile(
+            dense:true,
+            title:Text(grant.permission,style:const TextStyle(fontWeight:FontWeight.w600)),
+            subtitle:Text(grant.warehouseId??grant.branchId??'Toàn installation'),
+            trailing:TextButton(
+              onPressed:()=>Navigator.of(dialog).pop(grant.roleId),
+              child:const Text('Thu hồi')),
+          );
+        })),
+      actions:[TextButton(onPressed:()=>Navigator.of(dialog).pop(),
+        child:const Text('Đóng'))],
+    ));
+    if(roleId==null||!mounted)return;
+    try{
+      await widget.client!.revoke(token,user,roleId);
+      message('Quyền đã được thu hồi trên server.');
+      reload();
+    }on ErpApiError catch(e){message(e.message,error:true);reload();}
+  }
+  Widget usersTable(){
+    if(widget.previewOnly){
+      return const Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+        Text('Chưa có dữ liệu',style:TextStyle(color:ErpTokens.ink,fontWeight:FontWeight.w600)),
+        SizedBox(height:6),
+        Text('Chỉ admin đã đăng nhập và được cấp quyền mới có thể quản lý tài khoản.',
+          style:TextStyle(color:ErpTokens.muted)),
+      ]);
+    }
+    if(!allowed('identity.users.read'))return const Text(
+      'Tài khoản hiện tại không có quyền xem danh sách người dùng.');
+    return FutureBuilder<List<IdentityUser>>(
+      future:usersFuture,
+      builder:(ctx,snapshot){
+        if(snapshot.connectionState!=ConnectionState.done)return const Center(
+          child:Padding(padding:EdgeInsets.all(22),child:CircularProgressIndicator()));
+        if(snapshot.hasError)return const Text('Không tải được danh sách người dùng.',
+          style:TextStyle(color:ErpTokens.danger));
+        final users=snapshot.data??[];
+        if(users.isEmpty)return const Text('Chưa có tài khoản trong installation này.');
+        return Column(children:users.map((user)=>Container(
+          decoration:const BoxDecoration(border:Border(bottom:BorderSide(color:ErpTokens.border))),
+          padding:const EdgeInsets.symmetric(vertical:9),
+          child:Row(children:[
+            const Icon(Icons.person_outline,color:ErpTokens.primary),
+            const SizedBox(width:12),
+            Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+              Text(user.loginName,style:const TextStyle(fontWeight:FontWeight.w700,color:ErpTokens.ink)),
+              Text(user.disabled?'Đã khóa':'Đang hoạt động',
+                style:TextStyle(fontSize:12,color:user.disabled?ErpTokens.danger:ErpTokens.muted)),
+            ])),
+            if(allowed('identity.roles.manage'))...[
+              IconButton(
+                tooltip:'Cấp quyền',icon:const Icon(Icons.security_outlined),
+                onPressed:()=>addGrant(user)),
+              IconButton(
+                tooltip:'Thu quyền',icon:const Icon(Icons.remove_moderator_outlined),
+                onPressed:()=>manageGrants(user)),
+            ],
+            if(allowed('identity.users.manage')&&user.id!=widget.session?.actorId)
+              IconButton(
+                tooltip:user.disabled?'Mở khóa':'Khóa tài khoản',
+                icon:Icon(user.disabled?Icons.lock_open_outlined:Icons.lock_outline),
+                onPressed:()=>updateStatus(user)),
+          ]),
+        )).toList());
+      },
+    );
+  }
+  @override Widget build(BuildContext context){
+    final mobile=MediaQuery.sizeOf(context).width<720;
+    final margin=mobile?16.0:26.0;
+    return Column(children:[
+      Padding(padding:EdgeInsets.fromLTRB(margin,16,margin,0),
+        child:ErpPageHeader(
+          heading:'Quản trị',subtitle:'Người dùng và phân quyền',
+          icon:Icons.admin_panel_settings_outlined,
+          trailing:ErpHeaderTabs<int>(
+            keyPrefix:'admin',
+            selected:selected,
+            items:const [ErpSectionTab(0,'Tài khoản'),
+              ErpSectionTab(1,'Ma trận quyền')],
+            onSelected:(value)=>setState(()=>selected=value)))),
+      Expanded(child:AnimatedSwitcher(
+        duration:MediaQuery.of(context).disableAnimations
+          ? Duration.zero : ErpTokens.pageMotion,
+        reverseDuration:MediaQuery.of(context).disableAnimations
+          ? Duration.zero : const Duration(milliseconds:100),
+        layoutBuilder:erpStableSwitcherLayout,
+        transitionBuilder:erpFadeSwitcher,
+        child:SingleChildScrollView(
+          key:ValueKey('admin-content-$selected'),
+          padding:EdgeInsets.fromLTRB(margin,18,margin,26),
+          child:Card(child:Padding(padding:const EdgeInsets.all(18),
+            child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+              Row(children:[
+                Expanded(child:Text(selected==0?'Tài khoản người dùng':'Danh sách quyền',
+                  style:Theme.of(context).textTheme.titleLarge?.copyWith(
+                    fontWeight:FontWeight.w800,color:ErpTokens.ink))),
+                if(selected==0)
+                  Tooltip(message:real?'Tạo user mới':'Chưa có quyền tạo user',
+                    child:FilledButton.icon(
+                      onPressed:real&&allowed('identity.users.manage')?createUser:null,
+                      icon:const Icon(Icons.person_add_alt_1_outlined),
+                      label:const Text('Thêm user'))),
+              ]),
+              const SizedBox(height:18),
+              if(selected==0)usersTable() else ...[
+                const Text('Quyền được giới hạn theo chi nhánh và kho.',
+                  style:TextStyle(color:ErpTokens.muted)),
+                const SizedBox(height:12),
+                ...permissions.map((entry)=>Padding(
+                  padding:const EdgeInsets.symmetric(vertical:9),
+                  child:Row(children:[
+                    SizedBox(width:mobile?100:150,child:Text(entry.$1,
+                      style:const TextStyle(fontWeight:FontWeight.w600,color:ErpTokens.ink))),
+                    Expanded(child:Text(entry.$2,
+                      style:const TextStyle(color:ErpTokens.muted))),
+                  ]),
+                )),
+              ],
+            ]))),
+        ),
+      )),
+    ]);
+  }
+}

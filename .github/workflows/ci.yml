@@ -1,0 +1,219 @@
+name: ERP quality gates
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  backend:
+    name: backend-types-and-unit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install backend development dependencies
+        working-directory: backend
+        run: npm install --no-audit --no-fund
+      - name: Validate manual-only backup tools without credentials
+        run: |
+          set -euo pipefail
+          bash -n backend/scripts/backup-restore-gate.sh
+          node --check backend/scripts/reconcile-isolated-restore.mjs
+          node --check backend/scripts/db-cutover.mjs
+          node --check backend/scripts/db-cutover-resume.mjs
+          node --check backend/scripts/b1-production-migration.mjs
+          node --check backend/scripts/r1-production-migration.mjs
+          node --check backend/scripts/r1-maintenance.mjs
+          node --check backend/scripts/r1-resume-preflight.mjs
+          node --check backend/scripts/r1-target-preflight.mjs
+          # R1 production operator must not run outside an exact owner issue command.
+          if (cd backend && node --experimental-strip-types scripts/r1-production-migration.mjs               >/tmp/erp-r1-operator-negative.log 2>&1); then
+            echo 'R1 production operator unexpectedly ran without approval' >&2
+            exit 1
+          fi
+          node --check backend/scripts/b1-maintenance.mjs
+          node --check backend/scripts/b1-resume-preflight.mjs
+          node --check backend/scripts/db-cutover-maintenance.mjs
+          node --check backend/scripts/cutover-smoke.mjs
+          if env -u ERP_BACKUP_SOURCE_URL -u ERP_RESTORE_TARGET_URL -u ERP_BACKUP_STORE_URI \
+            -u ERP_BACKUP_AGE_RECIPIENT -u ERP_BACKUP_AGE_IDENTITY_FILE \
+            bash backend/scripts/backup-restore-gate.sh > /tmp/erp-backup-negative-test.log 2>&1; then
+            echo 'Backup operator script must refuse without protected credentials' >&2
+            exit 1
+          fi
+      - name: Test canonical ERP login origins (browser entrypoint)
+        run: node --test apps/flutter/test/web_origin_guard.test.mjs
+      - name: Typecheck backend
+        working-directory: backend
+        run: npm run typecheck
+      - name: Compile backend
+        working-directory: backend
+        run: npm run build
+      - name: Test contract / deny-by-default
+        working-directory: backend
+        run: npm test
+  postgres-schema:
+    name: postgres-fresh-schema
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: erp_ci
+          POSTGRES_PASSWORD: erp_ci_local_only
+          POSTGRES_DB: erp_ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U erp_ci -d erp_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://erp_ci:erp_ci_local_only@localhost:5432/erp_ci
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm install --no-audit --no-fund
+      - name: Run transactional migration on ephemeral DB
+        working-directory: backend
+        env:
+          ERP_DB_MIGRATION_TARGET: ci
+        run: npm run db:migrate:ci
+      - name: Verify migration replay skips cleanly
+        working-directory: backend
+        env:
+          ERP_DB_MIGRATION_TARGET: ci
+        run: npm run db:migrate:ci
+      - name: Test atomic mutation receipts and audit on real ephemeral PostgreSQL
+        working-directory: backend
+        run: npm run test:integration
+      - name: Verify schema tables
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('installation','branch','warehouse','app_user','app_role','role_permission','user_role','schema_migrations','mutation_receipt','audit_event','user_role_warehouse','app_session','auth_event','auth_login_throttle','catalog_customer','catalog_supplier','catalog_product_group','catalog_product','catalog_unit','catalog_price_list','catalog_price_entry')" | grep -qx 21
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM public.schema_migrations WHERE version IN ('0001_identity.sql','0002_mutation_control.sql','0003_warehouse_scope.sql','0004_auth_sessions.sql','0005_admin_revision_throttle.sql','0006_catalog.sql','0007_catalog_controls.sql')" | grep -qx 7
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('sales_order','sales_order_version','sales_order_line','sales_order_sequence')" | grep -qx 4
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM public.schema_migrations WHERE version = '0008_sales_orders.sql'" | grep -qx 1
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('catalog_sell_sku','catalog_sku_barcode','catalog_sales_channel','catalog_sku_price_rule')" | grep -qx 4
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM public.schema_migrations WHERE version='0009_r1_catalog_pricing.sql'" | grep -qx 1
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM public.schema_migrations WHERE version='0010_r1_sales_price_snapshot.sql'" | grep -qx 1
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM public.schema_migrations" | grep -qx 10
+      - name: Rehearse pg_dump + pg_restore and reconcile fresh CI PostgreSQL only
+        env:
+          ERP_DB_MIGRATION_TARGET: ci
+        run: bash backend/scripts/ci-backup-restore.sh
+      - name: Test actual PostgreSQL-backed health and ready endpoints
+        working-directory: backend
+        run: |
+          npm run build
+          PORT=3147 npm start >/tmp/erp-ci-api.out 2>&1 &
+          api_pid=$!
+          trap 'kill "$api_pid" || true' EXIT
+          node --input-type=module -e '
+            for (let i = 0; i < 40; i++) {
+              try {
+                const [r, db] = await Promise.all([
+                  fetch("http://127.0.0.1:3147/health/ready"),
+                  fetch("http://127.0.0.1:3147/health"),
+                ]);
+                if (r.status === 200 && db.status === 200) process.exit(0);
+              } catch {}
+              await new Promise(resolve => setTimeout(resolve, 300));
+            }
+            process.exit(1);
+          '
+  compute-build:
+    name: prisma-compute-build-only
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: oven-sh/setup-bun@v2
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm install --no-audit --no-fund
+      - name: Install Composer dependencies
+        working-directory: backend/deploy
+        run: npm install --no-audit --no-fund
+      - name: Typecheck Prisma Composer declarations
+        working-directory: backend/deploy
+        run: npm run typecheck
+      - name: Compile only; no deploy
+        working-directory: backend
+        run: |
+          npm run build:compute
+          test -s dist/compute.mjs
+  release-policy:
+    name: verify-db-isolation-and-ci-gated-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure Compose never provisions a second DB and release gates on CI
+        run: |
+          set -euo pipefail
+          grep -q 'module("erp-backend"' backend/deploy/module.ts
+          grep -q 'envSecret("ERP_POSTGRES_URL")' backend/deploy/module.ts
+          # Production automatic deploy is OFF. Only the explicit owner-approved release can run.
+          test ! -e .github/workflows/prisma-compute-after-ci.yml
+          grep -q 'workflow_dispatch:' .github/workflows/prisma-compute-manual.yml
+          grep -q 'environment: production' .github/workflows/prisma-compute-manual.yml
+          grep -q "github.ref == 'refs/heads/main'" .github/workflows/prisma-compute-manual.yml
+          grep -q 'ERP quality gates' .github/workflows/prisma-compute-manual.yml
+          grep -q 'backend/scripts/smoke.mjs' .github/workflows/prisma-compute-manual.yml
+          grep -q 'group: erp-db-resume-operator-only' .github/workflows/erp-db-resume.yml
+          grep -q 'environment: production' .github/workflows/erp-b1-release.yml
+          grep -q 'ERP_B1_MIGRATE' .github/workflows/erp-b1-release.yml
+          grep -q 'backend/scripts/smoke.mjs' .github/workflows/erp-b1-release.yml
+          grep -q 'ERP_R1_RELEASE' .github/workflows/erp-r1-release.yml
+          grep -q 'environment: production' .github/workflows/erp-r1-release.yml
+          grep -q 'r1-production-migration.mjs' .github/workflows/erp-r1-release.yml
+          grep -q 'r1-maintenance.mjs freeze' .github/workflows/erp-r1-release.yml
+          grep -q 'r1-maintenance.mjs normal' .github/workflows/erp-r1-release.yml
+          grep -q 'ERP_R1_RESUME' .github/workflows/erp-r1-resume.yml
+          grep -q 'environment: production' .github/workflows/erp-r1-resume.yml
+          grep -q 'r1-resume-preflight.mjs' .github/workflows/erp-r1-resume.yml
+          grep -q 'r1-maintenance.mjs normal' .github/workflows/erp-r1-resume.yml
+          if grep -Eq '^  (push|pull_request|schedule):' .github/workflows/erp-r1-resume.yml; then exit 1; fi
+          grep -q 'rows.length!==10' backend/scripts/compute-target-preflight.mjs
+          grep -q 'backend/scripts/smoke.mjs' .github/workflows/erp-r1-release.yml
+          if grep -Eq '^  (push|pull_request|schedule):' .github/workflows/erp-r1-release.yml; then exit 1; fi
+          if grep -Eq '^  (push|pull_request|schedule):' .github/workflows/erp-b1-release.yml; then exit 1; fi
+          grep -q 'ERP_B1_RESUME' .github/workflows/erp-b1-resume.yml
+          grep -q 'environment: production' .github/workflows/erp-b1-resume.yml
+          grep -q 'b1-resume-preflight.mjs' .github/workflows/erp-b1-resume.yml
+          if grep -Eq '^  (push|pull_request|schedule):' .github/workflows/erp-b1-resume.yml; then exit 1; fi
+          if grep -Eq 'provision\(rawPostgres|provision\(postgres\(' backend/deploy/module.ts; then exit 1; fi
+          if grep -Eq '^  (push|pull_request|schedule):' .github/workflows/prisma-compute-manual.yml; then exit 1; fi
+  flutter:
+    name: flutter-analyze-widget
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.50.0'
+          cache: true
+      - name: Flutter pub get
+        working-directory: apps/flutter
+        run: flutter pub get
+      - name: Analyze
+        working-directory: apps/flutter
+        run: flutter analyze
+      - name: Widget tests
+        working-directory: apps/flutter
+        run: flutter test
+      - name: Build Flutter Web release (UI only)
+        working-directory: apps/flutter
+        run: flutter build web --release

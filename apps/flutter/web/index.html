@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <base href="$FLUTTER_BASE_HREF">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="ERP - Nền tảng phân phối với sáu phân hệ">
+  <meta name="theme-color" content="#176B46">
+  <title>ERP phân phối</title>
+  <!-- Login CORS is restricted to the canonical ERP origin on the current
+       Prisma Compute backend. Move verified Vercel aliases there *before*
+       the Flutter app starts; keep URL path/query/hash, never touch credentials. -->
+  <script id="erp-canonical-origin">
+    (function () {
+      const canonical = 'erp-gustavjung24-ops-projects.vercel.app';
+      const current = window.location.hostname.toLowerCase();
+      const alias = current === 'erp-two-orcin.vercel.app'
+        || /^erp-[a-z0-9-]+-gustavjung24-ops-projects\.vercel\.app$/.test(current);
+      if (window.location.protocol === 'https:' && current !== canonical && alias) {
+        const next = new URL(window.location.href);
+        next.hostname = canonical;
+        window.location.replace(next.href);
+      }
+    })();
+  </script>
+</head>
+<body>
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>

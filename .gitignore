@@ -1,0 +1,33 @@
+# Credentials and local environment
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.secret
+secrets/
+*.sql.dump
+*.dump
+*.bak
+*.sqlite
+*.sqlite3
+
+# Build and tooling
+node_modules/
+dist/
+coverage/
+.dart_tool/
+.flutter-plugins*
+.packages
+build/
+.idea/
+.vscode/
+*.iml
+.DS_Store
+
+.prisma/
+.prisma-composer/
+.alchemy/
