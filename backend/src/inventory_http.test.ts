@@ -134,7 +134,7 @@ test("R3 real PostgreSQL: on-hand, hold, release, no oversell, exact replay, RBA
   assert.deepEqual((await make(releasePath,{branchId:b,warehouseId:w},0,releaseKey)).body,
    released.body);
   assert.equal((await make("/v1/inventory/reservations",
-   reservation(orders[loser]!)).status,201);
+   reservation(orders[loser]!))).status,201);
   assert.equal((await make("/v1/sales/orders/"+heldOrder+"/cancel",
    {branchId:b,reason:"Cancel test order"},1)).status,200);
   const ledger=await call("/v1/inventory/movements?branchId="+b+"&warehouseId="+w,
