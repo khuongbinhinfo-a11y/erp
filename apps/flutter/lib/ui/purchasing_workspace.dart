@@ -22,7 +22,7 @@ class PurchasingWorkspace extends StatefulWidget{
 class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
  List<Map<String,dynamic>> branches=[],warehouses=[],orders=[];
  String? branchId,warehouseId,error;
- bool loading=true,busy=false;
+ bool loading=true,busy=false,hasMore=false,loadingMore=false;
  int generation=0;
  @override void initState(){super.initState();loadBranches();}
  @override void didUpdateWidget(covariant PurchasingWorkspace old){
@@ -38,11 +38,22 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
  bool hasWarehouse(String code)=>widget.session.grants.any((g)=>
    g.permission==code&&g.branchId==branchId&&g.warehouseId==warehouseId);
  bool get canRead=>hasBranch('purchase.read')&&hasWarehouse('inventory.read');
+ String? get pendingScope=>branchId==null||warehouseId==null?null:
+   widget.session.actorId+':'+branchId!+':'+warehouseId!;
+ bool get hasPending=>pendingScope!=null&&
+   widget.client.pendingPurchase(pendingScope!)!=null;
+ Future<void> retryPending()async{
+  final scope=pendingScope;if(scope==null)return;
+  final saved=widget.client.pendingPurchase(scope);
+  if(saved==null)return;
+  // Replay without fetching the latest PO revision or showing a new receiving form.
+  await submit(saved.path,saved.payload,revision:saved.revision);
+ }
  void inform(String message,{bool bad=false}){
   if(mounted)ErpToast.show(context,message,isError:bad);
  }
  Future<void> loadBranches()async{
-  final n=++generation;setState((){loading=true;error=null;});
+  final n=++generation;setState((){loading=true;error=null;loadingMore=false;});
   try{
    final data=await widget.client.catalogItems(widget.session.token,'branches');
    if(!mounted||n!=generation)return;
@@ -59,7 +70,7 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
  }
  Future<void> loadWarehouses()async{
   final b=branchId;if(b==null)return;
-  final n=++generation;setState((){loading=true;error=null;orders=[];});
+  final n=++generation;setState((){loading=true;error=null;loadingMore=false;hasMore=false;orders=[];});
   try{
    final data=await widget.client.catalogItems(
      widget.session.token,'warehouses',branchId:b);
@@ -77,15 +88,33 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
  }
  Future<void> reload()async{
   final b=branchId,w=warehouseId;if(b==null||w==null)return;
-  final n=++generation;setState((){loading=true;error=null;});
+  final n=++generation;setState((){loading=true;error=null;loadingMore=false;});
   try{
-   final list=await widget.client.purchasingOrders(widget.session.token,b,w);
-   if(mounted&&n==generation)setState((){orders=list;loading=false;});
+   final page=await widget.client.purchasingOrderPage(widget.session.token,b,w);
+   if(mounted&&n==generation)setState((){
+     orders=page.items;hasMore=page.hasMore;loading=false;
+   });
   }on ErpApiError catch(e){
    if(mounted&&n==generation)setState((){loading=false;error=e.message;});
   }catch(_){
    if(mounted&&n==generation)setState((){loading=false;error='Không tải được đơn mua.';});
   }
+ }
+ Future<void> loadMore()async{
+  final b=branchId,w=warehouseId;
+  if(b==null||w==null||!hasMore||loading||loadingMore||busy)return;
+  final n=generation,offset=orders.length;
+  setState(()=>loadingMore=true);
+  try{
+   final page=await widget.client.purchasingOrderPage(widget.session.token,b,w,offset:offset);
+   if(mounted&&n==generation){
+    setState((){
+      orders=[...orders,...page.items];hasMore=page.hasMore;loadingMore=false;
+    });
+   }
+  }on ErpApiError catch(e){
+   if(mounted&&n==generation)setState(()=>error=e.message);
+  }finally{if(mounted&&n==generation)setState(()=>loadingMore=false);}
  }
  bool validQuantity(String v)=>RegExp(r'^(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,6})?$').hasMatch(v)
    &&RegExp(r'[1-9]').hasMatch(v);
@@ -96,15 +125,17 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
    'CANCELLED'=>'Đã hủy',_=>'Chưa xác định',
  };
  Future<void> submit(String path,Map<String,dynamic> payload,
-     {required String intent,required int revision})async{
+     {required int revision})async{
   if(busy)return;
-  final scope=widget.session.actorId+':'+(warehouseId??'')+':'+intent;
+  final scope=pendingScope;if(scope==null)return;
   final held=widget.client.pendingPurchase(scope);
-  if(held!=null&&jsonEncode(held.payload)!=jsonEncode(payload)){
-   inform('Yêu cầu trước chưa xác minh. Vui lòng không tạo chứng từ khác.',bad:true);return;
+  if(held!=null&&(jsonEncode(held.payload)!=jsonEncode(payload)||
+     held.path!=path||held.revision!=revision)){
+   inform('Phải xác minh phiếu trước bằng lệnh đã lưu. Không thể tạo phiếu mới.',bad:true);
+   return;
   }
   final key=held?.key??'purchase-'+DateTime.now().microsecondsSinceEpoch.toString();
-  widget.client.retainPurchase(scope,payload,key);
+  widget.client.retainPurchase(scope,payload,key,path:path,revision:revision);
   setState(()=>busy=true);
   try{
    await widget.client.purchasingCommand(widget.session.token,path,payload,
@@ -123,7 +154,7 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
  }
  Future<void> createOrder()async{
   final b=branchId,w=warehouseId;
-  if(b==null||w==null||!hasBranch('purchase.create')||!hasWarehouse('inventory.read'))return;
+  if(b==null||w==null||hasPending||!hasBranch('purchase.create')||!hasWarehouse('inventory.read'))return;
   List<Map<String,dynamic>> suppliers,products;
   try{
    final lists=await Future.wait([
@@ -216,11 +247,11 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
    }
    await submit('orders',{'branchId':b,'warehouseId':w,
        'supplierId':selected['supplierId'],'note':'','lines':selectedLines},
-       intent:'create',revision:0);
+       revision:0);
   }finally{for(final line in all)line.dispose();}
  }
  Future<void> changeOrder(Map<String,dynamic> row,String action)async{
-  final b=branchId,w=warehouseId;if(b==null||w==null)return;
+  final b=branchId,w=warehouseId;if(b==null||w==null||hasPending)return;
   final permission=action=='confirm'?'purchase.confirm':'purchase.create';
   if(!hasBranch(permission))return;
   final next=action=='confirm'?'Xác nhận':'Hủy';
@@ -233,11 +264,11 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
   if(approved!=true||!mounted)return;
   final id=row['id'].toString(),revision=(row['revision'] as num).toInt();
   await submit('orders/$id/$action',{'branchId':b,'warehouseId':w},
-    intent:'$action:$id:$revision',revision:revision);
+    revision:revision);
  }
  Future<void> receiveOrder(Map<String,dynamic> row)async{
   final b=branchId,w=warehouseId;
-  if(b==null||w==null||!hasWarehouse('purchase.receive'))return;
+  if(b==null||w==null||hasPending||!hasWarehouse('purchase.receive'))return;
   Map<String,dynamic> order;
   try{
    order=await widget.client.purchasingOrder(
@@ -288,7 +319,7 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
    }
    final id=order['id'].toString(),revision=(order['revision'] as num).toInt();
    await submit('orders/$id/receipts',{'branchId':b,'warehouseId':w,
-    'lines':selected},intent:'receipt:$id:$revision',revision:revision);
+    'lines':selected},revision:revision);
   }finally{for(final c in controllers.values)c.dispose();}
  }
  Widget orderLine(Map<String,dynamic> row){
@@ -304,12 +335,12 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
        ' · '+(row['lineCount']??'').toString()+' mặt hàng',
        style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
      ])),
-     if(!busy&&statusValue=='DRAFT'&&hasBranch('purchase.confirm'))
+     if(!busy&&!hasPending&&statusValue=='DRAFT'&&hasBranch('purchase.confirm'))
       TextButton(onPressed:()=>changeOrder(row,'confirm'),child:const Text('Xác nhận')),
-     if(!busy&&['DRAFT','CONFIRMED'].contains(statusValue)&&
+     if(!busy&&!hasPending&&['DRAFT','CONFIRMED'].contains(statusValue)&&
        hasBranch('purchase.create'))
       TextButton(onPressed:()=>changeOrder(row,'cancel'),child:const Text('Hủy')),
-     if(!busy&&['CONFIRMED','PARTIALLY_RECEIVED'].contains(statusValue)&&
+     if(!busy&&!hasPending&&['CONFIRMED','PARTIALLY_RECEIVED'].contains(statusValue)&&
        hasWarehouse('purchase.receive'))
       TextButton(onPressed:()=>receiveOrder(row),child:const Text('Nhận hàng')),
     ])),
@@ -344,8 +375,11 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
    ]),
    const SizedBox(height:16),
    Wrap(spacing:10,runSpacing:8,children:[
+    if(hasPending)
+      OutlinedButton.icon(onPressed:busy?null:retryPending,
+        icon:const Icon(Icons.refresh),label:const Text('Xác minh lệnh đang chờ')),
     if(hasBranch('purchase.create')&&hasWarehouse('inventory.read'))
-      OutlinedButton.icon(onPressed:busy?null:createOrder,
+      OutlinedButton.icon(onPressed:busy||hasPending?null:createOrder,
        icon:const Icon(Icons.add),label:const Text('Lập đơn mua')),
     IconButton(onPressed:busy?null:reload,icon:const Icon(Icons.refresh),
       tooltip:'Tải lại đơn mua'),
@@ -355,7 +389,10 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
    if(loading)const LinearProgressIndicator(),
    if(!loading&&error==null&&orders.isEmpty)const Padding(
     padding:EdgeInsets.all(18),child:Text('Chưa có đơn mua tại kho này.')),
-   if(!loading&&error==null)for(final row in orders)orderLine(row),
+()=>end+`
+   if(!loading&&error==null&&hasMore)
+    TextButton(onPressed:loadingMore||busy?null:loadMore,
+      child:Text(loadingMore?'Đang tải tiếp...':'Tải thêm đơn mua')),`
   ]);
  }
 }

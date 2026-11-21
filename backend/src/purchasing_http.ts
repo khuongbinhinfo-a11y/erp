@@ -134,8 +134,12 @@ export async function handlePurchasingHttp(req:IncomingMessage,res:ServerRespons
       permission:"purchase.read",branchId:s.branchId})||
        !await hasPermission(db,{installationId:t,actorId:actor,
       permission:"inventory.read",...s}))throw new PurchaseFault(403,"PURCHASE_READ_DENIED");
-    const items=await listOrders(db,t,s.branchId,[s.warehouseId]);
-    output(res,200,{items,requestId:id},id,cors);
+    const rawOffset=url.searchParams.get("offset")??"0";
+    if(!/^(0|[1-9][0-9]{0,5})$/.test(rawOffset)||
+        Number(rawOffset)%100!==0)
+      throw new PurchaseFault(400,"INVALID_PURCHASE_PAGE");
+    const page=await listOrders(db,t,s.branchId,[s.warehouseId],Number(rawOffset));
+    output(res,200,{...page,requestId:id},id,cors);
    }finally{db.release();}
    return;
   }

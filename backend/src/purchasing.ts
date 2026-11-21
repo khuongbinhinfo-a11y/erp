@@ -20,8 +20,8 @@ async function scopedWarehouse(db:PoolClient,t:string,scope:PurchaseScope,lock=f
    ${lock?"FOR UPDATE":"FOR SHARE"}`,[t,scope.branchId,scope.warehouseId]);
  if(r.rowCount!==1)throw new PurchaseFault(404,"WAREHOUSE_NOT_FOUND");
 }
-export async function listOrders(db:PoolClient,t:string,b:string,warehouseIds:string[]){
- if(warehouseIds.length===0)return [];
+export async function listOrders(db:PoolClient,t:string,b:string,warehouseIds:string[],offset=0){
+ if(warehouseIds.length===0)return {items:[],hasMore:false};
  const r=await db.query(
   `SELECT o.id,o.document_no AS "documentNo",o.revision::integer,
     o.status,o.warehouse_id AS "warehouseId",w.name AS "warehouseName",
@@ -40,9 +40,11 @@ export async function listOrders(db:PoolClient,t:string,b:string,warehouseIds:st
       AND w.branch_id=o.branch_id AND w.id=o.warehouse_id
     WHERE o.installation_id=$1 AND o.branch_id=$2
       AND o.warehouse_id=ANY($3::uuid[])
-    ORDER BY o.created_at DESC,o.id DESC LIMIT 100`,
-  [t,b,warehouseIds]);
- return r.rows;
+    ORDER BY CASE WHEN o.status IN ('CONFIRMED','PARTIALLY_RECEIVED') THEN 0
+                  WHEN o.status='DRAFT' THEN 1 ELSE 2 END,
+             o.created_at DESC,o.id DESC LIMIT 101 OFFSET $4`,
+  [t,b,warehouseIds,offset]);
+ return {items:r.rows.slice(0,100),hasMore:r.rows.length>100};
 }
 export async function orderDetail(db:PoolClient,t:string,scope:PurchaseScope,id:string){
  const q=await db.query(

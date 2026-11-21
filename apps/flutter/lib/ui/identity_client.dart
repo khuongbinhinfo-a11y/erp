@@ -316,13 +316,18 @@ class ErpIdentityClient {
       body:body,revision:revision,idempotencyKey:key);
 
   /// Branch + warehouse scoped purchase orders. Only server-posted receipts alter stock.
-  Future<List<Map<String,dynamic>>> purchasingOrders(String token,
-      String branchId,String warehouseId)async{
-    final q=Uri(queryParameters:{'branchId':branchId,'warehouseId':warehouseId}).query;
+  Future<({List<Map<String,dynamic>> items,bool hasMore})> purchasingOrderPage(
+      String token,String branchId,String warehouseId,{int offset=0})async{
+    if(offset<0||offset%100!=0)throw const ErpApiError(400,'Trang đơn mua không hợp lệ.');
+    final q=Uri(queryParameters:{'branchId':branchId,'warehouseId':warehouseId,
+      'offset':'$offset'}).query;
     final r=await _request('GET','/v1/purchasing/orders?$q',token:token);
-    return (r['items'] as List<dynamic>)
-      .map((v)=>Map<String,dynamic>.from(v as Map)).toList();
+    return (items:(r['items'] as List<dynamic>).map((v)=>
+      Map<String,dynamic>.from(v as Map)).toList(),hasMore:r['hasMore']==true);
   }
+  Future<List<Map<String,dynamic>>> purchasingOrders(String token,
+      String branchId,String warehouseId)async=>
+    (await purchasingOrderPage(token,branchId,warehouseId)).items;
   Future<Map<String,dynamic>> purchasingOrder(String token,String id,
       String branchId,String warehouseId)async{
     final q=Uri(queryParameters:{'branchId':branchId,'warehouseId':warehouseId}).query;
@@ -333,13 +338,17 @@ class ErpIdentityClient {
       Map<String,dynamic> payload,{required int revision,required String key})=>
     _request('POST','/v1/purchasing/$path',token:token,body:payload,
       revision:revision,idempotencyKey:key);
-  final Map<String,({Map<String,dynamic> payload,String key})> _purchasePending={};
-  ({Map<String,dynamic> payload,String key})? pendingPurchase(String id){
+  // Preserve the entire immutable command, not only its body and key.
+  final Map<String,({Map<String,dynamic> payload,String key,String path,int revision})> _purchasePending={};
+  ({Map<String,dynamic> payload,String key,String path,int revision})? pendingPurchase(String id){
     final p=_purchasePending[id];
-    return p==null?null:(payload:Map<String,dynamic>.from(p.payload),key:p.key);
+    return p==null?null:(payload:Map<String,dynamic>.from(p.payload),
+      key:p.key,path:p.path,revision:p.revision);
   }
-  void retainPurchase(String id,Map<String,dynamic> payload,String key){
-    _purchasePending[id]=(payload:Map<String,dynamic>.from(payload),key:key);
+  void retainPurchase(String id,Map<String,dynamic> payload,String key,{
+      required String path,required int revision}){
+    _purchasePending[id]=(payload:Map<String,dynamic>.from(payload),
+      key:key,path:path,revision:revision);
   }
   void clearPurchase(String id)=>_purchasePending.remove(id);
 
