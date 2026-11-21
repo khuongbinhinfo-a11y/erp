@@ -46,20 +46,30 @@ export async function balances(db:PoolClient,t:string,s:WarehouseScope){
 }
 export async function movements(db:PoolClient,t:string,s:WarehouseScope){
  const r=await db.query(
-  `SELECT id,product_id AS "productId",kind,source_type AS "sourceType",
-       source_id AS "sourceId",source_line AS "sourceLine",
-       delta_base::text AS "deltaBase",posted_at AS "postedAt",reversal_of AS "reversalOf"
-   FROM inventory_ledger WHERE installation_id=$1 AND branch_id=$2 AND warehouse_id=$3
-   ORDER BY posted_at DESC,id DESC LIMIT 100`,[t,s.branchId,s.warehouseId]);
+  `SELECT l.id,l.product_id AS "productId",p.sku,p.name AS "productName",
+       l.kind,l.source_type AS "sourceType",l.source_id AS "sourceId",
+       l.source_line AS "sourceLine",l.delta_base::text AS "deltaBase",
+       l.posted_at AS "postedAt",l.reversal_of AS "reversalOf"
+   FROM inventory_ledger l
+   JOIN catalog_product p ON p.installation_id=l.installation_id
+     AND p.branch_id=l.branch_id AND p.id=l.product_id
+   WHERE l.installation_id=$1 AND l.branch_id=$2 AND l.warehouse_id=$3
+   ORDER BY l.posted_at DESC,l.id DESC LIMIT 100`,[t,s.branchId,s.warehouseId]);
  return r.rows;
 }
 export async function reservations(db:PoolClient,t:string,s:WarehouseScope){
  const r=await db.query(
-  `SELECT id,product_id AS "productId",order_id AS "orderId",version_no AS version,
-    line_no AS "lineNo",quantity_base::text AS "quantityBase",state,revision::text,
-    created_at AS "createdAt",released_at AS "releasedAt"
-    FROM inventory_reservation WHERE installation_id=$1 AND branch_id=$2 AND warehouse_id=$3
-    ORDER BY created_at DESC,id DESC LIMIT 100`,[t,s.branchId,s.warehouseId]);
+  `SELECT r.id,r.product_id AS "productId",p.sku,p.name AS "productName",
+    r.order_id AS "orderId",o.document_no AS "documentNo",r.version_no AS version,
+    r.line_no AS "lineNo",r.quantity_base::text AS "quantityBase",
+    r.state,r.revision::text,r.created_at AS "createdAt",r.released_at AS "releasedAt"
+    FROM inventory_reservation r
+    JOIN catalog_product p ON p.installation_id=r.installation_id
+      AND p.branch_id=r.branch_id AND p.id=r.product_id
+    JOIN sales_order o ON o.installation_id=r.installation_id
+      AND o.branch_id=r.branch_id AND o.id=r.order_id
+    WHERE r.installation_id=$1 AND r.branch_id=$2 AND r.warehouse_id=$3
+    ORDER BY r.created_at DESC,r.id DESC LIMIT 100`,[t,s.branchId,s.warehouseId]);
  return r.rows;
 }
 export async function openStock(db:PoolClient,ctx:MutationContext,input:OpeningInput){
