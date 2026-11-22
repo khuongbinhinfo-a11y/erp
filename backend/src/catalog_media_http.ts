@@ -207,7 +207,8 @@ export async function handleCatalogMediaHttp(req:IncomingMessage,
           contentType:value.contentType,expiresInSeconds:300,requestId:id},id,corsOrigin);
         return;
       }
-      const context=ctxFrom(req,id,actorId,tenant,value);
+      // Include URL identity: a receipt for product A must NEVER replay as B.
+      const context=ctxFrom(req,id,actorId,tenant,{productId,...value});
       const outcome=await executeMutation(pool,context,{
         authorize:(db,c)=>hasPermission(db,{installationId:c.installationId,
           actorId:c.actorId,branchId:value.branchId,permission:"catalog.write"}),
