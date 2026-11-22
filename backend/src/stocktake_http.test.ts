@@ -9,13 +9,34 @@ import { bootstrapInstallation } from "./bootstrap.ts";
 import { buildApp } from "./server.ts";
 import { isDatabaseReady } from "./db.ts";
 import { hashPassword } from "./auth.ts";
-import { validNonnegativeQty } from "./stocktake.ts";
+import { validNonnegativeQty, createStocktake } from "./stocktake.ts";
+import type { PoolClient } from "pg";
 
 test("R3.4 precise nonnegative counts include zero but reject NaN/floats",()=>{
  for(const x of ["0","0.000000","3","9999.123456"])
    assert.equal(validNonnegativeQty(x),true,x);
  for(const x of ["-1","NaN","Infinity","1e2","00","1.1234567",1,0,null])
    assert.equal(validNonnegativeQty(x),false,String(x));
+});
+test("R3.4 rejects oversized stocktake snapshots before writing any document",async()=>{
+ let queries=0;
+ const fake={query:async(sql:string)=>{
+  queries++;
+  if(sql.startsWith("SELECT 1 FROM warehouse"))return {rowCount:1,rows:[{id:"fixture"}]};
+  if(sql.includes("FROM inventory_stock_balance v")){
+   assert.match(sql,/LIMIT 10001/);
+   return {rows:Array.from({length:10001},(_,i)=>({
+     product_id:String(i),on_hand:"1.000000",movement_count:"1"}))};
+  }
+  throw new Error("Oversized stocktake attempted an unexpected database write");
+ }} as unknown as PoolClient;
+ await assert.rejects(createStocktake(fake,{
+  installationId:randomUUID(),actorId:randomUUID(),requestId:"stocktake-overflow",
+  action:"inventory.stocktake.create",idempotencyKey:"overflow-fixture",
+  expectedRevision:0,payload:{},
+ },{branchId:randomUUID(),warehouseId:randomUUID(),note:""}),
+  {code:"STOCKTAKE_NO_STOCK_SCOPE"});
+ assert.equal(queries,2);
 });
 const source=process.env.DATABASE_URL;
 const ci=(()=>{
