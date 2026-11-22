@@ -27,7 +27,7 @@ test("Issue #7: catalog HTTP uses real PostgreSQL with tenant/branch RBAC, decim
     pool=new Pool({connectionString:target.toString(),max:5,query_timeout:12000});
     pool.on("error",()=>{});
     const applied=await applyMigrations(pool,resolve(process.cwd(),"db/migrations"));
-    assert.equal(applied.applied.length,14);
+    assert.equal(applied.applied.length,16);
     const ownerPassword="Owner-test-"+randomUUID();
     const root=await bootstrapInstallation(pool,{code:"catalog-ci",displayName:"Catalog Integration CI",
       adminLogin:"root",adminPassword:ownerPassword});
@@ -68,6 +68,28 @@ test("Issue #7: catalog HTTP uses real PostgreSQL with tenant/branch RBAC, decim
       const group=await create("groups",{code:"GRP-01",name:"Synthetic Group"},
         "group-"+randomUUID(),token);
       assert.equal(group.status,201);
+      const uom=await create("unit-definitions",{code:"CHAI",name:"Chai"},
+        "unit-dictionary-"+randomUUID(),token);
+      assert.equal(uom.status,201,JSON.stringify(uom.body));
+      assert.equal(uom.body.code,"CHAI");
+      const definitions=await call("/v1/catalog/unit-definitions?branchId="+b,
+        "GET",undefined,token);
+      assert.equal(definitions.status,200);
+      assert.equal(definitions.body.items.find((x:{code:string})=>x.code==="CHAI")?.name,
+        "Chai","unit code and human-readable label stay separate");
+      const duplicate=await create("unit-definitions",{code:"CHAI",name:"Khác"},
+        "unit-duplicate-"+randomUUID(),token);
+      assert.equal(duplicate.status,409);
+      const unitEdit=await call("/v1/catalog/unit-definitions/"+uom.body.id,
+        "PATCH",{branchId:b,name:"Chai thủy tinh"},token,{
+          "idempotency-key":"unit-edit-"+randomUUID(),"if-match":"0",
+        });
+      assert.equal(unitEdit.status,200);
+      assert.equal(unitEdit.body.revision,1);
+      const unitAfter=await call("/v1/catalog/unit-definitions?branchId="+b,
+        "GET",undefined,token);
+      assert.equal(unitAfter.body.items.find((x:{code:string})=>x.code==="CHAI")?.name,
+        "Chai thủy tinh");
       const customerKey="customer-"+randomUUID();
       const customerBody={branchId:b,code:"CUSTOMER-01",name:"Synthetic Customer"};
       const customer=await call("/v1/catalog/customers","POST",customerBody,token,
@@ -247,8 +269,8 @@ test("Issue #7: catalog HTTP uses real PostgreSQL with tenant/branch RBAC, decim
       const audit=await pool.query<{total:string}>(
         "SELECT count(*)::text AS total FROM audit_event WHERE installation_id=$1 AND action_code LIKE 'catalog.%'",
         [root.installationId]);
-      assert.equal(audit.rows[0]!.total,"13",
-        "7 creations and 6 distinct PATCH mutations each audited once; replay not double counted");
+      assert.equal(audit.rows[0]!.total,"15",
+        "8 creations and 7 distinct PATCH mutations each audited once; replay not double counted");
     }finally{await new Promise<void>((ok,fail)=>app.close(e=>e?fail(e):ok()));}
   }finally{
     if(pool)await pool.end();

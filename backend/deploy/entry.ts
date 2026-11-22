@@ -4,6 +4,16 @@ import { createDatabasePool, isDatabaseReady, isDatabaseConnected } from "../src
 
 // Database URL only exists in the private Compute service.
 const serviceInput = service.input();
+// Private credentials are only materialized inside the server Compute process.
+const r2Inputs = {
+  ERP_R2_ACCOUNT_ID: serviceInput.r2AccountId?.expose(),
+  ERP_R2_BUCKET: serviceInput.r2Bucket?.expose(),
+  ERP_R2_ACCESS_KEY_ID: serviceInput.r2AccessKeyId?.expose(),
+  ERP_R2_SECRET_ACCESS_KEY: serviceInput.r2SecretAccessKey?.expose(),
+};
+for (const [key,value] of Object.entries(r2Inputs)) {
+  if (value) process.env[key] = value;
+}
 const databaseUrl = serviceInput.postgresUrl.expose();
 const pool = createDatabasePool(databaseUrl);
 if (!pool) throw new Error("ERP PostgreSQL secret missing");

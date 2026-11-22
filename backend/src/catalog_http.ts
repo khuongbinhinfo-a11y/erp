@@ -76,6 +76,11 @@ function requireUuid(value:unknown):string{
   if(typeof value!=="string"||!UUID.test(value))throw new CatalogError(400,"INVALID_UUID");
   return value;
 }
+function requireUnitCode(value:unknown):string{
+  if(typeof value!=="string"||!/^[A-Za-z0-9][A-Za-z0-9._-]{0,23}$/.test(value))
+    throw new CatalogError(400,"INVALID_UNIT_CODE");
+  return value.toUpperCase();
+}
 function requireCode(value:unknown):string{
   if(typeof value!=="string"||!CODE.test(value))throw new CatalogError(400,"INVALID_CODE");
   return value;
@@ -118,8 +123,8 @@ function requestMutation(req:IncomingMessage,id:string,actorId:string,tenant:str
   return {installationId:tenant,actorId,requestId:id,action,
     idempotencyKey:key,expectedRevision:parsed,payload};
 }
-type Resource="customers"|"suppliers"|"groups"|"products"|"price-lists"|"prices"|"warehouses";
-const resources=new Set<Resource>(["customers","suppliers","groups","products","price-lists","prices","warehouses"]);
+type Resource="customers"|"suppliers"|"groups"|"products"|"price-lists"|"prices"|"warehouses"|"unit-definitions";
+const resources=new Set<Resource>(["customers","suppliers","groups","products","price-lists","prices","warehouses","unit-definitions"]);
 function resourceOf(value:string):Resource{
   if(!resources.has(value as Resource))throw new CatalogError(404,"UNKNOWN_RESOURCE");
   return value as Resource;
@@ -128,6 +133,7 @@ const selections:Record<Resource,string>={
   "customers":'SELECT id,code,name,customer_group AS "customerGroup",phone,delivery_address AS "deliveryAddress",payment_terms_days AS "paymentTermsDays",active,revision::integer FROM catalog_customer',
   "suppliers":'SELECT id,code,name,active,revision::integer FROM catalog_supplier',
   "groups":'SELECT id,code,name,active,revision::integer FROM catalog_product_group',
+  "unit-definitions":'SELECT id,code,name,active,revision::integer FROM catalog_unit_definition',
   "products":`SELECT id,sku AS code,name,base_unit AS "baseUnit",group_id AS "groupId",
     (SELECT g.name FROM catalog_product_group g WHERE
       g.installation_id=catalog_product.installation_id AND
@@ -153,6 +159,7 @@ const tableFor:Record<Exclude<Resource,"warehouses"|"prices">,string>={
   "customers":"catalog_customer",
   "suppliers":"catalog_supplier",
   "groups":"catalog_product_group",
+  "unit-definitions":"catalog_unit_definition",
   "products":"catalog_product",
   "price-lists":"catalog_price_list",
 };
@@ -160,6 +167,13 @@ async function hasR1CatalogSchema(db:Pool|PoolClient):Promise<boolean>{
   try{
     const result=await db.query<{ok:boolean}>(
       "SELECT EXISTS(SELECT 1 FROM public.schema_migrations WHERE version='0009_r1_catalog_pricing.sql') AS ok");
+    return result.rows[0]?.ok===true;
+  }catch{return false;}
+}
+async function hasUnitDictionary(db:Pool|PoolClient):Promise<boolean>{
+  try{
+    const result=await db.query<{ok:boolean}>(
+      "SELECT EXISTS(SELECT 1 FROM public.schema_migrations WHERE version='0015_r1_unit_dictionary.sql') AS ok");
     return result.rows[0]?.ok===true;
   }catch{return false;}
 }
@@ -185,6 +199,8 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
   }
   if(!await hasPermission(db,{installationId:tenant,actorId,permission:"catalog.read",branchId}))
     throw new CatalogError(403,"CATALOG_READ_DENIED");
+  if(resource==="unit-definitions"&&!await hasUnitDictionary(db))
+    throw new CatalogError(503,"UNIT_DICTIONARY_MIGRATION_REQUIRED");
   const values=resource==="prices"?[tenant,branchId]:
     [tenant,branchId,"%"+search+"%"];
   // Installations staged on catalog 0006/0007 must still list products
@@ -221,8 +237,13 @@ function checkCreate(resource:Resource,raw:Record<string,unknown>){
     const effectiveAt=requireIso(raw.effectiveAt);
     return {branchId,priceListId,productId,amount,discountRate,effectiveAt};
   }
-  const code=requireCode(raw.code);
-  const name=requireName(raw.name);
+  const code=resource==="unit-definitions"?requireUnitCode(raw.code):requireCode(raw.code);
+  const name=requireName(raw.name,resource==="unit-definitions"?80:160);
+  if(resource==="unit-definitions"){
+    if(Object.keys(raw).some(k=>!["branchId","code","name"].includes(k)))
+      throw new CatalogError(400,"UNKNOWN_FIELD");
+    return {branchId,code,name};
+  }
   if(resource==="products"){
     if(Object.keys(raw).some(x=>!["branchId","code","name","baseUnit","groupId","barcode","units"].includes(x)))
       throw new CatalogError(400,"UNKNOWN_FIELD");
@@ -290,6 +311,22 @@ async function executeCreate(db:PoolClient,context:MutationContext,
   }
   if(resource==="products"){
     if(!("baseUnit" in value))throw new CatalogError(400,"INVALID_PRODUCT");
+    // Preserve older catalog clients while maintaining the new shared
+    // dictionary. New codes imported from an item default to code==name;
+    // operators can rename the label separately. All writes are atomic.
+    if(await hasUnitDictionary(db)){
+      for(const uom of [value.baseUnit,...(value.units??[]).map(x=>x.unitCode)]){
+        await db.query(`INSERT INTO catalog_unit_definition
+          (installation_id,branch_id,code,name)
+          VALUES ($1,$2,$3,$3) ON CONFLICT(installation_id,branch_id,code) DO NOTHING`,
+          [installationId,branchId,uom]);
+        const known=await db.query<{active:boolean}>(`SELECT active FROM catalog_unit_definition
+          WHERE installation_id=$1 AND branch_id=$2 AND code=$3`,
+          [installationId,branchId,uom]);
+        if(known.rows[0]?.active!==true)
+          throw new CatalogError(400,"UNIT_DISABLED");
+      }
+    }
     const r=await db.query<{id:string}>(
       `INSERT INTO catalog_product(installation_id,branch_id,sku,name,group_id,base_unit)
        VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
@@ -352,11 +389,12 @@ async function executeCreate(db:PoolClient,context:MutationContext,
   return {status:201,body:{id:r.rows[0]!.id,code:value.code,name:value.name,revision:0}};
 }
 
-type Editable = "customers"|"suppliers"|"groups"|"products"|"price-lists";
-const editable = new Set<Editable>(["customers","suppliers","groups","products","price-lists"]);
+type Editable = "customers"|"suppliers"|"groups"|"products"|"price-lists"|"unit-definitions";
+const editable = new Set<Editable>(["customers","suppliers","groups","products","price-lists","unit-definitions"]);
 const editTables:Record<Editable,string>={
   "customers":"catalog_customer","suppliers":"catalog_supplier",
   "groups":"catalog_product_group","products":"catalog_product",
+  "unit-definitions":"catalog_unit_definition",
   "price-lists":"catalog_price_list",
 };
 function parseEdit(resource:Editable,raw:Record<string,unknown>){
@@ -518,7 +556,7 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
       }finally{db.release();}
       return;
     }
-    const updatePath=/^\/v1\/catalog\/(customers|suppliers|groups|products|price-lists)\/([0-9a-f-]{36})$/.exec(url.pathname);
+    const updatePath=/^\/v1\/catalog\/(customers|suppliers|groups|products|price-lists|unit-definitions)\/([0-9a-f-]{36})$/.exec(url.pathname);
     if(updatePath&&req.method==="PATCH"){
       const resource=updatePath[1] as Editable;
       if(!editable.has(resource))throw new CatalogError(404,"UNKNOWN_RESOURCE");
@@ -535,6 +573,8 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
       send(res,outcome.status,outcome.body,requestId,corsOrigin);return;
     }
     const resource=resourceOf(url.pathname.slice("/v1/catalog/".length));
+    if(resource==="unit-definitions"&&!await hasUnitDictionary(pool))
+      throw new CatalogError(503,"UNIT_DICTIONARY_MIGRATION_REQUIRED");
     if(req.method==="GET"){
       const branchId=requireUuid(url.searchParams.get("branchId"));
       const search=(url.searchParams.get("q")??"").trim();

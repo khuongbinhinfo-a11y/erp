@@ -114,7 +114,11 @@ jobs:
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('inventory_transfer','inventory_transfer_line','inventory_transfer_receipt','inventory_transfer_receipt_line')" | grep -qx 4
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM public.schema_migrations WHERE version='0014_r3_stocktake.sql'" | grep -qx 1
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('inventory_stocktake','inventory_stocktake_line','inventory_stocktake_count')" | grep -qx 3
-          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM public.schema_migrations" | grep -qx 14
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM public.schema_migrations WHERE version='0015_r1_unit_dictionary.sql'" | grep -qx 1
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='catalog_unit_definition'" | grep -qx 1
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='catalog_product_media'" | grep -qx 1
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM public.schema_migrations WHERE version='0016_r1_product_media.sql'" | grep -qx 1
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM public.schema_migrations" | grep -qx 16
       - name: Rehearse pg_dump + pg_restore and reconcile fresh CI PostgreSQL only
         env:
           ERP_DB_MIGRATION_TARGET: ci

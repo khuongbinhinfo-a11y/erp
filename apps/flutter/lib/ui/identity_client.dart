@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
+import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 const erpApiOrigin = String.fromEnvironment('ERP_API_BASE_URL', defaultValue: '');
@@ -54,6 +56,17 @@ class ErpIdentityClient {
   // One unresolved R1 command per actor/branch/resource is retained in the
   // authenticated client across workspace navigation; never store auth tokens.
   final Map<String,({Map<String,dynamic> payload,String key})> _r1Pending={};
+  final Map<String,({Map<String,dynamic> body,String key,Uint8List bytes})>
+    _mediaPending={};
+  String _nonceUuid(){
+    final rng=Random.secure();
+    final b=List<int>.generate(16,(_)=>rng.nextInt(256));
+    b[6]=(b[6]&15)|64;
+    b[8]=(b[8]&63)|128;
+    final hex=b.map((v)=>v.toRadixString(16).padLeft(2,'0')).join();
+    return '${hex.substring(0,8)}-${hex.substring(8,12)}-${hex.substring(12,16)}-'
+      '${hex.substring(16,20)}-${hex.substring(20)}';
+  }
   String _r1PendingId(String actorId,String branchId,String kind)=>
     '$actorId|$branchId|$kind';
   ({Map<String,dynamic> payload,String key})? pendingR1(
@@ -73,7 +86,7 @@ class ErpIdentityClient {
   ErpIdentityClient({this.apiOrigin=erpApiOrigin,http.Client? httpClient}):_http=httpClient??http.Client();
   bool get configured=>Uri.tryParse(apiOrigin)?.scheme=='https'&&
     Uri.tryParse(apiOrigin)?.host.isNotEmpty==true;
-  void dispose(){_r1Pending.clear();_inventoryPending.clear();_purchasePending.clear();_transferPending.clear();_stocktakePending.clear();_http.close();}
+  void dispose(){_r1Pending.clear();_mediaPending.clear();_inventoryPending.clear();_purchasePending.clear();_transferPending.clear();_stocktakePending.clear();_http.close();}
   String _key()=>'erp-'+DateTime.now().microsecondsSinceEpoch.toString()+'-${++_sequence}';
   Future<Map<String,dynamic>> _request(String method,String path,{
     String? token,Map<String,dynamic>? body,int? revision,String? idempotencyKey,
@@ -89,7 +102,9 @@ class ErpIdentityClient {
     try{
       final req=http.Request(method,url)..headers.addAll(headers);
       if(body!=null)req.body=jsonEncode(body);
-      final response=await http.Response.fromStream(await _http.send(req).timeout(Duration(seconds:path=='/v1/auth/login'?18:10)));
+      final timeout=path.endsWith('/media/complete')?const Duration(seconds:30):
+        path=='/v1/auth/login'?const Duration(seconds:18):const Duration(seconds:10);
+      final response=await http.Response.fromStream(await _http.send(req).timeout(timeout));
       dynamic decoded;
       try{
         decoded=jsonDecode(response.body);
@@ -241,6 +256,84 @@ class ErpIdentityClient {
       writeReady:raw['r1ProductReady']==true,
     );
   }
+  /// Private R2 media: upload bytes go only to a short-lived signed URL.
+  /// Keep the same upload nonce, body and idempotency key after a lost ACK.
+  Future<Map<String,dynamic>> uploadProductPhoto(
+    String token,String actorId,String branchId,String productId,
+    Uint8List bytes,String contentType)async{
+    if(bytes.isEmpty||bytes.length>5*1024*1024||
+      !['image/png','image/jpeg','image/webp'].contains(contentType)){
+      throw const ErpApiError(400,'Ảnh phải là PNG, JPG hoặc WebP, tối đa 5 MB.');
+    }
+    final scope='$actorId|$branchId|$productId';
+    final previous=_mediaPending[scope];
+    if(previous!=null){
+      final original=previous.bytes;
+      var identicalBytes=original.length==bytes.length&&
+        previous.body['contentType']==contentType;
+      if(identicalBytes){
+        for(var i=0;i<bytes.length;i++){
+          if(bytes[i]!=original[i]){identicalBytes=false;break;}
+        }
+      }
+      if(!identicalBytes)throw const ErpApiError(409,
+        'Ảnh trước chưa có xác nhận server. Hãy chọn lại đúng ảnh đó để kiểm tra.');
+    }
+    final body=previous?.body??<String,dynamic>{
+      'branchId':branchId,'uploadNonce':_nonceUuid(),
+      'contentType':contentType,'byteLength':bytes.length,
+    };
+    final key=previous?.key??_key();
+    _mediaPending[scope]=(body:body,key:key,bytes:bytes);
+    final prefix='/v1/catalog/products/$productId/media';
+    final prepare=await _request('POST','$prefix/prepare',token:token,body:body);
+    final url=Uri.tryParse(prepare['putUrl']?.toString()??'');
+    if(url==null||url.scheme!='https'||
+      !url.host.endsWith('.r2.cloudflarestorage.com'))
+      throw const ErpApiError(502,'Địa chỉ lưu ảnh không hợp lệ.');
+    try{
+      final put=await _http.put(url,
+        // Signed If-None-Match prevents any client from overwriting a
+        // committed image while its 5-minute PUT URL remains valid.
+        headers:{'content-type':contentType,'if-none-match':'*'},body:bytes)
+        .timeout(const Duration(seconds:35));
+      if(put.statusCode!=412&&
+        (put.statusCode<200||put.statusCode>=300)){
+        throw const ErpApiError(503,'Chưa tải được ảnh lên kho lưu trữ.');
+      }
+      // 412 means this immutable key already exists (e.g. lost ACK).
+      // Server-side HEAD + magic/length validation will reconcile it.
+
+    }on ErpApiError{rethrow;}
+    catch(_){
+      throw const ErpApiError(504,
+        'Chưa xác minh tải ảnh. Chọn lại ảnh này để thử đúng yêu cầu cũ.');
+    }
+    try{
+      final receipt=await _request('POST','$prefix/complete',
+        token:token,body:body,revision:0,idempotencyKey:key);
+      _mediaPending.remove(scope);
+      return receipt;
+    }on ErpApiError catch(e){
+      // Definitively rejected bytes cannot be replayed successfully. Keep
+      // ambiguous 503/504 and lost ACK commands with their original key.
+      if(e.status==400||e.status==413||e.status==415||
+         e.code=='IMAGE_UPLOAD_MISMATCH'||
+         e.code=='MAX_PRODUCT_IMAGES'||e.code=='PRODUCT_NOT_FOUND'){
+        _mediaPending.remove(scope);
+      }
+      rethrow;
+    }
+  }
+  Future<List<Map<String,dynamic>>> productPhotos(
+    String token,String branchId,String productId)async{
+    final query=Uri(queryParameters:{'branchId':branchId}).query;
+    final result=await _request('GET',
+      '/v1/catalog/products/$productId/media?$query',token:token);
+    return (result['items'] as List<dynamic>).map(
+      (x)=>Map<String,dynamic>.from(x as Map)).toList();
+  }
+
   Future<Map<String,dynamic>> createCatalog(String token,String resource,
     Map<String,dynamic> fields)async{
     return _request('POST','/v1/catalog/$resource',token:token,revision:0,body:fields);
