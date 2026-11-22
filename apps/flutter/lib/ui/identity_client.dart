@@ -73,7 +73,7 @@ class ErpIdentityClient {
   ErpIdentityClient({this.apiOrigin=erpApiOrigin,http.Client? httpClient}):_http=httpClient??http.Client();
   bool get configured=>Uri.tryParse(apiOrigin)?.scheme=='https'&&
     Uri.tryParse(apiOrigin)?.host.isNotEmpty==true;
-  void dispose(){_r1Pending.clear();_inventoryPending.clear();_purchasePending.clear();_transferPending.clear();_http.close();}
+  void dispose(){_r1Pending.clear();_inventoryPending.clear();_purchasePending.clear();_transferPending.clear();_stocktakePending.clear();_http.close();}
   String _key()=>'erp-'+DateTime.now().microsecondsSinceEpoch.toString()+'-${++_sequence}';
   Future<Map<String,dynamic>> _request(String method,String path,{
     String? token,Map<String,dynamic>? body,int? revision,String? idempotencyKey,
@@ -161,6 +161,7 @@ class ErpIdentityClient {
       _inventoryPending.removeWhere((scope,_)=>!scope.startsWith('$actor:'));
     _purchasePending.removeWhere((scope,_)=>!scope.startsWith('$actor:'));
       _transferPending.removeWhere((scope,_)=>!scope.startsWith('$actor:'));
+      _stocktakePending.removeWhere((scope,_)=>!scope.startsWith('$actor:'));
       _r1Pending.clear();
       return IdentitySession(actorId:actor,token:token,
         loginName:r['loginName'] as String? ?? username,
@@ -183,7 +184,7 @@ class ErpIdentityClient {
   Future<IdentitySession> refresh(IdentitySession current)=>restore(current.token);
   Future<void> logout(String token)async{
     try{await _request('POST','/v1/auth/logout',token:token);}
-    finally{_r1Pending.clear();_inventoryPending.clear();_purchasePending.clear();_transferPending.clear();}
+    finally{_r1Pending.clear();_inventoryPending.clear();_purchasePending.clear();_transferPending.clear();_stocktakePending.clear();}
   }
   Future<List<IdentityUser>> users(String token)async{
     final r=await _request('GET','/v1/admin/users',token:token);
@@ -424,6 +425,49 @@ class ErpIdentityClient {
         (p['sourceWarehouseId']==warehouseId||p['destinationWarehouseId']==warehouseId);
     }).map((entry)=>entry.key).toList();
 
+
+  Future<({List<Map<String,dynamic>> branches,List<Map<String,dynamic>> warehouses})>
+      stocktakeScopes(String token,{String? branchId,String query=''})async{
+    final q=Uri(queryParameters:{if(branchId!=null)'branchId':branchId,
+      if(query.isNotEmpty)'q':query}).query;
+    final r=await _request('GET','/v1/inventory/stocktakes/scopes?$q',token:token);
+    List<Map<String,dynamic>> list(String k)=>(r[k] as List<dynamic>).map((x)=>
+      Map<String,dynamic>.from(x as Map)).toList();
+    return (branches:list('branches'),warehouses:list('warehouses'));
+  }
+  Future<({List<Map<String,dynamic>> items,bool hasMore})> stocktakePage(
+    String token,{required String branchId,required String warehouseId,int offset=0})async{
+    if(offset<0||offset%100!=0)throw const ErpApiError(400,'Trang kiểm kê không hợp lệ.');
+    final q=Uri(queryParameters:{'branchId':branchId,'warehouseId':warehouseId,
+      'offset':'$offset'}).query;
+    final r=await _request('GET','/v1/inventory/stocktakes?$q',token:token);
+    return (items:(r['items'] as List<dynamic>).map((x)=>
+      Map<String,dynamic>.from(x as Map)).toList(),hasMore:r['hasMore']==true);
+  }
+  Future<Map<String,dynamic>> stocktakeDetail(String token,String id,{
+    required String branchId,required String warehouseId})async{
+    final q=Uri(queryParameters:{'branchId':branchId,'warehouseId':warehouseId}).query;
+    final r=await _request('GET','/v1/inventory/stocktakes/$id?$q',token:token);
+    return Map<String,dynamic>.from(r['stocktake'] as Map);
+  }
+  Future<Map<String,dynamic>> stocktakeCommand(String token,String suffix,
+    Map<String,dynamic> body,{required int revision,required String key})=>
+    _request('POST','/v1/inventory/stocktakes$suffix',token:token,
+      body:body,revision:revision,idempotencyKey:key);
+  final Map<String,({Map<String,dynamic> payload,String key,String suffix,int revision})>
+    _stocktakePending={};
+  ({Map<String,dynamic> payload,String key,String suffix,int revision})?
+      pendingStocktake(String scope){
+    final p=_stocktakePending[scope];
+    return p==null?null:(payload:Map<String,dynamic>.from(p.payload),
+      key:p.key,suffix:p.suffix,revision:p.revision);
+  }
+  void retainStocktake(String scope,Map<String,dynamic> payload,String key,{
+      required String suffix,required int revision}){
+    _stocktakePending[scope]=(payload:Map<String,dynamic>.from(payload),
+      key:key,suffix:suffix,revision:revision);
+  }
+  void clearStocktake(String scope)=>_stocktakePending.remove(scope);
 
   Future<IdentityUser> createUser(String token,String username,String password)async{
     final r=await _request('POST','/v1/admin/users',token:token,revision:0,
