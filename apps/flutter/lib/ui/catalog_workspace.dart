@@ -166,7 +166,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     final newGroupCode=TextEditingController(),newGroupName=TextEditingController();
     final newUnitCode=TextEditingController(),newUnitName=TextEditingController();
     String? groupError,unitError;
-    bool groupBusy=false,unitBusy=false;
+    bool groupBusy=false,unitBusy=false,unitDictionaryReady=false;
     Uint8List? selectedImage;
     String? selectedImageType,selectedImageName;
     String? productId,priceListId,groupId;
@@ -190,6 +190,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
         try{
           availableUnits=await widget.client.catalogItems(
             widget.session.token,'unit-definitions',branchId:branchId);
+          unitDictionaryReady=true;
         }on ErpApiError catch(e){
           // Pre-0015 installations still display an explicit text UOM
           // rather than pretending the shared catalog was loaded.
@@ -287,21 +288,24 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                           overflow:TextOverflow.ellipsis))).toList(),
                     onChanged:(value)=>refresh(()=>unit.text=value??'')),
                   const SizedBox(height:8),
-                  const Text('Thêm đơn vị tính mới (mã và tên dùng chung)',
-                    style:TextStyle(fontSize:12,fontWeight:FontWeight.w700)),
+                  Text(unitDictionaryReady
+                    ? 'Thêm đơn vị tính mới (mã và tên dùng chung)'
+                    : 'Danh mục ĐVT chưa sẵn sàng trên server; cần migration 0015.',
+                    style:const TextStyle(fontSize:12,
+                      fontWeight:FontWeight.w700)),
                   const SizedBox(height:8),
                   Wrap(spacing:8,runSpacing:8,children:[
                     SizedBox(width:160,child:TextField(
                       key:const ValueKey('catalog-quick-unit-code'),
-                      controller:newUnitCode,enabled:!unitBusy,
+                      controller:newUnitCode,enabled:unitDictionaryReady&&!unitBusy,
                       decoration:const InputDecoration(labelText:'Mã ĐVT',hintText:'CHAI'))),
                     SizedBox(width:210,child:TextField(
                       key:const ValueKey('catalog-quick-unit-name'),
-                      controller:newUnitName,enabled:!unitBusy,
+                      controller:newUnitName,enabled:unitDictionaryReady&&!unitBusy,
                       decoration:const InputDecoration(labelText:'Tên đơn vị',hintText:'Chai'))),
                     TextButton.icon(
                       key:const ValueKey('catalog-quick-unit-save'),
-                      onPressed:unitBusy?null:()async{
+                      onPressed:unitBusy||!unitDictionaryReady?null:()async{
                         final kind='catalog.create.unit-definitions';
                         final old=widget.client.pendingR1(actor,branch,kind);
                         final codeText=newUnitCode.text.trim().toUpperCase();
