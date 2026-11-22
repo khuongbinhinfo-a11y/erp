@@ -28,6 +28,8 @@ void main() {
     expect(erpPermissionLabel('inventory.read'), 'Xem tồn kho');
     expect(erpPermissionLabel('inventory.stocktake.approve'), 'Duyệt kiểm kê');
     expect(erpPermissionLabel('identity.roles.manage'), 'Cấp và thu hồi quyền');
+    expect(erpPermissionLabel('orders.confirm'), 'Xác nhận đơn hàng');
+    expect(erpPermissionLabel('purchase.receive'), 'Nhận hàng mua');
     expect(erpPermissionLabel('unknown.permission'), 'Quyền chưa có tên hiển thị');
   });
 }
