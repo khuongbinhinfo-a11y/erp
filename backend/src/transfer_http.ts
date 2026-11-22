@@ -187,6 +187,13 @@ export async function handleTransferHttp(req:IncomingMessage,res:ServerResponse,
   if(e instanceof TransferFault){fail(res,e.status,e.code,id,cors);return;}
   if(e instanceof MutationFault){fail(res,e.httpStatus,e.code,id,cors);return;}
   if(e&&typeof e==="object"&&"code" in e){
+   // PostgreSQL stock reservation/available guard raises P0001 on a
+   // definitive transactional rejection; it is NOT an uncertain 503 outcome.
+   const fault=e as {code?:unknown;message?:unknown};
+   if(fault.code==="P0001"&&typeof fault.message==="string"&&
+      /Inventory insufficient available stock|Transfer (dispatch|accepted quantity|receipt|destination movement|complete status|partial status)/i.test(fault.message)){
+     fail(res,409,"TRANSFER_STOCK_OR_STATE_REJECTED",id,cors);return;
+   }
    if(e.code==="23505"){fail(res,409,"TRANSFER_DUPLICATE",id,cors);return;}
    if(e.code==="23503"||e.code==="23514"){
     fail(res,409,"TRANSFER_CONSTRAINT",id,cors);return;
