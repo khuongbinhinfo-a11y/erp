@@ -349,22 +349,6 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
   const otherBarcode=await r1("barcodes",
     {sellSkuId:skuId,barcode:"BC-0002",isPrimary:false});
   assert.equal(otherBarcode.status,201);
-  const disabledSku=await patchR1("skus",skuId,0,{active:false});
-  assert.equal(disabledSku.status,200,JSON.stringify(disabledSku.body));
-  assert.equal(disabledSku.body.revision,1);
-  assert.equal((await patchR1("skus",skuId,0,{active:true})).status,409);
-  assert.equal((await patchR1("skus",skuId,1,{toBase:"24"})).status,400,
-    "an immutable conversion must not become editable");
-  const promote=await patchR1("barcodes",otherBarcode.body.id,0,
-    {active:true,isPrimary:true});
-  assert.equal(promote.status,200,JSON.stringify(promote.body));
-  const barcodes=await read("barcodes");
-  assert.equal(barcodes.body.items.find((x:any)=>x.id===otherBarcode.body.id)?.isPrimary,true);
-  assert.equal(barcodes.body.items.find((x:any)=>x.id===code.body.id)?.isPrimary,false);
-  assert.equal((await patchR1("barcodes",otherBarcode.body.id,0,
-    {active:false})).status,409,"barcode revision guards other-device stale edits");
-  assert.equal((await patchR1("barcodes",otherBarcode.body.id,1,
-    {barcode:"CHANGED"})).status,400,"barcode identity is immutable");
   // Historic Unicode labels and new directory codes must resolve the
   // SAME customer group. Neither policy may silently disappear or double stack.
   const unicodeGroup=await legacy("customer-groups",{
@@ -394,6 +378,22 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
   assert.equal(unicodeQuote.body.quote.trace.filter(
     (x:{ruleId:string})=>equivalent.includes(x.ruleId)).length,1,
     "old label and new code are equivalent; the discount must apply exactly once");
+  const disabledSku=await patchR1("skus",skuId,0,{active:false});
+  assert.equal(disabledSku.status,200,JSON.stringify(disabledSku.body));
+  assert.equal(disabledSku.body.revision,1);
+  assert.equal((await patchR1("skus",skuId,0,{active:true})).status,409);
+  assert.equal((await patchR1("skus",skuId,1,{toBase:"24"})).status,400,
+    "an immutable conversion must not become editable");
+  const promote=await patchR1("barcodes",otherBarcode.body.id,0,
+    {active:true,isPrimary:true});
+  assert.equal(promote.status,200,JSON.stringify(promote.body));
+  const barcodes=await read("barcodes");
+  assert.equal(barcodes.body.items.find((x:any)=>x.id===otherBarcode.body.id)?.isPrimary,true);
+  assert.equal(barcodes.body.items.find((x:any)=>x.id===code.body.id)?.isPrimary,false);
+  assert.equal((await patchR1("barcodes",otherBarcode.body.id,0,
+    {active:false})).status,409,"barcode revision guards other-device stale edits");
+  assert.equal((await patchR1("barcodes",otherBarcode.body.id,1,
+    {barcode:"CHANGED"})).status,400,"barcode identity is immutable");
   const inactive=await pool.query<{id:string}>(
    "INSERT INTO branch(installation_id,code,name) VALUES($1,'OTHER','Other') RETURNING id",
    [root.installationId]);
