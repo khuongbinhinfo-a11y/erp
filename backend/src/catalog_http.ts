@@ -156,7 +156,7 @@ const tableFor:Record<Exclude<Resource,"warehouses"|"prices">,string>={
   "products":"catalog_product",
   "price-lists":"catalog_price_list",
 };
-async function hasR1CatalogSchema(db:Pool):Promise<boolean>{
+async function hasR1CatalogSchema(db:Pool|PoolClient):Promise<boolean>{
   try{
     const result=await db.query<{ok:boolean}>(
       "SELECT EXISTS(SELECT 1 FROM public.schema_migrations WHERE version='0009_r1_catalog_pricing.sql') AS ok");
