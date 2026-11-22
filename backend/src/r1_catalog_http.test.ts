@@ -38,8 +38,8 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
   pool=new Pool({connectionString:target.toString(),max:7,query_timeout:15000});
   pool.on("error",()=>{});
   const applied=await applyMigrations(pool,resolve(process.cwd(),"db/migrations"));
-  assert.equal(applied.applied.length,16);
-  assert.equal((await applyMigrations(pool,resolve(process.cwd(),"db/migrations"))).skipped.length,16);
+  assert.equal(applied.applied.length,17);
+  assert.equal((await applyMigrations(pool,resolve(process.cwd(),"db/migrations"))).skipped.length,17);
   const password="R1-test-"+randomUUID();
   const root=await bootstrapInstallation(pool,{
    code:"r1-test",displayName:"Synthetic R1 integration",
@@ -82,8 +82,12 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
    {origin:"https://evil.example"})).status,403);
   assert.equal((await read("skus")).status,200);
 
+  const vipGroup=await legacy("customer-groups",{code:"VIP",name:"Khách VIP"});
+  const standardGroup=await legacy("customer-groups",{code:"STANDARD",name:"Khách phổ thông"});
+  assert.equal(vipGroup.status,201);
+  assert.equal(standardGroup.status,201);
   const c1=await legacy("customers",{
-   code:"KH-01",name:"Khách thử A",customerGroup:"VIP",
+   code:"KH-01",name:"Khách thử A",customerGroupId:vipGroup.body.id,
    phone:"+84900000001",deliveryAddress:"Địa chỉ kiểm thử",paymentTermsDays:15,
   });
   assert.equal(c1.status,201,JSON.stringify(c1.body));
@@ -93,7 +97,7 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
   assert.equal(customers.body.items[0].phone,"+84900000001");
   assert.equal(customers.body.items[0].paymentTermsDays,15);
   const c2=await legacy("customers",{code:"KH-02",name:"Khách thử B",
-   customerGroup:"STANDARD",phone:"+84900000002"});
+   customerGroupId:standardGroup.body.id,phone:"+84900000002"});
   assert.equal(c2.status,201);
 
   const product=await legacy("products",{
