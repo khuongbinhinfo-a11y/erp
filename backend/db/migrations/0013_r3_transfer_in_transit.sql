@@ -136,15 +136,23 @@ BEGIN
        AND r.transfer_id=OLD.id) THEN
      RAISE EXCEPTION 'Transfer cannot receive without posted receipt lines';
    END IF;
-   IF EXISTS(
+   IF NEW.status='RECEIVED' AND EXISTS(
      SELECT 1 FROM inventory_transfer_line l WHERE l.installation_id=OLD.installation_id
        AND l.branch_id=OLD.branch_id AND l.transfer_id=OLD.id AND
-       (COALESCE((SELECT sum(r.quantity_base) FROM inventory_transfer_receipt_line r
+       COALESCE((SELECT sum(r.quantity_base) FROM inventory_transfer_receipt_line r
          WHERE r.installation_id=l.installation_id AND r.branch_id=l.branch_id
-          AND r.transfer_id=l.transfer_id AND r.transfer_line_no=l.line_no),0)
-        <l.quantity_base)=(NEW.status='RECEIVED')
+          AND r.transfer_id=l.transfer_id AND r.transfer_line_no=l.line_no),0)<l.quantity_base
    ) THEN
-      RAISE EXCEPTION 'Transfer receiving status contradicts accepted quantities';
+      RAISE EXCEPTION 'Transfer complete status requires all received quantities';
+   END IF;
+   IF NEW.status='PARTIALLY_RECEIVED' AND NOT EXISTS(
+     SELECT 1 FROM inventory_transfer_line l WHERE l.installation_id=OLD.installation_id
+       AND l.branch_id=OLD.branch_id AND l.transfer_id=OLD.id AND
+       COALESCE((SELECT sum(r.quantity_base) FROM inventory_transfer_receipt_line r
+         WHERE r.installation_id=l.installation_id AND r.branch_id=l.branch_id
+          AND r.transfer_id=l.transfer_id AND r.transfer_line_no=l.line_no),0)<l.quantity_base
+   ) THEN
+      RAISE EXCEPTION 'Transfer partial status requires outstanding quantity';
    END IF;
  END IF;
  RETURN NEW;
