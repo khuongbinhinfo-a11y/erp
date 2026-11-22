@@ -38,6 +38,23 @@ const APPROVAL="OWNER_APPROVED_R1_MEDIA_0015_0016_ERP_DB";
 const CLEAN_EXCEPT=new Set(["backend/package-lock.json","backend/deploy/package-lock.json"]);
 
 function fail(code){throw new Error(code);}
+let terminationSignal=null;
+// Catchable SIGINT/SIGTERM mark a fail-closed abort. No forced process.exit:
+// async finally must revoke the target credential, shred temporary files and
+// delete Docker's anonymous plaintext volume. SIGKILL is not catchable.
+export function assertNotInterrupted(signal){
+ if(signal)fail("ERP_R1_MEDIA_INTERRUPTED_CLEANUP_REQUIRED");
+}
+async function checkpoint(){
+ // Yield to the event loop so pending OS signal handlers can run after spawnSync.
+ await new Promise(resolve=>setImmediate(resolve));
+ assertNotInterrupted(terminationSignal);
+}
+export function restoreContainerCleanupArgs(name){
+ if(!/^erp-r1-media-pg-[0-9a-f]{12}$/.test(name))
+  fail("INVALID_ISOLATED_RESTORE_CONTAINER_ID");
+ return ["rm","--force","--volumes",name];
+}
 function required(e,names){const missing=names.filter(n=>!e[n]);if(missing.length)fail("REQUIRED_CODESPACES_SECRETS_MISSING: "+missing.join(","));}
 export function checkVersions(versions,stage){
  const wanted=stage==="before"?BASE:[...BASE,...RELEASE];
@@ -349,6 +366,7 @@ async function main(mode){
  verifyCodespaceSession(e);
  attestPrimaryMainSha(e,sha);
  await attestProcessCodespace(e);
+ await checkpoint();
  required(e,["ERP_APPROVED_SHA"]);
  if(mode==="--apply")await maintenance();
  const credential=mintErpDbCredential();
@@ -405,15 +423,18 @@ async function main(mode){
   };
   // PgDump snapshot alone is not a release gate: read back, decrypt and RESTORE.
   dumpBaseDatabase(dump,u);
+  await checkpoint();
   if(statSync(dump).size<256)fail("ERP_BACKUP_TOO_SMALL");
   command("age",["-r",e.ERP_AGE_RECIPIENT,"-o",encrypted,dump]);
   aws("upload",encrypted,base+"pre-0015-0016.dump.age");
   aws("download",base+"pre-0015-0016.dump.age",durableCopy);
+  await checkpoint();
   if(fileHash(encrypted)!==fileHash(durableCopy))fail("DURABLE_BACKUP_READBACK_HASH_MISMATCH");
   const durableHash=fileHash(encrypted);
   // Decrypt the ACTUAL durable object using its actual recovery identity.
   // A separate ephemeral test key proves nothing about durable recoverability.
   command("age",["-d","-i",key,"-o",recovered,durableCopy]);
+  await checkpoint();
   if(fileHash(dump)!==fileHash(recovered))
     fail("DURABLE_BACKUP_DECRYPT_RESTORE_HASH_MISMATCH");
   console.log("ERP_R1_MEDIA_DURABLE_BACKUP_AND_READBACK_PASS key="+base+"pre-0015-0016.dump.age sha256="+durableHash);
@@ -447,6 +468,7 @@ async function main(mode){
    command("pg_restore",["--no-owner","--no-acl","--exit-on-error",
       "--single-transaction","--use-list="+portableList,
       "--dbname=erp_r1_media_restore",recovered],env);
+   await checkpoint();
    const testPool=new Pool({host:"127.0.0.1",port:Number(port),user:env.PGUSER,
      password,database:env.PGDATABASE,max:1,statement_timeout:300000,query_timeout:300000});
    try{
@@ -461,16 +483,20 @@ async function main(mode){
     checkPreserved(initial,await signature(testPool,["schema_migrations"]),
      "REHEARSAL");
    }finally{await testPool.end();}
-  }finally{if(started)command("docker",["rm","-f",name]);}
+  }finally{if(started)command("docker",restoreContainerCleanupArgs(name));}
   console.log("ERP_R1_MEDIA_ISOLATED_RESTORE_AND_0015_0016_REHEARSAL_PASS");
+  await checkpoint();
   // No production SQL is issued before all previous gates have passed.
   await maintenance();
+  await checkpoint();
   await validateSchema(pool,"before");
   checkPreserved(initial,await signature(pool,["schema_migrations"]),
    "PRODUCTION_PRECOMMIT");
+  await checkpoint();
   const result=await applyMigrations(pool,resolve("db/migrations"));
   if(JSON.stringify(result.applied)!==JSON.stringify(RELEASE)||result.skipped.length!==14)
     fail("PRODUCTION_APPLIED_VERSION_SET_INVALID");
+  await checkpoint();
   await validateSchema(pool,"after");
   await verifyNewTablesOnFirstApply(pool);
   checkPreserved(initial,await signature(pool,["schema_migrations"]),
@@ -488,10 +514,24 @@ async function main(mode){
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
  if(!["--check","--apply"].includes(process.argv[2])){console.error("USAGE: --check | --apply");process.exit(2);}
- else main(process.argv[2]).catch(e=>{
+ else {
+  const handleSignal=signal=>{
+   if(terminationSignal)return;
+   terminationSignal=signal;
+   process.exitCode=signal==="SIGINT"?130:143;
+   console.error("ERP_R1_MEDIA_INTERRUPT_RECEIVED_CLEANUP_PENDING");
+  };
+  const onInt=()=>handleSignal("SIGINT"),onTerm=()=>handleSignal("SIGTERM");
+  process.on("SIGINT",onInt);
+  process.on("SIGTERM",onTerm);
+  main(process.argv[2]).catch(e=>{
    const reason=e instanceof Error?e.message:"UNKNOWN";
    const safe=/^[A-Z0-9_ :,.-]+$/.test(reason)?reason:"MIGRATION_OR_BACKUP_FAILED_REVIEW_PROTECTED_LOGS";
    console.error("ERP_R1_MEDIA_OPERATOR_STOPPED "+safe);
-   process.exitCode=1;
- });
+   process.exitCode ||= 1;
+  }).finally(()=>{
+   process.off("SIGINT",onInt);
+   process.off("SIGTERM",onTerm);
+  });
+ }
 }
