@@ -43,10 +43,15 @@ export function checkVersions(versions,stage){
  const wanted=stage==="before"?BASE:[...BASE,...R3];
  if(JSON.stringify(versions)!==JSON.stringify(wanted))fail("ERP_DB_MIGRATION_DRIFT_"+stage.toUpperCase());
 }
+export function canonicalRemote(remote){
+ return /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)gustavjung24-ops\/ERP(?:\.git)?$/.test(remote.trim());
+}
 export function checkOperator(e,branch,sha,remote,changes,apply=false){
- if(e.CODESPACES!=="true"||branch!=="main"||
-   !/(^|[/@:])gustavjung24-ops\/ERP(?:\.git)?$/.test(remote.trim()))
-   fail("ONLY_PRIMARY_MAIN_CODESPACES");
+ if(e.CODESPACES!=="true"||!e.CODESPACE_NAME||
+    !String(e.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN??"").endsWith("app.github.dev")||
+    e.GITHUB_ACTIONS==="true"||e.CI==="true"||
+    branch!=="main"||!canonicalRemote(remote))
+   fail("ONLY_AUTHENTICATED_PRIMARY_MAIN_CODESPACES");
  if(!/^[a-f0-9]{40}$/.test(sha)||e.ERP_APPROVED_SHA!==sha)
    fail("EXACT_MAIN_SHA_APPROVAL_MISSING");
  if(changes.some(path=>!CLEAN_EXCEPT.has(path)))
@@ -62,6 +67,21 @@ function command(name,args,extraEnv={}){
   maxBuffer:4*1024*1024,timeout:600000,stdio:["ignore","pipe","pipe"]});
  if(x.error||x.status!==0)fail("OPERATOR_COMMAND_FAILED_"+name.replaceAll(/[^a-z0-9]/gi,"_").toUpperCase());
  return x.stdout.trim();
+}
+// GitHub's authenticated Codespaces API attests an active Codespace under the
+// intended repository. Environment flags alone are never treated as identity.
+export function checkCodespaceRecord(record,name){
+ if(record?.name!==name||record?.state!=="Available"||
+    record?.repository?.full_name!=="gustavjung24-ops/ERP")
+   fail("CODESPACES_IDENTITY_ATTESTATION_FAILED");
+}
+function verifyCodespaceSession(e){
+ if(!git(["rev-parse","--show-toplevel"]).startsWith("/workspaces/ERP"))
+   fail("CODESPACES_REPO_MOUNT_INVALID");
+ let record;
+ try{record=JSON.parse(command("gh",["api","/user/codespaces/"+e.CODESPACE_NAME]));}
+ catch{fail("CODESPACES_API_ATTESTATION_UNAVAILABLE");}
+ checkCodespaceRecord(record,e.CODESPACE_NAME);
 }
 function safeURL(raw){
  let u;try{u=new URL(raw);}catch{fail("INVALID_DIRECT_DATABASE_URL");}
@@ -132,6 +152,7 @@ async function main(mode){
  const tracked=git(["status","--porcelain","--untracked-files=all"]);
  const changes=tracked.split("\n").filter(Boolean).map(x=>x.slice(3));
  checkOperator(e,branch,sha,remote,changes,mode==="--apply");
+ verifyCodespaceSession(e);
  required(e,["ERP_POSTGRES_DIRECT_URL","ERP_APPROVED_SHA"]);
  const u=safeURL(e.ERP_POSTGRES_DIRECT_URL);
  if(mode==="--apply")await maintenance();
