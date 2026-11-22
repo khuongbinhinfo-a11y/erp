@@ -405,6 +405,13 @@ class ErpIdentityClient {
       key:key,path:path,revision:revision);
   }
   void clearTransfer(String scope)=>_transferPending.remove(scope);
+  List<String> transferPendingScopes(String actorId,String branchId,String warehouseId)=>
+    _transferPending.entries.where((entry){
+      final p=entry.value.payload;
+      return entry.key.startsWith('$actorId:')&&p['branchId']==branchId&&
+        (p['sourceWarehouseId']==warehouseId||p['destinationWarehouseId']==warehouseId);
+    }).map((entry)=>entry.key).toList();
+
 
   Future<IdentityUser> createUser(String token,String username,String password)async{
     final r=await _request('POST','/v1/admin/users',token:token,revision:0,
