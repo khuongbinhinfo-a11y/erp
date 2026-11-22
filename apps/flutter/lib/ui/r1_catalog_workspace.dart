@@ -137,11 +137,26 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
         widget.client.catalogItems(widget.session.token,'price-lists',branchId:branch),
         widget.client.catalogItems(widget.session.token,'customers',branchId:branch),
         widget.client.catalogItems(widget.session.token,'r1/channels',branchId:branch),
-        widget.client.catalogDirectoryAll(widget.session.token,'customer-groups',
-          branchId:branch),
-        widget.client.catalogUnitDefinitionsAll(widget.session.token,
-          branchId:branch),
       ]);
+      // Auxiliary master directories are optional for legacy R1 scopes.
+      // Do not break barcode entry or price quotation when 0017 is pending.
+      List<Map<String,dynamic>> groups=[],uoms=[];
+      if(widget.kind=='rules'){
+        try{
+          groups=await widget.client.catalogDirectoryAll(
+            widget.session.token,'customer-groups',branchId:branch);
+        }on ErpApiError catch(e){
+          if(e.status!=503)rethrow;
+        }
+      }
+      if(widget.kind=='units'||widget.kind=='skus'){
+        try{
+          uoms=await widget.client.catalogUnitDefinitionsAll(
+            widget.session.token,branchId:branch);
+        }on ErpApiError catch(e){
+          if(e.status!=503)rethrow;
+        }
+      }
       if(!mounted||widget.branchId!=branch)return;
       setState((){
         products=fetched[0].where((x)=>x['active']!=false).toList();
@@ -149,8 +164,8 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
         lists=fetched[2].where((x)=>x['active']!=false).toList();
         customers=fetched[3].where((x)=>x['active']!=false).toList();
         channels=fetched[4].where((x)=>x['active']!=false).toList();
-        customerGroups=fetched[5].where((x)=>x['active']!=false).toList();
-        unitDefinitions=fetched[6].where((x)=>x['active']!=false).toList();
+        customerGroups=groups.where((x)=>x['active']!=false).toList();
+        unitDefinitions=uoms.where((x)=>x['active']!=false).toList();
         productId=products.isEmpty?null:products.first['id'] as String;
         skuId=skus.isEmpty?null:skus.first['id'] as String;
         listId=lists.isEmpty?null:lists.first['id'] as String;
