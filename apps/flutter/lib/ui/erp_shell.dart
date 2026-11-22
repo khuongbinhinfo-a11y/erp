@@ -251,6 +251,44 @@ class _IntroToast extends StatelessWidget {
   );
 }
 
+class _RrpMarkPainter extends CustomPainter {
+  const _RrpMarkPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Draw an original geometric route/box mark at device-native resolution.
+    // Paths stay sharp in the expanded and collapsed sidebar on Retina.
+    canvas.save();
+    canvas.scale(size.width / 32, size.height / 32);
+    final paint = Paint()
+      ..color = ErpTokens.sidebar
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.8
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    final path = Path()
+      ..moveTo(5, 25)
+      ..lineTo(5, 7)
+      ..lineTo(12, 7)
+      ..quadraticBezierTo(19, 7, 19, 13)
+      ..quadraticBezierTo(19, 19, 12, 19)
+      ..lineTo(5, 19)
+      ..moveTo(13, 19)
+      ..lineTo(19, 26)
+      ..moveTo(23, 7)
+      ..lineTo(28, 7)
+      ..lineTo(28, 19)
+      ..lineTo(23, 19)
+      ..moveTo(23, 19)
+      ..lineTo(23, 26);
+    canvas.drawPath(path, paint);
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _RrpMarkPainter oldDelegate) => false;
+}
+
 class _Navigation extends StatelessWidget {
   final int selected;
   final ValueChanged<int> onSelect;
@@ -281,15 +319,15 @@ class _Navigation extends StatelessWidget {
             alignment: Alignment.center,
             decoration: BoxDecoration(color: ErpTokens.lime,
               borderRadius: BorderRadius.circular(5)),
-            child: const Text('E', style: TextStyle(color: ErpTokens.sidebar,
-              fontSize: 23, fontWeight: FontWeight.w900)),
+            child: const CustomPaint(size: Size(26, 26),
+              painter: _RrpMarkPainter()),
           ),
           if (!compact) ...[
             const SizedBox(width: 10),
             const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('ERP', style: TextStyle(color: Colors.white, fontSize: 21,
+              Text('RRP', style: TextStyle(color: Colors.white, fontSize: 21,
                 fontWeight: FontWeight.w800)),
-              Text('PHÂN PHỐI', style: TextStyle(color: ErpTokens.sidebarText,
+              Text('product by KB', style: TextStyle(color: ErpTokens.sidebarText,
                 fontSize: 10, letterSpacing: 1.35)),
             ])),
           ],
@@ -381,7 +419,7 @@ class _Navigation extends StatelessWidget {
         )
       else
         const Padding(padding: EdgeInsets.all(18),
-          child: Text('ERP PHÂN PHỐI',
+          child: Text('RRP · product by KB',
             style: TextStyle(color: ErpTokens.sidebarText,
               letterSpacing: 1.3, fontSize: 10))),
     ])),
