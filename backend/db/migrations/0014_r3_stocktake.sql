@@ -84,7 +84,7 @@ END; $$;
 CREATE TRIGGER inventory_stocktake_line_guard BEFORE INSERT OR UPDATE OR DELETE
  ON inventory_stocktake_line FOR EACH ROW EXECUTE FUNCTION erp_stocktake_line_guard();
 
-CREATE FUNCTION erp_stocktake_count_guard() RETURNS trigger LANGUAGE plpgsql AS $
+CREATE FUNCTION erp_stocktake_count_guard() RETURNS trigger LANGUAGE plpgsql AS $stocktake_count_guard$
 DECLARE st text;
  last_round integer;
 BEGIN
@@ -104,7 +104,7 @@ BEGIN
    RAISE EXCEPTION 'Stocktake count rounds must be sequential';
  END IF;
  RETURN NEW;
-END; $$;
+END; $stocktake_count_guard$;
 CREATE TRIGGER inventory_stocktake_count_guard BEFORE INSERT OR UPDATE OR DELETE
  ON inventory_stocktake_count FOR EACH ROW EXECUTE FUNCTION erp_stocktake_count_guard();
 
