@@ -20,15 +20,20 @@ terminal bảo vệ, không ghi giá trị vào chat, commit, issue, log hoặc 
 
 | Biến | Nguồn / yêu cầu |
 | --- | --- |
-| ERP_POSTGRES_DIRECT_URL | Direct TCP PostgreSQL URL từ ERP-DB, db.prisma.io, sslmode=require; không phải erp-demo |
+| Prisma CLI đã đăng nhập | Operator tự tạo credential TCP một lần cho đúng database ID và tự thu hồi sau khi chạy. Không dùng URL tự nhập. |
 | AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY | Key chỉ cho Prisma bucket erp-db-migration-encrypted-backups |
 | ERP_BACKUP_S3_ENDPOINT | HTTPS S3 endpoint của bucket trên, không kèm path |
 | ERP_AGE_RECIPIENT | Public age recipient được quản lý cùng private recovery key riêng |
-| ERP_BACKUP_RECOVERY_KEY_CUSTODY | Đúng giá trị VERIFIED, chỉ đặt khi đã xác minh giữ private recovery key |
+| ERP_AGE_RECOVERY_IDENTITY | Khóa riêng age tương ứng recipient (secret Codespaces, chỉ dùng giải mã bản backup production thực sự để thử restore; không xuất log) |
 
 Bucket đã tồn tại. **Chưa xác minh khóa truy cập từ Codespaces và private recovery key**;
-script sẽ từ chối nếu chưa đủ. Backup mã hóa được tải lên bucket riêng, readback SHA256,
-restore độc lập qua Docker Postgres 17, đối soát trước khi production migrate.
+script sẽ từ chối nếu chưa đủ. Khóa khôi phục chỉ được đưa vào Codespaces secret
+trong thời gian chạy operator, phải được thu hồi/luân chuyển sau phiên phát hành.
+Operator giải mã trực tiếp bản backup đã đọc lại từ bucket bằng chính khóa riêng
+khôi phục (không dùng khóa thử khác), restore độc lập qua Docker Postgres 17 và đối soát.
+Trước khi kết nối database, operator dùng authenticated Prisma CLI tạo credential mới
+cho đúng ID ERP-DB và GitHub CLI xác minh Codespace đang chạy trên repo chính.
+Cần gh auth status hoạt động và quyền đọc endpoint /user/codespaces của owner.
 
 ### Đưa backend vào bảo trì trước khi migration
 
@@ -68,7 +73,7 @@ duy nhất cho hai file package-lock.json phát sinh từ npm install của back
 
 ## 2. Owner chạy migration R3 — chỉ một lần (ghi ERP-DB)
 
-Chỉ sau khi duyệt target, có maintenance:true, xác minh quyền giữ private key:
+Chỉ sau khi duyệt target, có maintenance:true, đã cấu hình private recovery key trong Codespaces secret:
 
 ~~~bash
 cd /workspaces/ERP/backend
@@ -79,15 +84,16 @@ npm run db:migrate:r3:codespaces -- --apply
 Operator:
 1. Xác minh main, exact SHA, database và Compose maintenance.
 2. Xác minh 10 migration/PG17/checksum/fingerprint nền.
-3. Pg_dump, mã hóa age, upload private S3, readback SHA256, một bản rehearsal
-   mã hóa riêng và giải mã trên môi trường cô lập.
+3. Pg_dump, mã hóa age, upload private S3, readback SHA256, giải mã chính bản đã
+   đọc lại từ S3 bằng recovery key thực và xác minh SHA256 của dump.
 4. Restore vào PostgreSQL 17 Docker loopback riêng, so dòng dữ liệu cũ,
    rehearsal 0011–0014, xác minh đủ 14 migration và tất cả bảng nghiệp vụ.
 5. Trước ghi database thật, kiểm tra maintenance còn hiệu lực và fingerprint
    không đổi; applyMigrations chạy trong transaction và advisory lock.
 6. Xác minh 14 version và dữ liệu nền không đổi ngoài schema_migrations
    và các quyền mới trong role_permission. In object URI/hash backup, không secret.
-7. Dọn dump/key rehearsal/container cục bộ khi hoàn tất hoặc gặp lỗi.
+7. Dọn dump/khóa khôi phục tạm/container cục bộ và thu hồi credential Prisma
+   do operator tạo khi hoàn tất hoặc gặp lỗi. Thu hồi không xác minh được sẽ báo lỗi.
 
 Không chạy db:migrate:ci, script production R1, SQL tay hoặc prisma migrate deploy
 vào ERP-DB. Nếu backup/readback/restore/rehearsal không đạt thì dừng trước SQL
