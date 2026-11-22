@@ -96,4 +96,77 @@ void main(){
   await tester.pump(const Duration(seconds:5));
   await tester.pumpAndSettle();
  });
+ testWidgets('R3.3 transfer create grant works without transfer.read or catalog.read',
+ (tester)async{
+  var created=0,listed=0;
+  const headers={'content-type':'application/json; charset=utf-8'};
+  http.Response ok(Object data,int status)=>
+    http.Response(jsonEncode(data),status,headers:headers);
+  final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+    httpClient:MockClient((req)async{
+      if(req.url.path=='/v1/inventory/transfers/scopes')return ok({
+        'branches':[{'id':branch,'name':'Chi nhánh chính'}],
+        'warehouses':req.url.queryParameters.containsKey('branchId')?[
+          {'id':source,'name':'Kho chính'},
+          {'id':dest,'name':'Kho nhận'}]:[],
+      },200);
+      if(req.url.path=='/v1/inventory/transfers/products')return ok({
+        'items':[{'id':transfer,'code':'SP01','name':'Hàng hóa','active':true}],
+      },200);
+      if(req.url.path=='/v1/inventory/transfers'&&req.method=='GET'){
+        listed++;return ok({'error':{'code':'DENIED'}},403);
+      }
+      if(req.url.path=='/v1/inventory/transfers'&&req.method=='POST'){
+        created++;
+        expect(req.headers['if-match'],'0');
+        final payload=jsonDecode(req.body) as Map<String,dynamic>;
+        expect(payload['sourceWarehouseId'],source);
+        expect(payload['destinationWarehouseId'],dest);
+        expect(payload['lines'],[
+          {'productId':transfer,'quantity':'2'}]);
+        return ok({'id':transfer,'status':'CREATED','revision':0},201);
+      }
+      // Do not ask the global catalog for transfer-scoped product/warehouse data.
+      if(req.url.path.startsWith('/v1/catalog/')){
+        fail('Transfer-only operator must not call catalog endpoints');
+      }
+      return ok({'error':{'code':'NOT_FOUND'}},404);
+    }));
+  addTearDown(client.dispose);
+  tester.view.devicePixelRatio=1;tester.view.physicalSize=const Size(1250,900);
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
+  final session=IdentitySession(actorId:actor,token:'synthetic-token',
+    expiresAt:DateTime.now().add(const Duration(hours:1)),grants:const [
+      IdentityGrant(roleId:'r1',permission:'inventory.transfer.create',
+        branchId:branch,warehouseId:source),
+      IdentityGrant(roleId:'r2',permission:'inventory.read',
+        branchId:branch,warehouseId:dest),
+    ]);
+  await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
+    home:Scaffold(body:SingleChildScrollView(
+      child:TransferWorkspace(client:client,session:session)))));
+  for(var i=0;i<5;i++){
+    await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:80)));
+    await tester.pumpAndSettle();
+  }
+  expect(listed,0);
+  expect(find.text('Lập phiếu chuyển'),findsOneWidget);
+  expect(find.textContaining('không có quyền xem danh sách phiếu'),findsOneWidget);
+  await tester.tap(find.text('Lập phiếu chuyển'));
+  for(var i=0;i<4;i++){
+    await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:80)));
+    await tester.pumpAndSettle();
+  }
+  expect(find.text('Kho nhận'),findsWidgets);
+  await tester.enterText(find.widgetWithText(TextField,'SL gốc'),'2');
+  await tester.tap(find.text('Lưu phiếu'));
+  for(var i=0;i<4;i++){
+    await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:80)));
+    await tester.pumpAndSettle();
+  }
+  expect(created,1);
+  expect(listed,0);
+ });
+
 }
