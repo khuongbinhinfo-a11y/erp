@@ -13,6 +13,8 @@ const customer='00000000-0000-4000-8000-000000000003';
 const product='00000000-0000-4000-8000-000000000004';
 const sellSku='00000000-0000-4000-8000-000000000005';
 const priceList='00000000-0000-4000-8000-000000000006';
+const customerGroupId='00000000-0000-4000-8000-000000000007';
+const customerRegionId='00000000-0000-4000-8000-000000000008';
 
 void main(){
   testWidgets('quick customer in sale preserves order context and idempotent lost ACK retry',
@@ -38,6 +40,12 @@ void main(){
         if(path=='/v1/catalog/customers'&&request.method=='GET'){
           return reply({'items':[]},200);
         }
+        if(path=='/v1/catalog/customer-groups')return reply({'items':[
+          {'id':customerGroupId,'code':'KH_DAILY','name':'Đại lý','active':true},
+        ]},200);
+        if(path=='/v1/catalog/customer-regions')return reply({'items':[
+          {'id':customerRegionId,'code':'KV_MT','name':'Mỹ Tho','active':true},
+        ]},200);
         if(path=='/v1/catalog/customers'&&request.method=='POST'){
           attempts++;
           sentKeys.add(request.headers['idempotency-key']);
@@ -46,7 +54,10 @@ void main(){
           expect(body['branchId'],branch);
           expect(body['code'],'KH-T01');
           expect(body['name'],'Cửa hàng thử nghiệm');
-          expect(body['customerGroup'],'Đại lý');
+          expect(body['customerGroupId'],customerGroupId);
+          expect(body['customerRegionId'],customerRegionId);
+          expect(body.containsKey('customerGroup'),false,
+            reason:'coded categories are never posted as free text');
           expect(body['paymentTermsDays'],30);
           if(attempts==1)throw http.ClientException('ACK lost after COMMIT');
           if(attempts==2)return reply({'error':{'code':'AUTH_DENIED'}},401);
@@ -94,8 +105,14 @@ void main(){
       'KH-T01');
     await tester.enterText(find.byKey(const ValueKey('sales-quick-customer-name')),
       'Cửa hàng thử nghiệm');
-    await tester.enterText(find.byKey(const ValueKey('sales-quick-customer-group')),
-      'Đại lý');
+    await tester.tap(find.byKey(const ValueKey('sales-quick-customer-group-null')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('KH_DAILY · Đại lý').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('sales-quick-customer-region-null')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('KV_MT · Mỹ Tho').last);
+    await tester.pumpAndSettle();
     await tester.enterText(find.byKey(
       const ValueKey('sales-quick-customer-payment-terms')),'30');
     await tester.ensureVisible(find.byKey(const ValueKey('sales-quick-customer-save')));
