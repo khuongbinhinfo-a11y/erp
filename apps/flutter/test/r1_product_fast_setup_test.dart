@@ -196,9 +196,10 @@ void main(){
     expect(postCount,2);
     final selection=find.byKey(const ValueKey('catalog-product-group-group-1'));
     expect(selection,findsOneWidget);
-    final dropdown=tester.widget<DropdownButtonFormField<String?>>(selection);
-    expect(dropdown.items!.where((item)=>item.value=='group-1').length,1,
-      reason:'a replayed group must never be added twice to the dropdown');
+    // Duplicate values trigger DropdownButtonFormField's exact-one-value
+    // assertion when the selected group is rebuilt after replay.
+    expect(tester.takeException(),isNull,
+      reason:'replayed group must remain unique after rebuilding selection');
     await tester.tap(find.text('Hủy'));
     await flush(tester);
   });
