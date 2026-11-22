@@ -298,7 +298,7 @@ async function executeCreate(db:PoolClient,context:MutationContext,
         VALUES ($1,$2,$3,$4,true)`,
         [installationId,branchId,baseSku.rows[0]!.id,value.barcode]);
     }
-    for(const unit of value.units){
+    for(const unit of value.units??[]){
       if(!unit.sku)continue;
       const inserted=await db.query<{id:string}>(`INSERT INTO catalog_sell_sku
         (installation_id,branch_id,product_id,sku,unit_code,conversion_to_base)
