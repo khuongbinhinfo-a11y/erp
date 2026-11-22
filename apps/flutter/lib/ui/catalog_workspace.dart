@@ -21,7 +21,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
   late String resource;
   List<Map<String,dynamic>> branches=[],items=[];
   String? branchId;
-  bool loading=true,saving=false;
+  bool loading=true,saving=false,productWriteReady=false;
   String? error;
   int requestSerial=0;
   final search=TextEditingController();
@@ -58,7 +58,9 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
 
   static const r1Kinds={'units','skus','barcodes','channels','rules','quote'};
   bool get isR1=>r1Kinds.contains(resource);
-  bool get canWrite => resource!='warehouses' && widget.session.grants.any(
+  bool get canWrite => resource!='warehouses' &&
+    (resource!='products'||productWriteReady) &&
+    widget.session.grants.any(
     (g)=>g.permission=='catalog.write'&&g.branchId==branchId);
   @override void initState(){
     super.initState();resource=widget.area;_loadBranches();
@@ -67,7 +69,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     super.didUpdateWidget(oldWidget);
     if(oldWidget.session.token!=widget.session.token ||
       oldWidget.client!=widget.client || oldWidget.area!=widget.area){
-      requestSerial++;items=[];branches=[];branchId=null;resource=widget.area;search.clear();
+      requestSerial++;items=[];branches=[];branchId=null;
+      productWriteReady=false;resource=widget.area;search.clear();
       _loadBranches();
     }
   }
@@ -111,10 +114,17 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     final stamp=++requestSerial;
     setState((){loading=true;error=null;items=[];});
     try{
-      final result=await widget.client.catalogItems(
+      final productResult=resource=='products'
+        ? await widget.client.catalogProducts(widget.session.token,
+            branchId:currentBranch,query:search.text)
+        : null;
+      final result=productResult?.items ?? await widget.client.catalogItems(
         widget.session.token,resource,branchId:currentBranch,query:search.text);
       if(!mounted||requestSerial!=stamp)return;
-      setState((){items=result;loading=false;});
+      setState((){
+        items=result;loading=false;
+        productWriteReady=resource=='products'&&productResult?.writeReady==true;
+      });
     }on ErpApiError catch(e){
       if(mounted&&requestSerial==stamp)setState((){
         loading=false;error=_errorMessage(e);
@@ -127,7 +137,9 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
   }
   void _changeResource(String next){
     if(next==resource)return;
-    setState((){resource=next;search.clear();items=[];});
+    setState((){
+      resource=next;search.clear();items=[];productWriteReady=false;
+    });
     _loadRecords();
   }
 
@@ -732,6 +744,10 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                         ])
                       : Text(_cell(entry,c.$1))),
                 ])).toList())),
+            if(resource=='products'&&!productWriteReady&&!loading)
+              const Padding(padding:EdgeInsets.only(top:12),
+                child:Text('Đã xem được danh mục, nhưng chưa cập nhật đủ cấu trúc SKU để thêm sản phẩm.',
+                  style:TextStyle(fontSize:12,color:ErpTokens.muted))),
             if(resource=='warehouses')const Padding(
               padding:EdgeInsets.only(top:12),
               child:Text('Tồn khả dụng chỉ được xác nhận sau khi Inventory Ledger (#9) hoàn thiện.',
