@@ -117,7 +117,8 @@ export async function handleStocktakeHttp(req:IncomingMessage,res:ServerResponse
       const branches=await conn.query(
         `SELECT DISTINCT b.id,b.name FROM user_role ur
           JOIN role_permission rp ON rp.installation_id=ur.installation_id
-            AND rp.role_id=ur.role_id AND rp.permission_code='inventory.stocktake.read'
+            AND rp.role_id=ur.role_id
+            AND rp.permission_code IN ('inventory.stocktake.read','inventory.stocktake.create')
           JOIN user_role_warehouse uw ON uw.installation_id=ur.installation_id
             AND uw.user_id=ur.user_id AND uw.role_id=ur.role_id
             AND uw.branch_id=ur.branch_id
@@ -127,7 +128,8 @@ export async function handleStocktakeHttp(req:IncomingMessage,res:ServerResponse
         `SELECT DISTINCT w.id,w.code,w.name,w.branch_id AS "branchId"
           FROM user_role ur
           JOIN role_permission rp ON rp.installation_id=ur.installation_id
-            AND rp.role_id=ur.role_id AND rp.permission_code='inventory.stocktake.read'
+            AND rp.role_id=ur.role_id
+            AND rp.permission_code IN ('inventory.stocktake.read','inventory.stocktake.create')
           JOIN user_role_warehouse uw ON uw.installation_id=ur.installation_id
             AND uw.user_id=ur.user_id AND uw.role_id=ur.role_id
             AND uw.branch_id=ur.branch_id
