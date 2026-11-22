@@ -151,16 +151,24 @@ class ErpIdentityClient {
     }
   }
   Future<IdentitySession> login(String username,String password)async{
-    _r1Pending.clear();_inventoryPending.clear();
+    // Reauthentication must not discard a stock command whose COMMIT has no ACK.
     final raw=await _request('POST','/v1/auth/login',body:{'loginName':username,'password':password});
     final token=raw['token'] as String;
     try{
       final r=await _request('GET','/v1/auth/session',token:token);
-      return IdentitySession(actorId:r['actorId'] as String,token:token,
+      final actor=r['actorId'] as String;
+      // An account switch cannot access another actor's pending operation.
+      _inventoryPending.removeWhere((scope,_)=>!scope.startsWith('$actor:'));
+      _r1Pending.clear();
+      return IdentitySession(actorId:actor,token:token,
         loginName:r['loginName'] as String? ?? username,
         expiresAt:DateTime.parse(r['expiresAt'] as String? ?? raw['expiresAt'] as String),
         grants:(r['grants'] as List<dynamic>).map((v)=>IdentityGrant.fromJson(v as Map<String,dynamic>)).toList());
-    }catch(_){try{await logout(token);}catch(_){/* clear local token */}rethrow;}
+    }catch(_){
+      // Failed session setup must not erase old actor's unacknowledged command.
+      try{await _request('POST','/v1/auth/logout',token:token);}catch(_){}
+      rethrow;
+    }
   }
   Future<IdentitySession> restore(String token)async{
     final r=await _request('GET','/v1/auth/session',token:token);
@@ -301,13 +309,19 @@ class ErpIdentityClient {
     inventoryPage(token,'reservations',branchId:branchId,
       warehouseId:warehouseId,state:state,offset:offset);
   /// A pending request uses an identical command body and key until the server ACKs.
-  final Map<String,({Map<String,dynamic> payload,String key})> _inventoryPending={};
-  ({Map<String,dynamic> payload,String key})? pendingInventory(String id){
+  // Keep the entire exact request when POST may have COMMITTED without an ACK.
+  final Map<String,({Map<String,dynamic> payload,String key,String? action,int? revision})>
+    _inventoryPending={};
+  ({Map<String,dynamic> payload,String key,String? action,int? revision})?
+      pendingInventory(String id){
     final p=_inventoryPending[id];
-    return p==null?null:(payload:Map<String,dynamic>.from(p.payload),key:p.key);
+    return p==null?null:(payload:Map<String,dynamic>.from(p.payload),
+      key:p.key,action:p.action,revision:p.revision);
   }
-  void retainInventory(String id,Map<String,dynamic> payload,String key){
-    _inventoryPending[id]=(payload:Map<String,dynamic>.from(payload),key:key);
+  void retainInventory(String id,Map<String,dynamic> payload,String key,
+      {String? action,int? revision}){
+    _inventoryPending[id]=(payload:Map<String,dynamic>.from(payload),
+      key:key,action:action,revision:revision);
   }
   void clearInventory(String id){_inventoryPending.remove(id);}
   Future<Map<String,dynamic>> inventoryAction(String token,String action,
