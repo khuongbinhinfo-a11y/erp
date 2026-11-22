@@ -351,12 +351,16 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
   assert.equal(otherBarcode.status,201);
   // Historic Unicode labels and new directory codes must resolve the
   // SAME customer group. Neither policy may silently disappear or double stack.
-  const unicodeGroup=await legacy("customer-groups",{
-    code:"LEGACY-7e736d8317f82900ab34d1f5d56e3ed2",name:"Bán sỉ"});
-  assert.equal(unicodeGroup.status,201);
+  // Synthetic migrated dictionary row includes a frozen legacy alias,
+  // which is intentionally unavailable to ordinary POST/PATCH APIs.
+  const unicodeGroupId=(await pool.query<{id:string}>(`INSERT INTO catalog_customer_group
+    (installation_id,branch_id,code,name,legacy_label)
+    VALUES($1,$2,'LEGACY-7e736d8317f82900ab34d1f5d56e3ed2',
+      'Bán sỉ','Bán sỉ') RETURNING id`,
+    [root.installationId,b])).rows[0]!.id;
   const unicodeCustomer=await legacy("customers",{
     code:"KH-UNICODE",name:"Khách nhập theo nhóm cũ",
-    customerGroupId:unicodeGroup.body.id});
+    customerGroupId:unicodeGroupId});
   assert.equal(unicodeCustomer.status,201);
   const newGroupRule=await r1("rules",{
     ...basic,sellSkuId:skuId,scopeKind:"CUSTOMER_GROUP",
@@ -370,6 +374,10 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
     VALUES ($1,$2,$3,$4,'CUSTOMER_GROUP','Bán sỉ','PERCENT_DISCOUNT',
       3.0000,-1,'STACKABLE',1,$5::timestamptz) RETURNING id`,
     [root.installationId,b,list.body.id,skuId,now])).rows[0]!.id;
+  const renamed=await request("/v1/catalog/customer-groups/"+unicodeGroupId,"PATCH",
+    {branchId:b,name:"Tên nhóm đổi sau migration",active:true},token,
+    {"idempotency-key":"rename-group-"+randomUUID(),"if-match":"0"});
+  assert.equal(renamed.status,200,JSON.stringify(renamed.body));
   const unicodeQuote=await resolvePrice({
     priceListId:list.body.id,sellSkuId:skuId,
     quantity:"1",customerId:unicodeCustomer.body.id,priceAt});
