@@ -158,6 +158,10 @@ void main(){
     await tester.ensureVisible(find.byKey(const ValueKey('r1-save')));
     await tester.tap(find.byKey(const ValueKey('r1-save')));
     await tester.pumpAndSettle();
+    expect(requests, isNot(contains('GET /v1/catalog/customer-groups')),
+      reason:'R1 quote must remain usable before customer directory 0017');
+    expect(requests, isNot(contains('GET /v1/catalog/unit-definitions')),
+      reason:'R1 quote must not depend on irrelevant UOM dictionary requests');
     expect(quoteCalls,1,reason:'R1 HTTP calls: '+requests.join(' | ')+
       ' / widgets: '+tester.widgetList<Text>(find.byType(Text))
         .map((e)=>e.data??'').where((e)=>e.isNotEmpty).take(24).join(' / '));
