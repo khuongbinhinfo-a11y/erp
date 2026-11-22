@@ -240,6 +240,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     final newCustomerName=TextEditingController();
     final newCustomerPhone=TextEditingController();
     final newCustomerAddress=TextEditingController();
+    final newCustomerGroup=TextEditingController();
+    final newCustomerPaymentTerms=TextEditingController(text:'0');
     const quickCustomerKind='sales.customer.quick';
     final savedQuickCustomer=widget.client.pendingR1(
       widget.session.actorId,branch,quickCustomerKind);
@@ -251,6 +253,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       newCustomerName.text=pendingQuickCustomer['name']?.toString()??'';
       newCustomerPhone.text=pendingQuickCustomer['phone']?.toString()??'';
       newCustomerAddress.text=pendingQuickCustomer['deliveryAddress']?.toString()??'';
+      newCustomerGroup.text=pendingQuickCustomer['customerGroup']?.toString()??'';
+      newCustomerPaymentTerms.text=pendingQuickCustomer['paymentTermsDays']?.toString()??'0';
     }
     final skuFocus=FocusNode();
     final customerFocus=FocusNode();
@@ -343,7 +347,17 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           refresh(()=>formError='Cần nhập mã và tên khách hàng mới.');
           return;
         }
-        final payload=<String,dynamic>{'branchId':branch,'code':code,'name':name};
+        final days=int.tryParse(newCustomerPaymentTerms.text.trim());
+        if(days==null||days<0||days>365){
+          refresh(()=>formError='Số ngày thanh toán phải từ 0 đến 365.');
+          return;
+        }
+        final payload=<String,dynamic>{
+          'branchId':branch,'code':code,'name':name,'paymentTermsDays':days,
+        };
+        if(newCustomerGroup.text.trim().isNotEmpty){
+          payload['customerGroup']=newCustomerGroup.text.trim();
+        }
         if(newCustomerPhone.text.trim().isNotEmpty){
           payload['phone']=newCustomerPhone.text.trim();
         }
@@ -365,7 +379,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         final saved=<String,dynamic>{
           ...pendingQuickCustomer!,
           'id':result['id'],'code':result['code'],'name':result['name'],
-          'active':true,'paymentTermsDays':0,
+          'active':true,'paymentTermsDays':
+            pendingQuickCustomer!['paymentTermsDays']??0,
         };
         chooseCustomer(saved,refresh);
         widget.client.clearR1(widget.session.actorId,branch,quickCustomerKind);
@@ -621,6 +636,17 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                             controller:newCustomerAddress,
                             enabled:!quickCustomerBusy&&pendingQuickCustomer==null,
                             decoration:const InputDecoration(labelText:'Địa chỉ giao'))),
+                          SizedBox(width:narrow?280:170,child:TextField(
+                            key:const ValueKey('sales-quick-customer-group'),
+                            controller:newCustomerGroup,
+                            enabled:!quickCustomerBusy&&pendingQuickCustomer==null,
+                            decoration:const InputDecoration(labelText:'Nhóm khách hàng'))),
+                          SizedBox(width:narrow?280:160,child:TextField(
+                            key:const ValueKey('sales-quick-customer-payment-terms'),
+                            controller:newCustomerPaymentTerms,
+                            enabled:!quickCustomerBusy&&pendingQuickCustomer==null,
+                            keyboardType:TextInputType.number,
+                            decoration:const InputDecoration(labelText:'Hạn thanh toán (ngày)'))),
                         ]),
                         const SizedBox(height:8),
                         Row(children:[
@@ -955,6 +981,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       note.dispose();skuSearch.dispose();customerSearch.dispose();
       newCustomerCode.dispose();newCustomerName.dispose();
       newCustomerPhone.dispose();newCustomerAddress.dispose();
+      newCustomerGroup.dispose();newCustomerPaymentTerms.dispose();
       skuFocus.dispose();customerFocus.dispose();
       for(final line in lines){line.dispose();}
     }
