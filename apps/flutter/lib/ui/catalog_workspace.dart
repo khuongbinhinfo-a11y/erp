@@ -866,67 +866,172 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     if(!canEdit||saving||branchId==null)return;
     final id=row['id'],revision=row['revision'];
     if(id is! String||revision is! int)return;
+    final branch=branchId!;
     var name=(row['name']??'').toString();
-    var phone=(row['phone']??'').toString(),
-      deliveryAddress=(row['deliveryAddress']??'').toString();
+    var phone=(row['phone']??'').toString();
+    var deliveryAddress=(row['deliveryAddress']??'').toString();
     var paymentTermsDays=(row['paymentTermsDays']??0).toString();
-    var customerGroup=(row['customerGroup']??'').toString();
+    final oldGroupId=row['customerGroupId'] as String?;
+    final oldRegionId=row['customerRegionId'] as String?;
+    final oldProductGroupId=row['groupId'] as String?;
+    String? customerGroupId=oldGroupId,customerRegionId=oldRegionId;
+    String? productGroupId=oldProductGroupId;
     bool active=row['active'] as bool? ?? true;
-    final body=await showDialog<Map<String,dynamic>>(context:context,
-        builder:(dialog)=>StatefulBuilder(builder:(context,refresh)=>AlertDialog(
-          title:const Text('Sửa danh mục'),
-          content:SizedBox(width:400,child:Column(mainAxisSize:MainAxisSize.min,
-            children:[
-              TextFormField(key:const ValueKey('catalog-edit-name'),
-                initialValue:name,onChanged:(value)=>name=value,
-                maxLength:resource=='unit-definitions'?80:160,
-                decoration:const InputDecoration(labelText:'Tên')),
-              if(resource=='customers')...[
-                TextFormField(initialValue:customerGroup,
-                  onChanged:(v)=>customerGroup=v,
-                  decoration:const InputDecoration(labelText:'Nhóm khách hàng')),
-                TextFormField(initialValue:phone,onChanged:(v)=>phone=v,
-                  keyboardType:TextInputType.phone,
-                  decoration:const InputDecoration(labelText:'Điện thoại')),
-                TextFormField(initialValue:deliveryAddress,
-                  onChanged:(v)=>deliveryAddress=v,
-                  decoration:const InputDecoration(labelText:'Địa chỉ giao hàng')),
-                TextFormField(initialValue:paymentTermsDays,
-                  onChanged:(v)=>paymentTermsDays=v,
-                  keyboardType:TextInputType.number,
-                  decoration:const InputDecoration(labelText:'Số ngày thanh toán')),
-              ],
-              SwitchListTile(key:const ValueKey('catalog-edit-active'),
-                title:const Text('Đang sử dụng'),value:active,
-                onChanged:(v)=>refresh(()=>active=v)),
-            ])),
-          actions:[
-            TextButton(onPressed:()=>Navigator.pop(dialog),child:const Text('Hủy')),
-            FilledButton(key:const ValueKey('catalog-edit-save'),
-              onPressed:()=>Navigator.pop(dialog,{
-                'branchId':branchId,'name':name.trim(),'active':active,
-                if(resource=='customers')...{
-                  'customerGroup':customerGroup.trim().isEmpty?null:customerGroup.trim(),
-                  'phone':phone.trim().isEmpty?null:phone.trim(),
-                  'deliveryAddress':deliveryAddress.trim().isEmpty?null:deliveryAddress.trim(),
-                  'paymentTermsDays':int.tryParse(paymentTermsDays.trim())??-1,
-                },
-              }),child:const Text('Cập nhật')),
-          ],
-        )));
-      if(body==null||!mounted)return;
-      setState(()=>saving=true);
-      try{
-        await widget.client.updateCatalog(widget.session.token,resource,id,revision,body);
-        if(!mounted)return;
-        ErpToast.show(context,'Đã cập nhật trên server.');
+    List<Map<String,dynamic>> customerGroups=[],customerRegions=[],productGroups=[];
+    try{
+      if(resource=='customers'){
+        final lookup=await Future.wait([
+          widget.client.catalogDirectoryAll(widget.session.token,
+            'customer-groups',branchId:branch),
+          widget.client.catalogDirectoryAll(widget.session.token,
+            'customer-regions',branchId:branch),
+        ]);
+        customerGroups=lookup[0];
+        customerRegions=lookup[1];
+      }else if(resource=='products'){
+        productGroups=await widget.client.catalogItems(
+          widget.session.token,'groups',branchId:branch);
+      }
+    }on ErpApiError catch(e){
+      if(mounted)ErpToast.show(context,_errorMessage(e),isError:true);
+      return;
+    }
+    if(!mounted)return;
+    final size=MediaQuery.sizeOf(context);
+    final formWidth=(size.width-56).clamp(220.0,620.0).toDouble();
+    final formHeight=(size.height-205).clamp(120.0,580.0).toDouble();
+    final body=await showDialog<Map<String,dynamic>>(
+      context:context,
+      builder:(dialog)=>StatefulBuilder(builder:(context,refresh)=>AlertDialog(
+        key:const ValueKey('catalog-edit-dialog'),
+        insetPadding:const EdgeInsets.symmetric(horizontal:12,vertical:12),
+        contentPadding:const EdgeInsets.fromLTRB(16,8,16,8),
+        title:Text('Sửa ${titles[resource]??'danh mục'}',
+          style:const TextStyle(fontWeight:FontWeight.w700)),
+        content:SizedBox(width:formWidth,
+          child:ConstrainedBox(
+            constraints:BoxConstraints(maxHeight:formHeight),
+            child:SingleChildScrollView(
+              key:const ValueKey('catalog-edit-scroll'),
+              child:Column(mainAxisSize:MainAxisSize.min,
+                crossAxisAlignment:CrossAxisAlignment.stretch,
+                children:[
+                  Text('Mã: ${row['code']??'—'}',
+                    style:const TextStyle(fontSize:12,color:ErpTokens.muted)),
+                  const SizedBox(height:12),
+                  TextFormField(key:const ValueKey('catalog-edit-name'),
+                    initialValue:name,onChanged:(value)=>name=value,
+                    maxLength:resource=='unit-definitions'?80:160,
+                    decoration:const InputDecoration(labelText:'Tên')),
+                  if(resource=='products')...[
+                    const SizedBox(height:12),
+                    DropdownButtonFormField<String?>(
+                      key:const ValueKey('catalog-edit-product-group'),
+                      initialValue:productGroups.any((g)=>g['id']==productGroupId)
+                        ?productGroupId:null,
+                      isExpanded:true,
+                      decoration:const InputDecoration(labelText:'Nhóm sản phẩm'),
+                      items:[
+                        const DropdownMenuItem<String?>(
+                          value:null,child:Text('Chưa phân nhóm')),
+                        ...productGroups.where((g)=>g['active']!=false||
+                          g['id']==productGroupId).map((g)=>
+                          DropdownMenuItem<String?>(
+                            value:g['id'] as String,
+                            child:Text("${g['code']} · ${g['name']}",
+                              overflow:TextOverflow.ellipsis))),
+                      ],
+                      onChanged:(v)=>refresh(()=>productGroupId=v)),
+                  ],
+                  if(resource=='customers')...[
+                    const SizedBox(height:12),
+                    DropdownButtonFormField<String?>(
+                      key:const ValueKey('catalog-edit-customer-group'),
+                      initialValue:customerGroups.any((g)=>g['id']==customerGroupId)
+                        ?customerGroupId:null,
+                      isExpanded:true,
+                      decoration:const InputDecoration(labelText:'Nhóm khách hàng'),
+                      items:[
+                        const DropdownMenuItem<String?>(
+                          value:null,child:Text('Chưa phân nhóm')),
+                        ...customerGroups.where((g)=>g['active']!=false||
+                          g['id']==customerGroupId).map((g)=>
+                          DropdownMenuItem<String?>(
+                            value:g['id'] as String,
+                            child:Text("${g['code']} · ${g['name']}",
+                              overflow:TextOverflow.ellipsis))),
+                      ],
+                      onChanged:(v)=>refresh(()=>customerGroupId=v)),
+                    const SizedBox(height:12),
+                    DropdownButtonFormField<String?>(
+                      key:const ValueKey('catalog-edit-customer-region'),
+                      initialValue:customerRegions.any((r)=>r['id']==customerRegionId)
+                        ?customerRegionId:null,
+                      isExpanded:true,
+                      decoration:const InputDecoration(labelText:'Khu vực bán hàng'),
+                      items:[
+                        const DropdownMenuItem<String?>(
+                          value:null,child:Text('Chưa phân khu vực')),
+                        ...customerRegions.where((r)=>r['active']!=false||
+                          r['id']==customerRegionId).map((r)=>
+                          DropdownMenuItem<String?>(
+                            value:r['id'] as String,
+                            child:Text("${r['code']} · ${r['name']}",
+                              overflow:TextOverflow.ellipsis))),
+                      ],
+                      onChanged:(v)=>refresh(()=>customerRegionId=v)),
+                    const SizedBox(height:12),
+                    TextFormField(initialValue:phone,onChanged:(v)=>phone=v,
+                      keyboardType:TextInputType.phone,
+                      decoration:const InputDecoration(labelText:'Điện thoại')),
+                    const SizedBox(height:12),
+                    TextFormField(initialValue:deliveryAddress,
+                      onChanged:(v)=>deliveryAddress=v,maxLines:2,
+                      decoration:const InputDecoration(labelText:'Địa chỉ giao hàng')),
+                    const SizedBox(height:12),
+                    TextFormField(initialValue:paymentTermsDays,
+                      onChanged:(v)=>paymentTermsDays=v,
+                      keyboardType:TextInputType.number,
+                      decoration:const InputDecoration(labelText:'Số ngày thanh toán')),
+                  ],
+                  const SizedBox(height:8),
+                  SwitchListTile(key:const ValueKey('catalog-edit-active'),
+                    contentPadding:EdgeInsets.zero,
+                    title:const Text('Đang sử dụng'),value:active,
+                    onChanged:(v)=>refresh(()=>active=v)),
+                ]))),
+        ),
+        actions:[
+          TextButton(onPressed:()=>Navigator.pop(dialog),child:const Text('Hủy')),
+          FilledButton(key:const ValueKey('catalog-edit-save'),
+            onPressed:()=>Navigator.pop(dialog,{
+              'branchId':branchId,'name':name.trim(),'active':active,
+              if(resource=='products'&&productGroupId!=oldProductGroupId)
+                'groupId':productGroupId,
+              if(resource=='customers')...{
+                if(customerGroupId!=oldGroupId)'customerGroupId':customerGroupId,
+                if(customerRegionId!=oldRegionId)'customerRegionId':customerRegionId,
+                'phone':phone.trim().isEmpty?null:phone.trim(),
+                'deliveryAddress':deliveryAddress.trim().isEmpty
+                  ?null:deliveryAddress.trim(),
+                'paymentTermsDays':int.tryParse(paymentTermsDays.trim())??-1,
+              },
+            }),child:const Text('Lưu thay đổi')),
+        ],
+      )));
+    if(body==null||!mounted)return;
+    setState(()=>saving=true);
+    try{
+      await widget.client.updateCatalog(widget.session.token,resource,id,revision,body);
+      if(!mounted)return;
+      ErpToast.show(context,'Đã cập nhật trên server.');
+      await _loadRecords();
+    }on ErpApiError catch(e){
+      if(mounted){
+        ErpToast.show(context,_errorMessage(e),isError:true);
         await _loadRecords();
-      }on ErpApiError catch(e){
-        if(mounted){
-          ErpToast.show(context,_errorMessage(e),isError:true);
-          await _loadRecords();
-        }
-      }finally{if(mounted)setState(()=>saving=false);}
+      }
+    }finally{if(mounted)setState(()=>saving=false);}
   }
   Future<void> _quote()async{
     final branch=branchId;
