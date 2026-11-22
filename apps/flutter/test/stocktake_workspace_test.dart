@@ -79,4 +79,62 @@ void main(){
   await tester.pump(const Duration(seconds:5));
   await tester.pumpAndSettle();
  });
+ testWidgets('R3.4 create-only stocktake can capture without listing access',
+ (tester)async{
+  var created=0,listed=0;
+  const headers={'content-type':'application/json; charset=utf-8'};
+  http.Response ok(Object data,int code)=>
+    http.Response(jsonEncode(data),code,headers:headers);
+  final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+    httpClient:MockClient((req)async{
+      if(req.url.path=='/v1/inventory/stocktakes/scopes'){
+        return ok({'branches':[{'id':branch,'name':'Chi nhánh chính'}],
+          'warehouses':req.url.queryParameters.containsKey('branchId')
+            ?[{'id':wh,'name':'Kho chính'}]:[]},200);
+      }
+      if(req.url.path=='/v1/inventory/stocktakes'&&req.method=='GET'){
+        listed++;return ok({'error':{'code':'DENIED'}},403);
+      }
+      if(req.url.path=='/v1/inventory/stocktakes'&&req.method=='POST'){
+        created++;
+        expect(req.headers['if-match'],'0');
+        final body=jsonDecode(req.body) as Map<String,dynamic>;
+        expect(body['warehouseId'],wh);
+        return ok({'id':doc,'status':'COUNTING','revision':1},201);
+      }
+      return ok({'error':{'code':'NOT_FOUND'}},404);
+    }));
+  addTearDown(client.dispose);
+  tester.view.physicalSize=const Size(1200,800);
+  tester.view.devicePixelRatio=1;
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
+  final session=IdentitySession(actorId:actor,token:'synthetic-token',
+    expiresAt:DateTime.now().add(const Duration(hours:1)),grants:const [
+      IdentityGrant(roleId:'create',permission:'inventory.stocktake.create',
+        branchId:branch,warehouseId:wh),
+    ]);
+  await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
+    home:Scaffold(body:SingleChildScrollView(
+      child:StocktakeWorkspace(client:client,session:session)))));
+  for(var i=0;i<5;i++){
+    await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:70)));
+    await tester.pumpAndSettle();
+  }
+  expect(listed,0);
+  expect(find.text('Lập phiếu kiểm kê'),findsOneWidget);
+  expect(find.textContaining('không được xem danh sách phiếu'),findsOneWidget);
+  await tester.tap(find.text('Lập phiếu kiểm kê'));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text('Chụp tồn và tạo phiếu'));
+  for(var i=0;i<5;i++){
+    await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:70)));
+    await tester.pumpAndSettle();
+  }
+  expect(created,1);
+  expect(listed,0);
+  await tester.pump(const Duration(seconds:5));
+  await tester.pumpAndSettle();
+ });
+
 }
