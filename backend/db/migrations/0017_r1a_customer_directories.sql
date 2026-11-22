@@ -194,3 +194,17 @@ BEGIN
    RAISE EXCEPTION 'R1A_LEGACY_CUSTOMER_GROUP_HASH_OR_CODE_COLLISION';
  END IF;
 END; $$;
+
+// Legacy label is historical price-rule identity. Users may rename the
+// directory display name but cannot reassign the original pricing alias.
+CREATE FUNCTION erp_guard_customer_group_legacy_alias()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF NEW.legacy_label IS DISTINCT FROM OLD.legacy_label THEN
+   RAISE EXCEPTION 'IMMUTABLE_CUSTOMER_GROUP_LEGACY_ALIAS';
+ END IF;
+ RETURN NEW;
+END; $$;
+CREATE TRIGGER catalog_customer_group_legacy_alias_immutable
+BEFORE UPDATE ON catalog_customer_group
+FOR EACH ROW EXECUTE FUNCTION erp_guard_customer_group_legacy_alias();
