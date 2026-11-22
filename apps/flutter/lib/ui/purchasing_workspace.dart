@@ -24,6 +24,7 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
  String? branchId,warehouseId,error;
  bool loading=true,busy=false,hasMore=false,loadingMore=false;
  int generation=0;
+ final warehouseLookup=TextEditingController();
  @override void initState(){super.initState();loadBranches();}
  @override void didUpdateWidget(covariant PurchasingWorkspace old){
   super.didUpdateWidget(old);
@@ -32,7 +33,7 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
    loadBranches();
   }
  }
- @override void dispose(){generation++;super.dispose();}
+ @override void dispose(){generation++;warehouseLookup.dispose();super.dispose();}
  bool hasBranch(String code)=>widget.session.grants.any((g)=>
    g.permission==code&&g.branchId==branchId);
  bool hasWarehouse(String code)=>widget.session.grants.any((g)=>
@@ -68,12 +69,12 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
    if(mounted&&n==generation)setState((){loading=false;error='Không tải được chi nhánh.';});
   }
  }
- Future<void> loadWarehouses()async{
+ Future<void> loadWarehouses({String query=''})async{
   final b=branchId;if(b==null)return;
   final n=++generation;setState((){loading=true;error=null;loadingMore=false;hasMore=false;orders=[];});
   try{
    final data=await widget.client.catalogItems(
-     widget.session.token,'warehouses',branchId:b);
+     widget.session.token,'warehouses',branchId:b,query:query);
    if(!mounted||n!=generation)return;
    warehouses=data.where((w)=>widget.session.grants.any((g)=>
      g.branchId==b&&g.warehouseId==w['id']&&g.permission=='inventory.read')).toList();
@@ -144,7 +145,9 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
    inform('Máy chủ đã xác nhận nghiệp vụ mua hàng.');
    await reload();
   }on ErpApiError catch(e){
-   final unknown=e.status==0||e.status>=500;
+   // 401/403/409 do not prove an earlier COMMIT failed; preserve exact retry.
+   final unknown=e.status==0||e.status>=500||e.status==401||
+     e.status==403||e.status==409;
    if(!unknown)widget.client.clearPurchase(scope);
    inform(unknown?'Chưa xác minh máy chủ đã xử lý. Hãy thử lại đúng yêu cầu.':e.message,
      bad:true);
@@ -166,23 +169,65 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
   }on ErpApiError catch(e){inform(e.message,bad:true);return;}
   catch(_){inform('Không tải được nhà cung cấp và sản phẩm.',bad:true);return;}
   if(!mounted)return;
-  if(suppliers.isEmpty||products.isEmpty){
-   inform('Cần có nhà cung cấp và sản phẩm đang hoạt động trước khi lập đơn mua.',bad:true);
-   return;
+  suppliers=suppliers.where((x)=>x['active']!=false).toList();
+  products=products.where((x)=>x['active']!=false).toList();
+  final supplierSearch=TextEditingController(),productSearch=TextEditingController();
+  String? supplier=suppliers.isEmpty?null:suppliers.first['id'].toString();
+  Future<void> lookupSupplier(StateSetter refresh,BuildContext ctx)async{
+   try{
+    final found=await widget.client.catalogItems(widget.session.token,
+      'suppliers',branchId:b,query:supplierSearch.text.trim());
+    if(!mounted||!ctx.mounted)return;
+    refresh((){
+     final known={for(final x in suppliers)x['id'].toString():x};
+     for(final x in found.where((x)=>x['active']!=false)){
+      known[x['id'].toString()]=x;
+     }
+     suppliers=known.values.toList();
+     if(supplier==null&&suppliers.isNotEmpty)supplier=suppliers.first['id'].toString();
+    });
+   }on ErpApiError catch(e){inform(e.message,bad:true);}
   }
-  String supplier=suppliers.first['id'].toString();
+  Future<void> lookupProduct(StateSetter refresh,BuildContext ctx)async{
+   try{
+    final found=await widget.client.catalogItems(widget.session.token,
+      'products',branchId:b,query:productSearch.text.trim());
+    if(!mounted||!ctx.mounted)return;
+    refresh((){
+     final known={for(final x in products)x['id'].toString():x};
+     for(final x in found.where((x)=>x['active']!=false)){
+      known[x['id'].toString()]=x;
+     }
+     products=known.values.toList();
+     for(final x in rows){
+      if(x.productId.isEmpty&&products.isNotEmpty){
+       x.productId=products.first['id'].toString();
+      }
+     }
+    });
+   }on ErpApiError catch(e){inform(e.message,bad:true);}
+  }
   final all=< _PurchaseLineInput >[];
   final rows=< _PurchaseLineInput >[];
-  void addLine(){final line=_PurchaseLineInput(products.first['id'].toString());
+  void addLine(){final line=_PurchaseLineInput(products.isEmpty?'':products.first['id'].toString());
     rows.add(line);all.add(line);}
   addLine();
   try{
-   final selected=await showDialog<Map<String,dynamic>>(context:context,
+   final route=DialogRoute<Map<String,dynamic>>(context:context,
     builder:(ctx)=>StatefulBuilder(builder:(ctx,refresh)=>AlertDialog(
       title:const Text('Lập đơn mua hàng'),
       content:SizedBox(width:560,child:SingleChildScrollView(child:
         Column(mainAxisSize:MainAxisSize.min,children:[
-          DropdownButtonFormField<String>(initialValue:supplier,isExpanded:true,
+          TextField(key:const ValueKey('po-supplier-search'),controller:supplierSearch,
+            onSubmitted:(_)=>lookupSupplier(refresh,ctx),
+            decoration:InputDecoration(labelText:'Tìm mã hoặc tên nhà cung cấp',
+             suffixIcon:IconButton(tooltip:'Tìm nhà cung cấp',
+              icon:const Icon(Icons.search),
+              onPressed:()=>lookupSupplier(refresh,ctx)))),
+          const SizedBox(height:10),
+          DropdownButtonFormField<String>(
+           key:ValueKey('po-supplier-${supplier??'none'}'),
+           initialValue:supplier,isExpanded:true,
            decoration:const InputDecoration(labelText:'Nhà cung cấp'),
            items:suppliers.map((s)=>DropdownMenuItem<String>(
              value:s['id'].toString(),
@@ -190,13 +235,20 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
                overflow:TextOverflow.ellipsis))).toList(),
            onChanged:(v){if(v!=null)refresh(()=>supplier=v);}),
           const SizedBox(height:14),
+          TextField(key:const ValueKey('po-product-search'),controller:productSearch,
+            onSubmitted:(_)=>lookupProduct(refresh,ctx),
+            decoration:InputDecoration(labelText:'Tìm mã hoặc tên sản phẩm',
+              suffixIcon:IconButton(tooltip:'Tìm sản phẩm mua',
+                icon:const Icon(Icons.search),
+                onPressed:()=>lookupProduct(refresh,ctx)))),
+          const SizedBox(height:10),
           for(final item in rows.asMap().entries)
             Padding(padding:const EdgeInsets.only(bottom:12),
               child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
                 Row(children:[
                   Expanded(child:DropdownButtonFormField<String>(
                     key:ValueKey('po-new-product-${item.key}-${item.value.productId}'),
-                    initialValue:item.value.productId,isExpanded:true,
+                    initialValue:item.value.productId.isEmpty?null:item.value.productId,isExpanded:true,
                     decoration:InputDecoration(labelText:'Hàng số ${item.key+1}'),
                     items:products.map((p)=>DropdownMenuItem<String>(
                      value:p['id'].toString(),
@@ -226,7 +278,7 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
              icon:const Icon(Icons.add),label:const Text('Thêm dòng hàng'))),
         ]))),
       actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Đóng')),
-        FilledButton(onPressed:()=>Navigator.pop(ctx,{
+        FilledButton(onPressed:supplier==null||rows.any((x)=>x.productId.isEmpty)?null:()=>Navigator.pop(ctx,{
            'supplierId':supplier,
            'lines':rows.map((item)=><String,dynamic>{
             'productId':item.productId,'quantity':item.quantity.text.trim(),
@@ -234,6 +286,8 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
            }).toList(),
          }),child:const Text('Lưu đơn mua'))],
     )));
+   final selected=await Navigator.of(context,rootNavigator:true).push(route);
+   await route.completed; // Keep every search/quantity controller valid during exit.
    if(!mounted||selected==null)return;
    final selectedLines=(selected['lines'] as List<dynamic>)
       .map((x)=>Map<String,dynamic>.from(x as Map)).toList();
@@ -248,7 +302,7 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
    await submit('orders',{'branchId':b,'warehouseId':w,
        'supplierId':selected['supplierId'],'note':'','lines':selectedLines},
        revision:0);
-  }finally{for(final line in all)line.dispose();}
+  }finally{for(final line in all)line.dispose();supplierSearch.dispose();productSearch.dispose();}
  }
  Future<void> changeOrder(Map<String,dynamic> row,String action)async{
   final b=branchId,w=warehouseId;if(b==null||w==null||hasPending)return;
@@ -281,7 +335,7 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
     for(final x in items)(x['lineNo'] as num).toInt():TextEditingController(),
   };
   try{
-   final selected=await showDialog<List<Map<String,dynamic>>>(context:context,
+   final route=DialogRoute<List<Map<String,dynamic>>>(context:context,
      builder:(ctx)=>AlertDialog(
       title:const Text('Ghi nhận hàng từ nhà cung cấp'),
       content:SizedBox(width:540,child:SingleChildScrollView(child:
@@ -312,6 +366,8 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
          },
        ]),child:const Text('Ghi nhận nhập kho'))],
      ));
+   final selected=await Navigator.of(context,rootNavigator:true).push(route);
+   await route.completed; // Controller cleanup only after every field is unmounted.
    if(!mounted||selected==null)return;
    if(selected.isEmpty){inform('Cần nhập ít nhất một dòng có số lượng.',bad:true);return;}
    if(selected.any((x)=>!validQuantity(x['quantity'] as String))){
@@ -372,6 +428,13 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
          overflow:TextOverflow.ellipsis))).toList(),
       onChanged:busy?null:(v){if(v!=null){setState(()=>warehouseId=v);reload();}},
     )),
+    SizedBox(width:narrow?300:255,child:TextField(
+      key:const ValueKey('purchase-warehouse-search'),controller:warehouseLookup,
+      onSubmitted:(value)=>loadWarehouses(query:value.trim()),
+      decoration:InputDecoration(labelText:'Tìm mã hoặc tên kho nhận',
+       suffixIcon:IconButton(tooltip:'Tìm kho nhận',
+        icon:const Icon(Icons.search),
+        onPressed:()=>loadWarehouses(query:warehouseLookup.text.trim())))),
    ]),
    const SizedBox(height:16),
    Wrap(spacing:10,runSpacing:8,children:[
