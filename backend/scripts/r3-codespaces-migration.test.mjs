@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { BASE, R3, checkOperator, checkVersions, canonicalRemote, checkCodespaceRecord, attestProcessCodespace, parsePrismaCredential, validateMintedCredentialOrRevoke, requirePg17Client, classifyPgDumpFailure } from "./r3-codespaces-migration.mjs";
+import { BASE, R3, checkOperator, checkVersions, canonicalRemote, checkCodespaceRecord, attestProcessCodespace, parsePrismaCredential, validateMintedCredentialOrRevoke, requirePg17Client, classifyPgDumpFailure, BUCKET_S3_NAME, classifyAwsFailure } from "./r3-codespaces-migration.mjs";
 const sha="a".repeat(40);
 const remote="https://github.com/gustavjung24-ops/ERP.git";
 const base={CODESPACES:"true",CODESPACE_NAME:"synthetic-erp-codespace",
@@ -131,4 +131,26 @@ test("R3 diagnostic categories never expose credentials or connection URLs",()=>
  assert.equal(classifyPgDumpFailure("connection refused"),
   "PG_DUMP_CONNECTION_FAILED");
  assert.ok(!classifyPgDumpFailure("password="+secret).includes(secret));
+});
+
+test("R3 upload uses Prisma Object Store provider-assigned name, never Console display name",()=>{
+ assert.equal(BUCKET_S3_NAME,"user-hccjgwl892edb91ox3v3j5b2");
+ assert.notEqual(BUCKET_S3_NAME,"erp-db-migration-encrypted-backups");
+});
+test("R3 classifies S3 failures without leaking credentials or endpoint URLs",()=>{
+ const cases=[
+  ["An error occurred (NoSuchBucket) when calling the PutObject operation","BUCKET_NOT_FOUND"],
+  ["An error occurred (InvalidAccessKeyId)","ACCESS_KEY_INVALID"],
+  ["SignatureDoesNotMatch: region mismatch","SIGNATURE_OR_REGION_MISMATCH"],
+  ["An error occurred (AccessDenied)","ACCESS_DENIED"],
+  ["Could not connect to the endpoint URL: https://redacted.invalid","ENDPOINT_UNREACHABLE"],
+  ["SSL validation failed: certificate verify failed","TLS_CERTIFICATE_INVALID"],
+  ["Connect timeout on endpoint URL: https://redacted.invalid","NETWORK_TIMEOUT"],
+  ["unknown failure with secret-access-key-12345","FAILED_DETAILS_REDACTED"]
+ ];
+ for(const [err,expected] of cases){
+  assert.equal(classifyAwsFailure(err),expected);
+  assert.ok(!classifyAwsFailure(err).includes("https://"));
+  assert.ok(!classifyAwsFailure(err).includes("secret-access-key"));
+ }
 });
