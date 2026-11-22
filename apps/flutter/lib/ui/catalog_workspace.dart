@@ -133,6 +133,9 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
 
   Future<void> _add()async{
     if(!canWrite||saving||branchId==null)return;
+    final actor=widget.session.actorId,branch=branchId!;
+    final pendingKind='catalog.create.$resource';
+    final previous=widget.client.pendingR1(actor,branch,pendingKind);
     final code=TextEditingController(),name=TextEditingController();
     final unit=TextEditingController(text:'cai');
     final customerGroup=TextEditingController();
@@ -147,7 +150,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     String? productId,priceListId,groupId;
     List<Map<String,dynamic>> availableProducts=[],availableLists=[],availableGroups=[];
     try{
-      if(resource=='prices'){
+      if(resource=='prices'&&previous==null){
         availableProducts=await widget.client.catalogItems(widget.session.token,'products',branchId:branchId);
         availableLists=await widget.client.catalogItems(widget.session.token,'price-lists',branchId:branchId);
         if(availableProducts.isEmpty||availableLists.isEmpty){
@@ -157,14 +160,17 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
         productId=availableProducts.first['id'] as String;
         priceListId=availableLists.first['id'] as String;
       }
-      if(resource=='products'){
+      if(resource=='products'&&previous==null){
         availableGroups=await widget.client.catalogItems(widget.session.token,'groups',branchId:branchId);
       }
       if(!mounted)return;
-      final payload=await showDialog<Map<String,dynamic>>(context:context,builder:(dialog)=>
+      final payload=previous?.payload ?? await showDialog<Map<String,dynamic>>(
+        context:context,builder:(dialog)=>
         StatefulBuilder(builder:(ctx,refresh)=>AlertDialog(
           title:Text(resource=='prices'?'Thêm phiên bản đơn giá':'Thêm ${titles[resource]!.toLowerCase()}'),
-          content:SizedBox(width:resource=='products'?630:430,
+          content:SizedBox(
+            width:(MediaQuery.sizeOf(dialog).width-80)
+              .clamp(260.0,resource=='products'?630.0:430.0).toDouble(),
             child:SingleChildScrollView(child:Column(
             mainAxisSize:MainAxisSize.min,crossAxisAlignment:CrossAxisAlignment.stretch,children:[
               if(resource=='prices')...[
@@ -264,7 +270,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                       controller:altBarcode,
                       decoration:const InputDecoration(labelText:'Mã vạch',hintText:'893...'))),
                     for(var idx=0;idx<extraUnits.length;idx++)...[
-                      const Divider(),
+                      const SizedBox(width:580,child:Divider()),
                       SizedBox(width:210,child:TextField(
                         key:ValueKey('catalog-conversion-unit-${idx+1}'),
                         controller:extraUnits[idx].unit,
@@ -530,10 +536,14 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
   }
   List<(String,String)> get columns=>switch(resource){
     'customers'=>const [('code','Mã'),('name','Khách hàng'),('customerGroup','Nhóm'),
-      ('phone','Điện thoại'),('paymentTermsDays','Ngày hạn'),('active','Trạng thái')],
+      ('phone','Điện thoại'),('deliveryAddress','Địa chỉ giao'),
+      ('paymentTermsDays','Ngày hạn'),('active','Trạng thái')],
     'suppliers'=>const [('code','Mã'),('name','Nhà cung cấp'),('active','Trạng thái')],
     'groups'=>const [('code','Mã nhóm'),('name','Tên nhóm'),('active','Trạng thái')],
-    'products'=>const [('code','SKU'),('name','Sản phẩm'),('baseUnit','Đơn vị gốc'),('active','Trạng thái')],
+    'products'=>const [('code','Mã hàng'),('name','Sản phẩm'),
+      ('groupName','Nhóm hàng'),('baseUnit','Đơn vị tồn kho'),
+      ('sellSkuCount','SKU bán'),('barcode','Mã vạch gốc'),
+      ('active','Trạng thái')],
     'price-lists'=>const [('code','Mã bảng giá'),('name','Bảng giá'),('currency','Tiền tệ'),('active','Trạng thái')],
     'prices'=>const [('productId','Mã sản phẩm (ID)'),('amount','Đơn giá'),('discountRate','CK %'),('effectiveAt','Hiệu lực')],
     _=>const [('code','Mã kho'),('name','Kho hàng'),('branchId','Chi nhánh (ID)')],
@@ -583,7 +593,9 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                 key:const ValueKey('catalog-create'),
                 onPressed:saving||loading?null:_add,
                 icon:const Icon(Icons.add,size:18),
-                label:const Text('Tạo mới')),
+                label:Text(branchId!=null&&widget.client.pendingR1(
+                  widget.session.actorId,branchId!,'catalog.create.$resource')!=null
+                  ? 'Kiểm tra yêu cầu trước':'Tạo mới')),
             ]),
             const SizedBox(height:12),
             TextField(key:const ValueKey('catalog-search'),
