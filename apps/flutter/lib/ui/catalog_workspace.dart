@@ -192,7 +192,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
           widget.session.token,'groups',branchId:branchId);
         try{
           availableUnits=await widget.client.catalogUnitDefinitionsAll(
-            widget.session.token,branchId:branchId);
+            widget.session.token,branchId:branch);
           unitDictionaryReady=true;
         }on ErpApiError catch(e){
           // Pre-0015 installations still display an explicit text UOM
