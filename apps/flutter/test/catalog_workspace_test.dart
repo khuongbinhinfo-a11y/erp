@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -336,6 +337,7 @@ void main(){
   testWidgets('R1-A quick customer setup creates coded directories and submits ID references',
     (tester)async{
       final creations=<String>[];
+      final delayedRegion=Completer<http.Response>();
       Map<String,dynamic>? customerBody;
       const headers={'content-type':'application/json; charset=utf-8'};
       final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
@@ -356,7 +358,7 @@ void main(){
             creations.add(req.url.path);
             final body=jsonDecode(req.body) as Map<String,dynamic>;
             expect(body['code'],'KV_MT');
-            return http.Response(jsonEncode({'id':'region-created'}),201,headers:headers);
+            return delayedRegion.future;
           }
           if(req.url.path=='/v1/catalog/customers'&&req.method=='POST'){
             customerBody=jsonDecode(req.body) as Map<String,dynamic>;
@@ -402,9 +404,18 @@ void main(){
       await tester.tap(find.byKey(
         const ValueKey('catalog-quick-customer-region-save')));
       await tester.pumpAndSettle();
+      // Do not allow customer creation until the new region ID has a server ACK.
+      final submit=find.byKey(const ValueKey('catalog-create-confirm'));
+      expect(tester.widget<FilledButton>(submit).onPressed,isNull,
+        reason:'customer submit must stay disabled during region creation');
+      expect(customerBody,isNull);
+      delayedRegion.complete(http.Response(
+        jsonEncode({'id':'region-created'}),201,headers:headers));
       await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:120)));
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('catalog-create-customer-region-region-created')),findsOneWidget);
+      expect(tester.widget<FilledButton>(submit).onPressed,isNotNull,
+        reason:'save enabled only after region creation ACK');
       await tester.ensureVisible(find.text('Lưu trên server'));
       await tester.tap(find.text('Lưu trên server'));
       await tester.pumpAndSettle();
