@@ -295,6 +295,8 @@ void main(){
       await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:true),
         home:Scaffold(body:CompanyWorkspace(previewOnly:false,grants:grants,
           session:activeSession(),client:client))));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(),isNull,reason:'overview narrow initial overflow');
       await tester.tap(find.byKey(const ValueKey('company-CompanySection.customers')));
       await tester.pumpAndSettle();
       await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:150)));
