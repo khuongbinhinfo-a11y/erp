@@ -754,9 +754,13 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
             TextButton(onPressed:()=>Navigator.pop(dialog),child:const Text('Hủy')),
             FilledButton(
               key:const ValueKey('catalog-create-confirm'),
-              onPressed:groupBusy||unitBusy||resource=='products'&&
-                (widget.client.pendingR1(actor,branch,'catalog.create.groups')!=null||
-                 widget.client.pendingR1(actor,branch,'catalog.create.unit-definitions')!=null)
+              onPressed:groupBusy||regionBusy||unitBusy||
+                resource=='customers'&&(
+                  widget.client.pendingR1(actor,branch,'catalog.create.customer-groups')!=null||
+                  widget.client.pendingR1(actor,branch,'catalog.create.customer-regions')!=null)||
+                resource=='products'&&(
+                  widget.client.pendingR1(actor,branch,'catalog.create.groups')!=null||
+                  widget.client.pendingR1(actor,branch,'catalog.create.unit-definitions')!=null)
                 ?null:(){
                 final body=<String,dynamic>{'branchId':branchId};
                 if(resource=='prices'){
