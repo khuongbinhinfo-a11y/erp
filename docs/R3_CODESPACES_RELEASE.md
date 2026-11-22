@@ -37,8 +37,16 @@ Yêu cầu GitHub Codespaces tự cung cấp GITHUB_TOKEN dạng ghu_ được p
 phiên Codespace (không nhận local Personal Access Token hoặc gh login đơn thuần),
 GITHUB_USER, GITHUB_REPOSITORY. Không copy GITHUB_TOKEN ra ngoài Codespaces.
 Token phiên được dùng để đọc /user/codespaces/<CODESPACE_NAME> và đối chiếu
-trạng thái Available, repo chính. Nếu token phiên thiếu scope codespace API,
-script từ chối an toàn; không bỏ qua attestation hoặc thay bằng PAT.
+trạng thái Available, repo chính và owner.login = gustavjung24-ops.
+Để chống sao chép token sang máy khác, script còn mở một HTTP server tạm trên
+một cổng ngẫu nhiên, rồi kiểm tra nonce trả về qua **HTTPS GitHub Codespaces
+private forwarded port** (<CODESPACE_NAME>-<PORT>.app.github.dev). GitHub
+Codespaces tự động forward khi terminal in http://localhost:<PORT>.
+Nếu terminal VS Code không auto-forward, mở tab PORTS và forward đúng PORT
+đang được in trong lúc operator còn chạy, để Private; nếu không, operator
+dừng **trước khi đụng database**, không được bỏ qua/chuyển sang public.
+Nếu token phiên thiếu quyền API hoặc không có port forwarding, script từ chối;
+không thay bằng PAT ngoài Codespaces.
 
 ### Đưa backend vào bảo trì trước khi migration
 
