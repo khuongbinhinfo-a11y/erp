@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 
 import 'erp_tokens.dart';
+import 'erp_display.dart';
 import 'erp_navigation_ui.dart';
 import 'identity_client.dart';
 import 'erp_toast.dart';
@@ -16,15 +17,16 @@ class AdminWorkspace extends StatefulWidget {
 class _AdminWorkspaceState extends State<AdminWorkspace>{
   int selected=0;
   Future<List<IdentityUser>>? usersFuture;
+  IdentityScopes? namedScopes;
 
   static const permissions=<(String,String)>[
-    ('Người dùng','identity.users.read / manage'),
-    ('Vai trò','identity.roles.manage'),
-    ('Danh mục','catalog.read / write'),
-    ('Đơn hàng','orders.read / create'),
-    ('Kho','inventory.read / post'),
-    ('Công nợ','finance.receivables.read / payments.record'),
-    ('Giao hàng','delivery.read / update'),
+    ('Người dùng','Xem và quản lý tài khoản'),
+    ('Vai trò','Cấp và thu hồi quyền'),
+    ('Danh mục','Xem và quản lý danh mục'),
+    ('Đơn hàng','Xem và tạo đơn hàng'),
+    ('Kho','Xem tồn kho, ghi nhận tồn đầu kỳ'),
+    ('Công nợ','Xem công nợ và ghi nhận thanh toán'),
+    ('Giao hàng','Xem và cập nhật giao hàng'),
   ];
   bool get real=>!widget.previewOnly&&widget.session!=null&&widget.client!=null;
   bool allowed(String code)=>widget.session?.grants.any((g)=>g.permission==code)??false;
@@ -33,11 +35,44 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
   @override void initState(){
     super.initState();
     if(real&&allowed('identity.users.read'))usersFuture=widget.client!.users(token);
+    if(real&&allowed('identity.roles.manage'))loadScopes();
   }
   void reload(){
     if(real&&allowed('identity.users.read')){
       setState(()=>usersFuture=widget.client!.users(token));
     }
+    if(real&&allowed('identity.roles.manage'))loadScopes();
+  }
+  Future<void> loadScopes() async {
+    try {
+      final loaded=await widget.client!.scopes(token);
+      if(mounted)setState(()=>namedScopes=loaded);
+    } catch (_) {
+      if(mounted)setState(()=>namedScopes=null);
+    }
+  }
+  String grantScopeLabel(IdentityGrant grant) {
+    final current=namedScopes;
+    if(grant.warehouseId!=null){
+      if(current==null)return 'Đang tải tên kho';
+      for(final warehouse in current.warehouses){
+        if(warehouse.id==grant.warehouseId){
+          final branchName=current.branches.where((x)=>x.id==warehouse.branchId)
+            .map((x)=>x.name).firstOrNull;
+          return 'Kho '+warehouse.name+' ('+warehouse.code+')'+
+            (branchName==null?'':' · '+branchName);
+        }
+      }
+      return 'Kho không còn khả dụng';
+    }
+    if(grant.branchId!=null){
+      if(current==null)return 'Đang tải tên chi nhánh';
+      for(final branch in current.branches){
+        if(branch.id==grant.branchId)return 'Chi nhánh '+branch.name+' ('+branch.code+')';
+      }
+      return 'Chi nhánh không còn khả dụng';
+    }
+    return 'Toàn hệ thống';
   }
   void message(String text,{bool error=false}){
     if(mounted)ErpToast.show(context,text,isError:error);
@@ -82,6 +117,11 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
     }on ErpApiError catch(e){message(e.message,error:true);reload();}
   }
   Future<void> addGrant(IdentityUser user)async{
+    if(namedScopes==null){
+      message('Chưa tải được tên chi nhánh hoặc kho. Hãy thử lại.',error:true);
+      await loadScopes();
+      return;
+    }
     final available=widget.session!.grants.where((g)=>
       g.permission.isNotEmpty&&g.roleId.isNotEmpty).toList();
     if(available.isEmpty){message('Tài khoản quản trị chưa có quyền để cấp.',error:true);return;}
@@ -101,7 +141,7 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
             items:List.generate(available.length,(i){
               final g=available[i];
               return DropdownMenuItem(value:i,
-                child:Text('${g.permission} · ${g.warehouseId??g.branchId??"Toàn installation"}',
+                child:Text(erpPermissionLabel(g.permission)+' · '+grantScopeLabel(g),
                   overflow:TextOverflow.ellipsis));
             }),
             onChanged:(i)=>setLocal(()=>index=i??0),
@@ -123,6 +163,11 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
     }on ErpApiError catch(e){message(e.message,error:true);reload();}
   }
   Future<void> manageGrants(IdentityUser user)async{
+    if(namedScopes==null){
+      message('Chưa tải được tên chi nhánh hoặc kho. Hãy thử lại.',error:true);
+      await loadScopes();
+      return;
+    }
     List<IdentityGrant> grants;
     try{grants=await widget.client!.grants(token,user.id);}
     on ErpApiError catch(e){message(e.message,error:true);return;}
@@ -135,8 +180,8 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
           final grant=grants[i];
           return ListTile(
             dense:true,
-            title:Text(grant.permission,style:const TextStyle(fontWeight:FontWeight.w600)),
-            subtitle:Text(grant.warehouseId??grant.branchId??'Toàn installation'),
+            title:Text(erpPermissionLabel(grant.permission),style:const TextStyle(fontWeight:FontWeight.w600)),
+            subtitle:Text(grantScopeLabel(grant)),
             trailing:TextButton(
               onPressed:()=>Navigator.of(dialog).pop(grant.roleId),
               child:const Text('Thu hồi')),

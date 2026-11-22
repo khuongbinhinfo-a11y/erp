@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'erp_tokens.dart';
+import 'erp_display.dart';
 import 'erp_toast.dart';
 import 'identity_client.dart';
 
@@ -49,10 +50,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   String newKey()=>'sales-'+DateTime.now().microsecondsSinceEpoch.toString()+'-'+(++sequence).toString();
   bool can(String permission)=>widget.session.grants.any(
     (g)=>g.permission==permission&&g.branchId==branchId);
-  String money(dynamic value){
-    final raw=(value??'0').toString().split('.').first;
-    return raw.replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'),(m)=>'.')+' ₫';
-  }
+  String money(dynamic value)=>erpVndText(value);
   String stateOf(Map<String,dynamic> row){
     if(row['status']=='CANCELLED')return 'Đã hủy';
     if(row['versionStatus']=='DRAFT'&&row['status']=='CONFIRMED')return 'Đang điều chỉnh';
@@ -1121,7 +1119,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
                       const SizedBox(height:6),
                       Wrap(spacing:16,runSpacing:6,children:[
-                        Text('Số lượng: '+line['quantity'].toString()+' '+line['unitCode'].toString()),
+                        Text('Số lượng: '+erpDecimalText(line['quantity'])+' '+line['unitCode'].toString()),
                         Text('Đơn giá: '+money(line['unitPrice'])),
                         Text('Thành tiền: '+money(line['lineTotal']),
                           style:const TextStyle(fontWeight:FontWeight.w700)),

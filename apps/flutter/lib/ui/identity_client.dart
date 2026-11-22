@@ -191,10 +191,22 @@ class ErpIdentityClient {
     return (r['users'] as List<dynamic>).map((v)=>IdentityUser.fromJson(v as Map<String,dynamic>)).toList();
   }
   Future<IdentityScopes> scopes(String token)async{
-    final r=await _request('GET','/v1/admin/scopes',token:token);
+    final branches=<IdentityScope>[],warehouses=<IdentityScope>[];
     List<IdentityScope> parse(dynamic v)=>(v as List<dynamic>).map((x)=>
       IdentityScope.fromJson(x as Map<String,dynamic>)).toList();
-    return IdentityScopes(parse(r['branches']),parse(r['warehouses']));
+    // A valid grant beyond the first page must never be labeled nonexistent.
+    for(var offset=0;offset<=100000;offset+=100){
+      final path=offset==0?'/v1/admin/scopes':
+        '/v1/admin/scopes?offset=$offset';
+      final r=await _request('GET',path,token:token);
+      branches.addAll(parse(r['branches']));
+      warehouses.addAll(parse(r['warehouses']));
+      if(r['hasMoreBranches']!=true&&r['hasMoreWarehouses']!=true){
+        return IdentityScopes(branches,warehouses);
+      }
+    }
+    throw const ErpApiError(503,
+      'Có quá nhiều chi nhánh hoặc kho; không thể kiểm tra đầy đủ tên phạm vi.');
   }
   Future<List<IdentityGrant>> grants(String token,String userId)async{
     final r=await _request('GET','/v1/admin/users/$userId/grants',token:token);

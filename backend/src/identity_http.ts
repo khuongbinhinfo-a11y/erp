@@ -138,8 +138,13 @@ export async function handleIdentityHttp(
       return;
     }
     if(path==="/v1/admin/scopes"&&req.method==="GET"){
+      const requestUrl=new URL(req.url??"/", "http://erp.local");
+      const rawOffset=requestUrl.searchParams.get("offset")??"0";
+      if(!/^(0|[1-9][0-9]{0,5})$/.test(rawOffset))
+        throw new IdentityError(400,"INVALID_PAGINATION");
+      const offset=Number(rawOffset);
       const db=await pool.connect();
-      try{send(res,200,{...await listScopes(db,tenant,actor.actorId),requestId:id},id,corsOrigin);}
+      try{send(res,200,{...await listScopes(db,tenant,actor.actorId,offset),requestId:id},id,corsOrigin);}
       finally{db.release();}
       return;
     }

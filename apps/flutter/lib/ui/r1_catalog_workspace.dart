@@ -1,5 +1,6 @@
 import 'package:material_ui/material_ui.dart';
 import 'erp_tokens.dart';
+import 'erp_display.dart';
 import 'erp_toast.dart';
 import 'identity_client.dart';
 
@@ -78,11 +79,7 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
     });
   }
   String getField(String key)=>fields[key]!.text.trim();
-  String money(dynamic raw){
-    final parts=(raw??'0').toString().split('.');
-    return parts.first.replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'),
-      (_)=>'.')+' ₫';
-  }
+  String money(dynamic raw)=>erpVndText(raw);
   String errorMessage(ErpApiError e)=>switch(e.code){
     'SKU_HAS_NO_EFFECTIVE_BASE_PRICE'=>'Chưa có giá cơ sở hiệu lực cho SKU này.',
     'DUPLICATE'=>'Mã đã tồn tại. Vui lòng kiểm tra lại.',
@@ -458,12 +455,12 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
               style:const TextStyle(fontSize:22,fontWeight:FontWeight.w800,
                 color:ErpTokens.primary)),
             Text('Thành tiền: '+money(quote!['lineTotal'])),
-            Text('Quy đổi về đơn vị gốc: '+quote!['normalizedBaseQuantity'].toString()),
+            Text('Quy đổi về đơn vị gốc: '+erpDecimalText(quote!['normalizedBaseQuantity'])),
             const SizedBox(height:12),
             const Text('Quy tắc áp dụng:',style:TextStyle(fontWeight:FontWeight.w700)),
             for(final t in quote!['trace'] as List<dynamic>)
-              Text('• '+(t as Map)['scope'].toString()+' – '+
-                t['adjustment'].toString()+' → '+money(t['result'])),
+              Text('• '+erpPriceRuleLabel((t as Map)['scope'])+' – '+
+                erpPriceRuleLabel(t['adjustment'])+' → '+money(t['result'])),
             const SizedBox(height:8),
             const Text('Giá do máy chủ tính; chưa xác minh tồn khả dụng.',
               style:TextStyle(color:ErpTokens.muted,fontSize:12)),
@@ -484,6 +481,8 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
   String cell(Map<String,dynamic> item,String key){
     final value=item[key];if(value==null)return '—';
     if(value is bool)return value?'Có':'Không';
+    if(key=='toBase'||key=='amount')return erpDecimalText(value);
+    if(key=='scopeKind'||key=='adjustment')return erpPriceRuleLabel(value);
     return value.toString();
   }
   Widget records(){

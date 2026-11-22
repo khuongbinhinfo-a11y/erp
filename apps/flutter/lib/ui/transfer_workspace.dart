@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:material_ui/material_ui.dart';
 import 'erp_tokens.dart';
+import 'erp_display.dart';
 import 'erp_toast.dart';
 import 'identity_client.dart';
 
@@ -349,7 +350,8 @@ class _TransferWorkspaceState extends State<TransferWorkspace>{
               for(final x in lines)Padding(padding:const EdgeInsets.symmetric(vertical:9),
                 child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
                   Text((x['sku']??'').toString()+' · '+(x['name']??'').toString()),
-                  Text('Xuất: ${x['dispatchedBase']}  ·  Đã nhận: ${x['receivedBase']}  ·  Đang đi: ${x['inTransitBase']}',
+                  Text('Xuất: '+erpDecimalText(x['dispatchedBase'])+'  ·  Đã nhận: '+
+                    erpDecimalText(x['receivedBase'])+'  ·  Đang đi: '+erpDecimalText(x['inTransitBase']),
                     style:const TextStyle(fontSize:12,color:ErpTokens.muted)),
                   TextField(controller:controls[(x['lineNo'] as num).toInt()],
                     decoration:const InputDecoration(labelText:'Nhận đợt này'),

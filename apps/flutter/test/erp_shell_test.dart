@@ -54,7 +54,8 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
   await tester.tap(find.byKey(const ValueKey('admin-1')));
   await tester.pumpAndSettle();
   expect(find.text('Danh sách quyền'), findsOneWidget);
-  expect(find.textContaining('inventory.read / post'), findsOneWidget);
+  expect(find.textContaining('Xem tồn kho, ghi nhận tồn đầu kỳ'), findsOneWidget);
+  expect(find.textContaining('inventory.read'), findsNothing);
 });
 
   testWidgets('old persistent notices are replaced by a dismissible upper-right toast', (tester) async {
@@ -89,6 +90,9 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
     addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(const ErpApp(previewMode:true));
     expect(tester.view.physicalSize.width / tester.view.devicePixelRatio, greaterThan(960));
+    expect(find.text('RRP'), findsOneWidget);
+    expect(find.text('product by KB'), findsOneWidget);
+    expect(find.byType(CustomPaint), findsWidgets);
     final toggle=find.byKey(const ValueKey('erp-sidebar-toggle'));
     final logo=find.byKey(const ValueKey('erp-sidebar-logo'));
     expect(toggle,findsOneWidget);

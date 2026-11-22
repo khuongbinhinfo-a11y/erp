@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:material_ui/material_ui.dart';
 import 'erp_tokens.dart';
+import 'erp_display.dart';
 import 'erp_toast.dart';
 import 'identity_client.dart';
 
@@ -326,11 +327,11 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
       ?(row['sku']??'').toString()+' · '+(row['name']??'').toString()
       :tab=='movements'?(row['sku']??'').toString()+' · '+(row['kind']??'').toString()
       :(row['documentNo']??'').toString()+' · '+(row['sku']??'').toString();
-    final details=tab=='balances'?'Tồn: '+(row['onHand']??'0').toString()+
-        '  |  Đã giữ: '+(row['reserved']??'0').toString()+
-        '  |  Khả dụng: '+(row['available']??'0').toString()
-      :tab=='movements'?'Biến động: '+(row['deltaBase']??'0').toString()
-      :'Số lượng: '+(row['quantityBase']??'0').toString()+
+    final details=tab=='balances'?'Tồn: '+erpDecimalText(row['onHand'])+
+        '  |  Đã giữ: '+erpDecimalText(row['reserved'])+
+        '  |  Khả dụng: '+erpDecimalText(row['available'])
+      :tab=='movements'?'Biến động: '+erpDecimalText(row['deltaBase'])
+      :'Số lượng: '+erpDecimalText(row['quantityBase'])+
         ' · '+(row['state']=='ACTIVE'?'Đang giữ':'Đã giải phóng');
     return Column(children:[
       Padding(padding:const EdgeInsets.symmetric(vertical:12),child:Row(children:[
@@ -355,19 +356,19 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
         style:TextStyle(color:ErpTokens.muted,fontSize:12)),
       const SizedBox(height:18),
       Wrap(spacing:12,runSpacing:12,children:[
-        SizedBox(width:small?300:260,child:DropdownButtonFormField<String>(
+        SizedBox(width:small?300:204,child:DropdownButtonFormField<String>(
           key:ValueKey('inv-branch-'+(branchId??'')),initialValue:branchId,isExpanded:true,decoration:const InputDecoration(labelText:'Chi nhánh'),
           items:branches.map((b)=>DropdownMenuItem<String>(value:b['id'].toString(),
             child:Text((b['name']??'').toString(),overflow:TextOverflow.ellipsis))).toList(),
           onChanged:busy?null:(v){if(v!=null){setState(()=>branchId=v);loadWarehouses();}},
         )),
-        SizedBox(width:small?300:260,child:DropdownButtonFormField<String>(
+        SizedBox(width:small?300:204,child:DropdownButtonFormField<String>(
           key:ValueKey('inv-warehouse-'+(warehouseId??'')),initialValue:warehouseId,isExpanded:true,decoration:const InputDecoration(labelText:'Kho'),
           items:warehouses.map((w)=>DropdownMenuItem<String>(value:w['id'].toString(),
             child:Text((w['name']??'').toString(),overflow:TextOverflow.ellipsis))).toList(),
           onChanged:busy?null:(v){if(v!=null){setState(()=>warehouseId=v);reload();}},
         )),
-        SizedBox(width:small?300:260,child:TextField(
+        SizedBox(width:small?300:236,child:TextField(
           key:const ValueKey('inventory-warehouse-search'),
           controller:warehouseLookup,
           onSubmitted:(value)=>loadWarehouses(query:value.trim()),

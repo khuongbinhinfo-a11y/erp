@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 import 'erp_navigation_ui.dart';
 import 'erp_tokens.dart';
+import 'erp_display.dart';
 import 'erp_toast.dart';
 import 'identity_client.dart';
 import 'r1_catalog_workspace.dart';
@@ -417,12 +418,12 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
         content:Column(mainAxisSize:MainAxisSize.min,
           crossAxisAlignment:CrossAxisAlignment.start,children:[
             Text(q==null?'Chưa có giá hiệu lực':
-              q['amount'].toString()+' '+q['currency'].toString(),
+              erpDecimalText(q['amount'])+' '+q['currency'].toString(),
               key:const ValueKey('catalog-quote-result'),
               style:const TextStyle(fontSize:22,fontWeight:FontWeight.w800)),
             if(q!=null)...[
               const SizedBox(height:8),
-              Text('Chiết khấu: '+q['discountRate'].toString()+'%'),
+              Text('Chiết khấu: '+erpDecimalText(q['discountRate'])+'%'),
               Text('Hiệu lực: '+q['effectiveAt'].toString()),
             ],
             const SizedBox(height:12),
