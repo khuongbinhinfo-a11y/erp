@@ -258,6 +258,14 @@ void main(){
 
   testWidgets('R1-A customer editor fits narrow viewport and uses coded group/region',
     (tester)async{
+      final originalErrorHandler=FlutterError.onError;
+      FlutterError.onError=(details){
+        // Exact render chain for the narrow viewport regression.
+        // ignore: avoid_print
+        print('R1A_LAYOUT_DIAGNOSTIC: ${details.toString()}');
+        originalErrorHandler?.call(details);
+      };
+      addTearDown(()=>FlutterError.onError=originalErrorHandler);
       var patches=0;
       Map<String,dynamic>? saved;
       final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
