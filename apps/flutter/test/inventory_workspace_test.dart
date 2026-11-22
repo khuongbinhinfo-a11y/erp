@@ -321,4 +321,72 @@ testWidgets('R3 rejects conflicting stock opening without locking the warehouse'
   await tester.pump(const Duration(seconds:5));
   await tester.pumpAndSettle();
 });
+
+testWidgets('R3 stock opening ignores stale product lookup after warehouse switch',
+ (tester)async{
+  const w2='00000000-0000-4000-8000-000000000099';
+  const headers={'content-type':'application/json; charset=utf-8'};
+  final delayed=Completer<http.Response>();
+  var catalogCalls=0;
+  final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+   httpClient:MockClient((req)async{
+    if(req.url.path=='/v1/catalog/branches')return http.Response(
+      jsonEncode({'items':[{'id':branch,'name':'Chi nhánh chính'}]}),
+      200,headers:headers);
+    if(req.url.path=='/v1/catalog/warehouses')return http.Response(
+      jsonEncode({'items':[{'id':warehouse,'name':'Kho chính'},
+        {'id':w2,'name':'Kho phụ'}]}),200,headers:headers);
+    if(req.url.path=='/v1/inventory/balances')return http.Response(
+      jsonEncode({'items':[]}),200,headers:headers);
+    if(req.url.path=='/v1/catalog/products'){
+      catalogCalls++;
+      return delayed.future;
+    }
+    return http.Response('{}',404,headers:headers);
+   }));
+  addTearDown(client.dispose);
+  tester.view.devicePixelRatio=1;
+  tester.view.physicalSize=const Size(1280,850);
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
+  final session=IdentitySession(actorId:actor,token:'synthetic-token',
+    expiresAt:DateTime.now().add(const Duration(hours:1)),grants:const [
+      IdentityGrant(roleId:'stock',permission:'inventory.read',
+        branchId:branch,warehouseId:warehouse),
+      IdentityGrant(roleId:'post',permission:'inventory.post',
+        branchId:branch,warehouseId:warehouse),
+      IdentityGrant(roleId:'stock2',permission:'inventory.read',
+        branchId:branch,warehouseId:w2),
+      IdentityGrant(roleId:'post2',permission:'inventory.post',
+        branchId:branch,warehouseId:w2),
+    ]);
+  await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
+    home:Scaffold(body:SingleChildScrollView(
+      child:InventoryWorkspace(client:client,session:session)))));
+  for(var i=0;i<4;i++){
+    await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:80)));
+    await tester.pumpAndSettle();
+  }
+  await tester.tap(find.text('Tồn đầu kỳ'));
+  await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:80)));
+  await tester.pumpAndSettle();
+  expect(catalogCalls,1);
+  await tester.tap(find.text('Kho chính'));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text('Kho phụ').last);
+  for(var i=0;i<3;i++){
+    await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:80)));
+    await tester.pumpAndSettle();
+  }
+  delayed.complete(http.Response(jsonEncode({'items':[{
+    'id':product,'code':'SP01','name':'Hàng hóa','active':true}]}),
+    200,headers:headers));
+  for(var i=0;i<3;i++){
+    await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:80)));
+    await tester.pumpAndSettle();
+  }
+  expect(find.text('Ghi tồn đầu kỳ'),findsNothing);
+  expect(client.pendingInventory('$actor:$branch:$warehouse'),isNull);
+  expect(client.pendingInventory('$actor:$branch:$w2'),isNull);
+});
 }

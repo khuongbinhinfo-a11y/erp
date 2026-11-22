@@ -111,7 +111,14 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
   Future<void> send(String action,Map<String,dynamic> body,
       {required String intent,int revision=0})async{
     if(busy)return;
-    final scope=pendingScope;if(scope==null)return;
+    // Always bind the pending operation to its captured scope, not a later selection.
+    final b=body['branchId'],w=body['warehouseId'];
+    if(b is! String||w is! String)return;
+    if(branchId!=b||warehouseId!=w){
+      notify('Kho đã thay đổi. Hãy mở lại thao tác.',bad:true);
+      return;
+    }
+    final scope='${widget.session.actorId}:$b:$w';
     final held=widget.client.pendingInventory(scope);
     if(held!=null&&(jsonEncode(held.payload)!=jsonEncode(body)||
       held.action!=action||held.revision!=revision)){
@@ -128,8 +135,7 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
       await reload();
     }on ErpApiError catch(e){
       // Any 5xx may mean COMMIT succeeded but the ACK was lost: retain exact key/body.
-      // Authentication and revision conflicts are not evidence that the
-      // earlier COMMIT did not happen. Keep command for exact replay.
+      // Authentication challenges cannot settle a previously unknown COMMIT.
       // A server 409 is a definitive rolled-back domain/revision rejection:
       // executeMutation replays committed receipts before domain checks.
       // Keep the exact command only for transport/5xx and pre-replay auth errors.
@@ -150,6 +156,7 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
       products=await widget.client.catalogItems(
         widget.session.token,'products',branchId:b);
     }on ErpApiError catch(e){notify(e.message,bad:true);return;}
+    if(!mounted||branchId!=b||warehouseId!=w)return;
     if(products.isEmpty){notify('Cần tạo sản phẩm trước.',bad:true);return;}
     final qty=TextEditingController(),lookupText=TextEditingController();
     String? product=products.first['id'].toString();
@@ -201,7 +208,7 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
         )));
       final selection=await Navigator.of(context,rootNavigator:true).push(route);
       await route.completed; // Release controllers only after the dialog's exit animation.
-      if(selection==null)return;
+      if(selection==null||!mounted||branchId!=b||warehouseId!=w)return;
       final amount=selection['quantity']??'';
       if(!RegExp(r'^(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,6})?$').hasMatch(amount)||
          !RegExp(r'[1-9]').hasMatch(amount)){
@@ -222,6 +229,7 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
     }on ErpApiError catch(e){
       notify('Cần quyền xem đơn đã xác nhận. '+e.message,bad:true);return;
     }
+    if(!mounted||branchId!=b||warehouseId!=w)return;
     final search=TextEditingController();
     String? chosen=orders.isEmpty?null:orders.first['id'].toString();
     Future<void> searchOrders(StateSetter refresh,BuildContext ctx)async{
@@ -272,10 +280,11 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
       picked=await Navigator.of(context,rootNavigator:true).push(route);
       await route.completed; // The search field is no longer mounted.
     }finally{search.dispose();}
-    if(picked==null)return;
+    if(picked==null||!mounted||branchId!=b||warehouseId!=w)return;
     Map<String,dynamic> detail;
     try{detail=await widget.client.salesOrder(widget.session.token,picked,b);}
     on ErpApiError catch(e){notify(e.message,bad:true);return;}
+    if(!mounted||branchId!=b||warehouseId!=w)return;
     final lines=(detail['lines'] as List<dynamic>).map((v)=>
       Map<String,dynamic>.from(v as Map)).toList();
     if(lines.isEmpty){notify('Đơn không có dòng hàng.',bad:true);return;}
@@ -294,7 +303,7 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
         actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Đóng')),
           FilledButton(onPressed:()=>Navigator.pop(ctx,line),child:const Text('Giữ hàng'))],
       )));
-    if(selected==null)return;
+    if(selected==null||!mounted||branchId!=b||warehouseId!=w)return;
     await send('reservations',{'branchId':b,'warehouseId':w,
       'orderId':picked,'version':detail['version'],'lineNo':selected},
       intent:'hold:'+picked+':'+selected.toString());
@@ -307,7 +316,7 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
       content:Text('Đơn '+(row['documentNo']??'').toString()+' sẽ không còn giữ số hàng này.'),
       actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Đóng')),
         FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Giải phóng'))]));
-    if(ok!=true)return;
+    if(ok!=true||!mounted||branchId!=b||warehouseId!=w)return;
     final id=row['id'].toString();
     await send('reservations/'+id+'/release',{'branchId':b,'warehouseId':w},
       intent:'release:'+id,revision:int.tryParse(row['revision'].toString())??0);
