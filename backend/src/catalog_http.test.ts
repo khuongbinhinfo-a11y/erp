@@ -100,6 +100,29 @@ test("Issue #7: catalog HTTP uses real PostgreSQL with tenant/branch RBAC, decim
       const stillValid=unitAfterReject.body.items.find((x:{code:string})=>x.code==="CHAI");
       assert.equal(stillValid.name,"Chai thủy tinh");
       assert.equal(stillValid.revision,1);
+      // Regression: >100 shared units must all remain selectable by branch.
+      await pool.query(`INSERT INTO catalog_unit_definition
+        (installation_id,branch_id,code,name)
+        SELECT $1,$2,'U'||lpad(n::text,3,'0'),'Unit '||n
+        FROM generate_series(1,120) AS n`,[root.installationId,b]);
+      const firstPage=await call("/v1/catalog/unit-definitions?branchId="+b,
+        "GET",undefined,token);
+      assert.equal(firstPage.status,200);
+      assert.equal(firstPage.body.items.length,100);
+      assert.equal(typeof firstPage.body.nextAfter,"string");
+      const secondPage=await call("/v1/catalog/unit-definitions?branchId="+b+
+        "&after="+encodeURIComponent(firstPage.body.nextAfter),
+        "GET",undefined,token);
+      assert.equal(secondPage.status,200);
+      assert.equal(secondPage.body.items.length,21);
+      const allUnitCodes=[...firstPage.body.items,...secondPage.body.items]
+        .map((item:{code:string})=>item.code);
+      assert.equal(new Set(allUnitCodes).size,121,
+        "each UOM returned exactly once across cursor boundary");
+      assert.ok(allUnitCodes.includes("U120"),
+        "last unit remains selectable even beyond initial page");
+      assert.equal((await call("/v1/catalog/unit-definitions?branchId="+b+
+        "&after=INVALID%20CURSOR","GET",undefined,token)).status,400);
       const customerKey="customer-"+randomUUID();
       const customerBody={branchId:b,code:"CUSTOMER-01",name:"Synthetic Customer"};
       const customer=await call("/v1/catalog/customers","POST",customerBody,token,
