@@ -58,11 +58,22 @@ export async function listUsers(db:PoolClient,installationId:string,actorId:stri
     [installationId]);
   return r.rows.map(x=>({id:x.id,loginName:x.login_name,disabled:x.disabled,revision:Number(x.revision)}));
 }
-export async function listScopes(db:PoolClient,installationId:string,actorId:string){
+export async function listScopes(db:PoolClient,installationId:string,actorId:string,offset=0){
+  if(!Number.isSafeInteger(offset)||offset<0||offset>100000)
+    throw new IdentityError(400,"INVALID_PAGINATION");
   if(!await hasPermission(db,{installationId,actorId,permission:"identity.roles.manage"}))throw new MutationFault("FORBIDDEN",403);
-  const a=await db.query("SELECT id,code,name FROM branch WHERE installation_id=$1 ORDER BY code LIMIT 100",[installationId]);
-  const b=await db.query("SELECT id,branch_id AS \"branchId\",code,name FROM warehouse WHERE installation_id=$1 ORDER BY code LIMIT 100",[installationId]);
-  return {branches:a.rows,warehouses:b.rows};
+  // Return a bounded page with a separate more flag for each collection.
+  // Ordering by code + immutable ID prevents dropping equal-code rows.
+  const a=await db.query(
+    "SELECT id,code,name FROM branch WHERE installation_id=$1 ORDER BY code,id LIMIT 101 OFFSET $2",
+    [installationId,offset]);
+  const b=await db.query(
+    "SELECT id,branch_id AS \"branchId\",code,name FROM warehouse WHERE installation_id=$1 ORDER BY code,id LIMIT 101 OFFSET $2",
+    [installationId,offset]);
+  return {
+    branches:a.rows.slice(0,100),warehouses:b.rows.slice(0,100),
+    hasMoreBranches:a.rows.length>100,hasMoreWarehouses:b.rows.length>100,
+  };
 }
 export async function listGrants(db:PoolClient,installationId:string,actorId:string,target:string){
   if(!UUID.test(target))throw new IdentityError(400,"INVALID_INPUT");
