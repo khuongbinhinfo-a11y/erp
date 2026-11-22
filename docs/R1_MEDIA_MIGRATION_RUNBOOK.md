@@ -82,6 +82,10 @@ unset ERP_R1_MEDIA_MIGRATION_APPROVAL
 5. Read-only backend, baseline schema and old-table signatures are rechecked
    on ERP-DB before a transactionally applied migration with advisory lock.
    Post-commit schema, checksum and data signatures are read back.
+6. The isolated Docker container is removed **with its anonymous PostgreSQL
+   data volume**; catchable SIGINT/SIGTERM triggers a fail-closed cleanup path
+   with credential revocation and temporary-file deletion. Abrupt host loss or
+   SIGKILL cannot be caught: verify and clean protected operator resources.
 
 After `ERP_R1_MEDIA_0015_0016_MIGRATION_PASS_AND_RECONCILED` **and** the
 durable backup object/hash and credential cleanup status have been verified,
