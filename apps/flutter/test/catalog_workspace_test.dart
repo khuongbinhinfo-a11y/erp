@@ -299,7 +299,13 @@ void main(){
       await tester.pumpAndSettle();
       await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:150)));
       await tester.pumpAndSettle();
-      expect(tester.takeException(),isNull,reason:'initial mobile catalog overflow');
+      final initialError=tester.takeException();
+      if(initialError is FlutterError){
+        // RenderFlex diagnostics include the originating widget/location.
+        // ignore: avoid_print
+        print(initialError.diagnostics.map((d)=>d.toStringDeep()).join('\\n'));
+      }
+      expect(initialError,isNull,reason:'initial mobile catalog overflow');
       await tester.tap(find.byKey(const ValueKey('catalog-edit-customer-r1a')));
       await tester.pumpAndSettle();
       expect(tester.takeException(),isNull,reason:'opened edit dialog overflow');
