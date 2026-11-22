@@ -242,7 +242,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                     hintText:resource=='products'?'SKU-001':'MA-001')),
                 const SizedBox(height:12),
                 TextField(key:const ValueKey('catalog-create-name'),
-                  controller:name,decoration:const InputDecoration(labelText:'Tên')),
+                  controller:name,maxLength:resource=='unit-definitions'?80:160,
+                  decoration:const InputDecoration(labelText:'Tên')),
                 if(resource=='customers')...[
                   const SizedBox(height:12),
                   TextField(controller:customerGroup,
@@ -832,7 +833,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
             children:[
               TextFormField(key:const ValueKey('catalog-edit-name'),
                 initialValue:name,onChanged:(value)=>name=value,
-                maxLength:160,decoration:const InputDecoration(labelText:'Tên')),
+                maxLength:resource=='unit-definitions'?80:160,
+                decoration:const InputDecoration(labelText:'Tên')),
               if(resource=='customers')...[
                 TextFormField(initialValue:customerGroup,
                   onChanged:(v)=>customerGroup=v,

@@ -404,7 +404,8 @@ function parseEdit(resource:Editable,raw:Record<string,unknown>){
     ...(resource==="customers"?["customerGroup","phone","deliveryAddress","paymentTermsDays"]:[]),
     ...(resource==="products"?["groupId"]:[])]);
   if(Object.keys(raw).some(key=>!allow.has(key)))throw new CatalogError(400,"UNKNOWN_FIELD");
-  if(Object.prototype.hasOwnProperty.call(raw,"name"))columns.name=requireName(raw.name);
+  if(Object.prototype.hasOwnProperty.call(raw,"name"))
+    columns.name=requireName(raw.name,resource==="unit-definitions"?80:160);
   if(Object.prototype.hasOwnProperty.call(raw,"active")){
     if(typeof raw.active!=="boolean")throw new CatalogError(400,"INVALID_ACTIVE");
     columns.active=raw.active;

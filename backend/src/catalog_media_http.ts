@@ -203,7 +203,8 @@ export async function handleCatalogMediaHttp(req:IncomingMessage,
         try{
           await authorize(client,tenant,actorId,value.branchId,productId,"catalog.write");
         }finally{client.release();}
-        response(res,200,{putUrl:presignR2(config,"PUT",key,value.contentType),
+        response(res,200,{putUrl:presignR2(config,"PUT",key,value.contentType,
+          undefined,undefined,value.byteLength),
           contentType:value.contentType,expiresInSeconds:300,requestId:id},id,corsOrigin);
         return;
       }
