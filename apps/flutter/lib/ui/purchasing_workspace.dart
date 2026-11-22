@@ -434,7 +434,7 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
       decoration:InputDecoration(labelText:'Tìm mã hoặc tên kho nhận',
        suffixIcon:IconButton(tooltip:'Tìm kho nhận',
         icon:const Icon(Icons.search),
-        onPressed:()=>loadWarehouses(query:warehouseLookup.text.trim())))),
+        onPressed:()=>loadWarehouses(query:warehouseLookup.text.trim()))))),
    ]),
    const SizedBox(height:16),
    Wrap(spacing:10,runSpacing:8,children:[
