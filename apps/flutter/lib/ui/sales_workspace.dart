@@ -242,9 +242,18 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     final newCustomerName=TextEditingController();
     final newCustomerPhone=TextEditingController();
     final newCustomerAddress=TextEditingController();
-    bool quickCustomerVisible=false,quickCustomerBusy=false;
-    Map<String,dynamic>? pendingQuickCustomer;
-    String? pendingQuickCustomerKey;
+    const quickCustomerKind='sales.customer.quick';
+    final savedQuickCustomer=widget.client.pendingR1(
+      widget.session.actorId,branch,quickCustomerKind);
+    bool quickCustomerVisible=savedQuickCustomer!=null,quickCustomerBusy=false;
+    Map<String,dynamic>? pendingQuickCustomer=savedQuickCustomer?.payload;
+    String? pendingQuickCustomerKey=savedQuickCustomer?.key;
+    if(pendingQuickCustomer!=null){
+      newCustomerCode.text=pendingQuickCustomer!['code']?.toString()??'';
+      newCustomerName.text=pendingQuickCustomer!['name']?.toString()??'';
+      newCustomerPhone.text=pendingQuickCustomer!['phone']?.toString()??'';
+      newCustomerAddress.text=pendingQuickCustomer!['deliveryAddress']?.toString()??'';
+    }
     final skuFocus=FocusNode();
     final customerFocus=FocusNode();
     Timer? skuDebounce,customerDebounce;
@@ -345,6 +354,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         }
         pendingQuickCustomer=payload;
         pendingQuickCustomerKey=newKey();
+        widget.client.retainR1(widget.session.actorId,branch,
+          quickCustomerKind,payload,pendingQuickCustomerKey!);
       }
       refresh(()=>quickCustomerBusy=true);
       try{
@@ -359,6 +370,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           'active':true,'paymentTermsDays':0,
         };
         chooseCustomer(saved,refresh);
+        widget.client.clearR1(widget.session.actorId,branch,quickCustomerKind);
         refresh((){
           quickCustomerVisible=false;
           quickCustomerBusy=false;
@@ -371,11 +383,19 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           quickCustomerBusy=false;
           formError=e.message;
           // Unknown commit outcome: keep the exact body/key for a safe retry.
-          if(e.status>0&&e.status<500&&e.code!='UNKNOWN_OUTCOME'){
+          // Auth failures do not prove the earlier commit rolled back.
+          // Retain the same request/key across reauthentication and form reopen.
+          final definite=e.status>=400&&e.status<500&&
+            e.status!=401&&e.status!=403&&e.status!=408&&
+            e.code!='UNKNOWN_OUTCOME';
+          if(definite){
+            widget.client.clearR1(widget.session.actorId,branch,quickCustomerKind);
             pendingQuickCustomer=null;
             pendingQuickCustomerKey=null;
           }else{
-            formError='Chưa xác minh được kết quả tạo khách. Bấm kiểm tra lại để gửi cùng mã yêu cầu.';
+            formError=e.status==401||e.status==403
+              ?'Chưa xác minh tạo khách vì phiên hoặc quyền đã thay đổi. Yêu cầu được giữ để kiểm tra lại khi có quyền.'
+              :'Chưa xác minh được kết quả tạo khách. Bấm kiểm tra lại để gửi cùng mã yêu cầu.';
           }
         });
       }catch(_){
@@ -432,8 +452,15 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       });
     }
     Future<void> requestClose(BuildContext ctx)async{
-      if(quickCustomerBusy||pendingQuickCustomer!=null){
-        inform('Đang có yêu cầu tạo khách chưa được xác minh. Hãy kiểm tra lại trước khi đóng.',error:true);
+      if(quickCustomerBusy){
+        inform('Đang gửi yêu cầu tạo khách. Hãy kiểm tra kết quả trước khi đóng.',error:true);
+        return;
+      }
+      if(pendingQuickCustomer!=null){
+        // Persisted in the scoped client queue: leaving the form does not
+        // discard the original payload/key if session rights are lost.
+        inform('Yêu cầu tạo khách chưa xác minh đã được giữ lại. Mở lại đơn để kiểm tra khi có quyền.',error:true);
+        Navigator.pop(ctx);
         return;
       }
       if(stamp()==originalStamp&&note.text.trim()==originalNote){
