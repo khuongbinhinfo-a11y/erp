@@ -139,6 +139,10 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     final phone=TextEditingController(),deliveryAddress=TextEditingController();
     final paymentTerms=TextEditingController(text:'0');
     final altUnit=TextEditingController(),conversion=TextEditingController();
+    final baseBarcode=TextEditingController(),altSku=TextEditingController(),
+      altBarcode=TextEditingController();
+    final extraUnits=<({TextEditingController unit,TextEditingController factor,
+      TextEditingController sku,TextEditingController barcode})>[];
     final amount=TextEditingController(),discount=TextEditingController(text:'0');
     String? productId,priceListId,groupId;
     List<Map<String,dynamic>> availableProducts=[],availableLists=[],availableGroups=[];
@@ -160,7 +164,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
       final payload=await showDialog<Map<String,dynamic>>(context:context,builder:(dialog)=>
         StatefulBuilder(builder:(ctx,refresh)=>AlertDialog(
           title:Text(resource=='prices'?'Thêm phiên bản đơn giá':'Thêm ${titles[resource]!.toLowerCase()}'),
-          content:SizedBox(width:430,child:SingleChildScrollView(child:Column(
+          content:SizedBox(width:resource=='products'?630:430,
+            child:SingleChildScrollView(child:Column(
             mainAxisSize:MainAxisSize.min,crossAxisAlignment:CrossAxisAlignment.stretch,children:[
               if(resource=='prices')...[
                 DropdownButtonFormField<String>(
@@ -216,7 +221,12 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                 if(resource=='products')...[
                   const SizedBox(height:12),
                   TextField(controller:unit,
-                    decoration:const InputDecoration(labelText:'Đơn vị gốc',hintText:'cai')),
+                    decoration:const InputDecoration(labelText:'Đơn vị tồn kho gốc *',hintText:'chai')), 
+                  const SizedBox(height:12),
+                  TextField(key:const ValueKey('catalog-base-barcode'),
+                    controller:baseBarcode,
+                    decoration:const InputDecoration(labelText:'Mã vạch SKU gốc (nếu có)',
+                      hintText:'893...')),
                   if(availableGroups.isNotEmpty)...[
                     const SizedBox(height:12),
                     DropdownButtonFormField<String?>(
@@ -229,12 +239,61 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                       ],
                       onChanged:(v)=>refresh(()=>groupId=v)),
                   ],
-                  const SizedBox(height:12),
-                  TextField(controller:altUnit,
-                    decoration:const InputDecoration(labelText:'Đơn vị quy đổi (tùy chọn)',hintText:'thung')),
-                  const SizedBox(height:12),
-                  TextField(controller:conversion,keyboardType:TextInputType.number,
-                    decoration:const InputDecoration(labelText:'Hệ số sang đơn vị gốc',hintText:'12.000000')),
+                  const SizedBox(height:16),
+                  const Text('Quy cách bán và mã vạch',
+                    style:TextStyle(fontWeight:FontWeight.w700)),
+                  const SizedBox(height:4),
+                  const Text('Ví dụ: 1 thùng = 24 chai. Mỗi quy cách có SKU riêng, không tự đặt mã.',
+                    style:TextStyle(fontSize:12,color:ErpTokens.muted)),
+                  const SizedBox(height:9),
+                  Wrap(spacing:10,runSpacing:10,children:[
+                    SizedBox(width:210,child:TextField(
+                      key:const ValueKey('catalog-conversion-unit-0'),
+                      controller:altUnit,
+                      decoration:const InputDecoration(labelText:'Đơn vị quy đổi',hintText:'thung'))),
+                    SizedBox(width:145,child:TextField(
+                      key:const ValueKey('catalog-conversion-factor-0'),
+                      controller:conversion,keyboardType:TextInputType.number,
+                      decoration:const InputDecoration(labelText:'Số đơn vị gốc',hintText:'24'))),
+                    SizedBox(width:210,child:TextField(
+                      key:const ValueKey('catalog-conversion-sku-0'),
+                      controller:altSku,
+                      decoration:const InputDecoration(labelText:'Mã SKU bán',hintText:'SP-THUNG'))),
+                    SizedBox(width:145,child:TextField(
+                      key:const ValueKey('catalog-conversion-barcode-0'),
+                      controller:altBarcode,
+                      decoration:const InputDecoration(labelText:'Mã vạch',hintText:'893...'))),
+                    for(var idx=0;idx<extraUnits.length;idx++)...[
+                      const Divider(),
+                      SizedBox(width:210,child:TextField(
+                        key:ValueKey('catalog-conversion-unit-${idx+1}'),
+                        controller:extraUnits[idx].unit,
+                        decoration:InputDecoration(labelText:'Đơn vị quy đổi ${idx+2}'))),
+                      SizedBox(width:145,child:TextField(
+                        key:ValueKey('catalog-conversion-factor-${idx+1}'),
+                        controller:extraUnits[idx].factor,
+                        keyboardType:TextInputType.number,
+                        decoration:const InputDecoration(labelText:'Số đơn vị gốc'))),
+                      SizedBox(width:210,child:TextField(
+                        key:ValueKey('catalog-conversion-sku-${idx+1}'),
+                        controller:extraUnits[idx].sku,
+                        decoration:const InputDecoration(labelText:'Mã SKU bán'))),
+                      SizedBox(width:145,child:TextField(
+                        key:ValueKey('catalog-conversion-barcode-${idx+1}'),
+                        controller:extraUnits[idx].barcode,
+                        decoration:const InputDecoration(labelText:'Mã vạch'))),
+                    ],
+                  ]),
+                  const SizedBox(height:9),
+                  TextButton.icon(
+                    key:const ValueKey('catalog-add-unit-row'),
+                    onPressed:extraUnits.length>=11?null:()=>refresh((){
+                      extraUnits.add((unit:TextEditingController(),
+                        factor:TextEditingController(),sku:TextEditingController(),
+                        barcode:TextEditingController()));
+                    }),
+                    icon:const Icon(Icons.add),
+                    label:const Text('Thêm quy cách bán')),
                 ],
               ],
             ]))),
@@ -265,9 +324,29 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                     });
                   }
                   if(resource=='products'){
+                    final firstUnit=<String,String>{
+                      'unitCode':altUnit.text.trim(),'toBase':conversion.text.trim(),
+                      if(altSku.text.trim().isNotEmpty)'sku':altSku.text.trim(),
+                      if(altBarcode.text.trim().isNotEmpty)'barcode':altBarcode.text.trim(),
+                    };
+                    final rows=<Map<String,String>>[
+                      if(firstUnit.values.any((v)=>v.isNotEmpty))firstUnit,
+                      for(final extra in extraUnits)
+                        if([extra.unit.text,extra.factor.text,extra.sku.text,
+                          extra.barcode.text].any((v)=>v.trim().isNotEmpty))
+                          {
+                            'unitCode':extra.unit.text.trim(),
+                            'toBase':extra.factor.text.trim(),
+                            if(extra.sku.text.trim().isNotEmpty)
+                              'sku':extra.sku.text.trim(),
+                            if(extra.barcode.text.trim().isNotEmpty)
+                              'barcode':extra.barcode.text.trim(),
+                          },
+                    ];
                     body.addAll({'baseUnit':unit.text.trim(),'groupId':groupId,
-                      'units':altUnit.text.trim().isEmpty&&conversion.text.trim().isEmpty
-                        ? [] :[{'unitCode':altUnit.text.trim(),'toBase':conversion.text.trim()}]});
+                      if(baseBarcode.text.trim().isNotEmpty)
+                        'barcode':baseBarcode.text.trim(),
+                      'units':rows});
                   }
                 }
                 Navigator.pop(dialog,body);
@@ -299,7 +378,13 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     }finally{
       code.dispose();name.dispose();unit.dispose();customerGroup.dispose();
       phone.dispose();deliveryAddress.dispose();paymentTerms.dispose();
-      altUnit.dispose();conversion.dispose();amount.dispose();discount.dispose();
+      altUnit.dispose();conversion.dispose();altSku.dispose();altBarcode.dispose();
+      baseBarcode.dispose();
+      for(final extra in extraUnits){
+        extra.unit.dispose();extra.factor.dispose();extra.sku.dispose();
+        extra.barcode.dispose();
+      }
+      amount.dispose();discount.dispose();
     }
   }
 
