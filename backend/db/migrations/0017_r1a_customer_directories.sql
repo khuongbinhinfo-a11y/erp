@@ -1,3 +1,8 @@
+-- Barcodes previously had no optimistic revision; allow lifecycle corrections
+-- without ever rewriting the canonical barcode identity or posted SKU facts.
+ALTER TABLE catalog_sku_barcode
+ ADD COLUMN revision bigint NOT NULL DEFAULT 0 CHECK (revision >= 0);
+
 -- R1-A: canonical customer group and commercial region directories.
 -- Keep legacy customer_group as a compatibility/snapshot field for existing price
 -- rules; never destroy old labels or rewrite historical posted documents.
