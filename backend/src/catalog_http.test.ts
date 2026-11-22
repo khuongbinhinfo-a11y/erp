@@ -128,6 +128,15 @@ test("Issue #7: catalog HTTP uses real PostgreSQL with tenant/branch RBAC, decim
       assert.equal(unit,"12.000000");
       assert.equal((await call("/v1/catalog/products?branchId="+b,
         "GET",undefined,token)).body.items[0].code,"SKU-0001");
+      // A read request already holds one pool client. Requesting another
+      // client to check R1 readiness deadlocks a saturated five-client pool.
+      const parallel=await Promise.all(Array.from({length:8},()=>call(
+        "/v1/catalog/products?branchId="+b,"GET",undefined,token)));
+      for(const result of parallel){
+        assert.equal(result.status,200,JSON.stringify(result.body));
+        assert.equal(result.body.r1ProductReady,true,
+          "concurrent catalog reads must not falsely hide product creation");
+      }
       assert.equal((await create("products",{code:"SKU-BAD",name:"Bad",baseUnit:"cai",
         units:[{unitCode:"thung",toBase:1.5}]},
         "bad-unit-"+randomUUID(),token)).status,400,"float UOM forbidden");

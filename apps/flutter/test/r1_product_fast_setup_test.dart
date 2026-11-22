@@ -131,4 +131,76 @@ void main(){
     await tester.pump(const Duration(seconds:5));
     await tester.pumpAndSettle();
   });
+
+  testWidgets('inline group retry reuses group already loaded after lost ACK',
+    (tester)async{
+    var committed=false,postCount=0;
+    String? savedKey;
+    final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+      httpClient:MockClient((req)async{
+        if(req.url.path=='/v1/catalog/branches'){
+          return reply({'items':[{'id':branch,'code':'MAIN','name':'Chi nhánh chính'}]});
+        }
+        if(req.url.path=='/v1/catalog/products'&&req.method=='GET'){
+          return reply({'r1ProductReady':true,'items':[]});
+        }
+        if(req.url.path=='/v1/catalog/groups'&&req.method=='GET'){
+          return reply({'items':committed?[{
+            'id':'group-1','code':'GRP01','name':'Đồ uống',
+          }]:[]});
+        }
+        if(req.url.path=='/v1/catalog/groups'&&req.method=='POST'){
+          postCount++;
+          final payload=jsonDecode(req.body) as Map<String,dynamic>;
+          expect(payload['code'],'GRP01');
+          expect(payload['name'],'Đồ uống');
+          if(postCount==1){
+            committed=true;
+            savedKey=req.headers['idempotency-key'];
+            throw http.ClientException('group COMMIT succeeded but response lost');
+          }
+          expect(req.headers['idempotency-key'],savedKey,
+            reason:'replay must use identical mutation identity');
+          return reply({'id':'group-1','code':'GRP01','name':'Đồ uống'},201);
+        }
+        if(req.url.path=='/v1/auth/config')return reply({'enabled':true});
+        return reply({'items':[]});
+      }));
+    addTearDown(client.dispose);
+    tester.view.devicePixelRatio=1;
+    tester.view.physicalSize=const Size(1440,1000);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
+      home:Scaffold(body:CompanyWorkspace(previewOnly:false,
+        grants:rights,session:IdentitySession(actorId:actor,token:'test-token',
+          expiresAt:DateTime.now().add(const Duration(hours:1)),grants:rights),
+        client:client))));
+    await tester.tap(find.byKey(const ValueKey('company-CompanySection.products')));
+    await flush(tester);
+    await tester.tap(find.byKey(const ValueKey('catalog-create')));
+    await flush(tester);
+    await tester.enterText(find.byKey(const ValueKey('catalog-quick-group-code')),'GRP01');
+    await tester.enterText(find.byKey(const ValueKey('catalog-quick-group-name')),'Đồ uống');
+    await tester.ensureVisible(find.byKey(const ValueKey('catalog-quick-group-save')));
+    await tester.tap(find.byKey(const ValueKey('catalog-quick-group-save')));
+    await flush(tester);
+    expect(postCount,1);
+    await tester.tap(find.text('Hủy'));
+    await flush(tester);
+    await tester.tap(find.byKey(const ValueKey('catalog-create')));
+    await flush(tester);
+    await tester.ensureVisible(find.byKey(const ValueKey('catalog-quick-group-save')));
+    await tester.tap(find.byKey(const ValueKey('catalog-quick-group-save')));
+    await flush(tester);
+    expect(postCount,2);
+    final selection=find.byKey(const ValueKey('catalog-product-group-group-1'));
+    expect(selection,findsOneWidget);
+    // Duplicate values trigger DropdownButtonFormField's exact-one-value
+    // assertion when the selected group is rebuilt after replay.
+    expect(tester.takeException(),isNull,
+      reason:'replayed group must remain unique after rebuilding selection');
+    await tester.tap(find.text('Hủy'));
+    await flush(tester);
+  });
 }
