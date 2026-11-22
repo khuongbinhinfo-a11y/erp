@@ -9,7 +9,7 @@
  */
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { spawnSync, execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, statSync, chmodSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, statSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -125,41 +125,6 @@ async function validateSchema(pool,stage){
   if(found.rows[0]?.checksum!==checksum)fail("ERP_MIGRATION_CHECKSUM_DRIFT");
  }
 }
-async function dockerRestore(file,workDir){
- const name="erp-r3-restore-"+randomBytes(5).toString("hex");
- const pass=randomBytes(24).toString("hex");
- let started=false;
- try{
-  command("docker",["run","-d","--name",name,
-   "-e","POSTGRES_USER=erp_rehearsal","-e","POSTGRES_PASSWORD="+pass,
-   "-e","POSTGRES_DB=erp_r3_restore","-p","127.0.0.1::5432","postgres:17"]);
-  started=true;
-  const output=command("docker",["port",name,"5432/tcp"]);
-  const port=output.match(/127\.0\.0\.1:(\d+)/)?.[1];
-  if(!port)fail("REHEARSAL_DOCKER_LOOPBACK_PORT_MISSING");
-  const env={PGHOST:"127.0.0.1",PGPORT:port,PGUSER:"erp_rehearsal",
-   PGPASSWORD:pass,PGDATABASE:"erp_r3_restore",PGSSLMODE:"disable"};
-  let ready=false;
-  for(let n=0;n<50;n++){
-   const x=spawnSync("pg_isready",["-q"],{env:{...process.env,...env},stdio:"ignore"});
-   if(x.status===0){ready=true;break;}
-   await new Promise(ok=>setTimeout(ok,1000));
-  }
-  if(!ready)fail("REHEARSAL_POSTGRES_NOT_READY");
-  command("pg_restore",["--no-owner","--no-acl","--exit-on-error","--dbname=erp_r3_restore",file],env);
-  const pool=new Pool({host:"127.0.0.1",port:Number(port),user:env.PGUSER,
-   password:pass,database:env.PGDATABASE,max:1,statement_timeout:300000,query_timeout:300000});
-  try{
-   await validateSchema(pool,"before");
-   const snap=await signature(pool,["schema_migrations","role_permission"]);
-   return {pool,snap,cleanup:async()=>{await pool.end();}};
-  }catch(error){await pool.end();throw error;}
- }catch(error){
-  if(started){try{command("docker",["rm","-f",name]);}catch{}}
-  throw error;
- }
- // stopped by caller (see finally) rather than here.
-}
 async function main(mode){
  const e=process.env;
  const sha=git(["rev-parse","HEAD"]),branch=git(["branch","--show-current"]);
@@ -169,7 +134,7 @@ async function main(mode){
  checkOperator(e,branch,sha,remote,changes,mode==="--apply");
  required(e,["ERP_POSTGRES_DIRECT_URL","ERP_APPROVED_SHA"]);
  const u=safeURL(e.ERP_POSTGRES_DIRECT_URL);
- await maintenance();
+ if(mode==="--apply")await maintenance();
  const pool=new Pool({connectionString:e.ERP_POSTGRES_DIRECT_URL,max:1,
   connectionTimeoutMillis:20000,statement_timeout:300000,query_timeout:300000});
  pool.on("error",()=>console.error("ERP_R3_POSTGRES_POOL_DISCONNECTED"));
@@ -186,15 +151,16 @@ async function main(mode){
   if(e.ERP_BACKUP_RECOVERY_KEY_CUSTODY!=="VERIFIED")
     fail("RECOVERY_KEY_CUSTODY_NOT_VERIFIED");
   const endpoint=new URL(e.ERP_BACKUP_S3_ENDPOINT);
-  if(endpoint.protocol!=="https:")fail("S3_TLS_ENDPOINT_REQUIRED");
+  if(endpoint.protocol!=="https:"||endpoint.pathname!=="/"||endpoint.search)fail("S3_TLS_ENDPOINT_REQUIRED");
   // All external prerequisites must exist before creating the first production artifact.
   for(const tool of ["pg_dump","pg_restore","pg_isready","age","age-keygen","aws","docker"])
    command(tool,["--version"]);
-  if(!/^age1[ac-hj-np-z02-9]{20,}$/.test(e.ERP_AGE_RECIPIENT))
+  if(!/^age1[0-9a-z]{30,}$/.test(e.ERP_AGE_RECIPIENT))
    fail("INVALID_OFFLINE_BACKUP_RECIPIENT");
   tmp=mkdtempSync(join(tmpdir(),"erp-r3-recovery-"));
   chmodSync(tmp,0o700);
   const dump=join(tmp,"baseline.dump"),encrypted=join(tmp,"baseline.dump.age");
+  const portableList=join(tmp,"portable-restore.list");
   const durableCopy=join(tmp,"durable-readback.age");
   const key=join(tmp,"rehearsal.agekey"),rehCipher=join(tmp,"rehearsal.dump.age");
   const rehabCopy=join(tmp,"rehearsal-readback.age"),recovered=join(tmp,"verified.dump");
@@ -241,7 +207,14 @@ async function main(mode){
     await new Promise(ok=>setTimeout(ok,1000));
    }
    if(!ready)fail("RESTORE_CONTAINER_NOT_READY");
+   // Prisma Postgres provider-only extensions are not present in stock PG17.
+   // The portable snapshot deliberately excludes those extension objects,
+   // while retaining every application table, index, trigger and row.
+   const listing=command("pg_restore",["-l",recovered]).split("\n");
+   const portable=listing.filter(x=>!/\\bEXTENSION - |\\bCOMMENT - EXTENSION /.test(x));
+   writeFileSync(portableList,portable.join("\n"),{mode:0o600});
    command("pg_restore",["--no-owner","--no-acl","--exit-on-error",
+      "--single-transaction","--use-list="+portableList,
       "--dbname=erp_r3_restore",recovered],env);
    const testPool=new Pool({host:"127.0.0.1",port:Number(port),user:env.PGUSER,
      password,database:env.PGDATABASE,max:1,statement_timeout:300000,query_timeout:300000});
