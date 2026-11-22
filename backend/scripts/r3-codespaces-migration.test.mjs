@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { BASE, R3, checkOperator, checkVersions, canonicalRemote, checkCodespaceRecord, attestProcessCodespace, parsePrismaCredential } from "./r3-codespaces-migration.mjs";
+import { BASE, R3, checkOperator, checkVersions, canonicalRemote, checkCodespaceRecord, attestProcessCodespace, parsePrismaCredential, validateMintedCredentialOrRevoke } from "./r3-codespaces-migration.mjs";
 const sha="a".repeat(40);
 const remote="https://github.com/gustavjung24-ops/ERP.git";
 const base={CODESPACES:"true",CODESPACE_NAME:"synthetic-erp-codespace",
@@ -71,6 +71,20 @@ test("R3 process proof requires nonce from GitHub's forwarded-port route",async(
  await assert.rejects(attestProcessCodespace(e,{fetcher:async()=>({
   status:200,text:async()=>"unrelated-local-server"}) ,maxAttempts:1}),
   /CODESPACES_PROCESS_TUNNEL_ATTESTATION_FAILED/);
+});
+test("R3 revokes a new credential when Prisma returns an invalid one-time URL",()=>{
+ const id="con_bad_url_fixture";
+ const revoked=[];
+ assert.throws(()=>validateMintedCredentialOrRevoke({
+  connection:{id},connectionString:"postgres://u:p@evil.example/postgres?sslmode=require"
+ },credential=>revoked.push(credential)),/DIRECT_PRISMA_ERP_DB_TLS_URL_REQUIRED/);
+ assert.deepEqual(revoked,[id]);
+ assert.throws(()=>validateMintedCredentialOrRevoke({
+  connection:{id},connectionString:"invalid-url"
+ },()=>{throw Error("revocation failed");}),/CREATED_CREDENTIAL_VALIDATION_REVOKE_FAILED/);
+ assert.throws(()=>validateMintedCredentialOrRevoke({
+  connection:{},connectionString:"invalid-url"
+ },()=>{throw Error("should not be called");}),/MANUAL_REVOCATION_REQUIRED/);
 });
 test("R3 derives direct Postgres URL only from Prisma's targeted credential result",()=>{
  const item=parsePrismaCredential({connection:{id:"con_synthetictest123"},
