@@ -369,7 +369,8 @@ async function verifyNewTablesOnFirstApply(pool){
    g.installation_id=c.installation_id AND g.branch_id=c.branch_id
    AND g.id=c.customer_group_id
   WHERE c.customer_group IS NOT NULL AND length(trim(c.customer_group))>0
-   AND (g.id IS NULL OR g.name IS DISTINCT FROM trim(c.customer_group))) AS missing,
+   AND (g.id IS NULL OR g.name IS DISTINCT FROM trim(c.customer_group)
+       OR g.legacy_label IS DISTINCT FROM trim(c.customer_group))) AS missing,
  (SELECT count(*)::text FROM catalog_customer_region) AS regions,
  (SELECT count(*)::text FROM catalog_customer WHERE customer_region_id IS NOT NULL)
    AS assigned_regions,
