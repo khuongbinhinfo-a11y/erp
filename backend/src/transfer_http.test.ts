@@ -89,6 +89,12 @@ test("R3.3 transfer PostgreSQL: physical dispatch, in-transit, partial and raced
   assert.equal((await call(endpoint+"?branchId="+b+"&warehouseId="+w)).status,401);
   assert.equal((await call(endpoint+"?branchId="+b+"&warehouseId="+w,
    "GET",undefined,token,{origin:"https://evil.example.test"})).status,403);
+  // Approval never stamps dispatch actor/time before the source ledger is posted.
+  await assert.rejects(db.query(
+    `UPDATE inventory_transfer SET status='APPROVED',revision=revision+1,
+       approved_by=$4,approved_at=now(),dispatched_by=$4,dispatched_at=now()
+     WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,
+     [t,b,id,root.actorId]),/lifecycle mutation invalid/i);
   const approve=await make(endpoint+"/"+id+"/approve",scope,0);
   assert.equal(approve.status,200,JSON.stringify(approve.body));
   assert.equal(approve.body.status,"APPROVED");
