@@ -185,7 +185,7 @@ async function hasCatalogSchema(db:Pool):Promise<boolean>{
   }catch{return false;}
 }
 async function listing(db:PoolClient,tenant:string,actorId:string,branchId:string,
-  resource:Resource,search:string):Promise<unknown[]>{
+  resource:Resource,search:string,afterCode=""):Promise<unknown[]>{
   if(resource==="warehouses"){
     const grants=await userAccess(db,tenant,actorId);
     const ids=grants.filter(g=>g.branchId===branchId&&g.permission==="inventory.read"&&g.warehouseId)
@@ -201,6 +201,16 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
     throw new CatalogError(403,"CATALOG_READ_DENIED");
   if(resource==="unit-definitions"&&!await hasUnitDictionary(db))
     throw new CatalogError(503,"UNIT_DICTIONARY_MIGRATION_REQUIRED");
+  if(resource==="unit-definitions"){
+    // Keyset cursor ensures every UOM remains reachable, not just the first
+    // 100 codes. Code is unique within installation+branch.
+    const rows=await db.query(`${selections["unit-definitions"]}
+      WHERE installation_id=$1 AND branch_id=$2
+        AND (code ILIKE $3 OR name ILIKE $3) AND code>$4
+      ORDER BY code,id LIMIT 100`,
+      [tenant,branchId,"%"+search+"%",afterCode]);
+    return rows.rows;
+  }
   const values=resource==="prices"?[tenant,branchId]:
     [tenant,branchId,"%"+search+"%"];
   // Installations staged on catalog 0006/0007 must still list products
@@ -580,10 +590,20 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
       const branchId=requireUuid(url.searchParams.get("branchId"));
       const search=(url.searchParams.get("q")??"").trim();
       if(search.length>64)throw new CatalogError(400,"SEARCH_TOO_LONG");
+      const afterCode=resource==="unit-definitions"
+        ?(url.searchParams.get("after")??""):"";
+      // Cursor comes from existing stored data, including legacy display
+      // strings such as "Hộp 12". New-code validation must not reject it.
+      if(afterCode&&([...afterCode].length>24||
+        afterCode.trim().length===0||/[\u0000-\u001f\u007f]/.test(afterCode)))
+        throw new CatalogError(400,"INVALID_UNIT_CURSOR");
       const client=await pool.connect();
       try{
-        const rows=await listing(client,tenant,actorId,branchId,resource,search);
+        const rows=await listing(client,tenant,actorId,branchId,resource,search,afterCode);
+        const nextAfter=resource==="unit-definitions"&&rows.length===100
+          ?(rows[rows.length-1] as {code:string}).code:null;
         send(res,200,{items:rows,
+          ...(nextAfter?{nextAfter}:{}),
           ...(resource==="products"?{r1ProductReady:await hasR1CatalogSchema(client)}:{}),
           requestId},requestId,corsOrigin);
       }finally{client.release();}

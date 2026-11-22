@@ -242,6 +242,33 @@ class ErpIdentityClient {
     return (raw['items'] as List<dynamic>)
       .map((v)=>Map<String,dynamic>.from(v as Map)).toList();
   }
+  /// Load the whole UOM dictionary by branch-scoped keyset pages. A single
+  /// catalogItems() request intentionally returns at most 100 records.
+  Future<List<Map<String,dynamic>>> catalogUnitDefinitionsAll(
+      String token,{required String branchId,String query=''})async{
+    final collected=<Map<String,dynamic>>[];
+    final seen=<String>{};
+    String? after;
+    while(true){
+      final suffix=Uri(queryParameters:{
+        'branchId':branchId,
+        if(query.trim().isNotEmpty)'q':query.trim(),
+        if(after!=null)'after':after,
+      }).query;
+      final raw=await _request('GET',
+        '/v1/catalog/unit-definitions?$suffix',token:token);
+      final items=(raw['items'] as List<dynamic>)
+        .map((x)=>Map<String,dynamic>.from(x as Map)).toList();
+      collected.addAll(items);
+      final next=raw['nextAfter'];
+      if(next is! String||next.isEmpty)break;
+      if(!seen.add(next)){
+        throw const ErpApiError(502,'Máy chủ trả về trang đơn vị tính lặp.');
+      }
+      after=next;
+    }
+    return collected;
+  }
   /// Product write readiness is explicit: catalog 0006/0007 can still be
   /// viewed, but SKU/barcode creation requires the separately migrated R1 schema.
   Future<({List<Map<String,dynamic>> items,bool writeReady})> catalogProducts(

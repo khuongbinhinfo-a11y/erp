@@ -122,8 +122,11 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
         ? await widget.client.catalogProducts(widget.session.token,
             branchId:currentBranch,query:search.text)
         : null;
-      final result=productResult?.items ?? await widget.client.catalogItems(
-        widget.session.token,resource,branchId:currentBranch,query:search.text);
+      final result=resource=='unit-definitions'
+        ? await widget.client.catalogUnitDefinitionsAll(
+            widget.session.token,branchId:currentBranch,query:search.text)
+        : productResult?.items ?? await widget.client.catalogItems(
+            widget.session.token,resource,branchId:currentBranch,query:search.text);
       if(!mounted||requestSerial!=stamp)return;
       setState((){
         items=result;loading=false;
@@ -188,8 +191,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
         availableGroups=await widget.client.catalogItems(
           widget.session.token,'groups',branchId:branchId);
         try{
-          availableUnits=await widget.client.catalogItems(
-            widget.session.token,'unit-definitions',branchId:branchId);
+          availableUnits=await widget.client.catalogUnitDefinitionsAll(
+            widget.session.token,branchId:branch);
           unitDictionaryReady=true;
         }on ErpApiError catch(e){
           // Pre-0015 installations still display an explicit text UOM
