@@ -301,10 +301,16 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                           if(!ctx.mounted)return;
                           widget.client.clearR1(actor,branch,kind);
                           refresh((){
-                            availableGroups.add({
-                              'id':created['id'],'code':body['code'],'name':body['name'],
-                            });
-                            groupId=created['id'] as String;
+                            // After a lost ACK, re-opening this form can load the
+                            // committed group before the original command replays.
+                            // Reuse that row; dropdown values must stay unique.
+                            final savedId=created['id'] as String;
+                            if(!availableGroups.any((g)=>g['id']==savedId)){
+                              availableGroups.add({
+                                'id':savedId,'code':body['code'],'name':body['name'],
+                              });
+                            }
+                            groupId=savedId;
                             groupBusy=false;newGroupCode.clear();newGroupName.clear();
                           });
                         }on ErpApiError catch(e){
