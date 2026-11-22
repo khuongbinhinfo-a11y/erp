@@ -33,7 +33,12 @@ Operator giải mã trực tiếp bản backup đã đọc lại từ bucket b�
 khôi phục (không dùng khóa thử khác), restore độc lập qua Docker Postgres 17 và đối soát.
 Trước khi kết nối database, operator dùng authenticated Prisma CLI tạo credential mới
 cho đúng ID ERP-DB và GitHub CLI xác minh Codespace đang chạy trên repo chính.
-Cần gh auth status hoạt động và quyền đọc endpoint /user/codespaces của owner.
+Yêu cầu GitHub Codespaces tự cung cấp GITHUB_TOKEN dạng ghu_ được phát hành theo
+phiên Codespace (không nhận local Personal Access Token hoặc gh login đơn thuần),
+GITHUB_USER, GITHUB_REPOSITORY. Không copy GITHUB_TOKEN ra ngoài Codespaces.
+Token phiên được dùng để đọc /user/codespaces/<CODESPACE_NAME> và đối chiếu
+trạng thái Available, repo chính. Nếu token phiên thiếu scope codespace API,
+script từ chối an toàn; không bỏ qua attestation hoặc thay bằng PAT.
 
 ### Đưa backend vào bảo trì trước khi migration
 
