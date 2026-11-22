@@ -327,6 +327,44 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
   await assert.rejects(pool.query(
    "DELETE FROM catalog_sku_price_retirement WHERE rule_id=$1",[timeBound.body.id]),
    /immutable/i);
+  const patchR1=(kind:string,targetId:string,revision:number,
+    fields:Record<string,unknown>,key="update-r1-"+randomUUID())=>
+    request("/v1/catalog/r1/"+kind+"/"+targetId,"PATCH",
+      {branchId:b,...fields},token,
+      {"idempotency-key":key,"if-match":String(revision)});
+  const channelKey="channel-edit-"+randomUUID();
+  const updatedChannel=await patchR1("channels",channel.body.id,0,
+    {name:"Kênh bán thị trường",active:true},channelKey);
+  assert.equal(updatedChannel.status,200,JSON.stringify(updatedChannel.body));
+  assert.equal(updatedChannel.body.revision,1);
+  assert.deepEqual((await patchR1("channels",channel.body.id,0,
+    {name:"Kênh bán thị trường",active:true},channelKey)).body,
+    updatedChannel.body,"channel update must be idempotent");
+  assert.equal((await patchR1("channels",channel.body.id,0,
+    {name:"Stale edit"})).status,409);
+  assert.equal((await patchR1("channels",channel.body.id,1,
+    {code:"MCP_NEW"})).status,400,"channel identity is immutable");
+  assert.equal((await patchR1("skus",baseSku,0,{active:false})).status,409,
+    "base SKU cannot be disabled without product lifecycle decision");
+  const disabledSku=await patchR1("skus",skuId,0,{active:false});
+  assert.equal(disabledSku.status,200,JSON.stringify(disabledSku.body));
+  assert.equal(disabledSku.body.revision,1);
+  assert.equal((await patchR1("skus",skuId,0,{active:true})).status,409);
+  assert.equal((await patchR1("skus",skuId,1,{toBase:"24"})).status,400,
+    "an immutable conversion must not become editable");
+  const otherBarcode=await r1("barcodes",
+    {sellSkuId:skuId,barcode:"BC-0002",isPrimary:false});
+  assert.equal(otherBarcode.status,201);
+  const promote=await patchR1("barcodes",otherBarcode.body.id,0,
+    {active:true,isPrimary:true});
+  assert.equal(promote.status,200,JSON.stringify(promote.body));
+  const barcodes=await read("barcodes");
+  assert.equal(barcodes.body.items.find((x:any)=>x.id===otherBarcode.body.id)?.isPrimary,true);
+  assert.equal(barcodes.body.items.find((x:any)=>x.id===code.body.id)?.isPrimary,false);
+  assert.equal((await patchR1("barcodes",otherBarcode.body.id,0,
+    {active:false})).status,409,"barcode revision guards other-device stale edits");
+  assert.equal((await patchR1("barcodes",otherBarcode.body.id,1,
+    {barcode:"CHANGED"})).status,400,"barcode identity is immutable");
   const inactive=await pool.query<{id:string}>(
    "INSERT INTO branch(installation_id,code,name) VALUES($1,'OTHER','Other') RETURNING id",
    [root.installationId]);
