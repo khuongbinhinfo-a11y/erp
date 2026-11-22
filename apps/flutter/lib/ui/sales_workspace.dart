@@ -131,6 +131,25 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       return null;
     }
     if(mounted&&missingCatalog!=null)setState(()=>missingCatalog=null);
+    // Optional to opening the order: master dropdowns become available only on
+    // migrated 0017 and for actors granted catalog.read. Never fall back to
+    // a free-text group name or block existing order entry.
+    List<Map<String,dynamic>> customerGroups=[],customerRegions=[];
+    if(can('catalog.write')&&can('catalog.read')){
+      try{
+        final masters=await Future.wait([
+          widget.client.catalogDirectoryAll(widget.session.token,
+            'customer-groups',branchId:branch),
+          widget.client.catalogDirectoryAll(widget.session.token,
+            'customer-regions',branchId:branch),
+        ]);
+        customerGroups=masters[0].where((x)=>x['active']!=false).toList();
+        customerRegions=masters[1].where((x)=>x['active']!=false).toList();
+      }on ErpApiError catch(_){
+        // Creation can proceed with no group/region, but references must
+        // never be guessed. Catalog customer creation remains migration gated.
+      }
+    }
     if(!mounted)return null;
     String? customer=order?['customerId'] as String? ??
       (customers.length==1?customers.single['id'] as String:null);
@@ -240,8 +259,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     final newCustomerName=TextEditingController();
     final newCustomerPhone=TextEditingController();
     final newCustomerAddress=TextEditingController();
-    final newCustomerGroup=TextEditingController();
     final newCustomerPaymentTerms=TextEditingController(text:'0');
+    String? newCustomerGroupId,newCustomerRegionId;
     const quickCustomerKind='sales.customer.quick';
     final savedQuickCustomer=widget.client.pendingR1(
       widget.session.actorId,branch,quickCustomerKind);
@@ -253,7 +272,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       newCustomerName.text=pendingQuickCustomer['name']?.toString()??'';
       newCustomerPhone.text=pendingQuickCustomer['phone']?.toString()??'';
       newCustomerAddress.text=pendingQuickCustomer['deliveryAddress']?.toString()??'';
-      newCustomerGroup.text=pendingQuickCustomer['customerGroup']?.toString()??'';
+      newCustomerGroupId=pendingQuickCustomer['customerGroupId'] as String?;
+      newCustomerRegionId=pendingQuickCustomer['customerRegionId'] as String?;
       newCustomerPaymentTerms.text=pendingQuickCustomer['paymentTermsDays']?.toString()??'0';
     }
     final skuFocus=FocusNode();
@@ -355,9 +375,10 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         final payload=<String,dynamic>{
           'branchId':branch,'code':code,'name':name,'paymentTermsDays':days,
         };
-        if(newCustomerGroup.text.trim().isNotEmpty){
-          payload['customerGroup']=newCustomerGroup.text.trim();
-        }
+        if(newCustomerGroupId!=null)
+          payload['customerGroupId']=newCustomerGroupId;
+        if(newCustomerRegionId!=null)
+          payload['customerRegionId']=newCustomerRegionId;
         if(newCustomerPhone.text.trim().isNotEmpty){
           payload['phone']=newCustomerPhone.text.trim();
         }
@@ -636,11 +657,40 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                             controller:newCustomerAddress,
                             enabled:!quickCustomerBusy&&pendingQuickCustomer==null,
                             decoration:const InputDecoration(labelText:'Địa chỉ giao'))),
-                          SizedBox(width:narrow?280:170,child:TextField(
-                            key:const ValueKey('sales-quick-customer-group'),
-                            controller:newCustomerGroup,
-                            enabled:!quickCustomerBusy&&pendingQuickCustomer==null,
-                            decoration:const InputDecoration(labelText:'Nhóm khách hàng'))),
+                          SizedBox(width:narrow?280:210,child:
+                            DropdownButtonFormField<String?>(
+                              key:ValueKey('sales-quick-customer-group-$newCustomerGroupId'),
+                              initialValue:customerGroups.any((x)=>x['id']==newCustomerGroupId)
+                                ?newCustomerGroupId:null,
+                              isExpanded:true,
+                              decoration:const InputDecoration(labelText:'Nhóm khách hàng'),
+                              items:[
+                                const DropdownMenuItem<String?>(
+                                  value:null,child:Text('Chưa phân nhóm')),
+                                ...customerGroups.map((x)=>DropdownMenuItem<String?>(
+                                  value:x['id'] as String,
+                                  child:Text("${x['code']} · ${x['name']}",
+                                    overflow:TextOverflow.ellipsis))),
+                              ],
+                              onChanged:quickCustomerBusy||pendingQuickCustomer!=null
+                                ?null:(v)=>refresh(()=>newCustomerGroupId=v))),
+                          SizedBox(width:narrow?280:210,child:
+                            DropdownButtonFormField<String?>(
+                              key:ValueKey('sales-quick-customer-region-$newCustomerRegionId'),
+                              initialValue:customerRegions.any((x)=>x['id']==newCustomerRegionId)
+                                ?newCustomerRegionId:null,
+                              isExpanded:true,
+                              decoration:const InputDecoration(labelText:'Khu vực bán hàng'),
+                              items:[
+                                const DropdownMenuItem<String?>(
+                                  value:null,child:Text('Chưa phân khu vực')),
+                                ...customerRegions.map((x)=>DropdownMenuItem<String?>(
+                                  value:x['id'] as String,
+                                  child:Text("${x['code']} · ${x['name']}",
+                                    overflow:TextOverflow.ellipsis))),
+                              ],
+                              onChanged:quickCustomerBusy||pendingQuickCustomer!=null
+                                ?null:(v)=>refresh(()=>newCustomerRegionId=v))),
                           SizedBox(width:narrow?280:160,child:TextField(
                             key:const ValueKey('sales-quick-customer-payment-terms'),
                             controller:newCustomerPaymentTerms,
@@ -981,7 +1031,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       note.dispose();skuSearch.dispose();customerSearch.dispose();
       newCustomerCode.dispose();newCustomerName.dispose();
       newCustomerPhone.dispose();newCustomerAddress.dispose();
-      newCustomerGroup.dispose();newCustomerPaymentTerms.dispose();
+      newCustomerPaymentTerms.dispose();
       skuFocus.dispose();customerFocus.dispose();
       for(final line in lines){line.dispose();}
     }
