@@ -180,11 +180,24 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
     throw new CatalogError(403,"CATALOG_READ_DENIED");
   const values=resource==="prices"?[tenant,branchId]:
     [tenant,branchId,"%"+search+"%"];
+  // Installations staged on catalog 0006/0007 must still list products
+  // even before the separate R1 SKU/barcode migration 0009 is applied.
+  const r1Ready=resource==="products"&&(await db.query<{ok:boolean}>(
+    "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version='0009_r1_catalog_pricing.sql') AS ok"
+  )).rows[0]?.ok===true;
+  const productSelection=r1Ready?selections.products:
+    `SELECT id,sku AS code,name,base_unit AS "baseUnit",
+      group_id AS "groupId",
+      (SELECT g.name FROM catalog_product_group g WHERE
+        g.installation_id=catalog_product.installation_id AND
+        g.branch_id=catalog_product.branch_id AND g.id=catalog_product.group_id)
+      AS "groupName",0::integer AS "sellSkuCount",NULL::text AS barcode,
+      active,revision::integer FROM catalog_product`;
   const r=await db.query(
     resource==="prices"
       ?`${selections.prices} WHERE installation_id=$1 AND branch_id=$2
           ORDER BY effective_at DESC,id LIMIT 100`
-      :`${selections[resource]} WHERE installation_id=$1 AND branch_id=$2
+      :`${resource==="products"?productSelection:selections[resource]} WHERE installation_id=$1 AND branch_id=$2
           AND (${resource==="products"?"sku":"code"} ILIKE $3 OR name ILIKE $3
           ${resource==="customers"?"OR phone ILIKE $3 OR customer_group ILIKE $3":""})
           ORDER BY ${resource==="products"?"sku":"code"},id LIMIT 100`,
