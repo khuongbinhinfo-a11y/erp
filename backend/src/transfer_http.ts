@@ -119,7 +119,10 @@ export async function handleTransferHttp(req:IncomingMessage,res:ServerResponse,
     const branches=await c.query(
       `SELECT DISTINCT b.id,b.name FROM user_role ur
       JOIN role_permission rp ON rp.installation_id=ur.installation_id
-       AND rp.role_id=ur.role_id AND rp.permission_code='inventory.transfer.read'
+       AND rp.role_id=ur.role_id
+       AND rp.permission_code IN ('inventory.transfer.read',
+         'inventory.transfer.create','inventory.transfer.approve',
+         'inventory.transfer.dispatch','inventory.transfer.receive')
       JOIN user_role_warehouse uw ON uw.installation_id=ur.installation_id
        AND uw.user_id=ur.user_id AND uw.role_id=ur.role_id
        AND uw.branch_id=ur.branch_id
@@ -128,7 +131,11 @@ export async function handleTransferHttp(req:IncomingMessage,res:ServerResponse,
     const warehouses=branch===null?{rows:[]}:await c.query(
       `SELECT DISTINCT w.id,w.name,w.code,w.branch_id AS "branchId"
       FROM user_role ur JOIN role_permission rp ON rp.installation_id=ur.installation_id
-       AND rp.role_id=ur.role_id AND rp.permission_code='inventory.transfer.read'
+       AND rp.role_id=ur.role_id
+       AND rp.permission_code IN ('inventory.transfer.read',
+         'inventory.transfer.create','inventory.transfer.approve',
+         'inventory.transfer.dispatch','inventory.transfer.receive',
+         'inventory.read')
       JOIN user_role_warehouse uw ON uw.installation_id=ur.installation_id
        AND uw.user_id=ur.user_id AND uw.role_id=ur.role_id
        AND uw.branch_id=ur.branch_id
