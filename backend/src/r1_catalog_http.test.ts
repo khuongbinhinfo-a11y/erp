@@ -279,8 +279,11 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
    stacking:"EXCLUSIVE"};
   assert.equal((await r1("rules",openPromotion)).status,400,
    "promotions must declare their end time");
+  // A live retirement is stamped at database NOW(); keep the test promotion
+  // active at that instant, regardless of when the CI run is executed.
+  const promoEnd=new Date(Date.now()+30*24*60*60*1000).toISOString();
   const timeBound=await r1("rules",{
-   ...openPromotion,effectiveTo:"2026-11-22T00:00:00Z",
+   ...openPromotion,effectiveTo:promoEnd,
   });
   assert.equal(timeBound.status,201,JSON.stringify(timeBound.body));
   const during=await resolvePrice({
@@ -289,7 +292,7 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
   });
   const after=await resolvePrice({
    priceListId:list.body.id,sellSkuId:baseSku,quantity:"1",
-   priceAt:"2026-11-23T08:00:00Z",
+   priceAt:new Date(Date.parse(promoEnd)+24*60*60*1000).toISOString(),
   });
   assert.equal(during.body.quote.unitPrice,"10800");
   assert.equal(after.body.quote.unitPrice,"12000.0000");
