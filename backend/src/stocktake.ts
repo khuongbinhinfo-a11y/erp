@@ -85,7 +85,7 @@ export async function createStocktake(db:PoolClient,ctx:MutationContext,
    JOIN catalog_product p ON p.installation_id=v.installation_id
     AND p.branch_id=v.branch_id AND p.id=v.product_id
    WHERE v.installation_id=$1 AND v.branch_id=$2 AND v.warehouse_id=$3
-   ORDER BY p.sku,v.product_id LIMIT 10000`,[t,b,input.warehouseId]);
+   ORDER BY p.sku,v.product_id LIMIT 10001`,[t,b,input.warehouseId]);
  if(available.rows.length===0||available.rows.length>10000)
   throw new StocktakeFault(409,"STOCKTAKE_NO_STOCK_SCOPE");
  const head=await db.query<{id:string}>(
