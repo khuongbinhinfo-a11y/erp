@@ -45,6 +45,28 @@ test("R1-A 0017: real 16→17 upgrade preserves existing customer group strings,
     VALUES($1,$2,$3,$4,$5)`,
     [install,b,"KH-"+(i+1),"Khách thử "+(i+1),legacyGroups[i]]);
   }
+  // A legacy group can be referenced by an immutable price rule even when
+  // it has no current customer; future customers must still inherit that rule.
+  const priceOnlyLabel="Nhóm giá chỉ có quy tắc";
+  const productId=(await db.query<{id:string}>(`INSERT INTO catalog_product
+    (installation_id,branch_id,sku,name,base_unit)
+    VALUES($1,$2,'SP-RULE','Sản phẩm áp giá','CAI') RETURNING id`,
+    [install,b])).rows[0]!.id;
+  await db.query(`INSERT INTO catalog_unit
+    (installation_id,branch_id,product_id,unit_code,to_base)
+    VALUES($1,$2,$3,'CAI',1)`,[install,b,productId]);
+  const skuId=(await db.query<{id:string}>(`INSERT INTO catalog_sell_sku
+    (installation_id,branch_id,product_id,sku,unit_code,conversion_to_base,is_base)
+    VALUES($1,$2,$3,'SP-RULE','CAI',1,true) RETURNING id`,
+    [install,b,productId])).rows[0]!.id;
+  const priceListId=(await db.query<{id:string}>(`INSERT INTO catalog_price_list
+    (installation_id,branch_id,code,name) VALUES($1,$2,'BANG-GIA','Giá thử')
+    RETURNING id`,[install,b])).rows[0]!.id;
+  await db.query(`INSERT INTO catalog_sku_price_rule
+    (installation_id,branch_id,price_list_id,sell_sku_id,scope_kind,
+     customer_group,adjustment,amount,effective_from)
+    VALUES ($1,$2,$3,$4,'CUSTOMER_GROUP',$5,'PERCENT_DISCOUNT',5,now())`,
+    [install,b,priceListId,skuId,priceOnlyLabel]);
   await copyFile(join(original,names[16]!),join(dir,names[16]!));
   const upgrade=await applyMigrations(db,dir);
   assert.deepEqual(upgrade.applied,["0017_r1a_customer_directories.sql"]);
@@ -75,7 +97,24 @@ test("R1-A 0017: real 16→17 upgrade preserves existing customer group strings,
     "identical legacy labels share one canonical directory row");
   assert.equal((await db.query<{n:string}>(`SELECT count(*)::text AS n
     FROM catalog_customer_group WHERE installation_id=$1 AND branch_id=$2`,
-    [install,b])).rows[0]!.n,"3");
+    [install,b])).rows[0]!.n,"4");
+  const onlyRule=(await db.query<{id:string;code:string;legacy_label:string}>(
+   `SELECT id,code,legacy_label FROM catalog_customer_group
+     WHERE installation_id=$1 AND branch_id=$2 AND legacy_label=$3`,
+    [install,b,priceOnlyLabel])).rows[0];
+  assert.ok(onlyRule?.id,"price-rule-only group must not disappear");
+  assert.equal(onlyRule.legacy_label,priceOnlyLabel);
+  assert.equal(onlyRule.code,"LEGACY-"+createHash("md5").update(priceOnlyLabel)
+    .digest("hex").slice(0,32));
+  // Verify there is no existing customer referencing this directory and that
+  // it remains reusable for a customer assigned after the migration.
+  assert.equal((await db.query<{n:string}>(`SELECT count(*)::text AS n FROM catalog_customer
+    WHERE installation_id=$1 AND branch_id=$2 AND customer_group_id=$3`,
+    [install,b,onlyRule.id])).rows[0]!.n,"0");
+  await db.query(`INSERT INTO catalog_customer
+    (installation_id,branch_id,code,name,customer_group,customer_group_id)
+    VALUES($1,$2,'KH-FUTURE','Khách dùng luật giá cũ',$3,$4)`,
+    [install,b,onlyRule.code,onlyRule.id]);
   const foreign=(await db.query<{id:string}>(`INSERT INTO catalog_customer_region
     (installation_id,branch_id,code,name) VALUES($1,$2,'KV_OTHER','Khu vực khác')
     RETURNING id`,[install,other])).rows[0]!.id;
