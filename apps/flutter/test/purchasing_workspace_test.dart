@@ -90,7 +90,7 @@ void main(){
   await tester.pumpAndSettle();
  });
 
-testWidgets('R3.2 replays the original receipt revision/key after 503 and PO revision change',
+testWidgets('R3.2 retains exact receipt through 503, 401 and changed PO revision',
  (tester)async{
   var attempts=0;
   final observedKeys=<String?>[];
@@ -125,6 +125,8 @@ testWidgets('R3.2 replays the original receipt revision/key after 503 and PO rev
      observedBodies.add(req.body);
      if(attempts==1)return http.Response(
        jsonEncode({'error':{'code':'PURCHASE_UNAVAILABLE'}}),503,headers:headers);
+     if(attempts==2)return http.Response(
+       jsonEncode({'error':{'code':'AUTH_REQUIRED'}}),401,headers:headers);
      return http.Response(jsonEncode({
        'id':'00000000-0000-4000-8000-000000000011',
        'purchaseRevision':2,'purchaseStatus':'PARTIALLY_RECEIVED','status':'POSTED'}),
@@ -165,13 +167,50 @@ testWidgets('R3.2 replays the original receipt revision/key after 503 and PO rev
   await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:100)));
   await tester.pumpAndSettle();
   expect(attempts,2);
-  expect(observedKeys,[expectedKey,expectedKey]);
-  expect(observedRevisions,['1','1']);
+  expect(client.pendingPurchase(scope),isNotNull);
+  // An authentication challenge is not a definitive answer about the first COMMIT.
+  await tester.tap(find.text('Xác minh lệnh đang chờ'));
+  await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:100)));
+  await tester.pumpAndSettle();
+  expect(attempts,3);
+  expect(observedKeys,[expectedKey,expectedKey,expectedKey]);
+  expect(observedRevisions,['1','1','1']);
   expect(observedBodies[0],observedBodies[1]);
+  expect(observedBodies[1],observedBodies[2]);
   expect(jsonDecode(observedBodies[0]),payload);
   expect(client.pendingPurchase(scope),isNull);
   expect(calls.where((s)=>s=='/v1/purchasing/orders/$order').isEmpty,true);
   await tester.pump(const Duration(seconds:5));
   await tester.pumpAndSettle();
+});
+
+test('R3.2 same-actor login preserves pending receipt and different actor cannot reuse it',()async{
+  var activeActor=actor;
+  const headers={'content-type':'application/json; charset=utf-8'};
+  final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+    httpClient:MockClient((req)async{
+      if(req.url.path=='/v1/auth/login'){
+        return http.Response(jsonEncode({'token':'synthetic-token',
+          'expiresAt':'2035-12-31T23:00:00Z'}),200,headers:headers);
+      }
+      if(req.url.path=='/v1/auth/session'){
+        return http.Response(jsonEncode({'actorId':activeActor,
+          'loginName':'synthetic','expiresAt':'2035-12-31T23:00:00Z',
+          'grants':[]}),200,headers:headers);
+      }
+      return http.Response('{}',404,headers:headers);
+    }));
+  addTearDown(client.dispose);
+  final scope='$actor:$branch:$warehouse';
+  const key='same-actor-retry';
+  final original=<String,dynamic>{'branchId':branch,
+    'warehouseId':warehouse,'lines':[{'orderLineNo':1,'quantity':'2'}]};
+  client.retainPurchase(scope,original,key,
+    path:'orders/$order/receipts',revision:1);
+  await client.login('synthetic','password');
+  expect(client.pendingPurchase(scope)?.key,key);
+  activeActor='00000000-0000-4000-8000-000000000099';
+  await client.login('another-account','password');
+  expect(client.pendingPurchase(scope),isNull);
 });
 }
