@@ -13,6 +13,10 @@ export default module("erp-backend", ({ provision }) => {
       uiOrigin: envSecret("ERP_UI_ORIGIN"),
       throttleSecret: envSecret("ERP_THROTTLE_SECRET"),
       maintenanceMode: envSecret("ERP_MAINTENANCE_MODE"),
+      r2AccountId: envSecret("ERP_R2_ACCOUNT_ID"),
+      r2Bucket: envSecret("ERP_R2_BUCKET"),
+      r2AccessKeyId: envSecret("ERP_R2_ACCESS_KEY_ID"),
+      r2SecretAccessKey: envSecret("ERP_R2_SECRET_ACCESS_KEY"),
     },
   });
 });
