@@ -2,7 +2,7 @@ import type { IncomingMessage,ServerResponse } from "node:http";
 import type { Pool,PoolClient } from "pg";
 import { resolveSession } from "./auth.ts";
 import { hasPermission } from "./rbac.ts";
-import { executeMutation,MutationFault,type MutationContext } from "./mutation.ts";
+import { executeMutation,MutationFault,requireRevision,type MutationContext } from "./mutation.ts";
 import { validIdempotencyKey } from "./contracts.ts";
 import type { IdentityOptions } from "./identity_http.ts";
 import { resolveR1Price,R1QuoteError,r1QuoteSignature } from "./r1_pricing.ts";
@@ -103,6 +103,16 @@ function mutation(req:IncomingMessage,ctx:Omit<MutationContext,"idempotencyKey"|
  if(typeof raw!=="string"||!validIdempotencyKey(raw)||rev!=="0")
   throw new R1Error(400,"INVALID_MUTATION_HEADERS");
  return {...ctx,idempotencyKey:raw,expectedRevision:0};
+}
+function patchMutation(req:IncomingMessage,
+  ctx:Omit<MutationContext,"idempotencyKey"|"expectedRevision">):MutationContext{
+  const key=req.headers["idempotency-key"],version=req.headers["if-match"];
+  if(typeof key!=="string"||!validIdempotencyKey(key)||
+     typeof version!=="string"||!/^(0|[1-9][0-9]{0,14})$/.test(version))
+    throw new R1Error(400,"INVALID_MUTATION_HEADERS");
+  const n=Number(version);
+  if(!Number.isSafeInteger(n))throw new R1Error(400,"INVALID_REVISION");
+  return {...ctx,idempotencyKey:key,expectedRevision:n};
 }
 async function schema(db:Pool){
  try{
@@ -271,7 +281,7 @@ async function listing(db:PoolClient,t:string,b:string,kind:Kind,q:string,skuId?
  if(kind==="skus"){
   const r=await db.query(`SELECT s.id,s.product_id AS "productId",s.sku AS code,
    p.name AS "productName",s.unit_code AS "unitCode",
-   s.conversion_to_base::text AS "toBase",s.is_base AS "isBase",s.active,
+   s.conversion_to_base::text AS "toBase",s.is_base AS "isBase",s.active,s.revision::integer,
    (SELECT b.barcode FROM catalog_sku_barcode b
     WHERE b.installation_id=s.installation_id AND b.branch_id=s.branch_id
       AND b.sell_sku_id=s.id AND b.active
@@ -289,7 +299,7 @@ async function listing(db:PoolClient,t:string,b:string,kind:Kind,q:string,skuId?
  }
  if(kind==="barcodes"){
   const r=await db.query(`SELECT c.id,c.sell_sku_id AS "sellSkuId",s.sku,
-     c.barcode,c.is_primary AS "isPrimary",c.active
+     c.barcode,c.is_primary AS "isPrimary",c.active,c.revision::integer
    FROM catalog_sku_barcode c JOIN catalog_sell_sku s ON
     s.installation_id=c.installation_id AND s.branch_id=c.branch_id
     AND s.id=c.sell_sku_id
@@ -381,6 +391,78 @@ export async function handleR1Http(req:IncomingMessage,res:ServerResponse,
    });
    send(res,result.status,result.body,requestId,cors);
    return;
+  }
+  const patchPath=/^\/v1\/catalog\/r1\/(skus|barcodes|channels)\/([0-9a-f-]{36})$/i.exec(url.pathname);
+  if(patchPath&&req.method==="PATCH"){
+    const targetKind=patchPath[1] as "skus"|"barcodes"|"channels";
+    const targetId=id(patchPath[2]),raw=await body(req);
+    const branchId=id(raw.branchId);
+    if(targetKind==="skus")keys(raw,["branchId","active"]);
+    if(targetKind==="barcodes")keys(raw,["branchId","active","isPrimary"]);
+    if(targetKind==="channels")keys(raw,["branchId","name","active"]);
+    const activeFlag=raw.active===undefined?undefined:bool(raw.active);
+    const primaryFlag=raw.isPrimary===undefined?undefined:bool(raw.isPrimary);
+    const name=raw.name===undefined?undefined:label(raw.name);
+    if(activeFlag===undefined&&primaryFlag===undefined&&name===undefined)
+      throw new R1Error(400,"EMPTY_UPDATE");
+    const ctx=patchMutation(req,{installationId:t,actorId,requestId,
+      action:"r1.catalog."+targetKind+".update",
+      payload:{branchId,targetId,targetKind,
+        ...(activeFlag!==undefined?{active:activeFlag}:{}),
+        ...(primaryFlag!==undefined?{isPrimary:primaryFlag}:{}),
+        ...(name!==undefined?{name}:{})}});
+    const outcome=await executeMutation(pool,ctx,{
+      authorize:(db,c)=>hasPermission(db,{installationId:c.installationId,
+        actorId:c.actorId,branchId,permission:"catalog.write"}),
+      execute:async(db,c)=>{
+        const table=targetKind==="skus"?"catalog_sell_sku":
+          targetKind==="barcodes"?"catalog_sku_barcode":"catalog_sales_channel";
+        const current=await db.query<{revision:string;active:boolean;
+           isBase?:boolean;sellSkuId?:string;isPrimary?:boolean}>(
+          `SELECT revision::text,active${targetKind==="skus"?
+            ',is_base AS "isBase"':targetKind==="barcodes"?
+            ',sell_sku_id AS "sellSkuId",is_primary AS "isPrimary"':''}
+           FROM ${table} WHERE installation_id=$1 AND branch_id=$2 AND id=$3 FOR UPDATE`,
+          [t,branchId,targetId]);
+        if(!current.rows[0])throw new R1Error(404,"NOT_FOUND");
+        requireRevision(c.expectedRevision,Number(current.rows[0].revision));
+        if(targetKind==="skus"){
+          if(current.rows[0].isBase&&activeFlag===false)
+            throw new R1Error(409,"BASE_SKU_CANNOT_BE_DISABLED");
+          await db.query(`UPDATE catalog_sell_sku
+            SET active=$4,revision=revision+1
+            WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,
+            [t,branchId,targetId,activeFlag]);
+        }else if(targetKind==="channels"){
+          await db.query(`UPDATE catalog_sales_channel
+            SET name=COALESCE($4,name),active=COALESCE($5,active),
+              revision=revision+1
+            WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,
+            [t,branchId,targetId,name??null,activeFlag??null]);
+        }else{
+          const newActive=activeFlag??current.rows[0].active;
+          const newPrimary=newActive?(primaryFlag??current.rows[0].isPrimary):false;
+          if(newPrimary){
+            // One primary per SKU, change prior choice atomically with the same
+            // audited command. Concurrent writers cannot bypass unique index.
+            await db.query(`UPDATE catalog_sku_barcode
+              SET is_primary=false,revision=revision+1
+              WHERE installation_id=$1 AND branch_id=$2 AND sell_sku_id=$3
+                AND id<>$4 AND is_primary AND active`,
+                [t,branchId,current.rows[0].sellSkuId,targetId]);
+          }
+          await db.query(`UPDATE catalog_sku_barcode
+            SET active=$4,is_primary=$5,revision=revision+1
+            WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,
+            [t,branchId,targetId,newActive,newPrimary]);
+        }
+        const saved=await db.query<{revision:string}>(`SELECT revision::text FROM ${table}
+          WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,
+          [t,branchId,targetId]);
+        return {status:200,body:{id:targetId,revision:Number(saved.rows[0]!.revision)}};
+      },
+    });
+    send(res,outcome.status,outcome.body,requestId,cors);return;
   }
   const type=kind(url.pathname.slice("/v1/catalog/r1/".length));
   if(req.method==="GET"){
