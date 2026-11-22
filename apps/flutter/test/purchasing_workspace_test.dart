@@ -213,4 +213,61 @@ test('R3.2 same-actor login preserves pending receipt and different actor cannot
   await client.login('another-account','password');
   expect(client.pendingPurchase(scope),isNull);
 });
+
+testWidgets('R3.2 definite overreceipt 409 releases PO lock for correction',
+ (tester)async{
+  const headers={'content-type':'application/json; charset=utf-8'};
+  final payload=<String,dynamic>{'branchId':branch,'warehouseId':warehouse,
+    'lines':[{'orderLineNo':1,'quantity':'999'}]};
+  final scope='$actor:$branch:$warehouse';
+  final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+   httpClient:MockClient((req)async{
+    if(req.url.path=='/v1/catalog/branches')return http.Response(
+      jsonEncode({'items':[{'id':branch,'name':'Chi nhánh chính'}]}),
+      200,headers:headers);
+    if(req.url.path=='/v1/catalog/warehouses')return http.Response(
+      jsonEncode({'items':[{'id':warehouse,'name':'Kho chính'}]}),
+      200,headers:headers);
+    if(req.url.path=='/v1/purchasing/orders'&&req.method=='GET')
+      return http.Response(jsonEncode({'items':[{'id':order,'documentNo':'PO-001',
+        'supplierName':'NCC 1','warehouseId':warehouse,
+        'status':'PARTIALLY_RECEIVED','revision':3,
+        'lineCount':1}],'hasMore':false}),200,headers:headers);
+    if(req.url.path=='/v1/purchasing/orders/$order/receipts'&&req.method=='POST')
+      return http.Response(jsonEncode(
+        {'error':{'code':'RECEIPT_OVER_ORDERED'}}),409,headers:headers);
+    return http.Response('{}',404,headers:headers);
+   }));
+  addTearDown(client.dispose);
+  client.retainPurchase(scope,payload,'purchase-overreceipt-rejected',
+    path:'orders/$order/receipts',revision:2);
+  tester.view.devicePixelRatio=1;
+  tester.view.physicalSize=const Size(1280,850);
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
+  final session=IdentitySession(actorId:actor,token:'synthetic-token',
+    expiresAt:DateTime.now().add(const Duration(hours:1)),grants:const [
+      IdentityGrant(roleId:'read',permission:'purchase.read',branchId:branch),
+      IdentityGrant(roleId:'recv',permission:'purchase.receive',
+        branchId:branch,warehouseId:warehouse),
+      IdentityGrant(roleId:'stock',permission:'inventory.read',
+        branchId:branch,warehouseId:warehouse),
+    ]);
+  await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
+    home:Scaffold(body:SingleChildScrollView(
+      child:PurchasingWorkspace(client:client,session:session)))));
+  for(var i=0;i<5;i++){
+    await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:70)));
+    await tester.pumpAndSettle();
+  }
+  expect(find.text('Xác minh lệnh đang chờ'),findsOneWidget);
+  await tester.tap(find.text('Xác minh lệnh đang chờ'));
+  await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:80)));
+  await tester.pumpAndSettle();
+  expect(client.pendingPurchase(scope),isNull);
+  expect(find.text('Xác minh lệnh đang chờ'),findsNothing);
+  expect(find.text('Nhận hàng'),findsOneWidget);
+  await tester.pump(const Duration(seconds:5));
+  await tester.pumpAndSettle();
+});
 }
