@@ -212,6 +212,14 @@ async function create(db:PoolClient,tenant:string,kind:Kind,parsed:Parsed){
   return {status:201,body:{id:r.rows[0]!.id,code:parsed.code,name:parsed.name}};
  }
  if(kind==="rules"&&"scopeKind" in parsed){
+  // New customer-group rules must reference an existing active coded directory.
+  // Legacy immutable price rules remain untouched; never rewrite their snapshot.
+  if(parsed.customerGroup){
+    const group=await db.query<{id:string}>(`SELECT id FROM catalog_customer_group
+      WHERE installation_id=$1 AND branch_id=$2 AND code=$3 AND active`,
+      [tenant,b,parsed.customerGroup]);
+    if(group.rowCount!==1)throw new R1Error(400,"CUSTOMER_GROUP_REFERENCE_REQUIRED");
+  }
   const r=await db.query<{id:string}>(`INSERT INTO catalog_sku_price_rule
    (installation_id,branch_id,price_list_id,sell_sku_id,scope_kind,
     channel_id,customer_id,customer_group,adjustment,amount,priority,stacking,
