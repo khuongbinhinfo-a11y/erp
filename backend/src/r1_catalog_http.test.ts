@@ -346,15 +346,15 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
     {code:"MCP_NEW"})).status,400,"channel identity is immutable");
   assert.equal((await patchR1("skus",baseSku,0,{active:false})).status,409,
     "base SKU cannot be disabled without product lifecycle decision");
+  const otherBarcode=await r1("barcodes",
+    {sellSkuId:skuId,barcode:"BC-0002",isPrimary:false});
+  assert.equal(otherBarcode.status,201);
   const disabledSku=await patchR1("skus",skuId,0,{active:false});
   assert.equal(disabledSku.status,200,JSON.stringify(disabledSku.body));
   assert.equal(disabledSku.body.revision,1);
   assert.equal((await patchR1("skus",skuId,0,{active:true})).status,409);
   assert.equal((await patchR1("skus",skuId,1,{toBase:"24"})).status,400,
     "an immutable conversion must not become editable");
-  const otherBarcode=await r1("barcodes",
-    {sellSkuId:skuId,barcode:"BC-0002",isPrimary:false});
-  assert.equal(otherBarcode.status,201);
   const promote=await patchR1("barcodes",otherBarcode.body.id,0,
     {active:true,isPrimary:true});
   assert.equal(promote.status,200,JSON.stringify(promote.body));
