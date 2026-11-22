@@ -128,7 +128,23 @@ const selections:Record<Resource,string>={
   "customers":'SELECT id,code,name,customer_group AS "customerGroup",phone,delivery_address AS "deliveryAddress",payment_terms_days AS "paymentTermsDays",active,revision::integer FROM catalog_customer',
   "suppliers":'SELECT id,code,name,active,revision::integer FROM catalog_supplier',
   "groups":'SELECT id,code,name,active,revision::integer FROM catalog_product_group',
-  "products":'SELECT id,sku AS code,name,base_unit AS "baseUnit",group_id AS "groupId",active,revision::integer FROM catalog_product',
+  "products":`SELECT id,sku AS code,name,base_unit AS "baseUnit",group_id AS "groupId",
+    (SELECT g.name FROM catalog_product_group g WHERE
+      g.installation_id=catalog_product.installation_id AND
+      g.branch_id=catalog_product.branch_id AND g.id=catalog_product.group_id)
+      AS "groupName",
+    (SELECT count(*)::integer FROM catalog_sell_sku s WHERE
+      s.installation_id=catalog_product.installation_id AND
+      s.branch_id=catalog_product.branch_id AND s.product_id=catalog_product.id
+      AND s.active) AS "sellSkuCount",
+    (SELECT b.barcode FROM catalog_sku_barcode b
+      JOIN catalog_sell_sku s ON s.installation_id=b.installation_id
+        AND s.branch_id=b.branch_id AND s.id=b.sell_sku_id
+      WHERE s.installation_id=catalog_product.installation_id
+        AND s.branch_id=catalog_product.branch_id
+        AND s.product_id=catalog_product.id AND s.is_base
+        AND b.active ORDER BY b.is_primary DESC,b.barcode LIMIT 1) AS barcode,
+    active,revision::integer FROM catalog_product`,
   "price-lists":'SELECT id,code,name,currency,active,revision::integer FROM catalog_price_list',
   "prices":'SELECT id,price_list_id AS "priceListId",product_id AS "productId",amount::text,discount_rate::text AS "discountRate",effective_at AS "effectiveAt" FROM catalog_price_entry',
   "warehouses":'SELECT id,code,name,branch_id AS "branchId" FROM warehouse',
@@ -169,7 +185,9 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
       ?`${selections.prices} WHERE installation_id=$1 AND branch_id=$2
           ORDER BY effective_at DESC,id LIMIT 100`
       :`${selections[resource]} WHERE installation_id=$1 AND branch_id=$2
-          AND (${resource==="products"?"sku":"code"} ILIKE $3 OR name ILIKE $3) ORDER BY ${resource==="products"?"sku":"code"},id LIMIT 100`,
+          AND (${resource==="products"?"sku":"code"} ILIKE $3 OR name ILIKE $3
+          ${resource==="customers"?"OR phone ILIKE $3 OR customer_group ILIKE $3":""})
+          ORDER BY ${resource==="products"?"sku":"code"},id LIMIT 100`,
     values);
   return r.rows;
 }
