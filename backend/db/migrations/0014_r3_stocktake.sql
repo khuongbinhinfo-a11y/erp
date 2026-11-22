@@ -84,8 +84,9 @@ END; $$;
 CREATE TRIGGER inventory_stocktake_line_guard BEFORE INSERT OR UPDATE OR DELETE
  ON inventory_stocktake_line FOR EACH ROW EXECUTE FUNCTION erp_stocktake_line_guard();
 
-CREATE FUNCTION erp_stocktake_count_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE FUNCTION erp_stocktake_count_guard() RETURNS trigger LANGUAGE plpgsql AS $
 DECLARE st text;
+ last_round integer;
 BEGIN
  IF TG_OP IN ('UPDATE','DELETE') THEN RAISE EXCEPTION 'Stocktake count is immutable'; END IF;
  SELECT status INTO st FROM inventory_stocktake
@@ -93,6 +94,14 @@ BEGIN
     AND id=NEW.stocktake_id FOR UPDATE;
  IF st IS DISTINCT FROM 'COUNTING' THEN
    RAISE EXCEPTION 'Stocktake count only permitted during counting';
+ END IF;
+ -- The stocktake document FOR UPDATE lock serializes all count writers.
+ SELECT COALESCE(max(round_no),0) INTO last_round
+ FROM inventory_stocktake_count
+ WHERE installation_id=NEW.installation_id AND branch_id=NEW.branch_id
+   AND stocktake_id=NEW.stocktake_id AND line_no=NEW.line_no;
+ IF NEW.round_no<>last_round+1 THEN
+   RAISE EXCEPTION 'Stocktake count rounds must be sequential';
  END IF;
  RETURN NEW;
 END; $$;
@@ -133,6 +142,41 @@ BEGIN
       (NEW.posted_by IS DISTINCT FROM OLD.posted_by
        OR NEW.posted_at IS DISTINCT FROM OLD.posted_at))
  THEN RAISE EXCEPTION 'Stocktake lifecycle mutation invalid'; END IF;
+ -- A direct SQL writer cannot forge counted SKU scope, quantities or movement
+ -- counts. This comparison is against the authoritative ledger (not UI cache).
+ IF OLD.status='CREATED' AND NEW.status='COUNTING' THEN
+   PERFORM 1 FROM warehouse w
+    WHERE w.installation_id=OLD.installation_id AND w.branch_id=OLD.branch_id
+      AND w.id=OLD.warehouse_id FOR UPDATE;
+   IF NOT FOUND OR NOT EXISTS(
+     SELECT 1 FROM inventory_stocktake_line l
+      WHERE l.installation_id=OLD.installation_id AND l.branch_id=OLD.branch_id
+        AND l.stocktake_id=OLD.id
+   ) THEN
+     RAISE EXCEPTION 'Stocktake captured snapshot must match warehouse inventory ledger';
+   END IF;
+   IF EXISTS(
+     WITH ledger_facts AS(
+       SELECT l.product_id,sum(l.delta_base) AS qty,count(*)::bigint AS movement_count
+       FROM inventory_ledger l
+       WHERE l.installation_id=OLD.installation_id AND l.branch_id=OLD.branch_id
+         AND l.warehouse_id=OLD.warehouse_id
+       GROUP BY l.product_id
+     ), captured AS(
+       SELECT l.product_id,l.snapshot_on_hand,l.snapshot_movement_count
+       FROM inventory_stocktake_line l
+       WHERE l.installation_id=OLD.installation_id AND l.branch_id=OLD.branch_id
+         AND l.stocktake_id=OLD.id
+     )
+     SELECT 1 FROM ledger_facts f FULL OUTER JOIN captured x
+       ON x.product_id=f.product_id
+     WHERE f.product_id IS NULL OR x.product_id IS NULL
+       OR f.qty IS DISTINCT FROM x.snapshot_on_hand
+       OR f.movement_count IS DISTINCT FROM x.snapshot_movement_count
+   ) THEN
+     RAISE EXCEPTION 'Stocktake captured snapshot must match warehouse inventory ledger';
+   END IF;
+ END IF;
  RETURN NEW;
 END; $stocktake_guard$;
 CREATE TRIGGER inventory_stocktake_header_guard BEFORE INSERT OR UPDATE OR DELETE
