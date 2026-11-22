@@ -73,7 +73,7 @@ test("R3 process proof requires nonce from GitHub's forwarded-port route",async(
   /CODESPACES_PROCESS_TUNNEL_ATTESTATION_FAILED/);
 });
 test("R3 revokes a new credential when Prisma returns an invalid one-time URL",()=>{
- const id="con_bad_url_fixture";
+ const id="con_badurlfixture123";
  const revoked=[];
  assert.throws(()=>validateMintedCredentialOrRevoke({
   connection:{id},connectionString:"postgres://u:p@evil.example/postgres?sslmode=require"
