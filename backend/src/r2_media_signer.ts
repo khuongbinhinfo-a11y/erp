@@ -36,10 +36,12 @@ export function presignR2(config:R2Config,
     .map(queryEncode).join("/");
   const date=now.toISOString().replace(/[:-]|\.\d{3}/g,"");
   const day=date.slice(0,8),scope=day+"/auto/s3/aws4_request";
+  // R2 evaluates If-None-Match atomically during PutObject. Bind the
+  // create-only precondition to the signature so a client cannot remove it.
   const headers=method==="PUT"
-    ? "content-type:"+contentType+"\nhost:"+host+"\n"
+    ? "content-type:"+contentType+"\nhost:"+host+"\nif-none-match:*\n"
     : "host:"+host+"\n";
-  const signedHeaders=method==="PUT"?"content-type;host":"host";
+  const signedHeaders=method==="PUT"?"content-type;host;if-none-match":"host";
   const fields:Record<string,string>={
     "X-Amz-Algorithm":"AWS4-HMAC-SHA256",
     "X-Amz-Credential":config.accessKeyId+"/"+scope,
