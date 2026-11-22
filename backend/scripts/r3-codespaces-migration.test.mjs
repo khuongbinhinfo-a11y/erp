@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { BASE, R3, checkOperator, checkVersions, canonicalRemote, checkCodespaceRecord, parsePrismaCredential } from "./r3-codespaces-migration.mjs";
+import { BASE, R3, checkOperator, checkVersions, canonicalRemote, checkCodespaceRecord, attestProcessCodespace, parsePrismaCredential } from "./r3-codespaces-migration.mjs";
 const sha="a".repeat(40);
 const remote="https://github.com/gustavjung24-ops/ERP.git";
 const base={CODESPACES:"true",CODESPACE_NAME:"synthetic-erp-codespace",
@@ -45,13 +45,32 @@ test("R3 canonical origin rejects lookalike host and Actions spoof",()=>{
 test("R3 requires an authenticated active Codespace with exact repository",()=>{
  assert.doesNotThrow(()=>checkCodespaceRecord({
   name:"synthetic-erp-codespace",state:"Available",
-  repository:{full_name:"gustavjung24-ops/ERP"}},"synthetic-erp-codespace"));
+  repository:{full_name:"gustavjung24-ops/ERP"},
+  owner:{login:"gustavjung24-ops"}},"synthetic-erp-codespace"));
  assert.throws(()=>checkCodespaceRecord({
   name:"synthetic-erp-codespace",state:"Unavailable",
-  repository:{full_name:"gustavjung24-ops/ERP"}},"synthetic-erp-codespace"));
+  repository:{full_name:"gustavjung24-ops/ERP"},
+  owner:{login:"gustavjung24-ops"}},"synthetic-erp-codespace"));
  assert.throws(()=>checkCodespaceRecord({
   name:"synthetic-erp-codespace",state:"Available",
-  repository:{full_name:"evil.example/ERP"}},"synthetic-erp-codespace"));
+  repository:{full_name:"evil.example/ERP"},
+  owner:{login:"gustavjung24-ops"}},"synthetic-erp-codespace"));
+});
+test("R3 rejects a collaborator-owned Codespace on the canonical repo",()=>{
+ assert.throws(()=>checkCodespaceRecord({
+  name:"synthetic-erp-codespace",state:"Available",
+  repository:{full_name:"gustavjung24-ops/ERP"},
+  owner:{login:"collaborator"}},"synthetic-erp-codespace"));
+});
+test("R3 process proof requires nonce from GitHub's forwarded-port route",async()=>{
+ const e={CODESPACE_NAME:"synthetic-erp-codespace",
+  GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN:"app.github.dev",
+  GITHUB_TOKEN:"ghu_synthetic_session_token_12345"};
+ const good=async url=>({status:200,text:async()=>new URL(url).pathname.split("/").at(-1)});
+ await assert.doesNotReject(attestProcessCodespace(e,{fetcher:good,maxAttempts:1}));
+ await assert.rejects(attestProcessCodespace(e,{fetcher:async()=>({
+  status:200,text:async()=>"unrelated-local-server"}) ,maxAttempts:1}),
+  /CODESPACES_PROCESS_TUNNEL_ATTESTATION_FAILED/);
 });
 test("R3 derives direct Postgres URL only from Prisma's targeted credential result",()=>{
  const item=parsePrismaCredential({connection:{id:"con_synthetictest123"},
