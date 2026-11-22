@@ -35,7 +35,7 @@ test("Only authenticated primary main Codespaces may run; apply needs explicit e
   {...operator,ERP_R1_MEDIA_MIGRATION_APPROVAL:""},
   {...operator,ERP_TARGET_PROJECT_ID:"proj_other"},
   {...operator,ERP_TARGET_DATABASE_ID:"db_other"}
- ])assert.throws(()=>checkOperator(e,"main",sha,primary,[],true),/OWNER_R3_TARGET_APPROVAL_MISSING/);
+ ])assert.throws(()=>checkOperator(e,"main",sha,primary,[],true),/OWNER_R1_MEDIA_TARGET_APPROVAL_MISSING/);
  for(const [e,branch,remote,changes] of [
   [{...operator,CODESPACES:"false"},"main",primary,[]],
   [{...operator,GITHUB_TOKEN:"ghp_wrong_token"},"main",primary,[]],
