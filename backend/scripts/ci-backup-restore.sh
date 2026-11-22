@@ -46,14 +46,16 @@ RESTORE_URL="$restore_url" docker run --rm --network host --env RESTORE_URL --vo
 # Verify restore is usable: data, migration history, constraints and audit triggers.
 original_migrations="$(psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc 'SELECT count(*) FROM public.schema_migrations')"
 restored_migrations="$(psql "$restore_url" -v ON_ERROR_STOP=1 -Atc 'SELECT count(*) FROM public.schema_migrations')"
-test "$original_migrations" = "$restored_migrations"
-test "$restored_migrations" = "10"
+if [[ "$original_migrations" != "$restored_migrations" ]]; then echo "CI restore migration count mismatched" >&2; exit 1; fi
+if [[ "$restored_migrations" != "11" ]]; then echo "CI restore expected 11 migrations, got $restored_migrations" >&2; exit 1; fi
 
-for relation in installation branch warehouse app_user app_role role_permission user_role mutation_receipt audit_event user_role_warehouse app_session auth_event auth_login_throttle catalog_customer catalog_supplier catalog_product_group catalog_product catalog_unit catalog_price_list catalog_price_entry sales_order sales_order_version sales_order_line sales_order_sequence catalog_sell_sku catalog_sku_barcode catalog_sales_channel catalog_sku_price_rule catalog_sku_price_retirement; do
+for relation in installation branch warehouse app_user app_role role_permission user_role mutation_receipt audit_event user_role_warehouse app_session auth_event auth_login_throttle catalog_customer catalog_supplier catalog_product_group catalog_product catalog_unit catalog_price_list catalog_price_entry sales_order sales_order_version sales_order_line sales_order_sequence catalog_sell_sku catalog_sku_barcode catalog_sales_channel catalog_sku_price_rule catalog_sku_price_retirement inventory_ledger inventory_reservation; do
   source_count="$(psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM public.$relation")"
   target_count="$(psql "$restore_url" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM public.$relation")"
-  test "$source_count" = "$target_count"
+  if [[ "$source_count" != "$target_count" ]]; then echo "CI restore row count mismatched: $relation" >&2; exit 1; fi
 done
-test "$(psql "$restore_url" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM pg_trigger WHERE tgname IN ('audit_event_append_only','mutation_receipt_write_once','catalog_price_history_append_only','sales_order_identity_guard','sales_order_version_guard','sales_order_line_guard','catalog_sell_sku_guard','catalog_unit_sku_immutability','catalog_sku_price_immutable','sales_order_channel_guard','catalog_sku_price_retirement_immutable') AND NOT tgisinternal")" = "11"
-test "$(psql "$restore_url" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'")" = "30"
+trigger_count="$(psql "$restore_url" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM pg_trigger WHERE tgname IN ('audit_event_append_only','mutation_receipt_write_once','catalog_price_history_append_only','sales_order_identity_guard','sales_order_version_guard','sales_order_line_guard','catalog_sell_sku_guard','catalog_unit_sku_immutability','catalog_sku_price_immutable','sales_order_channel_guard','catalog_sku_price_retirement_immutable','inventory_ledger_immutable','inventory_reservation_guard','inventory_movement_insert_guard','inventory_reservation_insert_guard') AND NOT tgisinternal")"
+if [[ "$trigger_count" != "15" ]]; then echo "CI restore expected 15 audit/immutability triggers, got $trigger_count" >&2; exit 1; fi
+table_count="$(psql "$restore_url" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'")"
+if [[ "$table_count" != "33" ]]; then echo "CI restore expected 33 public tables, got $table_count" >&2; exit 1; fi
 echo '{"event":"ci_backup_restore_rehearsal","backup":"verified","restore":"verified","data_reconciliation":"verified","scope":"ephemeral_postgres_only"}'

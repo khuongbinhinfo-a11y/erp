@@ -15,6 +15,7 @@ export const PERMISSIONS = {
   "orders.cancel": "branch",
   "inventory.read": "warehouse",
   "inventory.post": "warehouse",
+  "inventory.reserve": "warehouse",
   "finance.receivables.read": "branch",
   "finance.payments.record": "branch",
   "delivery.read": "branch",

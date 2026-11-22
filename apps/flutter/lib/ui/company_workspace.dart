@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 import 'erp_tokens.dart';
 import 'erp_navigation_ui.dart';
 import 'catalog_workspace.dart';
+import 'inventory_workspace.dart';
 import 'sales_workspace.dart';
 import 'erp_toast.dart';
 import 'identity_client.dart';
@@ -118,9 +119,13 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
                     'products'=>CompanySection.products,
                     _=>CompanySection.prices,
                   }))
+            : (active == CompanySection.warehouses && !widget.previewOnly &&
+                widget.client != null && widget.session != null)
+              ? InventoryWorkspace(key:const ValueKey('inventory-workspace'),
+                  client:widget.client!,session:widget.session!)
             : (!widget.previewOnly && widget.client != null && widget.session != null &&
                const [CompanySection.customers,CompanySection.products,
-                 CompanySection.prices,CompanySection.warehouses].contains(active))
+                 CompanySection.prices].contains(active))
               ? CatalogWorkspace(
                   key: ValueKey('catalog-workspace-${active.name}'),
                   area: switch(active){

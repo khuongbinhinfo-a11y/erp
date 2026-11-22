@@ -28,8 +28,8 @@ test("B1: real PostgreSQL order lifecycle, immutable versions, RBAC, replay and 
     pool=new Pool({connectionString:u.toString(),max:8,query_timeout:12000});
     pool.on("error",()=>{});
     const installed=await applyMigrations(pool,resolve(process.cwd(),"db/migrations"));
-    assert.equal(installed.applied.length,10);
-    assert.equal((await applyMigrations(pool,resolve(process.cwd(),"db/migrations"))).skipped.length,10);
+    assert.equal(installed.applied.length,11);
+    assert.equal((await applyMigrations(pool,resolve(process.cwd(),"db/migrations"))).skipped.length,11);
     const password="Sales-Testing-"+randomUUID();
     const root=await bootstrapInstallation(pool,{
       code:"sales-test",displayName:"Order integration test",
@@ -215,8 +215,13 @@ test("B1: real PostgreSQL order lifecycle, immutable versions, RBAC, replay and 
     assert.equal(orderCount.rows[0]?.count,"1");
     const facts=await pool.query<{count:string}>(
       "SELECT count(*)::text AS count FROM information_schema.tables WHERE table_schema='public'"+
-      " AND table_name IN ('inventory_ledger','receivable_ledger','delivery_order','payment_ledger')");
+      " AND table_name IN ('receivable_ledger','delivery_order','payment_ledger')");
     assert.equal(facts.rows[0]?.count,"0");
+    // Sales confirmation alone never posts a movement; R3 owns inventory facts.
+    const stockFacts=await pool.query<{count:string}>(
+      "SELECT count(*)::text AS count FROM inventory_ledger WHERE installation_id=$1",
+      [root.installationId]);
+    assert.equal(stockFacts.rows[0]?.count,"0");
     const audit=await pool.query<{count:string}>(
       "SELECT count(*)::text AS count FROM audit_event WHERE installation_id=$1 AND action_code LIKE 'sales.order.%'",
       [root.installationId]);
