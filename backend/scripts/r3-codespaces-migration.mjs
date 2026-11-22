@@ -9,6 +9,7 @@
  */
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { spawnSync, execFileSync } from "node:child_process";
+import { createServer } from "node:http";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync, statSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
@@ -75,7 +76,8 @@ function command(name,args,extraEnv={}){
 // intended repository. Environment flags alone are never treated as identity.
 export function checkCodespaceRecord(record,name){
  if(record?.name!==name||record?.state!=="Available"||
-    record?.repository?.full_name!=="gustavjung24-ops/ERP")
+    record?.repository?.full_name!=="gustavjung24-ops/ERP"||
+    record?.owner?.login!=="gustavjung24-ops")
    fail("CODESPACES_IDENTITY_ATTESTATION_FAILED");
 }
 function verifyCodespaceSession(e){
@@ -90,6 +92,55 @@ function verifyCodespaceSession(e){
     {GH_TOKEN:e.GITHUB_TOKEN,GH_HOST:"github.com"}));
  }catch{fail("CODESPACES_SESSION_TOKEN_ATTESTATION_UNAVAILABLE");}
  checkCodespaceRecord(record,e.CODESPACE_NAME);
+}
+/**
+ * Proof of the current PROCESS's location: GitHub's private forwarded-port
+ * hostname routes to sockets inside the actual Codespace VM. A copied user
+ * token can authenticate remotely but CANNOT route a local socket through
+ * that VM. We start a fresh, unpredictable challenge server in THIS process
+ * and require the remote GitHub tunnel to reach it over HTTPS.
+ * Codespaces auto-forward when the terminal sees a localhost URL.
+ * Failure is closed; never fall back to a local port-only probe.
+ */
+export async function attestProcessCodespace(e,{fetcher=fetch,port=0}={}){
+ const name=e.CODESPACE_NAME,domain=e.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN;
+ if(!/^[a-z0-9-]{5,128}$/.test(name??"")||domain!=="app.github.dev")
+   fail("CODESPACES_PORT_OR_NAME_INVALID");
+ const nonce=randomBytes(32).toString("hex");
+ const server=createServer((req,res)=>{
+  if(req.method!=="GET"||req.url!=="/erp-r3-attestation/"+nonce){
+   res.writeHead(404).end();return;
+  }
+  res.writeHead(200,{"content-type":"text/plain; charset=utf-8","cache-control":"no-store"}).end(nonce);
+ });
+ await new Promise((resolveListen,rejectListen)=>{
+  server.once("error",rejectListen);
+  server.listen(port,"0.0.0.0",resolveListen);
+ });
+ const assigned=server.address()?.port;
+ try{
+  if(!Number.isInteger(assigned)||assigned<1024)
+    fail("CODESPACES_ATTESTATION_PORT_UNAVAILABLE");
+  // The Codespaces VS Code runtime detects this URL and forwards the port.
+  console.log("CODESPACES_FORWARD_ATTESTATION http://localhost:"+assigned);
+  const url="https://"+name+"-"+assigned+"."+domain+
+    "/erp-r3-attestation/"+nonce;
+  for(let attempt=0;attempt<25;attempt++){
+   try{
+    const response=await fetcher(url,{
+     headers:{"X-Github-Token":e.GITHUB_TOKEN},
+     redirect:"manual",signal:AbortSignal.timeout(2500)});
+    if(response.status===200&&(await response.text())===nonce){
+     console.log("CODESPACES_RUNNING_PROCESS_TUNNEL_ATTESTED");
+     return;
+    }
+   }catch{}
+   await new Promise(ok=>setTimeout(ok,900));
+  }
+  fail("CODESPACES_PROCESS_TUNNEL_ATTESTATION_FAILED");
+ }finally{
+  await new Promise(ok=>server.close(ok));
+ }
 }
 function safeURL(raw){
  let u;try{u=new URL(raw);}catch{fail("INVALID_DIRECT_DATABASE_URL");}
@@ -193,6 +244,7 @@ async function main(mode){
  const changes=tracked.split("\n").filter(Boolean).map(x=>x.slice(3));
  checkOperator(e,branch,sha,remote,changes,mode==="--apply");
  verifyCodespaceSession(e);
+ await attestProcessCodespace(e);
  required(e,["ERP_APPROVED_SHA"]);
  if(mode==="--apply")await maintenance();
  const credential=mintErpDbCredential();
