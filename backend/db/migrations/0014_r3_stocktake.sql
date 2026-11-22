@@ -100,8 +100,17 @@ CREATE TRIGGER inventory_stocktake_count_guard BEFORE INSERT OR UPDATE OR DELETE
  ON inventory_stocktake_count FOR EACH ROW EXECUTE FUNCTION erp_stocktake_count_guard();
 
 -- No mutation of snapshot identity and only server-defined lifecycle transitions.
-CREATE FUNCTION erp_stocktake_header_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE FUNCTION erp_stocktake_header_guard() RETURNS trigger LANGUAGE plpgsql AS $
 BEGIN
+ IF TG_OP='INSERT' THEN
+   IF NEW.status IS DISTINCT FROM 'CREATED' OR NEW.revision<>0
+     OR NEW.submitted_by IS NOT NULL OR NEW.submitted_at IS NOT NULL
+     OR NEW.approved_by IS NOT NULL OR NEW.approved_at IS NOT NULL
+     OR NEW.posted_by IS NOT NULL OR NEW.posted_at IS NOT NULL THEN
+      RAISE EXCEPTION 'Stocktake must begin in CREATED without posted facts';
+   END IF;
+   RETURN NEW;
+ END IF;
  IF TG_OP='DELETE' THEN RAISE EXCEPTION 'Stocktake document cannot be deleted'; END IF;
  IF (NEW.installation_id,NEW.branch_id,NEW.id,NEW.warehouse_id,
       NEW.created_by,NEW.request_id,NEW.created_at,NEW.note)
@@ -126,7 +135,7 @@ BEGIN
  THEN RAISE EXCEPTION 'Stocktake lifecycle mutation invalid'; END IF;
  RETURN NEW;
 END; $$;
-CREATE TRIGGER inventory_stocktake_header_guard BEFORE UPDATE OR DELETE
+CREATE TRIGGER inventory_stocktake_header_guard BEFORE INSERT OR UPDATE OR DELETE
  ON inventory_stocktake FOR EACH ROW EXECUTE FUNCTION erp_stocktake_header_guard();
 
 -- A direct SQL movement cannot create arbitrary stocktake corrections.
