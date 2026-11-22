@@ -378,7 +378,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
       }on ErpApiError catch(e){
         // Authentication failures, timeouts and conflicts cannot establish
         // that the first attempt did not commit. Replay the original command.
-        if(e.status==400||e.status==404||e.status==413||e.status==415)
+        if(e.status==400||e.status==404||e.status==413||
+            e.status==415||e.code=='DUPLICATE')
           widget.client.clearR1(actor,branch,pendingKind);
         if(mounted){
           ErpToast.show(context,_errorMessage(e),isError:true);
