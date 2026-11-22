@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+import 'package:file_picker/file_picker.dart';
 import 'package:material_ui/material_ui.dart';
 import 'erp_navigation_ui.dart';
 import 'erp_tokens.dart';
@@ -165,6 +167,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     final newUnitCode=TextEditingController(),newUnitName=TextEditingController();
     String? groupError,unitError;
     bool groupBusy=false,unitBusy=false;
+    Uint8List? selectedImage;
+    String? selectedImageType,selectedImageName;
     String? productId,priceListId,groupId;
     List<Map<String,dynamic>> availableProducts=[],availableLists=[],availableGroups=[],
       availableUnits=[];
@@ -534,6 +538,54 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                     }),
                     icon:const Icon(Icons.add),
                     label:const Text('Thêm quy cách bán')),
+                  const SizedBox(height:18),
+                  const Divider(),
+                  const SizedBox(height:12),
+                  const Text('4. Ảnh sản phẩm',style:TextStyle(
+                    fontWeight:FontWeight.w800,fontSize:16,color:ErpTokens.primary)),
+                  const SizedBox(height:5),
+                  const Text('Chọn ảnh để gửi vào kho R2 riêng sau khi sản phẩm được tạo. '
+                    'Tối đa 5 MB, PNG/JPG/WebP. Ảnh không được công khai.',
+                    style:TextStyle(color:ErpTokens.muted,fontSize:12)),
+                  const SizedBox(height:9),
+                  Wrap(spacing:12,runSpacing:12,crossAxisAlignment:WrapCrossAlignment.center,
+                    children:[
+                    OutlinedButton.icon(
+                      key:const ValueKey('catalog-product-pick-image'),
+                      icon:const Icon(Icons.add_photo_alternate_outlined),
+                      label:Text(selectedImageName??'Chọn ảnh sản phẩm'),
+                      onPressed:()async{
+                        try{
+                          final file=await FilePicker.platform.pickFiles(
+                            type:FileType.custom,
+                            allowedExtensions:['png','jpg','jpeg','webp'],
+                            withData:true);
+                          if(file==null||file.files.isEmpty)return;
+                          final first=file.files.first;
+                          final ext=first.extension?.toLowerCase();
+                          final mime=ext=='png'?'image/png':
+                            ext=='webp'?'image/webp':
+                            ext=='jpg'||ext=='jpeg'?'image/jpeg':null;
+                          if(mime==null||first.bytes==null||
+                            first.bytes!.isEmpty||first.bytes!.length>5242880){
+                            refresh(()=>unitError='Ảnh phải là PNG/JPG/WebP và dưới 5 MB.');
+                            return;
+                          }
+                          if(ctx.mounted)refresh((){
+                            selectedImage=first.bytes;
+                            selectedImageName=first.name;
+                            selectedImageType=mime;
+                          });
+                        }catch(_){
+                          if(ctx.mounted)refresh(
+                            ()=>unitError='Không mở được ảnh từ thiết bị.');
+                        }
+                      }),
+                    if(selectedImage!=null)ClipRRect(
+                      borderRadius:BorderRadius.circular(8),
+                      child:Image.memory(selectedImage!,height:90,width:90,
+                        fit:BoxFit.cover)),
+                  ]),
                 ],
               ],
             ]))),
@@ -604,12 +656,25 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
         actor,branch,pendingKind,payload,key);
       setState(()=>saving=true);
       try{
-        await widget.client.createCatalogWithKey(
+        final created=await widget.client.createCatalogWithKey(
           widget.session.token,resource,payload,key:key);
         widget.client.clearR1(actor,branch,pendingKind);
         if(!mounted)return;
         ErpToast.show(context,'Đã lưu ${titles[resource]!.toLowerCase()} sau xác nhận server.');
         await _loadRecords();
+        if(resource=='products'&&selectedImage!=null&&selectedImageType!=null){
+          try{
+            await widget.client.uploadProductPhoto(
+              widget.session.token,actor,branch,
+              created['id'] as String,selectedImage!,selectedImageType!);
+            if(mounted)ErpToast.show(context,'Ảnh sản phẩm đã lưu vào R2.');
+          }on ErpApiError catch(_){
+            if(mounted)ErpToast.show(context,
+              'Đã lưu sản phẩm nhưng ảnh chưa được xác nhận. '
+              'Mở biểu tượng hình ảnh tại sản phẩm để kiểm tra.',
+              isError:true);
+          }
+        }
       }on ErpApiError catch(e){
         // Authentication failures, timeouts and conflicts cannot establish
         // that the first attempt did not commit. Replay the original command.
