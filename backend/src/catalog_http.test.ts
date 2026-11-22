@@ -68,6 +68,28 @@ test("Issue #7: catalog HTTP uses real PostgreSQL with tenant/branch RBAC, decim
       const group=await create("groups",{code:"GRP-01",name:"Synthetic Group"},
         "group-"+randomUUID(),token);
       assert.equal(group.status,201);
+      const uom=await create("unit-definitions",{code:"CHAI",name:"Chai"},
+        "unit-dictionary-"+randomUUID(),token);
+      assert.equal(uom.status,201,JSON.stringify(uom.body));
+      assert.equal(uom.body.code,"CHAI");
+      const definitions=await call("/v1/catalog/unit-definitions?branchId="+b,
+        "GET",undefined,token);
+      assert.equal(definitions.status,200);
+      assert.equal(definitions.body.items.find((x:{code:string})=>x.code==="CHAI")?.name,
+        "Chai","unit code and human-readable label stay separate");
+      const duplicate=await create("unit-definitions",{code:"CHAI",name:"Khác"},
+        "unit-duplicate-"+randomUUID(),token);
+      assert.equal(duplicate.status,409);
+      const unitEdit=await call("/v1/catalog/unit-definitions/"+uom.body.id,
+        "PATCH",{branchId:b,name:"Chai thủy tinh"},token,{
+          "idempotency-key":"unit-edit-"+randomUUID(),"if-match":"0",
+        });
+      assert.equal(unitEdit.status,200);
+      assert.equal(unitEdit.body.revision,1);
+      const unitAfter=await call("/v1/catalog/unit-definitions?branchId="+b,
+        "GET",undefined,token);
+      assert.equal(unitAfter.body.items.find((x:{code:string})=>x.code==="CHAI")?.name,
+        "Chai thủy tinh");
       const customerKey="customer-"+randomUUID();
       const customerBody={branchId:b,code:"CUSTOMER-01",name:"Synthetic Customer"};
       const customer=await call("/v1/catalog/customers","POST",customerBody,token,
