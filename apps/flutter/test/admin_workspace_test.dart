@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -66,6 +67,9 @@ void main() {
     expect(find.textContaining('Chi nhánh miền Nam'),findsWidgets);
     expect(find.textContaining('inventory.read'),findsNothing);
     expect(find.textContaining('00000000-0000'),findsNothing);
+    // Close the open dropdown overlay before tapping the dialog action.
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Hủy').last);
     await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('Thu quyền'));
