@@ -126,6 +126,31 @@ test("R3.4 PostgreSQL: capture, recount, separate approval, stale guard and exac
   const createOnly=await make(endpoint,{...scope,note:"Counting-only create"},0,
     "creator-"+randomUUID(),creatorToken);
   assert.equal(createOnly.status,201,JSON.stringify(createOnly.body));
+  // A direct SQL writer must not forge a snapshot quantity or omit stock SKUs.
+  const forgedSnapshot=await db.query<{id:string}>(`
+    INSERT INTO inventory_stocktake(installation_id,branch_id,warehouse_id,
+      created_by,request_id)
+    VALUES($1,$2,$3,$4,'forged-snapshot-fixture') RETURNING id`,
+    [t,b,w,root.actorId]);
+  await db.query(`INSERT INTO inventory_stocktake_line(
+    installation_id,branch_id,stocktake_id,line_no,product_id,
+    snapshot_on_hand,snapshot_movement_count)
+    VALUES($1,$2,$3,1,$4,4,1)`,[t,b,forgedSnapshot.rows[0]!.id,p]);
+  await assert.rejects(db.query(`UPDATE inventory_stocktake
+    SET status='COUNTING',revision=revision+1
+    WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,
+    [t,b,forgedSnapshot.rows[0]!.id]),
+    /captured snapshot must match warehouse inventory ledger/i);
+  const omittedSnapshot=await db.query<{id:string}>(`
+    INSERT INTO inventory_stocktake(installation_id,branch_id,warehouse_id,
+      created_by,request_id)
+    VALUES($1,$2,$3,$4,'omitted-snapshot-fixture') RETURNING id`,
+    [t,b,w,root.actorId]);
+  await assert.rejects(db.query(`UPDATE inventory_stocktake
+    SET status='COUNTING',revision=revision+1
+    WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,
+    [t,b,omittedSnapshot.rows[0]!.id]),
+    /captured snapshot must match warehouse inventory ledger/i);
   const createKey="stocktake-"+randomUUID();
   const created=await make(endpoint,{...scope,note:"Reconcile synthetic"},0,createKey);
   assert.equal(created.status,201,JSON.stringify(created.body));
@@ -141,6 +166,14 @@ test("R3.4 PostgreSQL: capture, recount, separate approval, stale guard and exac
   assert.equal(detailed.body.stocktake.lines[0].snapshotOnHand,"5.000000");
   assert.equal(detailed.body.stocktake.lines[0].countedBase,null);
   const countPath=endpoint+"/"+id+"/counts";
+  await assert.rejects(db.query(`INSERT INTO inventory_stocktake_count(
+    installation_id,branch_id,stocktake_id,line_no,round_no,
+    counted_base,counted_by,request_id)
+    VALUES($1,$2,$3,1,3,4,$4,'round-skip-fixture')`,
+    [t,b,id,root.actorId]),/count rounds must be sequential/i);
+  const premature=await make(countPath,{...scope,lines:[
+    {lineNo:1,round:3,quantity:"4"}]},1);
+  assert.equal(premature.status,409,JSON.stringify(premature.body));
   const countKey="stock-count-"+randomUUID();
   const recorded=await make(countPath,{...scope,lines:[
    {lineNo:1,round:1,quantity:"4"}]},1,countKey);
@@ -149,6 +182,9 @@ test("R3.4 PostgreSQL: capture, recount, separate approval, stale guard and exac
    {lineNo:1,round:1,quantity:"4"}]},1,countKey)).body,recorded.body);
   assert.equal((await make(countPath,{...scope,lines:[
    {lineNo:1,round:1,quantity:"1"}]},1)).status,409);
+  // After round one, round three still cannot skip round two.
+  assert.equal((await make(countPath,{...scope,lines:[
+   {lineNo:1,round:3,quantity:"3"}]},1)).status,409);
   assert.equal((await make(countPath,{...scope,lines:[
    {lineNo:1,round:2,quantity:"3"}]},1)).status,201);
   const afterCount=await call(endpoint+"/"+id+"?branchId="+b+"&warehouseId="+w,
