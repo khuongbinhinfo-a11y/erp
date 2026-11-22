@@ -542,7 +542,9 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
       const client=await pool.connect();
       try{
         const rows=await listing(client,tenant,actorId,branchId,resource,search);
-        send(res,200,{items:rows,requestId},requestId,corsOrigin);
+        send(res,200,{items:rows,
+          ...(resource==="products"?{r1ProductReady:await hasR1CatalogSchema(pool)}:{}),
+          requestId},requestId,corsOrigin);
       }finally{client.release();}
       return;
     }
