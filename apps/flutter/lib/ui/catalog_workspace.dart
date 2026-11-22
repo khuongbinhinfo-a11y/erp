@@ -33,8 +33,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     ],
     'products':[
       ErpSectionTab('products','Sản phẩm'),
-      ErpSectionTab('unit-definitions','Danh mục đơn vị tính'),
       ErpSectionTab('groups','Nhóm hàng'),
+      ErpSectionTab('unit-definitions','Đơn vị tính'),
       ErpSectionTab('units','Đơn vị và quy đổi'),
       ErpSectionTab('skus','SKU bán hàng'),
       ErpSectionTab('barcodes','Mã vạch'),
