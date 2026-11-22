@@ -149,6 +149,27 @@ export async function handleTransferHttp(req:IncomingMessage,res:ServerResponse,
    }finally{c.release();}
    return;
   }
+  // Creation-specific SKU picker: permission is checked against the source
+  // warehouse, without granting broad catalog access across the installation.
+  if(req.method==="GET"&&url.pathname==="/v1/inventory/transfers/products"){
+   const b=uuid(url.searchParams.get("branchId"));
+   const wh=uuid(url.searchParams.get("warehouseId"));
+   const q=(url.searchParams.get("q")??"").trim();
+   if(q.length>80)throw new TransferFault(400,"INVALID_TRANSFER_PRODUCT_SEARCH");
+   const con=await db.connect();
+   try{
+    if(!await hasPermission(con,{installationId:t,actorId:actor,
+      permission:"inventory.transfer.create",branchId:b,warehouseId:wh}))
+      throw new TransferFault(403,"TRANSFER_CREATE_DENIED");
+    const products=await con.query(
+      `SELECT p.id,p.sku AS code,p.name,p.active FROM catalog_product p
+       WHERE p.installation_id=$1 AND p.branch_id=$2 AND p.active
+        AND ($3='' OR p.sku ILIKE '%'||$3||'%' OR p.name ILIKE '%'||$3||'%')
+       ORDER BY p.sku,p.id LIMIT 100`,[t,b,q]);
+    send(res,200,{items:products.rows,requestId:id},id,cors);
+   }finally{con.release();}
+   return;
+  }
   const route=/^\/v1\/inventory\/transfers\/([0-9a-f-]{36})(?:\/(approve|dispatch|cancel|receipts))?$/.exec(url.pathname);
   if(req.method==="GET"){
    const b=uuid(url.searchParams.get("branchId"));
