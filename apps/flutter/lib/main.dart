@@ -87,7 +87,11 @@ class _ErpAppState extends State<ErpApp>{
       // Only explicit invalidation/disabled account ends the session; transient
       // provider downtime preserves the user's browser session.
       if((e.status==401||e.status==403)&&mounted&&_session?.token==current.token){
-        await logout();
+        // Session expiry is not an explicit logout: pending business commands
+        // remain in the client until the same actor reauthenticates and replays.
+        _reauthorize?.cancel();
+        setState((){_session=null;_preview=false;_pendingToken=null;});
+        try{await ErpSessionStore.clear();}catch(_){}
       }
     }catch(_){/* Retry next health cycle; never logout for offline error. */}
   }
