@@ -121,8 +121,7 @@ function mintErpDbCredential(){
  return parsePrismaCredential(result);
 }
 function revokeErpDbCredential(id){
- prismaCli(["postgres","connection","delete",id,
-   "--project",PROJECT,"--confirm",id]);
+ prismaCli(["postgres","connection","delete",id,"--confirm",id]);
 }
 function pgEnv(u){
  return {PGHOST:u.hostname,PGPORT:u.port||"5432",
