@@ -146,8 +146,10 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
    await reload();
   }on ErpApiError catch(e){
    // 401/403/409 do not prove an earlier COMMIT failed; preserve exact retry.
+   // The server checks committed mutation receipts before business validation.
+   // A 409 is therefore a definite rejection, unlike 5xx/401/403.
    final unknown=e.status==0||e.status>=500||e.status==401||
-     e.status==403||e.status==409;
+     e.status==403;
    if(!unknown)widget.client.clearPurchase(scope);
    inform(unknown?'Chưa xác minh máy chủ đã xử lý. Hãy thử lại đúng yêu cầu.':e.message,
      bad:true);
