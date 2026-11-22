@@ -256,4 +256,71 @@ void main(){
     await tester.pumpAndSettle();
   });
 
+  testWidgets('R1-A customer editor fits narrow viewport and uses coded group/region',
+    (tester)async{
+      var patches=0;
+      Map<String,dynamic>? saved;
+      final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+        httpClient:MockClient((req)async{
+          const headers={'content-type':'application/json; charset=utf-8'};
+          if(req.url.path=='/v1/catalog/branches')return http.Response(
+            jsonEncode({'items':[{'id':branch,'code':'MAIN','name':'Chi nhánh chính'}]}),
+            200,headers:headers);
+          if(req.url.path=='/v1/catalog/customer-groups')return http.Response(
+            jsonEncode({'items':[{'id':'group-1','code':'KH_SI',
+              'name':'Khách bán sỉ','active':true}]}),200,headers:headers);
+          if(req.url.path=='/v1/catalog/customer-regions')return http.Response(
+            jsonEncode({'items':[{'id':'region-1','code':'KV_MT',
+              'name':'Khu vực Mỹ Tho','active':true}]}),200,headers:headers);
+          if(req.url.path=='/v1/catalog/customers'&&req.method=='GET'){
+            return http.Response(jsonEncode({'items':[{
+              'id':'customer-r1a','code':'KH0001','name':'Khách kiểm tra',
+              'customerGroupId':'group-1','customerGroupCode':'KH_SI',
+              'customerRegionId':null,'customerRegionCode':null,
+              'phone':'+84912345678','deliveryAddress':'Đường thử',
+              'paymentTermsDays':15,'active':true,'revision':0,
+            }]}),200,headers:headers);
+          }
+          if(req.url.path=='/v1/catalog/customers/customer-r1a'&&req.method=='PATCH'){
+            saved=jsonDecode(req.body) as Map<String,dynamic>;patches++;
+            return http.Response(jsonEncode({'id':'customer-r1a','revision':1}),200,headers:headers);
+          }
+          return http.Response(jsonEncode({'items':[]}),200,headers:headers);
+        }));
+      addTearDown(client.dispose);
+      tester.view.devicePixelRatio=1;
+      tester.view.physicalSize=const Size(390,680);
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:true),
+        home:Scaffold(body:CompanyWorkspace(previewOnly:false,grants:grants,
+          session:activeSession(),client:client))));
+      await tester.tap(find.byKey(const ValueKey('company-CompanySection.customers')));
+      await tester.pumpAndSettle();
+      await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:150)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('catalog-edit-customer-r1a')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('catalog-edit-scroll')),findsOneWidget);
+      expect(find.byKey(const ValueKey('catalog-edit-customer-group')),findsOneWidget);
+      final region=find.byKey(const ValueKey('catalog-edit-customer-region'));
+      expect(region,findsOneWidget);
+      await tester.ensureVisible(region);
+      await tester.pumpAndSettle();
+      await tester.tap(region);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('KV_MT · Khu vực Mỹ Tho').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('catalog-edit-save')));
+      await tester.pumpAndSettle();
+      await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:150)));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(),isNull);
+      expect(patches,1);
+      expect(saved?['customerRegionId'],'region-1');
+      expect(saved?.containsKey('customerGroupId'),false,
+        reason:'unchanged group must not trigger irrelevant re-assignment');
+      expect(saved?['branchId'],branch);
+    });
+
 }
