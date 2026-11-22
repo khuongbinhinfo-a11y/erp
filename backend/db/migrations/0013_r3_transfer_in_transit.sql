@@ -115,6 +115,8 @@ BEGIN
      OLD.destination_warehouse_id,OLD.note,OLD.created_by,OLD.request_id,OLD.created_at)
    OR NEW.revision<>OLD.revision+1
    OR (OLD.status='CREATED' AND NEW.status NOT IN ('APPROVED','CANCELLED'))
+   OR (OLD.status='CREATED' AND NEW.status='CANCELLED'
+       AND (NEW.approved_by IS NOT NULL OR NEW.approved_at IS NOT NULL))
    OR (OLD.status='APPROVED' AND NEW.status NOT IN ('IN_TRANSIT','CANCELLED'))
    OR (OLD.status='IN_TRANSIT' AND NEW.status NOT IN ('PARTIALLY_RECEIVED','RECEIVED'))
    OR (OLD.status='PARTIALLY_RECEIVED'
@@ -288,7 +290,30 @@ CREATE TRIGGER inventory_transfer_receipt_line_guard BEFORE INSERT
 
 -- Every destination stock credit must have a matching accepted receipt line
 -- at COMMIT, not merely a matching header. Prevent forged orphan TRANSFER_IN facts.
-CREATE FUNCTION erp_transfer_in_commit_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+-- Dispatch and stock deduction are one atomic business transition.
+CREATE FUNCTION erp_transfer_out_commit_guard() RETURNS trigger LANGUAGE plpgsql AS $transfer_out_guard$
+DECLARE committed_state text;
+BEGIN
+ SELECT status INTO committed_state FROM inventory_transfer
+ WHERE installation_id=NEW.installation_id AND branch_id=NEW.branch_id
+   AND id=NEW.source_id;
+ IF committed_state IS DISTINCT FROM 'IN_TRANSIT'
+   AND committed_state IS DISTINCT FROM 'PARTIALLY_RECEIVED'
+   AND committed_state IS DISTINCT FROM 'RECEIVED' THEN
+   RAISE EXCEPTION 'Transfer source movement requires dispatch transition at commit';
+ END IF;
+ RETURN NULL;
+END; $transfer_out_guard$;
+CREATE CONSTRAINT TRIGGER inventory_transfer_out_commit_guard
+ AFTER INSERT ON inventory_ledger
+ DEFERRABLE INITIALLY DEFERRED
+ FOR EACH ROW WHEN (NEW.kind='TRANSFER_OUT')
+ EXECUTE FUNCTION erp_transfer_out_commit_guard();
+
+CREATE FUNCTION erp_transfer_in_commit_guard() RETURNS trigger LANGUAGE plpgsql AS $
+DECLARE transfer_id_now uuid;
+ committed_state text;
+ still_outstanding boolean;
 BEGIN
  IF NOT EXISTS(
    SELECT 1 FROM inventory_transfer_receipt_line r
@@ -299,8 +324,32 @@ BEGIN
  ) THEN
    RAISE EXCEPTION 'Transfer destination movement has no accepted receipt line';
  END IF;
+ -- A receipt ledger credit is not valid until the transfer header reflects
+ -- the full accepted quantity or a genuine partial receipt in this transaction.
+ SELECT r.transfer_id,t.status INTO transfer_id_now,committed_state
+ FROM inventory_transfer_receipt r JOIN inventory_transfer t
+   ON t.installation_id=r.installation_id AND t.branch_id=r.branch_id
+     AND t.id=r.transfer_id
+ WHERE r.installation_id=NEW.installation_id AND r.branch_id=NEW.branch_id
+   AND r.id=NEW.source_id;
+ IF transfer_id_now IS NULL OR committed_state NOT IN ('PARTIALLY_RECEIVED','RECEIVED') THEN
+   RAISE EXCEPTION 'Transfer destination movement requires receipt status transition at commit';
+ END IF;
+ SELECT EXISTS(
+    SELECT 1 FROM inventory_transfer_line l
+    WHERE l.installation_id=NEW.installation_id AND l.branch_id=NEW.branch_id
+      AND l.transfer_id=transfer_id_now
+      AND l.quantity_base>COALESCE((SELECT sum(r.quantity_base)
+        FROM inventory_transfer_receipt_line r
+        WHERE r.installation_id=l.installation_id AND r.branch_id=l.branch_id
+          AND r.transfer_id=l.transfer_id AND r.transfer_line_no=l.line_no),0)
+ ) INTO still_outstanding;
+ IF (committed_state='RECEIVED' AND still_outstanding)
+   OR (committed_state='PARTIALLY_RECEIVED' AND NOT still_outstanding) THEN
+   RAISE EXCEPTION 'Transfer destination movement requires matching received status at commit';
+ END IF;
  RETURN NULL;
-END; $$;
+END; $;
 CREATE CONSTRAINT TRIGGER inventory_transfer_in_commit_guard
  AFTER INSERT ON inventory_ledger
  DEFERRABLE INITIALLY DEFERRED
