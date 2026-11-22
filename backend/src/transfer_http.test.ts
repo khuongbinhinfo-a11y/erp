@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import type { AddressInfo } from "node:net";
 import { Pool } from "pg";
+import { hashPassword } from "./auth.ts";
 import { applyMigrations } from "./migrate.ts";
 import { bootstrapInstallation } from "./bootstrap.ts";
 import { buildApp } from "./server.ts";
@@ -25,8 +26,8 @@ test("R3.3 transfer PostgreSQL: physical dispatch, in-transit, partial and raced
   const uri=new URL(source!);uri.pathname="/"+name;
   db=new Pool({connectionString:uri.toString(),max:8,query_timeout:12000});
   db.on("error",()=>{});
-  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).applied.length,14);
-  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).skipped.length,14);
+  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).applied.length,13);
+  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).skipped.length,13);
   const password="Synthetic-transfer-"+randomUUID();
   const root=await bootstrapInstallation(db,{code:"transfer-r3",displayName:"Transfer synthetic",
     adminLogin:"owner",adminPassword:password});
@@ -91,6 +92,12 @@ test("R3.3 transfer PostgreSQL: physical dispatch, in-transit, partial and raced
   const approve=await make(endpoint+"/"+id+"/approve",scope,0);
   assert.equal(approve.status,200,JSON.stringify(approve.body));
   assert.equal(approve.body.status,"APPROVED");
+  // Codex P2: direct status changes cannot skip the physical dispatch ledger.
+  await assert.rejects(db.query(
+   `UPDATE inventory_transfer SET status='IN_TRANSIT',
+     revision=revision+1,dispatched_by=$4,dispatched_at=now()
+     WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,
+   [t,b,id,root.actorId]),/requires one source issue per line/i);
   const before=await call("/v1/inventory/balances?branchId="+b+"&warehouseId="+w,
     "GET",undefined,token);
   assert.equal(before.body.items[0].onHand,"5.000000");
@@ -99,9 +106,38 @@ test("R3.3 transfer PostgreSQL: physical dispatch, in-transit, partial and raced
   assert.equal(sent.status,200,JSON.stringify(sent.body));
   assert.equal(sent.body.status,"IN_TRANSIT");
   assert.deepEqual((await make(endpoint+"/"+id+"/dispatch",scope,1,dispatchKey)).body,sent.body);
+  // The database cannot mark a transfer as fully received without receipts.
+  await assert.rejects(db.query(
+   `UPDATE inventory_transfer SET status='RECEIVED',revision=revision+1
+      WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,
+    [t,b,id]),/cannot receive without posted receipt lines/i);
+  // Codex P1: a ledger credit with only a header and no accepted line must fail at COMMIT.
+  const direct=await db.connect();
+  try{
+   await direct.query("BEGIN");
+   const head=await direct.query<{id:string}>(
+    `INSERT INTO inventory_transfer_receipt(installation_id,branch_id,transfer_id,
+       destination_warehouse_id,posted_by,request_id)
+      VALUES($1,$2,$3,$4,$5,'synthetic-orphan') RETURNING id`,
+    [t,b,id,dest,root.actorId]);
+   await direct.query(
+    `INSERT INTO inventory_ledger(installation_id,branch_id,warehouse_id,product_id,
+       kind,source_type,source_id,source_line,delta_base,actor_id,request_id)
+     VALUES($1,$2,$3,$4,'TRANSFER_IN','TRANSFER',$5,1,0.5,$6,'synthetic-orphan')`,
+    [t,b,dest,p,head.rows[0]!.id,root.actorId]);
+   await assert.rejects(direct.query("COMMIT"),/no accepted receipt line/i);
+  }finally{await direct.query("ROLLBACK").catch(()=>undefined);direct.release();}
+
   const sourceStock=await call("/v1/inventory/balances?branchId="+b+"&warehouseId="+w,
     "GET",undefined,token);
   assert.equal(sourceStock.body.items[0].onHand,"2.000000");
+  // Insufficient dispatch stock is a definitive, correctable 409, never 503.
+  const tooMuch=await make(endpoint,{...draft,
+    lines:[{productId:p,quantity:"9"}]},0);
+  assert.equal(tooMuch.status,201);
+  assert.equal((await make(endpoint+"/"+tooMuch.body.id+"/approve",scope,0)).status,200);
+  const insufficient=await make(endpoint+"/"+tooMuch.body.id+"/dispatch",scope,1);
+  assert.equal(insufficient.status,409,JSON.stringify(insufficient.body));
   const destinationBefore=await call("/v1/inventory/balances?branchId="+b+
     "&warehouseId="+dest,"GET",undefined,token);
   assert.equal(destinationBefore.body.items.length,0);
@@ -147,6 +183,38 @@ test("R3.3 transfer PostgreSQL: physical dispatch, in-transit, partial and raced
    "UPDATE inventory_transfer_receipt_line SET quantity_base=9 WHERE installation_id=$1",[t]),
    /immutable/i);
   assert.equal((await make(receivePath,second,4)).status,409);
+  // Transfer-only warehouse staff must access authorized selectors without catalog.read.
+  const limitedPass="Synthetic-transfer-receiver-"+randomUUID();
+  const limited=(await db.query<{id:string}>(
+   `INSERT INTO app_user(installation_id,login_name,password_hash)
+      VALUES($1,'receiver',$2) RETURNING id`,[t,await hashPassword(limitedPass)])).rows[0]!.id;
+  const role=(await db.query<{id:string}>(
+   `INSERT INTO app_role(installation_id,code)
+     VALUES($1,'TRANSFER_RECEIVER_ONLY') RETURNING id`,[t])).rows[0]!.id;
+  await db.query(`INSERT INTO user_role(installation_id,user_id,role_id,branch_id)
+    VALUES($1,$2,$3,$4)`,[t,limited,role,b]);
+  await db.query(`INSERT INTO user_role_warehouse(
+    installation_id,user_id,role_id,branch_id,warehouse_id)
+    VALUES($1,$2,$3,$4,$5)`,[t,limited,role,b,dest]);
+  await db.query(`INSERT INTO role_permission(installation_id,role_id,permission_code)
+    VALUES($1,$2,'inventory.transfer.read'),
+          ($1,$2,'inventory.transfer.receive')`,[t,role]);
+  const relog=await call("/v1/auth/login","POST",
+    {loginName:"receiver",password:limitedPass});
+  assert.equal(relog.status,200,JSON.stringify(relog.body));
+  const receiverToken=relog.body.token as string;
+  const transferScopes=await call(endpoint+"/scopes?branchId="+b,
+    "GET",undefined,receiverToken);
+  assert.equal(transferScopes.status,200,JSON.stringify(transferScopes.body));
+  assert.equal(transferScopes.body.branches.length,1);
+  assert.deepEqual(transferScopes.body.warehouses.map(
+    (x:Record<string,string>)=>x.id),[dest]);
+  assert.equal((await call("/v1/catalog/warehouses?branchId="+b,
+    "GET",undefined,receiverToken)).status,403);
+  assert.equal((await call(endpoint+"?branchId="+b+"&warehouseId="+dest,
+    "GET",undefined,receiverToken)).status,200);
+  assert.equal((await call(endpoint+"?branchId="+b+"&warehouseId="+w,
+    "GET",undefined,receiverToken)).status,403);
   const unknownWh=randomUUID();
   assert.equal((await call(endpoint+"?branchId="+b+"&warehouseId="+unknownWh,
     "GET",undefined,token)).status,403);

@@ -48,10 +48,9 @@ class _TransferWorkspaceState extends State<TransferWorkspace>{
   Future<void> loadBranches()async{
     final n=++epoch;setState((){loading=true;error=null;});
     try{
-      final data=await widget.client.catalogItems(widget.session.token,'branches');
+      final data=await widget.client.transferScopes(widget.session.token);
       if(!mounted||n!=epoch)return;
-      branches=data.where((x)=>widget.session.grants.any((g)=>
-        g.branchId==x['id']&&g.permission.startsWith('inventory.transfer.'))).toList();
+      branches=data.branches;
       branchId=branches.isEmpty?null:branches.first['id'].toString();
       if(branchId==null)setState((){loading=false;error='Chưa có quyền chuyển kho.';});
       else await loadWarehouses();
@@ -67,10 +66,11 @@ class _TransferWorkspaceState extends State<TransferWorkspace>{
       loading=true;loadingMore=false;hasMore=false;error=null;items=[];
     });
     try{
-      final data=await widget.client.catalogItems(widget.session.token,
-        'warehouses',branchId:b,query:query);
+      final data=await widget.client.transferScopes(widget.session.token,
+        branchId:b,query:query);
       if(!mounted||n!=epoch)return;
-      warehouses=data.where((x)=>can('inventory.transfer.read',x['id'].toString())).toList();
+      warehouses=data.warehouses.where((x)=>
+        can('inventory.transfer.read',x['id'].toString())).toList();
       warehouseId=warehouses.isEmpty?null:warehouses.first['id'].toString();
       if(warehouseId==null)setState((){
         loading=false;error='Không có kho được cấp quyền xem chuyển kho.';
