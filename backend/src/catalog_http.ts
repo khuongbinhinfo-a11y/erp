@@ -393,7 +393,7 @@ async function executeCreate(db:PoolClient,context:MutationContext,
       }
     }
     if(value.groupId!==null)
-      await activeDirectoryCode(db,"catalog_product_group",installationId,branchId,value.groupId);
+      await activeDirectoryCode(db,"catalog_product_group",installationId,branchId,value.groupId??null);
     const r=await db.query<{id:string}>(
       `INSERT INTO catalog_product(installation_id,branch_id,sku,name,group_id,base_unit)
        VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
@@ -445,9 +445,9 @@ async function executeCreate(db:PoolClient,context:MutationContext,
   if(withGroup){
     if(!("customerGroupId" in value))throw new CatalogError(400,"INVALID_CUSTOMER_REFERENCE");
     groupCode=await activeDirectoryCode(db,"catalog_customer_group",
-      installationId,branchId,value.customerGroupId);
+      installationId,branchId,value.customerGroupId??null);
     await activeDirectoryCode(db,"catalog_customer_region",
-      installationId,branchId,value.customerRegionId);
+      installationId,branchId,value.customerRegionId??null);
   }
   const r=await db.query<{id:string}>(
     withGroup
