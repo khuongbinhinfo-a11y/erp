@@ -14,6 +14,10 @@ export default compute({
     "uiOrigin?": secretString(),
     "throttleSecret?": secretString(),
     "maintenanceMode?": secretString(),
+    "r2AccountId?": secretString(),
+    "r2Bucket?": secretString(),
+    "r2AccessKeyId?": secretString(),
+    "r2SecretAccessKey?": secretString(),
   }),
   build: node({ module: import.meta.url, entry: "../dist/compute.mjs" }),
 });
