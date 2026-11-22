@@ -263,7 +263,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                     style:TextStyle(color:ErpTokens.muted,fontSize:12)),
                   const SizedBox(height:12),
                   if(availableUnits.isEmpty)
-                    TextField(controller:unit,
+                    TextField(key:const ValueKey('catalog-base-unit-raw'),
+                      controller:unit,
                       decoration:const InputDecoration(
                         labelText:'Mã đơn vị tồn kho gốc *',
                         hintText:'CHAI (chưa có danh mục ĐVT)'))
@@ -281,11 +282,86 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                         child:Text("${x['name']} · ${x['code']}",
                           overflow:TextOverflow.ellipsis))).toList(),
                     onChanged:(value)=>refresh(()=>unit.text=value??'')),
+                  const SizedBox(height:8),
+                  const Text('Thêm đơn vị tính mới (mã và tên dùng chung)',
+                    style:TextStyle(fontSize:12,fontWeight:FontWeight.w700)),
+                  const SizedBox(height:8),
+                  Wrap(spacing:8,runSpacing:8,children:[
+                    SizedBox(width:160,child:TextField(
+                      key:const ValueKey('catalog-quick-unit-code'),
+                      controller:newUnitCode,enabled:!unitBusy,
+                      decoration:const InputDecoration(labelText:'Mã ĐVT',hintText:'CHAI'))),
+                    SizedBox(width:210,child:TextField(
+                      key:const ValueKey('catalog-quick-unit-name'),
+                      controller:newUnitName,enabled:!unitBusy,
+                      decoration:const InputDecoration(labelText:'Tên đơn vị',hintText:'Chai'))),
+                    TextButton.icon(
+                      key:const ValueKey('catalog-quick-unit-save'),
+                      onPressed:unitBusy?null:()async{
+                        final kind='catalog.create.unit-definitions';
+                        final old=widget.client.pendingR1(actor,branch,kind);
+                        final codeText=newUnitCode.text.trim().toUpperCase();
+                        final nameText=newUnitName.text.trim();
+                        if(old==null&&(codeText.isEmpty||nameText.isEmpty)){
+                          refresh(()=>unitError='Nhập mã và tên đơn vị tính.');
+                          return;
+                        }
+                        final body=old?.payload??<String,dynamic>{
+                          'branchId':branch,'code':codeText,'name':nameText,
+                        };
+                        final key=old?.key??
+                          'catalog-uom-${DateTime.now().microsecondsSinceEpoch}';
+                        if(old==null)widget.client.retainR1(actor,branch,kind,body,key);
+                        refresh((){unitBusy=true;unitError=null;});
+                        try{
+                          final created=await widget.client.createCatalogWithKey(
+                            widget.session.token,'unit-definitions',body,key:key);
+                          if(!ctx.mounted)return;
+                          widget.client.clearR1(actor,branch,kind);
+                          refresh((){
+                            final savedCode=created['code'] as String;
+                            if(!availableUnits.any((x)=>x['code']==savedCode)){
+                              availableUnits.add({
+                                'id':created['id'],'code':savedCode,
+                                'name':body['name'],'active':true,
+                              });
+                            }
+                            unit.text=savedCode;
+                            unitBusy=false;newUnitCode.clear();newUnitName.clear();
+                          });
+                        }on ErpApiError catch(e){
+                          if(!ctx.mounted)return;
+                          if(e.status==400||e.status==404||e.code=='DUPLICATE'){
+                            widget.client.clearR1(actor,branch,kind);
+                          }
+                          refresh((){
+                            unitBusy=false;
+                            unitError=e.code=='DUPLICATE'
+                              ?'Mã ĐVT đã tồn tại. Chọn từ danh mục hoặc đổi mã.'
+                              :e.message;
+                          });
+                        }catch(_){
+                          if(ctx.mounted)refresh((){
+                            unitBusy=false;
+                            unitError='Chưa xác nhận tạo ĐVT. Nhấn lại để kiểm tra.';
+                          });
+                        }
+                      },
+                      icon:const Icon(Icons.add),label:const Text('Lưu đơn vị')),
+                  ]),
+                  if(unitError!=null)
+                    Text(unitError!,style:const TextStyle(color:ErpTokens.danger)),
                   const SizedBox(height:12),
                   TextField(key:const ValueKey('catalog-base-barcode'),
                     controller:baseBarcode,
                     decoration:const InputDecoration(labelText:'Mã vạch SKU gốc (nếu có)',
                       hintText:'893...')),
+                  const SizedBox(height:16),
+                  const Text('2. Nhóm hàng',style:TextStyle(
+                    fontWeight:FontWeight.w800,fontSize:16,color:ErpTokens.primary)),
+                  const SizedBox(height:4),
+                  const Text('Chọn nhóm hiện có hoặc tạo nhóm mới bên dưới.',
+                    style:TextStyle(color:ErpTokens.muted,fontSize:12)),
                   if(availableGroups.isNotEmpty)...[
                     const SizedBox(height:12),
                     DropdownButtonFormField<String?>(
@@ -300,12 +376,6 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                       ],
                       onChanged:(v)=>refresh(()=>groupId=v)),
                   ],
-                  const SizedBox(height:16),
-                  const Text('2. Nhóm hàng',style:TextStyle(
-                    fontWeight:FontWeight.w800,fontSize:16,color:ErpTokens.primary)),
-                  const SizedBox(height:4),
-                  const Text('Chọn nhóm hiện có hoặc tạo nhóm mới bên dưới.',
-                    style:TextStyle(color:ErpTokens.muted,fontSize:12)),
                   const SizedBox(height:6),
                   Wrap(spacing:8,runSpacing:8,children:[
                     SizedBox(width:160,child:TextField(
@@ -389,10 +459,23 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                     style:TextStyle(fontSize:12,color:ErpTokens.muted)),
                   const SizedBox(height:9),
                   Wrap(spacing:10,runSpacing:10,children:[
-                    SizedBox(width:210,child:TextField(
-                      key:const ValueKey('catalog-conversion-unit-0'),
-                      controller:altUnit,
-                      decoration:const InputDecoration(labelText:'Đơn vị quy đổi',hintText:'thung'))),
+                    SizedBox(width:210,child:availableUnits.isEmpty
+                      ?TextField(key:const ValueKey('catalog-conversion-unit-0'),
+                        controller:altUnit,
+                        decoration:const InputDecoration(
+                          labelText:'Mã đơn vị quy đổi',hintText:'THUNG'))
+                      :DropdownButtonFormField<String>(
+                        key:const ValueKey('catalog-conversion-unit-0'),
+                        initialValue:availableUnits.any((x)=>x['code']==altUnit.text)
+                          ?altUnit.text:null,
+                        isExpanded:true,
+                        decoration:const InputDecoration(labelText:'Đơn vị quy đổi'),
+                        items:availableUnits.where((x)=>x['active']==true)
+                          .map((x)=>DropdownMenuItem<String>(
+                            value:x['code'] as String,
+                            child:Text("${x['name']} · ${x['code']}",
+                              overflow:TextOverflow.ellipsis))).toList(),
+                        onChanged:(value)=>refresh(()=>altUnit.text=value??''))),
                     SizedBox(width:145,child:TextField(
                       key:const ValueKey('catalog-conversion-factor-0'),
                       controller:conversion,keyboardType:TextInputType.number,
@@ -408,10 +491,24 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                     for(var idx=0;idx<extraUnits.length;idx++)...[
                       SizedBox(width:(MediaQuery.sizeOf(ctx).width-80)
                         .clamp(220.0,580.0).toDouble(),child:const Divider()),
-                      SizedBox(width:210,child:TextField(
-                        key:ValueKey('catalog-conversion-unit-${idx+1}'),
-                        controller:extraUnits[idx].unit,
-                        decoration:InputDecoration(labelText:'Đơn vị quy đổi ${idx+2}'))),
+                      SizedBox(width:210,child:availableUnits.isEmpty
+                        ?TextField(key:ValueKey('catalog-conversion-unit-${idx+1}'),
+                          controller:extraUnits[idx].unit,
+                          decoration:InputDecoration(labelText:'Mã đơn vị quy đổi ${idx+2}'))
+                        :DropdownButtonFormField<String>(
+                          key:ValueKey('catalog-conversion-unit-${idx+1}'),
+                          initialValue:availableUnits.any(
+                            (x)=>x['code']==extraUnits[idx].unit.text)
+                            ?extraUnits[idx].unit.text:null,
+                          isExpanded:true,
+                          decoration:InputDecoration(labelText:'Đơn vị quy đổi ${idx+2}'),
+                          items:availableUnits.where((x)=>x['active']==true)
+                            .map((x)=>DropdownMenuItem<String>(
+                              value:x['code'] as String,
+                              child:Text("${x['name']} · ${x['code']}",
+                                overflow:TextOverflow.ellipsis))).toList(),
+                          onChanged:(value)=>refresh(
+                            ()=>extraUnits[idx].unit.text=value??''))),
                       SizedBox(width:145,child:TextField(
                         key:ValueKey('catalog-conversion-factor-${idx+1}'),
                         controller:extraUnits[idx].factor,
