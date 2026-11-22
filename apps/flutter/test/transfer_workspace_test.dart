@@ -167,6 +167,9 @@ void main(){
   }
   expect(created,1);
   expect(listed,0);
+  // The ACK toast uses a four-second timer; flush it before test teardown.
+  await tester.pump(const Duration(seconds:5));
+  await tester.pumpAndSettle();
  });
 
 }
