@@ -149,6 +149,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     final amount=TextEditingController(),discount=TextEditingController(text:'0');
     String? productId,priceListId,groupId;
     List<Map<String,dynamic>> availableProducts=[],availableLists=[],availableGroups=[];
+    ModalRoute<dynamic>? formRoute;
     try{
       if(resource=='prices'&&previous==null){
         availableProducts=await widget.client.catalogItems(widget.session.token,'products',branchId:branchId);
@@ -165,8 +166,9 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
       }
       if(!mounted)return;
       final payload=previous?.payload ?? await showDialog<Map<String,dynamic>>(
-        context:context,builder:(dialog)=>
-        StatefulBuilder(builder:(ctx,refresh)=>AlertDialog(
+        context:context,builder:(dialog){
+          formRoute=ModalRoute.of(dialog);
+          return StatefulBuilder(builder:(ctx,refresh)=>AlertDialog(
           title:Text(resource=='prices'?'Thêm phiên bản đơn giá':'Thêm ${titles[resource]!.toLowerCase()}'),
           content:SizedBox(
             width:(MediaQuery.sizeOf(dialog).width-80)
@@ -359,7 +361,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
               },
               child:const Text('Lưu trên server')),
           ],
-        )));
+        ));});
       if(payload==null||!mounted)return;
       final key=previous?.key ??
         'catalog-$resource-${DateTime.now().microsecondsSinceEpoch}';
@@ -393,6 +395,9 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     }on ErpApiError catch(e){
       if(mounted)ErpToast.show(context,_errorMessage(e),isError:true);
     }finally{
+      // showDialog's result arrives when pop begins, BEFORE its reverse
+      // animation finishes. TextFields still listen to these controllers.
+      if(formRoute!=null)await formRoute!.completed;
       code.dispose();name.dispose();unit.dispose();customerGroup.dispose();
       phone.dispose();deliveryAddress.dispose();paymentTerms.dispose();
       altUnit.dispose();conversion.dispose();altSku.dispose();altBarcode.dispose();
@@ -634,17 +639,20 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
               child:DataTable(
                 key:const ValueKey('catalog-live-table'),
                 headingRowColor:const WidgetStatePropertyAll(ErpTokens.mint),
-                columns:[
-                  ...columns.map((entry)=>DataColumn(label:Text(entry.$2))),
-                  if(canEdit)const DataColumn(label:Text('Thao tác')),
-                ],
+                columns:columns.map((entry)=>DataColumn(
+                  label:Text(entry.$2))).toList(),
                 rows:items.map((entry)=>DataRow(cells:[
-                  ...columns.map((c)=>DataCell(Text(_cell(entry,c.$1)))),
-                  if(canEdit)DataCell(IconButton(
-                    key:ValueKey('catalog-edit-'+entry['id'].toString()),
-                    icon:const Icon(Icons.edit_outlined,size:18),
-                    tooltip:'Sửa/ngừng sử dụng',
-                    onPressed:saving?null:()=>_edit(entry))),
+                  for(final c in columns)DataCell(
+                    c.$1=='code'&&canEdit
+                      ? Row(mainAxisSize:MainAxisSize.min,children:[
+                          Text(_cell(entry,c.$1)),
+                          IconButton(
+                            key:ValueKey('catalog-edit-'+entry['id'].toString()),
+                            icon:const Icon(Icons.edit_outlined,size:18),
+                            tooltip:'Sửa/ngừng sử dụng',
+                            onPressed:saving?null:()=>_edit(entry)),
+                        ])
+                      : Text(_cell(entry,c.$1))),
                 ])).toList())),
             if(resource=='warehouses')const Padding(
               padding:EdgeInsets.only(top:12),
