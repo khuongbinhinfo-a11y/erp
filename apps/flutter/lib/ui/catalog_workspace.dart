@@ -169,15 +169,81 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
       TextEditingController sku,TextEditingController barcode})>[];
     final amount=TextEditingController(),discount=TextEditingController(text:'0');
     final newGroupCode=TextEditingController(),newGroupName=TextEditingController();
+    final newRegionCode=TextEditingController(),newRegionName=TextEditingController();
     final newUnitCode=TextEditingController(),newUnitName=TextEditingController();
-    String? groupError,unitError;
-    bool groupBusy=false,unitBusy=false,unitDictionaryReady=false;
+    String? groupError,regionError,unitError;
+    bool groupBusy=false,regionBusy=false,unitBusy=false,unitDictionaryReady=false;
     Uint8List? selectedImage;
     String? selectedImageType,selectedImageName;
     String? productId,priceListId,groupId,customerGroupId,customerRegionId;
     List<Map<String,dynamic>> availableProducts=[],availableLists=[],availableGroups=[],
       availableUnits=[],availableCustomerGroups=[],availableCustomerRegions=[];
     ModalRoute<dynamic>? formRoute;
+    Future<void> saveCustomerDirectory(String kind,StateSetter refresh)async{
+      final group=kind=='customer-groups';
+      final codeField=group?newGroupCode:newRegionCode;
+      final nameField=group?newGroupName:newRegionName;
+      final existing=group?availableCustomerGroups:availableCustomerRegions;
+      if((group?groupBusy:regionBusy)||!mounted)return;
+      final command='catalog.create.$kind';
+      final pending=widget.client.pendingR1(actor,branch,command);
+      final codeValue=codeField.text.trim().toUpperCase();
+      final nameValue=nameField.text.trim();
+      if(pending==null&&(codeValue.isEmpty||nameValue.isEmpty)){
+        refresh((){
+          if(group)groupError='Cần nhập mã và tên nhóm khách.';
+          else regionError='Cần nhập mã và tên khu vực.';
+        });
+        return;
+      }
+      final body=pending?.payload??<String,dynamic>{
+        'branchId':branch,'code':codeValue,'name':nameValue,
+      };
+      final key=pending?.key??
+        'catalog-$kind-${DateTime.now().microsecondsSinceEpoch}';
+      if(pending==null)widget.client.retainR1(actor,branch,command,body,key);
+      refresh((){
+        if(group){groupBusy=true;groupError=null;}
+        else{regionBusy=true;regionError=null;}
+      });
+      try{
+        final created=await widget.client.createCatalogWithKey(
+          widget.session.token,kind,body,key:key);
+        widget.client.clearR1(actor,branch,command);
+        if(!mounted||formRoute?.isCurrent!=true)return;
+        refresh((){
+          final id=created['id'];
+          if(id is String&&!existing.any((x)=>x['id']==id)){
+            existing.add({'id':id,'code':body['code'],
+              'name':body['name'],'active':true});
+          }
+          if(group){
+            customerGroupId=id as String?;groupBusy=false;groupError=null;
+          }else{
+            customerRegionId=id as String?;regionBusy=false;regionError=null;
+          }
+          codeField.clear();nameField.clear();
+        });
+      }on ErpApiError catch(e){
+        if(e.status==400||e.status==404||e.code=='DUPLICATE')
+          widget.client.clearR1(actor,branch,command);
+        if(mounted&&formRoute?.isCurrent==true)refresh((){
+          if(group){groupBusy=false;groupError=_errorMessage(e);}
+          else{regionBusy=false;regionError=_errorMessage(e);}
+        });
+      }catch(_){
+        if(mounted&&formRoute?.isCurrent==true)refresh((){
+          if(group){
+            groupBusy=false;
+            groupError='Chưa xác nhận. Thử lại để kiểm tra yêu cầu trước.';
+          }else{
+            regionBusy=false;
+            regionError='Chưa xác nhận. Thử lại để kiểm tra yêu cầu trước.';
+          }
+        });
+      }
+    }
+
     try{
       if(resource=='prices'&&previous==null){
         availableProducts=await widget.client.catalogItems(widget.session.token,'products',branchId:branchId);
@@ -277,6 +343,28 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                             overflow:TextOverflow.ellipsis))),
                     ],
                     onChanged:(v)=>refresh(()=>customerGroupId=v)),
+                  const SizedBox(height:8),
+                  const Text('Tạo nhanh nhóm khách hàng (danh mục dùng chung)',
+                    style:TextStyle(color:ErpTokens.muted,fontSize:12)),
+                  const SizedBox(height:8),
+                  Wrap(spacing:8,runSpacing:8,
+                    crossAxisAlignment:WrapCrossAlignment.center,children:[
+                    SizedBox(width:126,child:TextField(
+                      key:const ValueKey('catalog-quick-customer-group-code'),
+                      controller:newGroupCode,enabled:!groupBusy,
+                      decoration:const InputDecoration(labelText:'Mã nhóm'))),
+                    SizedBox(width:180,child:TextField(
+                      key:const ValueKey('catalog-quick-customer-group-name'),
+                      controller:newGroupName,enabled:!groupBusy,
+                      decoration:const InputDecoration(labelText:'Tên nhóm'))),
+                    TextButton.icon(
+                      key:const ValueKey('catalog-quick-customer-group-save'),
+                      onPressed:groupBusy?null:()=>
+                        saveCustomerDirectory('customer-groups',refresh),
+                      icon:const Icon(Icons.add),label:const Text('Tạo nhóm')),
+                  ]),
+                  if(groupError!=null)Text(groupError!,
+                    style:const TextStyle(color:ErpTokens.danger,fontSize:12)),
                   const SizedBox(height:12),
                   DropdownButtonFormField<String?>(
                     key:const ValueKey('catalog-create-customer-region'),
@@ -294,6 +382,28 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                             overflow:TextOverflow.ellipsis))),
                     ],
                     onChanged:(v)=>refresh(()=>customerRegionId=v)),
+                  const SizedBox(height:8),
+                  const Text('Tạo nhanh khu vực bán hàng',
+                    style:TextStyle(color:ErpTokens.muted,fontSize:12)),
+                  const SizedBox(height:8),
+                  Wrap(spacing:8,runSpacing:8,
+                    crossAxisAlignment:WrapCrossAlignment.center,children:[
+                    SizedBox(width:126,child:TextField(
+                      key:const ValueKey('catalog-quick-customer-region-code'),
+                      controller:newRegionCode,enabled:!regionBusy,
+                      decoration:const InputDecoration(labelText:'Mã khu vực'))),
+                    SizedBox(width:180,child:TextField(
+                      key:const ValueKey('catalog-quick-customer-region-name'),
+                      controller:newRegionName,enabled:!regionBusy,
+                      decoration:const InputDecoration(labelText:'Tên khu vực'))),
+                    TextButton.icon(
+                      key:const ValueKey('catalog-quick-customer-region-save'),
+                      onPressed:regionBusy?null:()=>
+                        saveCustomerDirectory('customer-regions',refresh),
+                      icon:const Icon(Icons.add),label:const Text('Tạo khu vực')),
+                  ]),
+                  if(regionError!=null)Text(regionError!,
+                    style:const TextStyle(color:ErpTokens.danger,fontSize:12)),
                   const SizedBox(height:12),
                   TextField(controller:phone,
                     keyboardType:TextInputType.phone,
@@ -760,6 +870,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
       }
       amount.dispose();discount.dispose();
       newGroupCode.dispose();newGroupName.dispose();
+      newRegionCode.dispose();newRegionName.dispose();
       newUnitCode.dispose();newUnitName.dispose();
     }
   }
