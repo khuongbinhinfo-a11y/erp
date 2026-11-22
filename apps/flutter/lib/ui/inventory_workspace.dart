@@ -361,7 +361,7 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
           onSubmitted:(value)=>loadWarehouses(query:value.trim()),
           decoration:InputDecoration(labelText:'Tìm mã hoặc tên kho',
             suffixIcon:IconButton(tooltip:'Tìm kho',icon:const Icon(Icons.search),
-              onPressed:()=>loadWarehouses(query:warehouseLookup.text.trim())))),
+              onPressed:()=>loadWarehouses(query:warehouseLookup.text.trim()))))),
       ]),
       const SizedBox(height:16),
       Wrap(spacing:10,runSpacing:10,children:[
