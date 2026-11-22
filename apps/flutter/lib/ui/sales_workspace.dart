@@ -249,10 +249,10 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     Map<String,dynamic>? pendingQuickCustomer=savedQuickCustomer?.payload;
     String? pendingQuickCustomerKey=savedQuickCustomer?.key;
     if(pendingQuickCustomer!=null){
-      newCustomerCode.text=pendingQuickCustomer!['code']?.toString()??'';
-      newCustomerName.text=pendingQuickCustomer!['name']?.toString()??'';
-      newCustomerPhone.text=pendingQuickCustomer!['phone']?.toString()??'';
-      newCustomerAddress.text=pendingQuickCustomer!['deliveryAddress']?.toString()??'';
+      newCustomerCode.text=pendingQuickCustomer['code']?.toString()??'';
+      newCustomerName.text=pendingQuickCustomer['name']?.toString()??'';
+      newCustomerPhone.text=pendingQuickCustomer['phone']?.toString()??'';
+      newCustomerAddress.text=pendingQuickCustomer['deliveryAddress']?.toString()??'';
     }
     final skuFocus=FocusNode();
     final customerFocus=FocusNode();
