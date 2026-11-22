@@ -543,7 +543,7 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
       try{
         const rows=await listing(client,tenant,actorId,branchId,resource,search);
         send(res,200,{items:rows,
-          ...(resource==="products"?{r1ProductReady:await hasR1CatalogSchema(pool)}:{}),
+          ...(resource==="products"?{r1ProductReady:await hasR1CatalogSchema(client)}:{}),
           requestId},requestId,corsOrigin);
       }finally{client.release();}
       return;
