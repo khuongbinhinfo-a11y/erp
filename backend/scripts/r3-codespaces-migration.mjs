@@ -25,7 +25,9 @@ export const R3 = ["0011_r3_inventory_ledger.sql","0012_r3_purchase_receipt.sql"
  "0013_r3_transfer_in_transit.sql","0014_r3_stocktake.sql"];
 const PROJECT="proj_ud3b1s5yn03vh0zp9cbs2upa";
 const DATABASE="db_jg2bl98hzi1jm06lwo0i4rqx";
-const BUCKET="erp-db-migration-encrypted-backups";
+// Prisma Console display name differs from its opaque S3 provider bucket name.
+// Verified from the Prisma Object Store bucket API for the approved project.
+export const BUCKET_S3_NAME="user-hccjgwl892edb91ox3v3j5b2";
 const API="https://gh30k50bvsc0o9298w9leivf.sin.prisma.build";
 const BASE_TABLES=["installation","branch","warehouse","app_user","app_role",
  "schema_migrations","role_permission","inventory_ledger"];
@@ -222,6 +224,24 @@ export function classifyPgDumpFailure(stderr){
   return "PG_DUMP_SNAPSHOT_MODE_UNSUPPORTED";
  return "PG_DUMP_FAILED_DETAILS_REDACTED";
 }
+export function classifyAwsFailure(stderr){
+ const message=String(stderr??"").toLowerCase();
+ if(/nosuchbucket|the specified bucket does not exist|bucket name does not exist/.test(message))
+  return "BUCKET_NOT_FOUND";
+ if(/invalidaccesskeyid|invalid access key id|invalidclienttokenid/.test(message))
+  return "ACCESS_KEY_INVALID";
+ if(/signaturedoesnotmatch|signature mismatch|invalidsignature|requesttime.tooskewed/.test(message))
+  return "SIGNATURE_OR_REGION_MISMATCH";
+ if(/accessdenied|403 forbidden|explicit deny|not authorized/.test(message))
+  return "ACCESS_DENIED";
+ if(/could not connect to the endpoint url|endpointconnectionerror|name or service not known|nodename nor servname provided/.test(message))
+  return "ENDPOINT_UNREACHABLE";
+ if(/ssl validation failed|certificate verify failed|certificate_verify_failed/.test(message))
+  return "TLS_CERTIFICATE_INVALID";
+ if(/timeout|timed out|connection reset/.test(message))
+  return "NETWORK_TIMEOUT";
+ return "FAILED_DETAILS_REDACTED";
+}
 function dumpBaseDatabase(dump,u){
  const x=spawnSync("pg_dump",["--format=custom","--no-owner","--no-acl",
   "--serializable-deferrable","--file="+dump],{
@@ -330,11 +350,16 @@ async function main(mode){
   const actualRecipient=command("age-keygen",["-y",key]).trim();
   if(actualRecipient!==e.ERP_AGE_RECIPIENT)
     fail("DURABLE_BACKUP_PRIVATE_KEY_RECIPIENT_MISMATCH");
-  const base="s3://"+BUCKET+"/erp-db/R3/"+sha+"/"+
+  const base="s3://"+BUCKET_S3_NAME+"/erp-db/R3/"+sha+"/" +
     Date.now().toString()+"-"+randomUUID()+"/";
-  const aws=(action,source,dest)=>command("aws",[
-    "--endpoint-url",endpoint.origin,"s3","cp",source,dest,"--only-show-errors"
-  ],{AWS_EC2_METADATA_DISABLED:"true",AWS_DEFAULT_REGION:"ap-southeast-1"});
+  const aws=(action,source,dest)=>{
+    const x=spawnSync("aws",[
+      "--endpoint-url",endpoint.origin,"s3","cp",source,dest,"--only-show-errors"
+    ],{encoding:"utf8",
+      env:{...process.env,AWS_EC2_METADATA_DISABLED:"true",AWS_DEFAULT_REGION:"ap-southeast-1"},
+      maxBuffer:4*1024*1024,timeout:600000,stdio:["ignore","pipe","pipe"]});
+    if(x.error||x.status!==0)fail("ERP_R3_S3_"+action.toUpperCase()+"_"+classifyAwsFailure(x.stderr));
+  };
   // PgDump snapshot alone is not a release gate: read back, decrypt and RESTORE.
   dumpBaseDatabase(dump,u);
   if(statSync(dump).size<256)fail("ERP_BACKUP_TOO_SMALL");

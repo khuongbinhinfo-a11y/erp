@@ -25,6 +25,11 @@ Nếu client 17 vẫn báo lỗi, operator chỉ in mã phân loại (ví dụ
 `PG_DUMP_AUTHENTICATION_FAILED`, `PG_DUMP_TLS_VERIFY_FAILED`,
 `PG_DUMP_DATABASE_PERMISSION_DENIED`, `PG_DUMP_SNAPSHOT_MODE_UNSUPPORTED`)
 và dừng trước migration. Không in stderr gốc vì có thể chứa thông tin kết nối.
+
+Nếu lỗi `ERP_R3_S3_UPLOAD_BUCKET_NOT_FOUND` hoặc `ERP_R3_S3_UPLOAD_ACCESS_DENIED`,
+kiểm tra key và S3 endpoint có thuộc đúng bucket đã đối chiếu trên Prisma hay không.
+Lỗi AWS được phân loại an toàn (không log credential hay endpoint đầy đủ);
+không chạy migration khi bước upload+readback+khôi phục độc lập chưa PASS.
 Kết nối Prisma CLI từ backend/deploy bằng prisma auth whoami (đăng nhập nếu cần).
 
 Đặt biến sau trong **GitHub Settings → Codespaces → Secrets** hoặc môi trường
@@ -33,12 +38,12 @@ terminal bảo vệ, không ghi giá trị vào chat, commit, issue, log hoặc 
 | Biến | Nguồn / yêu cầu |
 | --- | --- |
 | Prisma CLI đã đăng nhập | Operator tự tạo credential TCP một lần cho đúng database ID và tự thu hồi sau khi chạy. Không dùng URL tự nhập. |
-| AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY | Key chỉ cho Prisma bucket erp-db-migration-encrypted-backups |
+| AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY | Key `read_write` chỉ cho Prisma bucket có display name `erp-db-migration-encrypted-backups`; **S3 provider name thực tế** `user-hccjgwl892edb91ox3v3j5b2` (xác minh qua Prisma API 22/11/2026). Hai tên KHÔNG hoán đổi được. |
 | ERP_BACKUP_S3_ENDPOINT | HTTPS S3 endpoint của bucket trên, không kèm path |
 | ERP_AGE_RECIPIENT | Public age recipient được quản lý cùng private recovery key riêng |
 | ERP_AGE_RECOVERY_IDENTITY | Khóa riêng age tương ứng recipient (secret Codespaces, chỉ dùng giải mã bản backup production thực sự để thử restore; không xuất log) |
 
-Bucket đã tồn tại. **Chưa xác minh khóa truy cập từ Codespaces và private recovery key**;
+Bucket đã tồn tại và trạng thái `ready`; bucket tên hiển thị khác tên S3 thực tế. **Chưa xác minh khóa truy cập từ Codespaces và private recovery key bằng đường đọc/ghi bucket**;
 script sẽ từ chối nếu chưa đủ. Khóa khôi phục chỉ được đưa vào Codespaces secret
 trong thời gian chạy operator, phải được thu hồi/luân chuyển sau phiên phát hành.
 Operator giải mã trực tiếp bản backup đã đọc lại từ bucket bằng chính khóa riêng
