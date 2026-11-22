@@ -60,6 +60,12 @@ test("R3.4 PostgreSQL: capture, recount, separate approval, stale guard and exac
   const root=await bootstrapInstallation(db,{code:"stocktake-ci",displayName:"Stocktake CI",
     adminLogin:"owner",adminPassword:password});
   const t=root.installationId,b=root.branchId,w=root.warehouseId;
+  // PostgreSQL must reject forged lifecycle facts, even with all required actors.
+  await assert.rejects(db.query(`
+    INSERT INTO inventory_stocktake(installation_id,branch_id,warehouse_id,
+      status,revision,created_by,submitted_by,submitted_at,request_id)
+    VALUES($1,$2,$3,'SUBMITTED',1,$4,$4,now(),'forged-stocktake-fixture')`,
+    [t,b,w,root.actorId]),/must begin in CREATED/i);
   server=buildApp(()=>isDatabaseReady(db!),async()=>true,{
    pool:db,installationId:t,allowedOrigin:"https://erp.example.test",
    throttleSecret:"synthetic-"+randomUUID(),
@@ -89,6 +95,37 @@ test("R3.4 PostgreSQL: capture, recount, separate approval, stale guard and exac
   assert.equal(opened.status,201,JSON.stringify(opened.body));
   const endpoint="/v1/inventory/stocktakes";
   const scope={branchId:b,warehouseId:w};
+  // Create-only operator must see the assigned warehouse and create without
+  // inheriting read access to existing documents.
+  const creatorPass="Synthetic-stocktake-creator-"+randomUUID();
+  const creator=(await db.query<{id:string}>(
+    `INSERT INTO app_user(installation_id,login_name,password_hash)
+     VALUES($1,'stock_creator',$2) RETURNING id`,
+    [t,await hashPassword(creatorPass)])).rows[0]!.id;
+  const creatorRole=(await db.query<{id:string}>(
+    `INSERT INTO app_role(installation_id,code)
+     VALUES($1,'STOCKTAKE_CREATE_ONLY') RETURNING id`,[t])).rows[0]!.id;
+  await db.query(`INSERT INTO user_role(installation_id,user_id,role_id,branch_id)
+    VALUES($1,$2,$3,$4)`,[t,creator,creatorRole,b]);
+  await db.query(`INSERT INTO user_role_warehouse(
+    installation_id,user_id,role_id,branch_id,warehouse_id)
+    VALUES($1,$2,$3,$4,$5)`,[t,creator,creatorRole,b,w]);
+  await db.query(`INSERT INTO role_permission(installation_id,role_id,permission_code)
+    VALUES($1,$2,'inventory.stocktake.create')`,[t,creatorRole]);
+  const creatorLogin=await call("/v1/auth/login","POST",
+    {loginName:"stock_creator",password:creatorPass});
+  assert.equal(creatorLogin.status,200,JSON.stringify(creatorLogin.body));
+  const creatorToken=creatorLogin.body.token as string;
+  const scopes=await call(endpoint+"/scopes?branchId="+b,
+    "GET",undefined,creatorToken);
+  assert.equal(scopes.status,200,JSON.stringify(scopes.body));
+  assert.deepEqual(scopes.body.branches.map((x:Record<string,string>)=>x.id),[b]);
+  assert.deepEqual(scopes.body.warehouses.map((x:Record<string,string>)=>x.id),[w]);
+  assert.equal((await call(endpoint+"?branchId="+b+"&warehouseId="+w,
+    "GET",undefined,creatorToken)).status,403);
+  const createOnly=await make(endpoint,{...scope,note:"Counting-only create"},0,
+    "creator-"+randomUUID(),creatorToken);
+  assert.equal(createOnly.status,201,JSON.stringify(createOnly.body));
   const createKey="stocktake-"+randomUUID();
   const created=await make(endpoint,{...scope,note:"Reconcile synthetic"},0,createKey);
   assert.equal(created.status,201,JSON.stringify(created.body));
