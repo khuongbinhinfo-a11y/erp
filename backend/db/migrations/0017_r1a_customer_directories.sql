@@ -195,8 +195,8 @@ BEGIN
  END IF;
 END; $$;
 
-// Legacy label is historical price-rule identity. Users may rename the
-// directory display name but cannot reassign the original pricing alias.
+-- Legacy label is historical price-rule identity. Users may rename the
+-- directory display name but cannot reassign the original pricing alias.
 CREATE FUNCTION erp_guard_customer_group_legacy_alias()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
