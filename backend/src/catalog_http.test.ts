@@ -90,6 +90,16 @@ test("Issue #7: catalog HTTP uses real PostgreSQL with tenant/branch RBAC, decim
         "GET",undefined,token);
       assert.equal(unitAfter.body.items.find((x:{code:string})=>x.code==="CHAI")?.name,
         "Chai thủy tinh");
+      const overlongName=await call("/v1/catalog/unit-definitions/"+uom.body.id,
+        "PATCH",{branchId:b,name:"X".repeat(81)},token,{
+          "idempotency-key":"unit-invalid-length-"+randomUUID(),"if-match":"1",
+        });
+      assert.equal(overlongName.status,400,"UOM name over 80 chars is rejected before SQL");
+      const unitAfterReject=await call("/v1/catalog/unit-definitions?branchId="+b,
+        "GET",undefined,token);
+      const stillValid=unitAfterReject.body.items.find((x:{code:string})=>x.code==="CHAI");
+      assert.equal(stillValid.name,"Chai thủy tinh");
+      assert.equal(stillValid.revision,1);
       const customerKey="customer-"+randomUUID();
       const customerBody={branchId:b,code:"CUSTOMER-01",name:"Synthetic Customer"};
       const customer=await call("/v1/catalog/customers","POST",customerBody,token,
