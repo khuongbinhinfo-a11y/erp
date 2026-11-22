@@ -156,6 +156,13 @@ const tableFor:Record<Exclude<Resource,"warehouses"|"prices">,string>={
   "products":"catalog_product",
   "price-lists":"catalog_price_list",
 };
+async function hasR1CatalogSchema(db:Pool):Promise<boolean>{
+  try{
+    const result=await db.query<{ok:boolean}>(
+      "SELECT EXISTS(SELECT 1 FROM public.schema_migrations WHERE version='0009_r1_catalog_pricing.sql') AS ok");
+    return result.rows[0]?.ok===true;
+  }catch{return false;}
+}
 async function hasCatalogSchema(db:Pool):Promise<boolean>{
   try {
     const r=await db.query<{present:boolean}>(
@@ -182,9 +189,7 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
     [tenant,branchId,"%"+search+"%"];
   // Installations staged on catalog 0006/0007 must still list products
   // even before the separate R1 SKU/barcode migration 0009 is applied.
-  const r1Ready=resource==="products"&&(await db.query<{ok:boolean}>(
-    "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version='0009_r1_catalog_pricing.sql') AS ok"
-  )).rows[0]?.ok===true;
+  const r1Ready=resource==="products"&&await hasR1CatalogSchema(db);
   const productSelection=r1Ready?selections.products:
     `SELECT id,sku AS code,name,base_unit AS "baseUnit",
       group_id AS "groupId",
@@ -542,6 +547,11 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
       return;
     }
     if(req.method==="POST"){
+      // R1 sale variants/barcodes do not exist on 0006/0007-only installations.
+      // Reject BEFORE the mutation transaction, never expose a half-created
+      // product or a generic retryable provider error.
+      if(resource==="products"&&!await hasR1CatalogSchema(pool))
+        throw new CatalogError(503,"R1_PRODUCT_SCHEMA_REQUIRED");
       const input=checkCreate(resource,await payloadFrom(req));
       const context=requestMutation(req,requestId,actorId,tenant,
         "catalog."+resource.replaceAll("-","_")+".create",input);
