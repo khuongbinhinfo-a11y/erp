@@ -22,7 +22,8 @@ CREATE TABLE inventory_transfer (
  FOREIGN KEY(installation_id,approved_by) REFERENCES app_user(installation_id,id),
  FOREIGN KEY(installation_id,dispatched_by) REFERENCES app_user(installation_id,id),
  CHECK(source_warehouse_id<>destination_warehouse_id),
- CHECK ((status IN ('CREATED','CANCELLED') AND approved_by IS NULL AND dispatched_by IS NULL)
+ CHECK ((status='CREATED' AND approved_by IS NULL AND dispatched_by IS NULL)
+     OR (status='CANCELLED' AND dispatched_by IS NULL)
      OR (status IN ('APPROVED','IN_TRANSIT','PARTIALLY_RECEIVED','RECEIVED')
          AND approved_by IS NOT NULL AND approved_at IS NOT NULL)),
  CHECK (status NOT IN ('IN_TRANSIT','PARTIALLY_RECEIVED','RECEIVED')
@@ -130,12 +131,13 @@ CREATE TRIGGER inventory_transfer_receipt_line_immutable BEFORE UPDATE OR DELETE
 
 -- Guard both inventory fact origins and in-transit line consumption at DB boundary.
 CREATE FUNCTION erp_transfer_ledger_guard() RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE source_wh uuid;
-DECLARE dest_wh uuid;
-DECLARE transfer_state text;
-DECLARE transfer_sku uuid;
-DECLARE transfer_qty numeric;
-DECLARE receipt_transfer uuid;
+DECLARE
+ source_wh uuid;
+ dest_wh uuid;
+ transfer_state text;
+ transfer_sku uuid;
+ transfer_qty numeric;
+ receipt_transfer uuid;
 BEGIN
  IF NEW.kind='TRANSFER_OUT' THEN
    SELECT t.source_warehouse_id,t.status,l.product_id,l.quantity_base
@@ -170,18 +172,19 @@ CREATE TRIGGER inventory_transfer_ledger_guard BEFORE INSERT ON inventory_ledger
  EXECUTE FUNCTION erp_transfer_ledger_guard();
 
 CREATE FUNCTION erp_transfer_receipt_line_guard() RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE ordered numeric;
-DECLARE accepted numeric;
-DECLARE ordered_product uuid;
-DECLARE correct_transfer uuid;
-DECLARE correct_wh uuid;
-DECLARE transfer_status text;
-DECLARE actual_product uuid;
-DECLARE actual_delta numeric;
-DECLARE actual_type text;
-DECLARE actual_kind text;
-DECLARE actual_source uuid;
-DECLARE actual_line integer;
+DECLARE
+ ordered numeric;
+ accepted numeric;
+ ordered_product uuid;
+ correct_transfer uuid;
+ correct_wh uuid;
+ transfer_status text;
+ actual_product uuid;
+ actual_delta numeric;
+ actual_type text;
+ actual_kind text;
+ actual_source uuid;
+ actual_line integer;
 BEGIN
  SELECT r.transfer_id,r.destination_warehouse_id,t.status
    INTO correct_transfer,correct_wh,transfer_status
