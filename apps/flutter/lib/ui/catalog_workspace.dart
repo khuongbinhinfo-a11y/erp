@@ -361,21 +361,32 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
           ],
         )));
       if(payload==null||!mounted)return;
+      final key=previous?.key ??
+        'catalog-$resource-${DateTime.now().microsecondsSinceEpoch}';
+      if(previous==null)widget.client.retainR1(
+        actor,branch,pendingKind,payload,key);
       setState(()=>saving=true);
       try{
-        await widget.client.createCatalog(widget.session.token,resource,payload);
+        await widget.client.createCatalogWithKey(
+          widget.session.token,resource,payload,key:key);
+        widget.client.clearR1(actor,branch,pendingKind);
         if(!mounted)return;
         ErpToast.show(context,'Đã lưu ${titles[resource]!.toLowerCase()} sau xác nhận server.');
         await _loadRecords();
       }on ErpApiError catch(e){
+        // Authentication failures, timeouts and conflicts cannot establish
+        // that the first attempt did not commit. Replay the original command.
+        if(e.status==400||e.status==404||e.status==413||e.status==415)
+          widget.client.clearR1(actor,branch,pendingKind);
         if(mounted){
           ErpToast.show(context,_errorMessage(e),isError:true);
-          // A lost ACK may follow COMMIT: always re-read before considering a retry.
           await _loadRecords();
         }
       }catch(_){
         if(mounted){
-          ErpToast.show(context,'Không rõ kết quả ghi. Đã tải lại dữ liệu để đối chiếu.',isError:true);
+          ErpToast.show(context,
+            'Chưa có xác nhận server. Nhấn Kiểm tra yêu cầu để gửi lại đúng thao tác.',
+            isError:true);
           await _loadRecords();
         }
       }finally{if(mounted)setState(()=>saving=false);}
