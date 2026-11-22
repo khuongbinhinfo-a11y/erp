@@ -407,6 +407,12 @@ class ErpIdentityClient {
     Map<String,dynamic> fields,{required String key})=>
       _request('POST','/v1/catalog/r1/rules/$ruleId/retire',token:token,
         body:fields,revision:0,idempotencyKey:key);
+  /// Correct lifecycle fields only; SKU/barcode identity and UOM factors
+  /// are immutable. Optimistic revision + idempotency are server validated.
+  Future<Map<String,dynamic>> updateR1Catalog(
+      String token,String kind,String id,int revision,Map<String,dynamic> fields)=>
+    _request('PATCH','/v1/catalog/r1/$kind/$id',token:token,
+      body:fields,revision:revision);
   /// Price simulation is read-only; it never changes order, stock or money ledger.
   Future<Map<String,dynamic>> r1PriceQuote(String token,
     Map<String,dynamic> context)=>_request(
