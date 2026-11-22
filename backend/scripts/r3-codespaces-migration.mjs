@@ -91,6 +91,39 @@ function safeURL(raw){
     fail("DIRECT_PRISMA_ERP_DB_TLS_URL_REQUIRED");
  return u;
 }
+// The CLI generates a one-time credential scoped by Prisma to the exact
+// project + database IDs. A caller-supplied generic db.prisma.io URL is NEVER
+// accepted as proof of ERP-DB identity.
+function prismaCli(args){
+ const p=spawnSync("npx",["--no-install","prisma",...args,"--json"],{
+  cwd:resolve("deploy"),encoding:"utf8",env:process.env,
+  maxBuffer:4*1024*1024,timeout:60000,stdio:["ignore","pipe","pipe"]});
+ if(p.error||p.status!==0)fail("PRISMA_OPERATOR_CLI_FAILED");
+ const envelope=p.stdout.split(/\r?\n/).map(line=>{
+  try{return JSON.parse(line);}catch{return null;}
+ }).find(x=>x?.kind==="result")?.envelope;
+ if(!envelope||envelope.ok!==true)fail("PRISMA_OPERATOR_CLI_RESULT_FAILED");
+ return envelope.result;
+}
+export function parsePrismaCredential(payload){
+ const id=payload?.connection?.id;
+ const raw=payload?.connectionString;
+ if(!/^con_[a-z0-9]+$/i.test(id??"")||typeof raw!=="string")
+   fail("ERP_DB_ONE_TIME_CREDENTIAL_MISSING");
+ let url;
+ try{url=new URL(raw);}catch{fail("ERP_DB_ONE_TIME_CREDENTIAL_INVALID");}
+ if(url.hostname==="pooled.db.prisma.io")url.hostname="db.prisma.io";
+ return {id,url:safeURL(url.toString())};
+}
+function mintErpDbCredential(){
+ const result=prismaCli(["postgres","connection","create",DATABASE,
+  "--project",PROJECT]);
+ return parsePrismaCredential(result);
+}
+function revokeErpDbCredential(id){
+ prismaCli(["postgres","connection","delete",id,
+   "--project",PROJECT,"--delete",id]);
+}
 function pgEnv(u){
  return {PGHOST:u.hostname,PGPORT:u.port||"5432",
   PGDATABASE:decodeURIComponent(u.pathname.slice(1)),PGUSER:decodeURIComponent(u.username),
@@ -153,10 +186,11 @@ async function main(mode){
  const changes=tracked.split("\n").filter(Boolean).map(x=>x.slice(3));
  checkOperator(e,branch,sha,remote,changes,mode==="--apply");
  verifyCodespaceSession(e);
- required(e,["ERP_POSTGRES_DIRECT_URL","ERP_APPROVED_SHA"]);
- const u=safeURL(e.ERP_POSTGRES_DIRECT_URL);
+ required(e,["ERP_APPROVED_SHA"]);
  if(mode==="--apply")await maintenance();
- const pool=new Pool({connectionString:e.ERP_POSTGRES_DIRECT_URL,max:1,
+ const credential=mintErpDbCredential();
+ const u=credential.url;
+ const pool=new Pool({connectionString:u.toString(),max:1,
   connectionTimeoutMillis:20000,statement_timeout:300000,query_timeout:300000});
  pool.on("error",()=>console.error("ERP_R3_POSTGRES_POOL_DISCONNECTED"));
  let tmp,container;
@@ -267,8 +301,11 @@ async function main(mode){
   console.log("ERP_R3_BACKUP_OBJECT "+base+"pre-0011-0014.dump.age");
   console.log("ERP_R3_BACKUP_SHA256 "+durableHash);
  }finally{
-  await pool.end();
-  if(tmp)rmSync(tmp,{recursive:true,force:true});
+  let cleanupFailed=false;
+  try{await pool.end();}catch{cleanupFailed=true;}
+  try{if(tmp)rmSync(tmp,{recursive:true,force:true});}catch{cleanupFailed=true;}
+  try{revokeErpDbCredential(credential.id);}catch{cleanupFailed=true;}
+  if(cleanupFailed)fail("ERP_R3_CREDENTIAL_OR_TEMP_CLEANUP_UNVERIFIED");
  }
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
