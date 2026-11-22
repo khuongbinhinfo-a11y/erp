@@ -69,14 +69,16 @@ export async function resolveR1Price(db:PoolClient,input:Query){
     if(!r.rows[0])throw new R1QuoteError(409,"CUSTOMER_UNAVAILABLE");
     if(r.rows[0].customer_group)customerGroups.add(r.rows[0].customer_group);
     if(r.rows[0].customer_group_id){
-      const mapped=await db.query<{code:string;name:string}>(`SELECT g.code,g.name
+      const mapped=await db.query<{code:string;legacy_label:string|null}>(`SELECT g.code,g.legacy_label
         FROM catalog_customer_group g
         WHERE g.installation_id=$1 AND g.branch_id=$2 AND g.id=$3`,
         [t,b,r.rows[0].customer_group_id]);
       if(!mapped.rows[0])throw new R1QuoteError(409,"CUSTOMER_GROUP_REFERENCE_INVALID");
       canonicalGroup=mapped.rows[0].code;
       customerGroups.add(mapped.rows[0].code);
-      customerGroups.add(mapped.rows[0].name);
+      // Do not derive historical matching from editable group.name.
+      if(mapped.rows[0].legacy_label)
+        customerGroups.add(mapped.rows[0].legacy_label);
     }
   }
   if(channelId){
