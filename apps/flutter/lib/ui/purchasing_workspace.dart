@@ -3,6 +3,7 @@ import 'package:material_ui/material_ui.dart';
 import 'identity_client.dart';
 import 'erp_toast.dart';
 import 'erp_tokens.dart';
+import 'erp_display.dart';
 
 class _PurchaseLineInput{
  String productId;
@@ -358,8 +359,8 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
           crossAxisAlignment:CrossAxisAlignment.start,children:[
            Text((item['sku']??'').toString()+' · '+(item['name']??'').toString(),
              style:const TextStyle(fontWeight:FontWeight.w700)),
-           Text('Đặt '+(item['orderedBase']??'').toString()+
-             ' · Đã nhận '+(item['receivedBase']??'').toString(),
+           Text('Đặt '+erpDecimalText(item['orderedBase'])+
+             ' · Đã nhận '+erpDecimalText(item['receivedBase']),
              style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
            TextField(controller:controllers[(item['lineNo'] as num).toInt()],
              keyboardType:const TextInputType.numberWithOptions(decimal:true),
