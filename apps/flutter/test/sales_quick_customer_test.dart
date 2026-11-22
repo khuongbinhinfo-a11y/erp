@@ -47,6 +47,7 @@ void main(){
           expect(body['code'],'KH-T01');
           expect(body['name'],'Cửa hàng thử nghiệm');
           if(attempts==1)throw http.ClientException('ACK lost after COMMIT');
+          if(attempts==2)return reply({'error':{'code':'AUTH_DENIED'}},401);
           return reply({'id':customer,'code':'KH-T01',
             'name':'Cửa hàng thử nghiệm','revision':0},201);
         }
@@ -107,9 +108,32 @@ void main(){
       Future<void>.delayed(const Duration(milliseconds:120)));
     await tester.pumpAndSettle();
     expect(attempts,2);
+    expect(find.text('Kiểm tra lại'),findsOneWidget,
+      reason:'401 cannot prove the first POST was rolled back');
+    // Close the order composer and reopen after reauthentication. The same
+    // actor/branch command must remain recoverable with the original key.
+    await tester.tap(find.text('Đóng').last);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('sales-create')),findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('sales-create')));
+    await tester.pumpAndSettle();
+    await tester.runAsync(()async=>
+      Future<void>.delayed(const Duration(milliseconds:120)));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('sales-quick-customer-panel')),findsOneWidget);
+    expect(find.text('Kiểm tra lại'),findsOneWidget);
+    await tester.ensureVisible(find.byKey(const ValueKey('sales-quick-customer-save')));
+    await tester.tap(find.byKey(const ValueKey('sales-quick-customer-save')));
+    await tester.pumpAndSettle();
+    await tester.runAsync(()async=>
+      Future<void>.delayed(const Duration(milliseconds:120)));
+    await tester.pumpAndSettle();
+    expect(attempts,3);
     expect(sentKeys[0],isNotNull);
     expect(sentKeys[0],sentKeys[1]);
+    expect(sentKeys[1],sentKeys[2]);
     expect(sentBodies[0],sentBodies[1]);
+    expect(sentBodies[1],sentBodies[2]);
     expect(find.byKey(const ValueKey('sales-quick-customer-panel')),findsNothing);
     expect(find.textContaining('Cửa hàng thử nghiệm'),findsWidgets);
     expect(find.byKey(const ValueKey('sales-sku-search')),findsOneWidget);
