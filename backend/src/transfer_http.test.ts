@@ -98,6 +98,17 @@ test("R3.3 transfer PostgreSQL: physical dispatch, in-transit, partial and raced
   const approve=await make(endpoint+"/"+id+"/approve",scope,0);
   assert.equal(approve.status,200,JSON.stringify(approve.body));
   assert.equal(approve.body.status,"APPROVED");
+  // A matching physical issue must not commit until this transfer reaches IN_TRANSIT.
+  const issueOnly=await db.connect();
+  try{
+   await issueOnly.query("BEGIN");
+   await issueOnly.query(`INSERT INTO inventory_ledger(installation_id,branch_id,
+     warehouse_id,product_id,kind,source_type,source_id,source_line,
+     delta_base,actor_id,request_id)
+     VALUES($1,$2,$3,$4,'TRANSFER_OUT','TRANSFER',$5,1,-3,$6,
+       'issue-without-dispatch')`,[t,b,w,p,id,root.actorId]);
+   await assert.rejects(issueOnly.query("COMMIT"),/requires dispatch transition at commit/i);
+  }finally{await issueOnly.query("ROLLBACK").catch(()=>undefined);issueOnly.release();}
   // A direct database writer cannot create a fake already-dispatched header.
   await assert.rejects(db.query(
     `INSERT INTO inventory_transfer(installation_id,branch_id,
@@ -112,6 +123,10 @@ test("R3.3 transfer PostgreSQL: physical dispatch, in-transit, partial and raced
      destination_warehouse_id,created_by,request_id)
     VALUES($1,$2,$3,$4,$5,'empty-transfer-fixture') RETURNING id`,
    [t,b,w,dest,root.actorId]);
+  await assert.rejects(db.query(`UPDATE inventory_transfer
+    SET status='CANCELLED',revision=revision+1,approved_by=$4,approved_at=now()
+    WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,
+    [t,b,empty.rows[0]!.id,root.actorId]),/lifecycle mutation invalid/i);
   await db.query(`UPDATE inventory_transfer SET status='APPROVED',
       revision=revision+1,approved_by=$4,approved_at=now()
     WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,
@@ -156,6 +171,29 @@ test("R3.3 transfer PostgreSQL: physical dispatch, in-transit, partial and raced
    await assert.rejects(direct.query("COMMIT"),/no accepted receipt line/i);
   }finally{await direct.query("ROLLBACK").catch(()=>undefined);direct.release();}
 
+  // Even a perfectly matched receipt fact must not commit without updating
+  // the transfer status in the same transaction.
+  const receiptOnly=await db.connect();
+  try{
+   await receiptOnly.query("BEGIN");
+   const forgedReceipt=await receiptOnly.query<{id:string}>(
+    `INSERT INTO inventory_transfer_receipt(installation_id,branch_id,
+      transfer_id,destination_warehouse_id,posted_by,request_id)
+     VALUES($1,$2,$3,$4,$5,'receipt-without-transition') RETURNING id`,
+    [t,b,id,dest,root.actorId]);
+   const movement=await receiptOnly.query<{id:string}>(
+    `INSERT INTO inventory_ledger(installation_id,branch_id,warehouse_id,
+      product_id,kind,source_type,source_id,source_line,delta_base,actor_id,request_id)
+     VALUES($1,$2,$3,$4,'TRANSFER_IN','TRANSFER',$5,1,1,$6,
+       'receipt-without-transition') RETURNING id`,
+     [t,b,dest,p,forgedReceipt.rows[0]!.id,root.actorId]);
+   await receiptOnly.query(`INSERT INTO inventory_transfer_receipt_line(
+      installation_id,branch_id,receipt_id,line_no,transfer_id,transfer_line_no,
+      product_id,destination_warehouse_id,quantity_base,ledger_id)
+     VALUES($1,$2,$3,1,$4,1,$5,$6,1,$7)`,
+    [t,b,forgedReceipt.rows[0]!.id,id,p,dest,movement.rows[0]!.id]);
+   await assert.rejects(receiptOnly.query("COMMIT"),/requires receipt status transition at commit/i);
+  }finally{await receiptOnly.query("ROLLBACK").catch(()=>undefined);receiptOnly.release();}
   const sourceStock=await call("/v1/inventory/balances?branchId="+b+"&warehouseId="+w,
     "GET",undefined,token);
   assert.equal(sourceStock.body.items[0].onHand,"2.000000");
