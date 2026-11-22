@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import type { AddressInfo } from "node:net";
 import { Pool } from "pg";
+import { hashPassword } from "./auth.ts";
 import { applyMigrations } from "./migrate.ts";
 import { bootstrapInstallation } from "./bootstrap.ts";
 import { buildApp } from "./server.ts";
@@ -182,6 +183,38 @@ test("R3.3 transfer PostgreSQL: physical dispatch, in-transit, partial and raced
    "UPDATE inventory_transfer_receipt_line SET quantity_base=9 WHERE installation_id=$1",[t]),
    /immutable/i);
   assert.equal((await make(receivePath,second,4)).status,409);
+  // Transfer-only warehouse staff must access authorized selectors without catalog.read.
+  const limitedPass="Synthetic-transfer-receiver-"+randomUUID();
+  const limited=(await db.query<{id:string}>(
+   `INSERT INTO app_user(installation_id,login_name,password_hash)
+      VALUES($1,'receiver',$2) RETURNING id`,[t,await hashPassword(limitedPass)])).rows[0]!.id;
+  const role=(await db.query<{id:string}>(
+   `INSERT INTO app_role(installation_id,code)
+     VALUES($1,'TRANSFER_RECEIVER_ONLY') RETURNING id`,[t])).rows[0]!.id;
+  await db.query(`INSERT INTO user_role(installation_id,user_id,role_id,branch_id)
+    VALUES($1,$2,$3,$4)`,[t,limited,role,b]);
+  await db.query(`INSERT INTO user_role_warehouse(
+    installation_id,user_id,role_id,branch_id,warehouse_id)
+    VALUES($1,$2,$3,$4,$5)`,[t,limited,role,b,dest]);
+  await db.query(`INSERT INTO role_permission(installation_id,role_id,permission_code)
+    VALUES($1,$2,'inventory.transfer.read'),
+          ($1,$2,'inventory.transfer.receive')`,[t,role]);
+  const relog=await call("/v1/auth/login","POST",
+    {loginName:"receiver",password:limitedPass});
+  assert.equal(relog.status,200,JSON.stringify(relog.body));
+  const receiverToken=relog.body.token as string;
+  const transferScopes=await call(endpoint+"/scopes?branchId="+b,
+    "GET",undefined,receiverToken);
+  assert.equal(transferScopes.status,200,JSON.stringify(transferScopes.body));
+  assert.equal(transferScopes.body.branches.length,1);
+  assert.deepEqual(transferScopes.body.warehouses.map(
+    (x:Record<string,string>)=>x.id),[dest]);
+  assert.equal((await call("/v1/catalog/warehouses?branchId="+b,
+    "GET",undefined,receiverToken)).status,403);
+  assert.equal((await call(endpoint+"?branchId="+b+"&warehouseId="+dest,
+    "GET",undefined,receiverToken)).status,200);
+  assert.equal((await call(endpoint+"?branchId="+b+"&warehouseId="+w,
+    "GET",undefined,receiverToken)).status,403);
   const unknownWh=randomUUID();
   assert.equal((await call(endpoint+"?branchId="+b+"&warehouseId="+unknownWh,
     "GET",undefined,token)).status,403);
