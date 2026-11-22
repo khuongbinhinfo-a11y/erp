@@ -1,6 +1,6 @@
 /**
  * ERP R1 UOM/media, Codespaces-only production migration operator.
- * Run from backend with: node --experimental-strip-types scripts/r3-codespaces-migration.mjs --check|--apply
+ * Run from backend with: node --experimental-strip-types scripts/r1-media-codespaces-migration.mjs --check|--apply
  *
  * Production writes are gated by observed Compute maintenance mode.
  * A private, encrypted durable backup and its isolated read-back/restore are
@@ -32,7 +32,7 @@ export const BUCKET_S3_NAME="user-hccjgwl892edb91ox3v3j5b2";
 const API="https://gh30k50bvsc0o9298w9leivf.sin.prisma.build";
 const BASE_TABLES=["installation","branch","warehouse","app_user","app_role",
  "schema_migrations","role_permission","inventory_ledger","catalog_product","catalog_unit"];
-const REQUIRED_R3=["catalog_unit_definition","catalog_product_media",
+const REQUIRED_NEW=["catalog_unit_definition","catalog_product_media",
  "inventory_ledger","catalog_product","catalog_unit","app_user"];
 const APPROVAL="OWNER_APPROVED_R1_MEDIA_0015_0016_ERP_DB";
 const CLEAN_EXCEPT=new Set(["backend/package-lock.json","backend/deploy/package-lock.json"]);
@@ -61,7 +61,7 @@ export function checkOperator(e,branch,sha,remote,changes,apply=false){
    fail("WORKTREE_CHANGES_NOT_APPROVED");
  if(apply&&(e.ERP_R1_MEDIA_MIGRATION_APPROVAL!==APPROVAL||
     e.ERP_TARGET_PROJECT_ID!==PROJECT||e.ERP_TARGET_DATABASE_ID!==DATABASE))
-   fail("OWNER_R3_TARGET_APPROVAL_MISSING");
+   fail("OWNER_R1_MEDIA_TARGET_APPROVAL_MISSING");
 }
 function git(args){return execFileSync("git",args,{cwd:resolve(process.cwd(),".."),
  encoding:"utf8",stdio:["ignore","pipe","ignore"]}).trim();}
@@ -280,7 +280,7 @@ function checkPreserved(before,after,description){
 }
 async function validateSchema(pool,stage){
  const v=await versions(pool);checkVersions(v,stage);
- const names=stage==="before"?BASE_TABLES:REQUIRED_R3;
+ const names=stage==="before"?BASE_TABLES:REQUIRED_NEW;
  for(const name of names){
   const result=await pool.query("SELECT to_regclass($1) IS NOT NULL AS ok",["public."+name]);
   if(result.rows[0]?.ok!==true)fail("ERP_SCHEMA_MISSING_"+name);
@@ -457,7 +457,7 @@ async function main(mode){
     if(JSON.stringify(rehearsal.applied)!==JSON.stringify(RELEASE)||rehearsal.skipped.length!==14)
       fail("REHEARSAL_MIGRATION_SET_INVALID");
     await validateSchema(testPool,"after");
-     await verifyNewTablesOnFirstApply(testPool);
+    await verifyNewTablesOnFirstApply(testPool);
     checkPreserved(initial,await signature(testPool,["schema_migrations"]),
      "REHEARSAL");
    }finally{await testPool.end();}
