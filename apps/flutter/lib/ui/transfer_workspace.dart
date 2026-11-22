@@ -69,11 +69,17 @@ class _TransferWorkspaceState extends State<TransferWorkspace>{
       final data=await widget.client.transferScopes(widget.session.token,
         branchId:b,query:query);
       if(!mounted||n!=epoch)return;
-      warehouses=data.warehouses.where((x)=>
-        can('inventory.transfer.read',x['id'].toString())).toList();
+      // The picker is for transfer actions, not only transfer reading.
+      // The server already limits returned warehouses to this actor's scopes.
+      warehouses=data.warehouses.where((x){
+        final id=x['id'].toString();
+        return const ['inventory.transfer.read','inventory.transfer.create',
+          'inventory.transfer.approve','inventory.transfer.dispatch',
+          'inventory.transfer.receive'].any((permission)=>can(permission,id));
+      }).toList();
       warehouseId=warehouses.isEmpty?null:warehouses.first['id'].toString();
       if(warehouseId==null)setState((){
-        loading=false;error='Không có kho được cấp quyền xem chuyển kho.';
+        loading=false;error='Chưa có quyền thao tác chuyển kho tại chi nhánh này.';
       });else await reload();
     }on ErpApiError catch(e){
       if(mounted&&n==epoch)setState((){loading=false;error=e.message;});
@@ -84,6 +90,15 @@ class _TransferWorkspaceState extends State<TransferWorkspace>{
   Future<void> reload()async{
     final b=branchId,w=warehouseId;
     if(b==null||w==null)return;
+    // Creating/dispatching/receiving does not imply permission to list documents.
+    // Never generate a predictable 403 for a valid action-only warehouse.
+    if(!can('inventory.transfer.read',w)){
+      epoch++;
+      if(mounted)setState((){
+        items=[];hasMore=false;loading=false;loadingMore=false;error=null;
+      });
+      return;
+    }
     final n=++epoch;setState((){loading=true;loadingMore=false;error=null;});
     try{
       final page=await widget.client.transferPage(widget.session.token,
@@ -163,13 +178,13 @@ class _TransferWorkspaceState extends State<TransferWorkspace>{
     if(b==null||source==null||hasPending||!can('inventory.transfer.create',source))return;
     List<Map<String,dynamic>> options,products;
     try{
-      final data=await Future.wait([
-        widget.client.catalogItems(widget.session.token,'warehouses',branchId:b),
-        widget.client.catalogItems(widget.session.token,'products',branchId:b),
-      ]);
-      options=data[0].where((x)=>x['id']!=source&&
+      final scopes=await widget.client.transferScopes(widget.session.token,
+        branchId:b);
+      products=await widget.client.transferProducts(widget.session.token,
+        branchId:b,sourceWarehouseId:source);
+      // Destination read grant is required by the transfer-create API.
+      options=scopes.warehouses.where((x)=>x['id']!=source&&
         can('inventory.read',x['id'].toString())).toList();
-      products=data[1].where((x)=>x['active']!=false).toList();
     }on ErpApiError catch(e){info(e.message,bad:true);return;}
     if(!mounted||branchId!=b||warehouseId!=source)return;
     String? dest=options.isEmpty?null:options.first['id'].toString();
@@ -180,8 +195,9 @@ class _TransferWorkspaceState extends State<TransferWorkspace>{
     add();
     Future<void> findWarehouse(StateSetter set,BuildContext ctx)async{
       try{
-        final found=await widget.client.catalogItems(widget.session.token,
-          'warehouses',branchId:b,query:wSearch.text.trim());
+        final scoped=await widget.client.transferScopes(widget.session.token,
+          branchId:b,query:wSearch.text.trim());
+        final found=scoped.warehouses;
         if(!mounted||!ctx.mounted||branchId!=b||warehouseId!=source)return;
         set((){
           final known={for(final x in options)x['id'].toString():x};
@@ -196,8 +212,8 @@ class _TransferWorkspaceState extends State<TransferWorkspace>{
     }
     Future<void> findProduct(StateSetter set,BuildContext ctx)async{
       try{
-        final found=await widget.client.catalogItems(widget.session.token,
-          'products',branchId:b,query:pSearch.text.trim());
+        final found=await widget.client.transferProducts(widget.session.token,
+          branchId:b,sourceWarehouseId:source,query:pSearch.text.trim());
         if(!mounted||!ctx.mounted||branchId!=b||warehouseId!=source)return;
         set((){
           final known={for(final x in products)x['id'].toString():x};
@@ -441,7 +457,10 @@ class _TransferWorkspaceState extends State<TransferWorkspace>{
         child:Text(error!,style:const TextStyle(color:Colors.red))),
       if(loading)const LinearProgressIndicator(),
       if(!loading&&error==null&&items.isEmpty)
-        const Padding(padding:EdgeInsets.all(18),child:Text('Kho này chưa có phiếu chuyển.')),
+        Padding(padding:const EdgeInsets.all(18),child:Text(
+          can('inventory.transfer.read',warehouseId)
+            ?'Kho này chưa có phiếu chuyển.'
+            :'Bạn có thể thao tác theo quyền được cấp nhưng không có quyền xem danh sách phiếu.')),
       if(!loading&&error==null)for(final row in items)line(row),
       if(!loading&&error==null&&hasMore)
         TextButton(onPressed:busy||loadingMore?null:more,
