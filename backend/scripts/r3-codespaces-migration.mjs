@@ -102,7 +102,7 @@ function verifyCodespaceSession(e){
  * Codespaces auto-forward when the terminal sees a localhost URL.
  * Failure is closed; never fall back to a local port-only probe.
  */
-export async function attestProcessCodespace(e,{fetcher=fetch,port=0}={}){
+export async function attestProcessCodespace(e,{fetcher=fetch,port=0,maxAttempts=25}={}){
  const name=e.CODESPACE_NAME,domain=e.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN;
  if(!/^[a-z0-9-]{5,128}$/.test(name??"")||domain!=="app.github.dev")
    fail("CODESPACES_PORT_OR_NAME_INVALID");
@@ -125,7 +125,7 @@ export async function attestProcessCodespace(e,{fetcher=fetch,port=0}={}){
   console.log("CODESPACES_FORWARD_ATTESTATION http://localhost:"+assigned);
   const url="https://"+name+"-"+assigned+"."+domain+
     "/erp-r3-attestation/"+nonce;
-  for(let attempt=0;attempt<25;attempt++){
+  for(let attempt=0;attempt<maxAttempts;attempt++){
    try{
     const response=await fetcher(url,{
      headers:{"X-Github-Token":e.GITHUB_TOKEN},
