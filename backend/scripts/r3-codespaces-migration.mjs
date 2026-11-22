@@ -201,6 +201,34 @@ function pgEnv(u){
   PGDATABASE:decodeURIComponent(u.pathname.slice(1)),PGUSER:decodeURIComponent(u.username),
   PGPASSWORD:decodeURIComponent(u.password),PGSSLMODE:u.searchParams.get("sslmode")||"require"};
 }
+export function requirePg17Client(version, binary){
+ const major=/^pg_(?:dump|restore) \(PostgreSQL\) (\d+)(?:\.\d+)?(?:\s|$)/.exec(version)?.[1];
+ if(major!=="17")fail("POSTGRES_17_CLIENT_REQUIRED_"+binary.toUpperCase().replaceAll("-","_"));
+}
+export function classifyPgDumpFailure(stderr){
+ const problem=String(stderr??"").toLowerCase();
+ // Only emit stable classifications; raw stderr can include connection details.
+ if(/server version mismatch|aborting because of server version mismatch|server version:.*pg_dump version:/s.test(problem))
+  return "PG_DUMP_SERVER_VERSION_MISMATCH";
+ if(/password authentication failed|authentication failed|no password supplied/.test(problem))
+  return "PG_DUMP_AUTHENTICATION_FAILED";
+ if(/permission denied|must be owner|must have permission|insufficient privilege/.test(problem))
+  return "PG_DUMP_DATABASE_PERMISSION_DENIED";
+ if(/certificate|ssl error|tls error|certificate verify failed/.test(problem))
+  return "PG_DUMP_TLS_VERIFY_FAILED";
+ if(/could not translate host name|connection refused|could not connect|timeout expired|network is unreachable|no route to host/.test(problem))
+  return "PG_DUMP_CONNECTION_FAILED";
+ if(/serializable|deferrable|transaction isolation/.test(problem))
+  return "PG_DUMP_SNAPSHOT_MODE_UNSUPPORTED";
+ return "PG_DUMP_FAILED_DETAILS_REDACTED";
+}
+function dumpBaseDatabase(dump,u){
+ const x=spawnSync("pg_dump",["--format=custom","--no-owner","--no-acl",
+  "--serializable-deferrable","--file="+dump],{
+    encoding:"utf8",env:{...process.env,...pgEnv(u)},
+    maxBuffer:4*1024*1024,timeout:600000,stdio:["ignore","pipe","pipe"]});
+ if(x.error||x.status!==0)fail(classifyPgDumpFailure(x.stderr));
+}
 function fileHash(file){return createHash("sha256").update(readFileSync(file)).digest("hex");}
 async function maintenance(){
  const r=await fetch(API+"/health/live",{signal:AbortSignal.timeout(15000)});
@@ -285,8 +313,10 @@ async function main(mode){
   const endpoint=new URL(e.ERP_BACKUP_S3_ENDPOINT);
   if(endpoint.protocol!=="https:"||endpoint.pathname!=="/"||endpoint.search)fail("S3_TLS_ENDPOINT_REQUIRED");
   // All external prerequisites must exist before creating the first production artifact.
-  for(const tool of ["pg_dump","pg_restore","pg_isready","age","age-keygen","aws","docker"])
-   command(tool,["--version"]);
+  for(const tool of ["pg_dump","pg_restore","pg_isready","age","age-keygen","aws","docker"]){
+   const version=command(tool,["--version"]);
+   if(tool==="pg_dump"||tool==="pg_restore")requirePg17Client(version,tool);
+  }
   if(!/^age1[0-9a-z]{30,}$/.test(e.ERP_AGE_RECIPIENT))
    fail("INVALID_OFFLINE_BACKUP_RECIPIENT");
   tmp=mkdtempSync(join(tmpdir(),"erp-r3-recovery-"));
@@ -306,8 +336,7 @@ async function main(mode){
     "--endpoint-url",endpoint.origin,"s3","cp",source,dest,"--only-show-errors"
   ],{AWS_EC2_METADATA_DISABLED:"true",AWS_DEFAULT_REGION:"ap-southeast-1"});
   // PgDump snapshot alone is not a release gate: read back, decrypt and RESTORE.
-  command("pg_dump",["--format=custom","--no-owner","--no-acl",
-    "--serializable-deferrable","--file="+dump],pgEnv(u));
+  dumpBaseDatabase(dump,u);
   if(statSync(dump).size<256)fail("ERP_BACKUP_TOO_SMALL");
   command("age",["-r",e.ERP_AGE_RECIPIENT,"-o",encrypted,dump]);
   aws("upload",encrypted,base+"pre-0011-0014.dump.age");

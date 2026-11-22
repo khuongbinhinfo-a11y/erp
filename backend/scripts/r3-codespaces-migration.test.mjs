@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { BASE, R3, checkOperator, checkVersions, canonicalRemote, checkCodespaceRecord, attestProcessCodespace, parsePrismaCredential, validateMintedCredentialOrRevoke } from "./r3-codespaces-migration.mjs";
+import { BASE, R3, checkOperator, checkVersions, canonicalRemote, checkCodespaceRecord, attestProcessCodespace, parsePrismaCredential, validateMintedCredentialOrRevoke, requirePg17Client, classifyPgDumpFailure } from "./r3-codespaces-migration.mjs";
 const sha="a".repeat(40);
 const remote="https://github.com/gustavjung24-ops/ERP.git";
 const base={CODESPACES:"true",CODESPACE_NAME:"synthetic-erp-codespace",
@@ -105,4 +105,30 @@ test("R3 operator accepts exclusively 10 pre-migration and 14 post-migration ver
  assert.throws(()=>checkVersions(BASE,"after"),/MIGRATION_DRIFT/);
  assert.throws(()=>checkVersions([...BASE.slice(0,9)],"before"),/MIGRATION_DRIFT/);
  assert.throws(()=>checkVersions([...BASE,"0011_modified.sql",...R3.slice(1)],"after"),/MIGRATION_DRIFT/);
+});
+
+test("R3 accepts only PostgreSQL client 17 before production backup",()=>{
+ assert.doesNotThrow(()=>requirePg17Client("pg_dump (PostgreSQL) 17.7","pg_dump"));
+ assert.doesNotThrow(()=>requirePg17Client("pg_restore (PostgreSQL) 17.2 (Ubuntu)","pg_restore"));
+ assert.throws(()=>requirePg17Client("pg_dump (PostgreSQL) 16.10","pg_dump"),/POSTGRES_17_CLIENT_REQUIRED_PG_DUMP/);
+ assert.throws(()=>requirePg17Client("pg_restore (PostgreSQL) 18.1","pg_restore"),/POSTGRES_17_CLIENT_REQUIRED_PG_RESTORE/);
+ assert.throws(()=>requirePg17Client("unknown binary","pg_dump"),/POSTGRES_17_CLIENT_REQUIRED/);
+});
+test("R3 diagnostic categories never expose credentials or connection URLs",()=>{
+ const secret="example-sensitive-password";
+ assert.equal(classifyPgDumpFailure("pg_dump: error: aborting because of server version mismatch"),
+  "PG_DUMP_SERVER_VERSION_MISMATCH");
+ assert.equal(classifyPgDumpFailure("pg_dump: error: permission denied for schema public"),
+  "PG_DUMP_DATABASE_PERMISSION_DENIED");
+ assert.equal(classifyPgDumpFailure("pg_dump: error: server closed connection, password authentication failed"),
+  "PG_DUMP_AUTHENTICATION_FAILED");
+ assert.equal(classifyPgDumpFailure("pg_dump: error: unable to verify SSL certificate"),
+  "PG_DUMP_TLS_VERIFY_FAILED");
+ assert.equal(classifyPgDumpFailure("password="+secret+" secret-db.example:5432 unexpected"),
+  "PG_DUMP_FAILED_DETAILS_REDACTED");
+ assert.equal(classifyPgDumpFailure("feature is unsupported: serializable deferrable"),
+  "PG_DUMP_SNAPSHOT_MODE_UNSUPPORTED");
+ assert.equal(classifyPgDumpFailure("connection refused"),
+  "PG_DUMP_CONNECTION_FAILED");
+ assert.ok(!classifyPgDumpFailure("password="+secret).includes(secret));
 });

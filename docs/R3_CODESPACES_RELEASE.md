@@ -13,6 +13,18 @@ Script không tự lấy secret hoặc in URL/khóa mật; chỉ sử dụng bi�
 
 Yêu cầu Node 22+, Git, Docker daemon, pg_dump/pg_restore/pg_isready PostgreSQL 17,
 age, aws CLI. Backend đã cài npm dependencies.
+**ERP-DB là PostgreSQL 17.x, bắt buộc pg_dump/pg_restore phiên bản 17.**
+Ubuntu 24.04 có thể cài client 16 mặc định; nếu báo
+`POSTGRES_17_CLIENT_REQUIRED_PG_DUMP` hoặc
+`POSTGRES_17_CLIENT_REQUIRED_PG_RESTORE`, cài **chỉ client 17**
+từ repository PostgreSQL chính thức
+(https://www.postgresql.org/download/linux/ubuntu/),
+kiểm tra `pg_dump --version` và `pg_restore --version`
+trước khi chạy lại. Không đổi PostgreSQL server production.
+Nếu client 17 vẫn báo lỗi, operator chỉ in mã phân loại (ví dụ
+`PG_DUMP_AUTHENTICATION_FAILED`, `PG_DUMP_TLS_VERIFY_FAILED`,
+`PG_DUMP_DATABASE_PERMISSION_DENIED`, `PG_DUMP_SNAPSHOT_MODE_UNSUPPORTED`)
+và dừng trước migration. Không in stderr gốc vì có thể chứa thông tin kết nối.
 Kết nối Prisma CLI từ backend/deploy bằng prisma auth whoami (đăng nhập nếu cần).
 
 Đặt biến sau trong **GitHub Settings → Codespaces → Secrets** hoặc môi trường
