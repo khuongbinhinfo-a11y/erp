@@ -90,4 +90,14 @@ BEGIN
  ) THEN
    RAISE EXCEPTION 'R1A_LEGACY_CUSTOMER_GROUP_BACKFILL_INCOMPLETE';
  END IF;
-END; $$;
+ IF EXISTS (
+   SELECT 1 FROM catalog_customer c
+   JOIN catalog_customer_group g ON
+     g.installation_id=c.installation_id AND g.branch_id=c.branch_id
+     AND g.id=c.customer_group_id
+   WHERE c.customer_group IS NOT NULL
+     AND g.name IS DISTINCT FROM trim(c.customer_group)
+ ) THEN
+   RAISE EXCEPTION 'R1A_LEGACY_CUSTOMER_GROUP_HASH_OR_CODE_COLLISION';
+ END IF;
+END; $;
