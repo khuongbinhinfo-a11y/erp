@@ -109,6 +109,39 @@ export async function handleTransferHttp(req:IncomingMessage,res:ServerResponse,
   try{actor=token?(await resolveSession(c,t,token))?.actorId:undefined;}
   finally{c.release();}
   if(!actor){fail(res,401,"AUTH_REQUIRED",id,cors);return;}
+  // Read scope from the assigned transfer role, never require catalog.read.
+  if(req.method==="GET"&&url.pathname==="/v1/inventory/transfers/scopes"){
+   const branch=url.searchParams.get("branchId"),q=(url.searchParams.get("q")??"").trim();
+   if((branch!==null&&!UUID.test(branch))||q.length>80)
+     throw new TransferFault(400,"INVALID_SCOPE_SEARCH");
+   const c=await db.connect();
+   try{
+    const branches=await c.query(
+      `SELECT DISTINCT b.id,b.name FROM user_role ur
+      JOIN role_permission rp ON rp.installation_id=ur.installation_id
+       AND rp.role_id=ur.role_id AND rp.permission_code='inventory.transfer.read'
+      JOIN user_role_warehouse uw ON uw.installation_id=ur.installation_id
+       AND uw.user_id=ur.user_id AND uw.role_id=ur.role_id
+       AND uw.branch_id=ur.branch_id
+      JOIN branch b ON b.installation_id=ur.installation_id AND b.id=ur.branch_id
+      WHERE ur.installation_id=$1 AND ur.user_id=$2 ORDER BY b.name,b.id`,[t,actor]);
+    const warehouses=branch===null?{rows:[]}:await c.query(
+      `SELECT DISTINCT w.id,w.name,w.code,w.branch_id AS "branchId"
+      FROM user_role ur JOIN role_permission rp ON rp.installation_id=ur.installation_id
+       AND rp.role_id=ur.role_id AND rp.permission_code='inventory.transfer.read'
+      JOIN user_role_warehouse uw ON uw.installation_id=ur.installation_id
+       AND uw.user_id=ur.user_id AND uw.role_id=ur.role_id
+       AND uw.branch_id=ur.branch_id
+      JOIN warehouse w ON w.installation_id=uw.installation_id
+       AND w.branch_id=uw.branch_id AND w.id=uw.warehouse_id
+      WHERE ur.installation_id=$1 AND ur.user_id=$2 AND w.branch_id=$3
+       AND ($4='' OR w.name ILIKE '%'||$4||'%' OR w.code ILIKE '%'||$4||'%')
+      ORDER BY w.name,w.id LIMIT 100`,[t,actor,branch,q]);
+    send(res,200,{branches:branches.rows,warehouses:warehouses.rows,
+      requestId:id},id,cors);
+   }finally{c.release();}
+   return;
+  }
   const route=/^\/v1\/inventory\/transfers\/([0-9a-f-]{36})(?:\/(approve|dispatch|cancel|receipts))?$/.exec(url.pathname);
   if(req.method==="GET"){
    const b=uuid(url.searchParams.get("branchId"));
