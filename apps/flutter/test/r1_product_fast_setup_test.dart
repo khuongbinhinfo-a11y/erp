@@ -112,5 +112,8 @@ void main(){
     expect(bodies[1],bodies[2]);
     expect(find.text('Kiểm tra yêu cầu trước'),findsNothing);
     expect(find.text('Nước uống'),findsOneWidget);
+    // Toast uses a four-second fake timer; complete it before teardown.
+    await tester.pump(const Duration(seconds:5));
+    await tester.pumpAndSettle();
   });
 }
