@@ -58,18 +58,14 @@ export async function resolveR1Price(db:PoolClient,input:Query){
   const customerGroups=new Set<string>();
   let canonicalGroup:string|null=null;
   if(customerId){
+    const found=await db.query<{ready:boolean}>(`SELECT EXISTS(
+      SELECT 1 FROM public.schema_migrations
+      WHERE version='0017_r1a_customer_directories.sql') AS ready`);
+    const customerSql=found.rows[0]?.ready===true
+      ? "SELECT customer_group,customer_group_id FROM catalog_customer WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active"
+      : "SELECT customer_group,NULL::uuid AS customer_group_id FROM catalog_customer WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active";
     const r=await db.query<{customer_group:string|null;customer_group_id:string|null}>(
-      "SELECT customer_group,customer_group_id FROM catalog_customer WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active",
-      [t,b,customerId]).catch(async(err:unknown)=>{
-        // Only tolerate the expected undefined_column of a pre-0017 schema,
-        // never hide auth, permission, provider or connectivity faults.
-        if(typeof err!=="object"||err===null||!("code" in err)||err.code!=="42703")
-          throw err;
-        const old=await db.query<{customer_group:string|null}>(
-          "SELECT customer_group FROM catalog_customer WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active",
-          [t,b,customerId]);
-        return {rows:old.rows.map(x=>({...x,customer_group_id:null}))};
-      });
+      customerSql,[t,b,customerId]);
     if(!r.rows[0])throw new R1QuoteError(409,"CUSTOMER_UNAVAILABLE");
     if(r.rows[0].customer_group)customerGroups.add(r.rows[0].customer_group);
     if(r.rows[0].customer_group_id){
