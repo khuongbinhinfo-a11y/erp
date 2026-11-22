@@ -299,23 +299,27 @@ void main(){
       await tester.pumpAndSettle();
       await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:150)));
       await tester.pumpAndSettle();
+      expect(tester.takeException(),isNull,reason:'initial mobile catalog overflow');
       await tester.tap(find.byKey(const ValueKey('catalog-edit-customer-r1a')));
       await tester.pumpAndSettle();
+      expect(tester.takeException(),isNull,reason:'opened edit dialog overflow');
       expect(find.byKey(const ValueKey('catalog-edit-scroll')),findsOneWidget);
       expect(find.byKey(const ValueKey('catalog-edit-customer-group')),findsOneWidget);
       final region=find.byKey(const ValueKey('catalog-edit-customer-region'));
       expect(region,findsOneWidget);
       await tester.ensureVisible(region);
       await tester.pumpAndSettle();
+      expect(tester.takeException(),isNull,reason:'scrolled edit dialog overflow');
       await tester.tap(region);
       await tester.pumpAndSettle();
       await tester.tap(find.text('KV_MT · Khu vực Mỹ Tho').last);
       await tester.pumpAndSettle();
+      expect(tester.takeException(),isNull,reason:'dropdown selection overflow');
       await tester.tap(find.byKey(const ValueKey('catalog-edit-save')));
       await tester.pumpAndSettle();
       await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:150)));
       await tester.pumpAndSettle();
-      expect(tester.takeException(),isNull);
+      expect(tester.takeException(),isNull,reason:'after save overflow');
       expect(patches,1);
       expect(saved?['customerRegionId'],'region-1');
       expect(saved?.containsKey('customerGroupId'),false,
