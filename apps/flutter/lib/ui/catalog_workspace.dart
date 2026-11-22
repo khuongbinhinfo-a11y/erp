@@ -31,6 +31,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
   static const tabs=<String,List<ErpSectionTab<String>>>{
     'customers':[
       ErpSectionTab('customers','Khách hàng'),
+      ErpSectionTab('customer-groups','Nhóm khách'),
+      ErpSectionTab('customer-regions','Khu vực'),
       ErpSectionTab('suppliers','Nhà cung cấp'),
     ],
     'products':[
@@ -53,7 +55,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     ],
   };
   static const titles=<String,String>{
-    'customers':'Khách hàng','suppliers':'Nhà cung cấp',
+    'customers':'Khách hàng','customer-groups':'Nhóm khách',
+    'customer-regions':'Khu vực','suppliers':'Nhà cung cấp',
     'products':'Sản phẩm','groups':'Nhóm hàng',
     'unit-definitions':'Đơn vị tính',
     'price-lists':'Bảng giá','prices':'Lịch sử đơn giá',
@@ -157,7 +160,6 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     final previous=widget.client.pendingR1(actor,branch,pendingKind);
     final code=TextEditingController(),name=TextEditingController();
     final unit=TextEditingController();
-    final customerGroup=TextEditingController();
     final phone=TextEditingController(),deliveryAddress=TextEditingController();
     final paymentTerms=TextEditingController(text:'0');
     final altUnit=TextEditingController(),conversion=TextEditingController();
@@ -172,9 +174,9 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     bool groupBusy=false,unitBusy=false,unitDictionaryReady=false;
     Uint8List? selectedImage;
     String? selectedImageType,selectedImageName;
-    String? productId,priceListId,groupId;
+    String? productId,priceListId,groupId,customerGroupId,customerRegionId;
     List<Map<String,dynamic>> availableProducts=[],availableLists=[],availableGroups=[],
-      availableUnits=[];
+      availableUnits=[],availableCustomerGroups=[],availableCustomerRegions=[];
     ModalRoute<dynamic>? formRoute;
     try{
       if(resource=='prices'&&previous==null){
@@ -186,6 +188,16 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
         }
         productId=availableProducts.first['id'] as String;
         priceListId=availableLists.first['id'] as String;
+      }
+      if(resource=='customers'&&previous==null){
+        final result=await Future.wait([
+          widget.client.catalogDirectoryAll(widget.session.token,
+            'customer-groups',branchId:branch),
+          widget.client.catalogDirectoryAll(widget.session.token,
+            'customer-regions',branchId:branch),
+        ]);
+        availableCustomerGroups=result[0];
+        availableCustomerRegions=result[1];
       }
       if(resource=='products'&&previous==null){
         availableGroups=await widget.client.catalogItems(
@@ -249,8 +261,39 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                   decoration:const InputDecoration(labelText:'Tên')),
                 if(resource=='customers')...[
                   const SizedBox(height:12),
-                  TextField(controller:customerGroup,
-                    decoration:const InputDecoration(labelText:'Nhóm khách hàng')),
+                  DropdownButtonFormField<String?>(
+                    key:const ValueKey('catalog-create-customer-group'),
+                    initialValue:customerGroupId,isExpanded:true,
+                    decoration:const InputDecoration(
+                      labelText:'Nhóm khách hàng',
+                      helperText:'Chọn mã danh mục; tạo nhóm mới ở tab Nhóm khách'),
+                    items:[
+                      const DropdownMenuItem<String?>(
+                        value:null,child:Text('Chưa phân nhóm')),
+                      ...availableCustomerGroups.where((x)=>x['active']!=false)
+                        .map((x)=>DropdownMenuItem<String?>(
+                          value:x['id'] as String,
+                          child:Text("${x['code']} · ${x['name']}",
+                            overflow:TextOverflow.ellipsis))),
+                    ],
+                    onChanged:(v)=>refresh(()=>customerGroupId=v)),
+                  const SizedBox(height:12),
+                  DropdownButtonFormField<String?>(
+                    key:const ValueKey('catalog-create-customer-region'),
+                    initialValue:customerRegionId,isExpanded:true,
+                    decoration:const InputDecoration(
+                      labelText:'Khu vực bán hàng',
+                      helperText:'Khác địa chỉ hành chính; tạo mã ở tab Khu vực'),
+                    items:[
+                      const DropdownMenuItem<String?>(
+                        value:null,child:Text('Chưa phân khu vực')),
+                      ...availableCustomerRegions.where((x)=>x['active']!=false)
+                        .map((x)=>DropdownMenuItem<String?>(
+                          value:x['id'] as String,
+                          child:Text("${x['code']} · ${x['name']}",
+                            overflow:TextOverflow.ellipsis))),
+                    ],
+                    onChanged:(v)=>refresh(()=>customerRegionId=v)),
                   const SizedBox(height:12),
                   TextField(controller:phone,
                     keyboardType:TextInputType.phone,
@@ -618,8 +661,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                   body.addAll({'code':code.text.trim(),'name':name.text.trim()});
                   if(resource=='customers'){
                     body.addAll({
-                      if(customerGroup.text.trim().isNotEmpty)
-                        'customerGroup':customerGroup.text.trim(),
+                      'customerGroupId':customerGroupId,
+                      'customerRegionId':customerRegionId,
                       'phone':phone.text.trim().isEmpty?null:phone.text.trim(),
                       'deliveryAddress':deliveryAddress.text.trim().isEmpty
                         ?null:deliveryAddress.text.trim(),
@@ -707,7 +750,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
       // showDialog's result arrives when pop begins, BEFORE its reverse
       // animation finishes. TextFields still listen to these controllers.
       if(formRoute!=null)await formRoute!.completed;
-      code.dispose();name.dispose();unit.dispose();customerGroup.dispose();
+      code.dispose();name.dispose();unit.dispose();
       phone.dispose();deliveryAddress.dispose();paymentTerms.dispose();
       altUnit.dispose();conversion.dispose();altSku.dispose();altBarcode.dispose();
       baseBarcode.dispose();
@@ -960,9 +1003,12 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     return value.toString();
   }
   List<(String,String)> get columns=>switch(resource){
-    'customers'=>const [('code','Mã'),('name','Khách hàng'),('customerGroup','Nhóm'),
+    'customers'=>const [('code','Mã'),('name','Khách hàng'),
+      ('customerGroupCode','Mã nhóm'),('customerRegionCode','Mã khu vực'),
       ('phone','Điện thoại'),('deliveryAddress','Địa chỉ giao'),
       ('paymentTermsDays','Ngày hạn'),('active','Trạng thái')],
+    'customer-groups'=>const [('code','Mã nhóm'),('name','Tên nhóm'),('active','Trạng thái')],
+    'customer-regions'=>const [('code','Mã khu vực'),('name','Tên khu vực'),('active','Trạng thái')],
     'suppliers'=>const [('code','Mã'),('name','Nhà cung cấp'),('active','Trạng thái')],
     'groups'=>const [('code','Mã nhóm'),('name','Tên nhóm'),('active','Trạng thái')],
     'unit-definitions'=>const [
