@@ -216,6 +216,11 @@ class ErpIdentityClient {
     Map<String,dynamic> fields)async{
     return _request('POST','/v1/catalog/$resource',token:token,revision:0,body:fields);
   }
+  /// Reuse the exact body/key when a quick-create acknowledgment is lost.
+  Future<Map<String,dynamic>> createCatalogWithKey(String token,String resource,
+    Map<String,dynamic> fields,{required String key})=>
+      _request('POST','/v1/catalog/$resource',token:token,
+        body:fields,revision:0,idempotencyKey:key);
   /// R1 writes retain the same key and body after a lost server acknowledgment.
   Future<Map<String,dynamic>> createR1Catalog(String token,String kind,
     Map<String,dynamic> fields,{required String key})=>
