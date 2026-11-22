@@ -310,7 +310,7 @@ CREATE CONSTRAINT TRIGGER inventory_transfer_out_commit_guard
  FOR EACH ROW WHEN (NEW.kind='TRANSFER_OUT')
  EXECUTE FUNCTION erp_transfer_out_commit_guard();
 
-CREATE FUNCTION erp_transfer_in_commit_guard() RETURNS trigger LANGUAGE plpgsql AS $
+CREATE FUNCTION erp_transfer_in_commit_guard() RETURNS trigger LANGUAGE plpgsql AS $transfer_in_guard$
 DECLARE transfer_id_now uuid;
  committed_state text;
  still_outstanding boolean;
@@ -349,7 +349,7 @@ BEGIN
    RAISE EXCEPTION 'Transfer destination movement requires matching received status at commit';
  END IF;
  RETURN NULL;
-END; $;
+END; $transfer_in_guard$;
 CREATE CONSTRAINT TRIGGER inventory_transfer_in_commit_guard
  AFTER INSERT ON inventory_ledger
  DEFERRABLE INITIALLY DEFERRED
