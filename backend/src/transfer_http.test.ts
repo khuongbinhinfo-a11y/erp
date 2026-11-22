@@ -92,6 +92,14 @@ test("R3.3 transfer PostgreSQL: physical dispatch, in-transit, partial and raced
   const approve=await make(endpoint+"/"+id+"/approve",scope,0);
   assert.equal(approve.status,200,JSON.stringify(approve.body));
   assert.equal(approve.body.status,"APPROVED");
+  // A direct database writer cannot create a fake already-dispatched header.
+  await assert.rejects(db.query(
+    `INSERT INTO inventory_transfer(installation_id,branch_id,
+      source_warehouse_id,destination_warehouse_id,status,revision,
+      created_by,approved_by,approved_at,dispatched_by,dispatched_at,request_id)
+     VALUES($1,$2,$3,$4,'IN_TRANSIT',2,$5,$5,now(),$5,now(),
+       'forged-transfer-fixture')`,
+    [t,b,w,dest,root.actorId]),/must begin in CREATED/i);
   // A malformed zero-line document must never be dispatched by direct SQL.
   const empty=await db.query<{id:string}>(
    `INSERT INTO inventory_transfer(installation_id,branch_id,source_warehouse_id,
