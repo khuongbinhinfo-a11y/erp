@@ -27,7 +27,9 @@ CREATE TABLE inventory_transfer (
      OR (status IN ('APPROVED','IN_TRANSIT','PARTIALLY_RECEIVED','RECEIVED')
          AND approved_by IS NOT NULL AND approved_at IS NOT NULL)),
  CHECK (status NOT IN ('IN_TRANSIT','PARTIALLY_RECEIVED','RECEIVED')
-     OR (dispatched_by IS NOT NULL AND dispatched_at IS NOT NULL))
+     OR (dispatched_by IS NOT NULL AND dispatched_at IS NOT NULL)),
+ CHECK (status NOT IN ('CREATED','APPROVED','CANCELLED')
+     OR (dispatched_by IS NULL AND dispatched_at IS NULL))
 );
 CREATE INDEX inventory_transfer_source_idx ON inventory_transfer
  (installation_id,branch_id,source_warehouse_id,created_at DESC);
@@ -118,6 +120,8 @@ BEGIN
    OR (OLD.status='PARTIALLY_RECEIVED'
        AND NEW.status NOT IN ('PARTIALLY_RECEIVED','RECEIVED'))
    OR OLD.status IN ('RECEIVED','CANCELLED')
+   OR (OLD.status='CREATED' AND
+       (NEW.dispatched_by IS NOT NULL OR NEW.dispatched_at IS NOT NULL))
    OR (OLD.status<>'CREATED'
        AND (NEW.approved_by IS DISTINCT FROM OLD.approved_by
         OR NEW.approved_at IS DISTINCT FROM OLD.approved_at))
