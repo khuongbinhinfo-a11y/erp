@@ -41,7 +41,8 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
       'priority','minQuantity','customerGroup'])
       key:TextEditingController(),
   };
-  List<Map<String,dynamic>> items=[],products=[],skus=[],lists=[],customers=[],channels=[];
+  List<Map<String,dynamic>> items=[],products=[],skus=[],lists=[],customers=[],channels=[],
+    customerGroups=[],unitDefinitions=[];
   String? error,productId,skuId,listId,customerId,channelId;
   String scope='BASE',adjustment='FIXED_PRICE',stacking='EXCLUSIVE';
   int promotionDays=7;
@@ -136,6 +137,10 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
         widget.client.catalogItems(widget.session.token,'price-lists',branchId:branch),
         widget.client.catalogItems(widget.session.token,'customers',branchId:branch),
         widget.client.catalogItems(widget.session.token,'r1/channels',branchId:branch),
+        widget.client.catalogDirectoryAll(widget.session.token,'customer-groups',
+          branchId:branch),
+        widget.client.catalogUnitDefinitionsAll(widget.session.token,
+          branchId:branch),
       ]);
       if(!mounted||widget.branchId!=branch)return;
       setState((){
@@ -144,6 +149,8 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
         lists=fetched[2].where((x)=>x['active']!=false).toList();
         customers=fetched[3].where((x)=>x['active']!=false).toList();
         channels=fetched[4].where((x)=>x['active']!=false).toList();
+        customerGroups=fetched[5].where((x)=>x['active']!=false).toList();
+        unitDefinitions=fetched[6].where((x)=>x['active']!=false).toList();
         productId=products.isEmpty?null:products.first['id'] as String;
         skuId=skus.isEmpty?null:skus.first['id'] as String;
         listId=lists.isEmpty?null:lists.first['id'] as String;
@@ -351,7 +358,17 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
               slot(dropdown('Sản phẩm',productId,products,
                 (v)=>setState(()=>productId=v))),
               if(widget.kind=='skus')slot(textField('code','Mã SKU',hint:'SP001-T')),
-              slot(textField('unitCode','Đơn vị',hint:'thung')),
+              slot(DropdownButtonFormField<String>(
+                key:const ValueKey('r1-unit-directory-select'),
+                isExpanded:true,
+                initialValue:unitDefinitions.any((u)=>u['code']==getField('unitCode'))
+                  ?getField('unitCode'):null,
+                decoration:const InputDecoration(labelText:'Đơn vị tính'),
+                items:unitDefinitions.map((u)=>DropdownMenuItem<String>(
+                  value:u['code'] as String,
+                  child:Text("${u['code']} · ${u['name']}",
+                    overflow:TextOverflow.ellipsis))).toList(),
+                onChanged:(v)=>setState(()=>fields['unitCode']!.text=v??''))),
               slot(textField('toBase','Hệ số quy đổi',numeric:true,hint:'12.000000')),
             ],
             if(widget.kind=='barcodes')...[
@@ -402,7 +419,21 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
                 onChanged:(v){if(v!=null)setState(()=>promotionDays=v);},
               )),
               if(scope=='CUSTOMER_GROUP'||scope=='CUSTOMER'||scope=='PROMOTION')
-                slot(textField('customerGroup','Nhóm khách')),
+                slot(DropdownButtonFormField<String?>(
+                  key:const ValueKey('r1-customer-group-directory-select'),
+                  isExpanded:true,
+                  initialValue:customerGroups.any((g)=>g['code']==getField('customerGroup'))
+                    ?getField('customerGroup'):null,
+                  decoration:const InputDecoration(labelText:'Nhóm khách hàng'),
+                  items:[
+                    const DropdownMenuItem<String?>(
+                      value:null,child:Text('Không áp dụng')),
+                    ...customerGroups.map((g)=>DropdownMenuItem<String?>(
+                      value:g['code'] as String,
+                      child:Text("${g['code']} · ${g['name']}",
+                        overflow:TextOverflow.ellipsis))),
+                  ],
+                  onChanged:(v)=>setState(()=>fields['customerGroup']!.text=v??''))),
               slot(DropdownButtonFormField<String>(
                 initialValue:adjustment,
                 decoration:const InputDecoration(labelText:'Cách tính giá'),
