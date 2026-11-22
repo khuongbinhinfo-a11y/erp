@@ -64,7 +64,8 @@ class _StocktakeWorkspaceState extends State<StocktakeWorkspace>{
       if(!mounted||n!=generation)return;
       warehouses=result.warehouses.where((x)=>
         widget.session.grants.any((g)=>g.branchId==b&&g.warehouseId==x['id']&&
-          g.permission=='inventory.stocktake.read')).toList();
+          const ['inventory.stocktake.read','inventory.stocktake.create']
+            .contains(g.permission))).toList();
       warehouseId=warehouses.isEmpty?null:warehouses.first['id'].toString();
       if(warehouseId==null){
         setState((){loading=false;error='Không có kho được cấp quyền kiểm kê.';});
@@ -77,6 +78,15 @@ class _StocktakeWorkspaceState extends State<StocktakeWorkspace>{
   }
   Future<void> reload()async{
     final b=branchId,w=warehouseId;if(b==null||w==null)return;
+    // A creator can capture the count snapshot without read access to prior
+    // documents. Do not perform an unauthorized list call for such a grant.
+    if(!can('inventory.stocktake.read')){
+      generation++;
+      if(mounted)setState((){
+        items=[];hasMore=false;loading=false;moreLoading=false;error=null;
+      });
+      return;
+    }
     final n=++generation;setState((){
       loading=true;error=null;moreLoading=false;
     });
@@ -309,7 +319,10 @@ class _StocktakeWorkspaceState extends State<StocktakeWorkspace>{
         child:Text(error!,style:const TextStyle(color:Colors.red))),
       if(loading)const LinearProgressIndicator(),
       if(!loading&&error==null&&items.isEmpty)
-        const Padding(padding:EdgeInsets.all(18),child:Text('Kho này chưa có phiếu kiểm kê.')),
+        Padding(padding:const EdgeInsets.all(18),child:Text(
+          can('inventory.stocktake.read')
+            ?'Kho này chưa có phiếu kiểm kê.'
+            :'Bạn có quyền lập phiếu kiểm kê nhưng không được xem danh sách phiếu.')),
       if(!loading&&error==null)for(final row in items)item(row),
       if(!loading&&error==null&&hasMore)
         TextButton(onPressed:busy||moreLoading?null:loadMore,
