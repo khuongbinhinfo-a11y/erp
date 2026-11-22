@@ -44,7 +44,7 @@ void main(){
           return reply({'id':'group-1','code':'GRP01','name':'Đồ uống'},201);
         }
         if(req.url.path=='/v1/catalog/products'&&req.method=='GET'){
-          return reply({'items':complete?[{
+          return reply({'r1ProductReady':true,'items':complete?[{
             'id':'product-1','code':'SP-001','name':'Nước uống',
             'baseUnit':'chai','sellSkuCount':3,'barcode':'BAR-BASE-01',
             'active':true,'revision':0,
