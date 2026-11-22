@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import {
  BASE, RELEASE, checkVersions, checkOperator, checkPrimaryMainSha,
  assertUnitCodeValidity, assertNewTableBackfill, canonicalRemote,
- parsePrismaCredential, requirePg17Client, BUCKET_S3_NAME
+ parsePrismaCredential, requirePg17Client, BUCKET_S3_NAME,
+ assertNotInterrupted, restoreContainerCleanupArgs
 } from "./r1-media-codespaces-migration.mjs";
 
 const sha="a".repeat(40);
@@ -73,4 +74,16 @@ test("Prisma credential and backup tooling remain restricted to ERP-DB and PG17"
  assert.equal(credential.url.hostname,"db.prisma.io");
  assert.throws(()=>parsePrismaCredential({connection:{id:"con_synthetictest123"},
   connectionString:"postgresql://temporary:synthetic@attacker.invalid:5432/postgres?sslmode=require"}));
+});
+
+test("Rehearsal cleanup must remove Docker anonymous plaintext volumes",()=>{
+ const name="erp-r1-media-pg-abcdef012345";
+ assert.deepEqual(restoreContainerCleanupArgs(name),["rm","--force","--volumes",name]);
+ for(const bad of ["erp-r3-pg-abcdef012345","abc;docker volume rm -f","",undefined])
+  assert.throws(()=>restoreContainerCleanupArgs(bad),/INVALID_ISOLATED_RESTORE_CONTAINER_ID/);
+});
+test("Catchable termination takes fail-closed cleanup path",()=>{
+ assert.doesNotThrow(()=>assertNotInterrupted(null));
+ for(const signal of ["SIGINT","SIGTERM"])
+  assert.throws(()=>assertNotInterrupted(signal),/ERP_R1_MEDIA_INTERRUPTED_CLEANUP_REQUIRED/);
 });
