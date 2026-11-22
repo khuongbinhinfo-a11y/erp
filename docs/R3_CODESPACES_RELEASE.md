@@ -24,7 +24,7 @@ terminal bảo vệ, không ghi giá trị vào chat, commit, issue, log hoặc 
 | AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY | Key chỉ cho Prisma bucket erp-db-migration-encrypted-backups |
 | ERP_BACKUP_S3_ENDPOINT | HTTPS S3 endpoint của bucket trên, không kèm path |
 | ERP_AGE_RECIPIENT | Public age recipient được quản lý cùng private recovery key riêng |
-| ERP_BACKUP_RECOVERY_KEY_CUSTODY | VERfIED phải viết hoa là VERIFIED, chỉ đặt khi đã xác minh giữ private recovery key |
+| ERP_BACKUP_RECOVERY_KEY_CUSTODY | Đúng giá trị VERIFIED, chỉ đặt khi đã xác minh giữ private recovery key |
 
 Bucket đã tồn tại. **Chưa xác minh khóa truy cập từ Codespaces và private recovery key**;
 script sẽ từ chối nếu chưa đủ. Backup mã hóa được tải lên bucket riêng, readback SHA256,
