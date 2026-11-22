@@ -12,6 +12,7 @@ const CODE = /^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$/;
 const AMOUNT = /^(?:0|[1-9][0-9]{0,13})(?:\.[0-9]{1,4})?$/;
 const DISCOUNT = /^(?:100(?:\.0{1,2})?|(?:[0-9]|[1-9][0-9])(?:\.[0-9]{1,2})?)$/;
 const FACTOR = /^(?:0\.[0-9]{0,5}[1-9]|[1-9][0-9]{0,11}(?:\.[0-9]{1,6})?)$/;
+const BARCODE = /^[A-Za-z0-9._-]{4,64}$/;
 
 class CatalogError extends Error {
   readonly status:number;
@@ -79,6 +80,12 @@ function requireCode(value:unknown):string{
   if(typeof value!=="string"||!CODE.test(value))throw new CatalogError(400,"INVALID_CODE");
   return value;
 }
+function optionalBarcode(value:unknown):string|null{
+  if(value==null||value==="")return null;
+  if(typeof value!=="string"||!BARCODE.test(value))
+    throw new CatalogError(400,"INVALID_BARCODE");
+  return value;
+}
 function requirePhone(value:unknown):string{
   if(typeof value!=="string"||!/^\+?[0-9]{9,15}$/.test(value))
     throw new CatalogError(400,"INVALID_PHONE");
@@ -121,7 +128,23 @@ const selections:Record<Resource,string>={
   "customers":'SELECT id,code,name,customer_group AS "customerGroup",phone,delivery_address AS "deliveryAddress",payment_terms_days AS "paymentTermsDays",active,revision::integer FROM catalog_customer',
   "suppliers":'SELECT id,code,name,active,revision::integer FROM catalog_supplier',
   "groups":'SELECT id,code,name,active,revision::integer FROM catalog_product_group',
-  "products":'SELECT id,sku AS code,name,base_unit AS "baseUnit",group_id AS "groupId",active,revision::integer FROM catalog_product',
+  "products":`SELECT id,sku AS code,name,base_unit AS "baseUnit",group_id AS "groupId",
+    (SELECT g.name FROM catalog_product_group g WHERE
+      g.installation_id=catalog_product.installation_id AND
+      g.branch_id=catalog_product.branch_id AND g.id=catalog_product.group_id)
+      AS "groupName",
+    (SELECT count(*)::integer FROM catalog_sell_sku s WHERE
+      s.installation_id=catalog_product.installation_id AND
+      s.branch_id=catalog_product.branch_id AND s.product_id=catalog_product.id
+      AND s.active) AS "sellSkuCount",
+    (SELECT b.barcode FROM catalog_sku_barcode b
+      JOIN catalog_sell_sku s ON s.installation_id=b.installation_id
+        AND s.branch_id=b.branch_id AND s.id=b.sell_sku_id
+      WHERE s.installation_id=catalog_product.installation_id
+        AND s.branch_id=catalog_product.branch_id
+        AND s.product_id=catalog_product.id AND s.is_base
+        AND b.active ORDER BY b.is_primary DESC,b.barcode LIMIT 1) AS barcode,
+    active,revision::integer FROM catalog_product`,
   "price-lists":'SELECT id,code,name,currency,active,revision::integer FROM catalog_price_list',
   "prices":'SELECT id,price_list_id AS "priceListId",product_id AS "productId",amount::text,discount_rate::text AS "discountRate",effective_at AS "effectiveAt" FROM catalog_price_entry',
   "warehouses":'SELECT id,code,name,branch_id AS "branchId" FROM warehouse',
@@ -133,6 +156,13 @@ const tableFor:Record<Exclude<Resource,"warehouses"|"prices">,string>={
   "products":"catalog_product",
   "price-lists":"catalog_price_list",
 };
+async function hasR1CatalogSchema(db:Pool|PoolClient):Promise<boolean>{
+  try{
+    const result=await db.query<{ok:boolean}>(
+      "SELECT EXISTS(SELECT 1 FROM public.schema_migrations WHERE version='0009_r1_catalog_pricing.sql') AS ok");
+    return result.rows[0]?.ok===true;
+  }catch{return false;}
+}
 async function hasCatalogSchema(db:Pool):Promise<boolean>{
   try {
     const r=await db.query<{present:boolean}>(
@@ -157,12 +187,25 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
     throw new CatalogError(403,"CATALOG_READ_DENIED");
   const values=resource==="prices"?[tenant,branchId]:
     [tenant,branchId,"%"+search+"%"];
+  // Installations staged on catalog 0006/0007 must still list products
+  // even before the separate R1 SKU/barcode migration 0009 is applied.
+  const r1Ready=resource==="products"&&await hasR1CatalogSchema(db);
+  const productSelection=r1Ready?selections.products:
+    `SELECT id,sku AS code,name,base_unit AS "baseUnit",
+      group_id AS "groupId",
+      (SELECT g.name FROM catalog_product_group g WHERE
+        g.installation_id=catalog_product.installation_id AND
+        g.branch_id=catalog_product.branch_id AND g.id=catalog_product.group_id)
+      AS "groupName",0::integer AS "sellSkuCount",NULL::text AS barcode,
+      active,revision::integer FROM catalog_product`;
   const r=await db.query(
     resource==="prices"
       ?`${selections.prices} WHERE installation_id=$1 AND branch_id=$2
           ORDER BY effective_at DESC,id LIMIT 100`
-      :`${selections[resource]} WHERE installation_id=$1 AND branch_id=$2
-          AND (${resource==="products"?"sku":"code"} ILIKE $3 OR name ILIKE $3) ORDER BY ${resource==="products"?"sku":"code"},id LIMIT 100`,
+      :`${resource==="products"?productSelection:selections[resource]} WHERE installation_id=$1 AND branch_id=$2
+          AND (${resource==="products"?"sku":"code"} ILIKE $3 OR name ILIKE $3
+          ${resource==="customers"?"OR phone ILIKE $3 OR customer_group ILIKE $3":""})
+          ORDER BY ${resource==="products"?"sku":"code"},id LIMIT 100`,
     values);
   return r.rows;
 }
@@ -181,22 +224,36 @@ function checkCreate(resource:Resource,raw:Record<string,unknown>){
   const code=requireCode(raw.code);
   const name=requireName(raw.name);
   if(resource==="products"){
+    if(Object.keys(raw).some(x=>!["branchId","code","name","baseUnit","groupId","barcode","units"].includes(x)))
+      throw new CatalogError(400,"UNKNOWN_FIELD");
     const baseUnit=requireName(raw.baseUnit,24);
+    const barcode=optionalBarcode(raw.barcode);
     const groupId=raw.groupId==null?null:requireUuid(raw.groupId);
     const units=raw.units??[];
     if(!Array.isArray(units)||units.length>12)throw new CatalogError(400,"INVALID_UNITS");
-    const names=new Set<string>([baseUnit]);
-    const conversions:{unitCode:string;toBase:string}[]=[];
+    const names=new Set<string>([baseUnit.toUpperCase()]);
+    const skuCodes=new Set<string>([code.toUpperCase()]);
+    const barcodes=new Set<string>(barcode?[barcode.toUpperCase()]:[]);
+    const conversions:{unitCode:string;toBase:string;sku:string|null;barcode:string|null}[]=[];
     for(const entry of units){
       if(!entry||typeof entry!=="object"||Array.isArray(entry))
         throw new CatalogError(400,"INVALID_UNITS");
       const obj=entry as Record<string,unknown>;
       const unitCode=requireName(obj.unitCode,24);
       const toBase=requireAmount(obj.toBase,FACTOR);
-      if(names.has(unitCode))throw new CatalogError(400,"DUPLICATE_UNIT");
-      names.add(unitCode);conversions.push({unitCode,toBase});
+      const sku=obj.sku==null||obj.sku===""?null:requireCode(obj.sku);
+      const unitBarcode=optionalBarcode(obj.barcode);
+      if(unitBarcode&&!sku)throw new CatalogError(400,"BARCODE_REQUIRES_SKU");
+      if(names.has(unitCode.toUpperCase()))throw new CatalogError(400,"DUPLICATE_UNIT");
+      if(sku&&skuCodes.has(sku.toUpperCase()))throw new CatalogError(400,"DUPLICATE_SKU");
+      if(unitBarcode&&barcodes.has(unitBarcode.toUpperCase()))
+        throw new CatalogError(400,"DUPLICATE_BARCODE");
+      names.add(unitCode.toUpperCase());
+      if(sku)skuCodes.add(sku.toUpperCase());
+      if(unitBarcode)barcodes.add(unitBarcode.toUpperCase());
+      conversions.push({unitCode,toBase,sku,barcode:unitBarcode});
     }
-    return {branchId,code,name,baseUnit,groupId,units:conversions};
+    return {branchId,code,name,baseUnit,groupId,barcode,units:conversions};
   }
   if(resource==="customers"){
     const customerGroup=raw.customerGroup==null?null:requireName(raw.customerGroup,64);
@@ -246,13 +303,36 @@ async function executeCreate(db:PoolClient,context:MutationContext,
         (installation_id,branch_id,product_id,unit_code,to_base) VALUES ($1,$2,$3,$4,$5::numeric)`,
         [installationId,branchId,id,unit.unitCode,unit.toBase]);
     }
-    // R1: expose the canonical base inventory SKU as an exact sellable variant.
-    await db.query(`INSERT INTO catalog_sell_sku
+    // Product, units, sellable variants and their barcodes are one idempotent
+    // transaction. No partially configured product after a failed insert.
+    const baseSku=await db.query<{id:string}>(`INSERT INTO catalog_sell_sku
       (installation_id,branch_id,product_id,sku,unit_code,conversion_to_base,is_base)
-      VALUES($1,$2,$3,$4,$5,1,true)`,
+      VALUES($1,$2,$3,$4,$5,1,true) RETURNING id`,
       [installationId,branchId,id,value.code,value.baseUnit]);
+    const variants=[{id:baseSku.rows[0]!.id,sku:value.code,unitCode:value.baseUnit}];
+    if(value.barcode){
+      await db.query(`INSERT INTO catalog_sku_barcode
+        (installation_id,branch_id,sell_sku_id,barcode,is_primary)
+        VALUES ($1,$2,$3,$4,true)`,
+        [installationId,branchId,baseSku.rows[0]!.id,value.barcode]);
+    }
+    for(const unit of value.units??[]){
+      if(!unit.sku)continue;
+      const inserted=await db.query<{id:string}>(`INSERT INTO catalog_sell_sku
+        (installation_id,branch_id,product_id,sku,unit_code,conversion_to_base)
+        VALUES ($1,$2,$3,$4,$5,$6::numeric) RETURNING id`,
+        [installationId,branchId,id,unit.sku,unit.unitCode,unit.toBase]);
+      const sellSkuId=inserted.rows[0]!.id;
+      variants.push({id:sellSkuId,sku:unit.sku,unitCode:unit.unitCode});
+      if(unit.barcode){
+        await db.query(`INSERT INTO catalog_sku_barcode
+          (installation_id,branch_id,sell_sku_id,barcode,is_primary)
+          VALUES ($1,$2,$3,$4,true)`,
+          [installationId,branchId,sellSkuId,unit.barcode]);
+      }
+    }
     return {status:201,body:{id,code:value.code,name:value.name,
-      baseUnit:value.baseUnit,groupId:value.groupId,revision:0}};
+      baseUnit:value.baseUnit,groupId:value.groupId,revision:0,variants}};
   }
   if(!("code" in value))throw new CatalogError(400,"INVALID_RESOURCE");
   const table=tableFor[resource];
@@ -462,11 +542,18 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
       const client=await pool.connect();
       try{
         const rows=await listing(client,tenant,actorId,branchId,resource,search);
-        send(res,200,{items:rows,requestId},requestId,corsOrigin);
+        send(res,200,{items:rows,
+          ...(resource==="products"?{r1ProductReady:await hasR1CatalogSchema(pool)}:{}),
+          requestId},requestId,corsOrigin);
       }finally{client.release();}
       return;
     }
     if(req.method==="POST"){
+      // R1 sale variants/barcodes do not exist on 0006/0007-only installations.
+      // Reject BEFORE the mutation transaction, never expose a half-created
+      // product or a generic retryable provider error.
+      if(resource==="products"&&!await hasR1CatalogSchema(pool))
+        throw new CatalogError(503,"R1_PRODUCT_SCHEMA_REQUIRED");
       const input=checkCreate(resource,await payloadFrom(req));
       const context=requestMutation(req,requestId,actorId,tenant,
         "catalog."+resource.replaceAll("-","_")+".create",input);

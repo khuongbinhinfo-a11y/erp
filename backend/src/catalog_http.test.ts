@@ -86,11 +86,42 @@ test("Issue #7: catalog HTTP uses real PostgreSQL with tenant/branch RBAC, decim
         "duplicate-"+randomUUID(),token)).status,409);
       assert.equal((await call("/v1/catalog/customers?branchId="+b+"&q=CUSTOMER-01",
         "GET",undefined,token)).body.items.length,1);
-      const product=await create("products",{
+      const productPayload={
         code:"SKU-0001",name:"Synthetic Product",groupId:group.body.id,baseUnit:"cai",
-        units:[{unitCode:"thung",toBase:"12.000000"}],
-      },"product-"+randomUUID(),token);
+        barcode:"BASE-0001",
+        units:[{unitCode:"thung",toBase:"12.000000",sku:"SKU-0001-T",barcode:"PACK-0001"},
+          {unitCode:"lo",toBase:"6.000000",sku:"SKU-0001-L",barcode:"PACK-0002"}],
+      };
+      const productKey="product-"+randomUUID();
+      const product=await create("products",productPayload,productKey,token);
       assert.equal(product.status,201,JSON.stringify(product.body));
+      assert.equal(product.body.variants.length,3,"base and two sell units created atomically");
+      const productReplay=await create("products",productPayload,productKey,token);
+      assert.deepEqual(productReplay.body,product.body,"same idempotency key never duplicates variants");
+      const skus=await call("/v1/catalog/r1/skus?branchId="+b,"GET",undefined,token);
+      const productSkus=skus.body.items.filter((x:{productId:string})=>x.productId===product.body.id);
+      assert.deepEqual(productSkus.map((x:{code:string})=>x.code).sort(),
+        ["SKU-0001","SKU-0001-L","SKU-0001-T"]);
+      assert.deepEqual(productSkus.map((x:{barcode:string})=>x.barcode).sort(),
+        ["BASE-0001","PACK-0001","PACK-0002"]);
+      const broken=await create("products",{
+        code:"SKU-FAIL",name:"Should rollback",baseUnit:"cai",
+        units:[{unitCode:"thung",toBase:"12.000000",sku:"SKU-FAIL-T",barcode:"PACK-0001"}],
+      },"product-fail-"+randomUUID(),token);
+      assert.equal(broken.status,409,"barcode already belongs to another sell SKU");
+      const absent=await pool.query<{count:string}>(
+        "SELECT count(*)::text AS count FROM catalog_product WHERE installation_id=$1 AND sku='SKU-FAIL'",
+        [root.installationId]);
+      assert.equal(absent.rows[0]?.count,"0","all product, unit and SKU inserts rollback");
+      assert.equal((await create("products",{
+        code:"SKU-DUP",name:"Invalid multiple units",baseUnit:"cai",
+        units:[{unitCode:"thung",toBase:"12.000000",sku:"SKU-DUP-T"},
+          {unitCode:"lo",toBase:"6.000000",sku:"SKU-DUP-T"}],
+      },"duplicate-sku-"+randomUUID(),token)).status,400);
+      assert.equal((await create("products",{
+        code:"SKU-BAR",name:"Barcode without SKU",baseUnit:"cai",
+        units:[{unitCode:"thung",toBase:"12.000000",barcode:"BAR-0009"}],
+      },"barcode-no-sku-"+randomUUID(),token)).status,400);
       const unit=(await pool.query<{to_base:string}>(
         "SELECT to_base::text FROM catalog_unit WHERE installation_id=$1 AND branch_id=$2 AND product_id=$3 AND unit_code='thung'",
         [root.installationId,b,product.body.id])).rows[0]!.to_base;

@@ -227,6 +227,20 @@ class ErpIdentityClient {
     return (raw['items'] as List<dynamic>)
       .map((v)=>Map<String,dynamic>.from(v as Map)).toList();
   }
+  /// Product write readiness is explicit: catalog 0006/0007 can still be
+  /// viewed, but SKU/barcode creation requires the separately migrated R1 schema.
+  Future<({List<Map<String,dynamic>> items,bool writeReady})> catalogProducts(
+      String token,{required String branchId,String query=''})async{
+    final suffix=Uri(queryParameters:{
+      'branchId':branchId,if(query.trim().isNotEmpty)'q':query.trim(),
+    }).query;
+    final raw=await _request('GET','/v1/catalog/products?$suffix',token:token);
+    return (
+      items:(raw['items'] as List<dynamic>).map((v)=>
+        Map<String,dynamic>.from(v as Map)).toList(),
+      writeReady:raw['r1ProductReady']==true,
+    );
+  }
   Future<Map<String,dynamic>> createCatalog(String token,String resource,
     Map<String,dynamic> fields)async{
     return _request('POST','/v1/catalog/$resource',token:token,revision:0,body:fields);

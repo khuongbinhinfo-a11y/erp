@@ -96,6 +96,44 @@ void main(){
       expect(find.byKey(const ValueKey('catalog-live-table')),findsOneWidget);
     });
 
+  testWidgets('staged catalog can be read but multi-SKU product create stays disabled',
+    (tester)async{
+      final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+        httpClient:MockClient((req)async{
+          const headers={'content-type':'application/json; charset=utf-8'};
+          if(req.url.path=='/v1/catalog/branches'){
+            return http.Response(jsonEncode({'items':[
+              {'id':branch,'code':'MAIN','name':'Chi nhánh chính'},
+            ]}),200,headers:headers);
+          }
+          if(req.url.path=='/v1/catalog/products'){
+            return http.Response(jsonEncode({
+              'items':[{'id':'old-product','code':'SP01','name':'Sản phẩm cũ',
+                'baseUnit':'cai','sellSkuCount':0,'active':true}],
+              'r1ProductReady':false,
+            }),200,headers:headers);
+          }
+          return http.Response(jsonEncode({'items':[]}),200,headers:headers);
+        }));
+      addTearDown(client.dispose);
+      tester.view.devicePixelRatio=1;
+      tester.view.physicalSize=const Size(1280,800);
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
+        home:Scaffold(body:CompanyWorkspace(previewOnly:false,grants:grants,
+          session:activeSession(),client:client))));
+      await tester.tap(find.byKey(const ValueKey('company-CompanySection.products')));
+      await tester.pumpAndSettle();
+      await tester.runAsync(()async=>
+        Future<void>.delayed(const Duration(milliseconds:120)));
+      await tester.pumpAndSettle();
+      expect(find.text('Sản phẩm cũ'),findsOneWidget);
+      expect(find.byKey(const ValueKey('catalog-create')),findsNothing,
+        reason:'Do not offer a write that needs uninstalled migration 0009');
+      expect(find.textContaining('chưa cập nhật đủ cấu trúc SKU'),findsOneWidget);
+    });
+
   test('legacy backend without catalog CORS is identified without blaming network',()async{
     final paths=<String>[];
     final mock=MockClient((request)async{

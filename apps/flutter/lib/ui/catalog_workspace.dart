@@ -21,7 +21,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
   late String resource;
   List<Map<String,dynamic>> branches=[],items=[];
   String? branchId;
-  bool loading=true,saving=false;
+  bool loading=true,saving=false,productWriteReady=false;
   String? error;
   int requestSerial=0;
   final search=TextEditingController();
@@ -58,7 +58,9 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
 
   static const r1Kinds={'units','skus','barcodes','channels','rules','quote'};
   bool get isR1=>r1Kinds.contains(resource);
-  bool get canWrite => resource!='warehouses' && widget.session.grants.any(
+  bool get canWrite => resource!='warehouses' &&
+    (resource!='products'||productWriteReady) &&
+    widget.session.grants.any(
     (g)=>g.permission=='catalog.write'&&g.branchId==branchId);
   @override void initState(){
     super.initState();resource=widget.area;_loadBranches();
@@ -67,7 +69,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     super.didUpdateWidget(oldWidget);
     if(oldWidget.session.token!=widget.session.token ||
       oldWidget.client!=widget.client || oldWidget.area!=widget.area){
-      requestSerial++;items=[];branches=[];branchId=null;resource=widget.area;search.clear();
+      requestSerial++;items=[];branches=[];branchId=null;
+      productWriteReady=false;resource=widget.area;search.clear();
       _loadBranches();
     }
   }
@@ -111,10 +114,17 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     final stamp=++requestSerial;
     setState((){loading=true;error=null;items=[];});
     try{
-      final result=await widget.client.catalogItems(
+      final productResult=resource=='products'
+        ? await widget.client.catalogProducts(widget.session.token,
+            branchId:currentBranch,query:search.text)
+        : null;
+      final result=productResult?.items ?? await widget.client.catalogItems(
         widget.session.token,resource,branchId:currentBranch,query:search.text);
       if(!mounted||requestSerial!=stamp)return;
-      setState((){items=result;loading=false;});
+      setState((){
+        items=result;loading=false;
+        productWriteReady=resource=='products'&&productResult?.writeReady==true;
+      });
     }on ErpApiError catch(e){
       if(mounted&&requestSerial==stamp)setState((){
         loading=false;error=_errorMessage(e);
@@ -127,23 +137,36 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
   }
   void _changeResource(String next){
     if(next==resource)return;
-    setState((){resource=next;search.clear();items=[];});
+    setState((){
+      resource=next;search.clear();items=[];productWriteReady=false;
+    });
     _loadRecords();
   }
 
   Future<void> _add()async{
     if(!canWrite||saving||branchId==null)return;
+    final actor=widget.session.actorId,branch=branchId!;
+    final pendingKind='catalog.create.$resource';
+    final previous=widget.client.pendingR1(actor,branch,pendingKind);
     final code=TextEditingController(),name=TextEditingController();
     final unit=TextEditingController(text:'cai');
     final customerGroup=TextEditingController();
     final phone=TextEditingController(),deliveryAddress=TextEditingController();
     final paymentTerms=TextEditingController(text:'0');
     final altUnit=TextEditingController(),conversion=TextEditingController();
+    final baseBarcode=TextEditingController(),altSku=TextEditingController(),
+      altBarcode=TextEditingController();
+    final extraUnits=<({TextEditingController unit,TextEditingController factor,
+      TextEditingController sku,TextEditingController barcode})>[];
     final amount=TextEditingController(),discount=TextEditingController(text:'0');
+    final newGroupCode=TextEditingController(),newGroupName=TextEditingController();
+    String? groupError;
+    bool groupBusy=false;
     String? productId,priceListId,groupId;
     List<Map<String,dynamic>> availableProducts=[],availableLists=[],availableGroups=[];
+    ModalRoute<dynamic>? formRoute;
     try{
-      if(resource=='prices'){
+      if(resource=='prices'&&previous==null){
         availableProducts=await widget.client.catalogItems(widget.session.token,'products',branchId:branchId);
         availableLists=await widget.client.catalogItems(widget.session.token,'price-lists',branchId:branchId);
         if(availableProducts.isEmpty||availableLists.isEmpty){
@@ -153,14 +176,19 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
         productId=availableProducts.first['id'] as String;
         priceListId=availableLists.first['id'] as String;
       }
-      if(resource=='products'){
+      if(resource=='products'&&previous==null){
         availableGroups=await widget.client.catalogItems(widget.session.token,'groups',branchId:branchId);
       }
       if(!mounted)return;
-      final payload=await showDialog<Map<String,dynamic>>(context:context,builder:(dialog)=>
-        StatefulBuilder(builder:(ctx,refresh)=>AlertDialog(
+      final payload=previous?.payload ?? await showDialog<Map<String,dynamic>>(
+        context:context,builder:(dialog){
+          formRoute=ModalRoute.of(dialog);
+          return StatefulBuilder(builder:(ctx,refresh)=>AlertDialog(
           title:Text(resource=='prices'?'Thêm phiên bản đơn giá':'Thêm ${titles[resource]!.toLowerCase()}'),
-          content:SizedBox(width:430,child:SingleChildScrollView(child:Column(
+          content:SizedBox(
+            width:(MediaQuery.sizeOf(dialog).width-80)
+              .clamp(260.0,resource=='products'?630.0:430.0).toDouble(),
+            child:SingleChildScrollView(child:Column(
             mainAxisSize:MainAxisSize.min,crossAxisAlignment:CrossAxisAlignment.stretch,children:[
               if(resource=='prices')...[
                 DropdownButtonFormField<String>(
@@ -192,7 +220,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
               ]else...[
                 TextField(key:const ValueKey('catalog-create-code'),
                   controller:code,decoration:InputDecoration(
-                    labelText:resource=='products'?'SKU':'Mã',
+                    labelText:resource=='products'?'Mã hàng / SKU gốc':'Mã',
                     hintText:resource=='products'?'SKU-001':'MA-001')),
                 const SizedBox(height:12),
                 TextField(key:const ValueKey('catalog-create-name'),
@@ -216,25 +244,151 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                 if(resource=='products')...[
                   const SizedBox(height:12),
                   TextField(controller:unit,
-                    decoration:const InputDecoration(labelText:'Đơn vị gốc',hintText:'cai')),
+                    decoration:const InputDecoration(labelText:'Đơn vị tồn kho gốc *',hintText:'chai')), 
+                  const SizedBox(height:12),
+                  TextField(key:const ValueKey('catalog-base-barcode'),
+                    controller:baseBarcode,
+                    decoration:const InputDecoration(labelText:'Mã vạch SKU gốc (nếu có)',
+                      hintText:'893...')),
                   if(availableGroups.isNotEmpty)...[
                     const SizedBox(height:12),
                     DropdownButtonFormField<String?>(
+                      key:ValueKey('catalog-product-group-$groupId'),
                       initialValue:groupId,isExpanded:true,
                       decoration:const InputDecoration(labelText:'Nhóm hàng (tùy chọn)'),
                       items:[
                         const DropdownMenuItem<String?>(value:null,child:Text('Chưa phân nhóm')),
                         ...availableGroups.map((g)=>DropdownMenuItem<String?>(
-                          value:g['id'] as String,child:Text(g['name'] as String))),
+                          value:g['id'] as String,
+                          child:Text(g['name'].toString(),overflow:TextOverflow.ellipsis))),
                       ],
                       onChanged:(v)=>refresh(()=>groupId=v)),
                   ],
                   const SizedBox(height:12),
-                  TextField(controller:altUnit,
-                    decoration:const InputDecoration(labelText:'Đơn vị quy đổi (tùy chọn)',hintText:'thung')),
-                  const SizedBox(height:12),
-                  TextField(controller:conversion,keyboardType:TextInputType.number,
-                    decoration:const InputDecoration(labelText:'Hệ số sang đơn vị gốc',hintText:'12.000000')),
+                  const Text('Tạo nhóm hàng ngay tại đây',
+                    style:TextStyle(fontWeight:FontWeight.w700)),
+                  const SizedBox(height:6),
+                  Wrap(spacing:8,runSpacing:8,children:[
+                    SizedBox(width:160,child:TextField(
+                      key:const ValueKey('catalog-quick-group-code'),
+                      controller:newGroupCode,enabled:!groupBusy,
+                      decoration:const InputDecoration(labelText:'Mã nhóm'))),
+                    SizedBox(width:260,child:TextField(
+                      key:const ValueKey('catalog-quick-group-name'),
+                      controller:newGroupName,enabled:!groupBusy,
+                      decoration:const InputDecoration(labelText:'Tên nhóm'))),
+                    TextButton.icon(
+                      key:const ValueKey('catalog-quick-group-save'),
+                      onPressed:groupBusy?null:()async{
+                        final kind='catalog.create.groups';
+                        final old=widget.client.pendingR1(actor,branch,kind);
+                        final groupCode=newGroupCode.text.trim();
+                        final groupName=newGroupName.text.trim();
+                        if(old==null&&(groupCode.isEmpty||groupName.isEmpty)){
+                          refresh(()=>groupError='Cần nhập mã và tên nhóm hàng.');
+                          return;
+                        }
+                        final body=old?.payload??<String,dynamic>{
+                          'branchId':branch,'code':groupCode,'name':groupName,
+                        };
+                        final key=old?.key??
+                          'catalog-groups-${DateTime.now().microsecondsSinceEpoch}';
+                        if(old==null)widget.client.retainR1(actor,branch,kind,body,key);
+                        refresh((){groupBusy=true;groupError=null;});
+                        try{
+                          final created=await widget.client.createCatalogWithKey(
+                            widget.session.token,'groups',body,key:key);
+                          if(!ctx.mounted)return;
+                          widget.client.clearR1(actor,branch,kind);
+                          refresh((){
+                            availableGroups.add({
+                              'id':created['id'],'code':body['code'],'name':body['name'],
+                            });
+                            groupId=created['id'] as String;
+                            groupBusy=false;newGroupCode.clear();newGroupName.clear();
+                          });
+                        }on ErpApiError catch(e){
+                          if(!ctx.mounted)return;
+                          if(e.status==400||e.status==404||e.code=='DUPLICATE'){
+                            widget.client.clearR1(actor,branch,kind);
+                          }
+                          refresh((){
+                            groupBusy=false;
+                            groupError=e.code=='DUPLICATE'
+                              ?'Mã nhóm đã có. Sửa mã rồi thử lại.'
+                              :e.message;
+                          });
+                        }catch(_){
+                          if(ctx.mounted)refresh((){
+                            groupBusy=false;
+                            groupError='Chưa có xác nhận tạo nhóm. Nhấn lại để kiểm tra.';
+                          });
+                        }
+                      },
+                      icon:const Icon(Icons.add),
+                      label:const Text('Lưu nhóm')),
+                  ]),
+                  if(groupError!=null)Padding(
+                    padding:const EdgeInsets.only(top:6),
+                    child:Text(groupError!,
+                      style:const TextStyle(color:ErpTokens.danger))),
+
+                  const SizedBox(height:16),
+                  const Text('Quy cách bán và mã vạch',
+                    style:TextStyle(fontWeight:FontWeight.w700)),
+                  const SizedBox(height:4),
+                  const Text('Ví dụ: 1 thùng = 24 chai. Mỗi quy cách có SKU riêng, không tự đặt mã.',
+                    style:TextStyle(fontSize:12,color:ErpTokens.muted)),
+                  const SizedBox(height:9),
+                  Wrap(spacing:10,runSpacing:10,children:[
+                    SizedBox(width:210,child:TextField(
+                      key:const ValueKey('catalog-conversion-unit-0'),
+                      controller:altUnit,
+                      decoration:const InputDecoration(labelText:'Đơn vị quy đổi',hintText:'thung'))),
+                    SizedBox(width:145,child:TextField(
+                      key:const ValueKey('catalog-conversion-factor-0'),
+                      controller:conversion,keyboardType:TextInputType.number,
+                      decoration:const InputDecoration(labelText:'Số đơn vị gốc',hintText:'24'))),
+                    SizedBox(width:210,child:TextField(
+                      key:const ValueKey('catalog-conversion-sku-0'),
+                      controller:altSku,
+                      decoration:const InputDecoration(labelText:'Mã SKU bán',hintText:'SP-THUNG'))),
+                    SizedBox(width:145,child:TextField(
+                      key:const ValueKey('catalog-conversion-barcode-0'),
+                      controller:altBarcode,
+                      decoration:const InputDecoration(labelText:'Mã vạch',hintText:'893...'))),
+                    for(var idx=0;idx<extraUnits.length;idx++)...[
+                      SizedBox(width:(MediaQuery.sizeOf(ctx).width-80)
+                        .clamp(220.0,580.0).toDouble(),child:const Divider()),
+                      SizedBox(width:210,child:TextField(
+                        key:ValueKey('catalog-conversion-unit-${idx+1}'),
+                        controller:extraUnits[idx].unit,
+                        decoration:InputDecoration(labelText:'Đơn vị quy đổi ${idx+2}'))),
+                      SizedBox(width:145,child:TextField(
+                        key:ValueKey('catalog-conversion-factor-${idx+1}'),
+                        controller:extraUnits[idx].factor,
+                        keyboardType:TextInputType.number,
+                        decoration:const InputDecoration(labelText:'Số đơn vị gốc'))),
+                      SizedBox(width:210,child:TextField(
+                        key:ValueKey('catalog-conversion-sku-${idx+1}'),
+                        controller:extraUnits[idx].sku,
+                        decoration:const InputDecoration(labelText:'Mã SKU bán'))),
+                      SizedBox(width:145,child:TextField(
+                        key:ValueKey('catalog-conversion-barcode-${idx+1}'),
+                        controller:extraUnits[idx].barcode,
+                        decoration:const InputDecoration(labelText:'Mã vạch'))),
+                    ],
+                  ]),
+                  const SizedBox(height:9),
+                  TextButton.icon(
+                    key:const ValueKey('catalog-add-unit-row'),
+                    onPressed:extraUnits.length>=11?null:()=>refresh((){
+                      extraUnits.add((unit:TextEditingController(),
+                        factor:TextEditingController(),sku:TextEditingController(),
+                        barcode:TextEditingController()));
+                    }),
+                    icon:const Icon(Icons.add),
+                    label:const Text('Thêm quy cách bán')),
                 ],
               ],
             ]))),
@@ -242,7 +396,9 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
             TextButton(onPressed:()=>Navigator.pop(dialog),child:const Text('Hủy')),
             FilledButton(
               key:const ValueKey('catalog-create-confirm'),
-              onPressed:(){
+              onPressed:groupBusy||resource=='products'&&
+                widget.client.pendingR1(actor,branch,'catalog.create.groups')!=null
+                ?null:(){
                 final body=<String,dynamic>{'branchId':branchId};
                 if(resource=='prices'){
                   body.addAll({
@@ -265,41 +421,83 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                     });
                   }
                   if(resource=='products'){
+                    final firstUnit=<String,String>{
+                      'unitCode':altUnit.text.trim(),'toBase':conversion.text.trim(),
+                      if(altSku.text.trim().isNotEmpty)'sku':altSku.text.trim(),
+                      if(altBarcode.text.trim().isNotEmpty)'barcode':altBarcode.text.trim(),
+                    };
+                    final rows=<Map<String,String>>[
+                      if(firstUnit.values.any((v)=>v.isNotEmpty))firstUnit,
+                      for(final extra in extraUnits)
+                        if([extra.unit.text,extra.factor.text,extra.sku.text,
+                          extra.barcode.text].any((v)=>v.trim().isNotEmpty))
+                          {
+                            'unitCode':extra.unit.text.trim(),
+                            'toBase':extra.factor.text.trim(),
+                            if(extra.sku.text.trim().isNotEmpty)
+                              'sku':extra.sku.text.trim(),
+                            if(extra.barcode.text.trim().isNotEmpty)
+                              'barcode':extra.barcode.text.trim(),
+                          },
+                    ];
                     body.addAll({'baseUnit':unit.text.trim(),'groupId':groupId,
-                      'units':altUnit.text.trim().isEmpty&&conversion.text.trim().isEmpty
-                        ? [] :[{'unitCode':altUnit.text.trim(),'toBase':conversion.text.trim()}]});
+                      if(baseBarcode.text.trim().isNotEmpty)
+                        'barcode':baseBarcode.text.trim(),
+                      'units':rows});
                   }
                 }
                 Navigator.pop(dialog,body);
               },
               child:const Text('Lưu trên server')),
           ],
-        )));
+        ));});
       if(payload==null||!mounted)return;
+      final key=previous?.key ??
+        'catalog-$resource-${DateTime.now().microsecondsSinceEpoch}';
+      if(previous==null)widget.client.retainR1(
+        actor,branch,pendingKind,payload,key);
       setState(()=>saving=true);
       try{
-        await widget.client.createCatalog(widget.session.token,resource,payload);
+        await widget.client.createCatalogWithKey(
+          widget.session.token,resource,payload,key:key);
+        widget.client.clearR1(actor,branch,pendingKind);
         if(!mounted)return;
         ErpToast.show(context,'Đã lưu ${titles[resource]!.toLowerCase()} sau xác nhận server.');
         await _loadRecords();
       }on ErpApiError catch(e){
+        // Authentication failures, timeouts and conflicts cannot establish
+        // that the first attempt did not commit. Replay the original command.
+        if(e.status==400||e.status==404||e.status==413||
+            e.status==415||e.code=='DUPLICATE')
+          widget.client.clearR1(actor,branch,pendingKind);
         if(mounted){
           ErpToast.show(context,_errorMessage(e),isError:true);
-          // A lost ACK may follow COMMIT: always re-read before considering a retry.
           await _loadRecords();
         }
       }catch(_){
         if(mounted){
-          ErpToast.show(context,'Không rõ kết quả ghi. Đã tải lại dữ liệu để đối chiếu.',isError:true);
+          ErpToast.show(context,
+            'Chưa có xác nhận server. Nhấn Kiểm tra yêu cầu để gửi lại đúng thao tác.',
+            isError:true);
           await _loadRecords();
         }
       }finally{if(mounted)setState(()=>saving=false);}
     }on ErpApiError catch(e){
       if(mounted)ErpToast.show(context,_errorMessage(e),isError:true);
     }finally{
+      // showDialog's result arrives when pop begins, BEFORE its reverse
+      // animation finishes. TextFields still listen to these controllers.
+      if(formRoute!=null)await formRoute!.completed;
       code.dispose();name.dispose();unit.dispose();customerGroup.dispose();
       phone.dispose();deliveryAddress.dispose();paymentTerms.dispose();
-      altUnit.dispose();conversion.dispose();amount.dispose();discount.dispose();
+      altUnit.dispose();conversion.dispose();altSku.dispose();altBarcode.dispose();
+      baseBarcode.dispose();
+      for(final extra in extraUnits){
+        extra.unit.dispose();extra.factor.dispose();extra.sku.dispose();
+        extra.barcode.dispose();
+      }
+      amount.dispose();discount.dispose();
+      newGroupCode.dispose();newGroupName.dispose();
     }
   }
 
@@ -445,10 +643,14 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
   }
   List<(String,String)> get columns=>switch(resource){
     'customers'=>const [('code','Mã'),('name','Khách hàng'),('customerGroup','Nhóm'),
-      ('phone','Điện thoại'),('paymentTermsDays','Ngày hạn'),('active','Trạng thái')],
+      ('phone','Điện thoại'),('deliveryAddress','Địa chỉ giao'),
+      ('paymentTermsDays','Ngày hạn'),('active','Trạng thái')],
     'suppliers'=>const [('code','Mã'),('name','Nhà cung cấp'),('active','Trạng thái')],
     'groups'=>const [('code','Mã nhóm'),('name','Tên nhóm'),('active','Trạng thái')],
-    'products'=>const [('code','SKU'),('name','Sản phẩm'),('baseUnit','Đơn vị gốc'),('active','Trạng thái')],
+    'products'=>const [('code','Mã hàng'),('name','Sản phẩm'),
+      ('groupName','Nhóm hàng'),('baseUnit','Đơn vị tồn kho'),
+      ('sellSkuCount','SKU bán'),('barcode','Mã vạch gốc'),
+      ('active','Trạng thái')],
     'price-lists'=>const [('code','Mã bảng giá'),('name','Bảng giá'),('currency','Tiền tệ'),('active','Trạng thái')],
     'prices'=>const [('productId','Mã sản phẩm (ID)'),('amount','Đơn giá'),('discountRate','CK %'),('effectiveAt','Hiệu lực')],
     _=>const [('code','Mã kho'),('name','Kho hàng'),('branchId','Chi nhánh (ID)')],
@@ -498,7 +700,9 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                 key:const ValueKey('catalog-create'),
                 onPressed:saving||loading?null:_add,
                 icon:const Icon(Icons.add,size:18),
-                label:const Text('Tạo mới')),
+                label:Text(branchId!=null&&widget.client.pendingR1(
+                  widget.session.actorId,branchId!,'catalog.create.$resource')!=null
+                  ? 'Kiểm tra yêu cầu trước':'Tạo mới')),
             ]),
             const SizedBox(height:12),
             TextField(key:const ValueKey('catalog-search'),
@@ -526,18 +730,25 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
               child:DataTable(
                 key:const ValueKey('catalog-live-table'),
                 headingRowColor:const WidgetStatePropertyAll(ErpTokens.mint),
-                columns:[
-                  ...columns.map((entry)=>DataColumn(label:Text(entry.$2))),
-                  if(canEdit)const DataColumn(label:Text('Thao tác')),
-                ],
+                columns:columns.map((entry)=>DataColumn(
+                  label:Text(entry.$2))).toList(),
                 rows:items.map((entry)=>DataRow(cells:[
-                  ...columns.map((c)=>DataCell(Text(_cell(entry,c.$1)))),
-                  if(canEdit)DataCell(IconButton(
-                    key:ValueKey('catalog-edit-'+entry['id'].toString()),
-                    icon:const Icon(Icons.edit_outlined,size:18),
-                    tooltip:'Sửa/ngừng sử dụng',
-                    onPressed:saving?null:()=>_edit(entry))),
+                  for(final c in columns)DataCell(
+                    c.$1=='code'&&canEdit
+                      ? Row(mainAxisSize:MainAxisSize.min,children:[
+                          Text(_cell(entry,c.$1)),
+                          IconButton(
+                            key:ValueKey('catalog-edit-'+entry['id'].toString()),
+                            icon:const Icon(Icons.edit_outlined,size:18),
+                            tooltip:'Sửa/ngừng sử dụng',
+                            onPressed:saving?null:()=>_edit(entry)),
+                        ])
+                      : Text(_cell(entry,c.$1))),
                 ])).toList())),
+            if(resource=='products'&&!productWriteReady&&!loading)
+              const Padding(padding:EdgeInsets.only(top:12),
+                child:Text('Đã xem được danh mục, nhưng chưa cập nhật đủ cấu trúc SKU để thêm sản phẩm.',
+                  style:TextStyle(fontSize:12,color:ErpTokens.muted))),
             if(resource=='warehouses')const Padding(
               padding:EdgeInsets.only(top:12),
               child:Text('Tồn khả dụng chỉ được xác nhận sau khi Inventory Ledger (#9) hoàn thiện.',

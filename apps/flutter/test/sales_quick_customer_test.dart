@@ -46,6 +46,8 @@ void main(){
           expect(body['branchId'],branch);
           expect(body['code'],'KH-T01');
           expect(body['name'],'Cửa hàng thử nghiệm');
+          expect(body['customerGroup'],'Đại lý');
+          expect(body['paymentTermsDays'],30);
           if(attempts==1)throw http.ClientException('ACK lost after COMMIT');
           if(attempts==2)return reply({'error':{'code':'AUTH_DENIED'}},401);
           return reply({'id':customer,'code':'KH-T01',
@@ -92,6 +94,10 @@ void main(){
       'KH-T01');
     await tester.enterText(find.byKey(const ValueKey('sales-quick-customer-name')),
       'Cửa hàng thử nghiệm');
+    await tester.enterText(find.byKey(const ValueKey('sales-quick-customer-group')),
+      'Đại lý');
+    await tester.enterText(find.byKey(
+      const ValueKey('sales-quick-customer-payment-terms')),'30');
     await tester.ensureVisible(find.byKey(const ValueKey('sales-quick-customer-save')));
     await tester.tap(find.byKey(const ValueKey('sales-quick-customer-save')));
     await tester.pumpAndSettle();
