@@ -73,7 +73,7 @@ class ErpIdentityClient {
   ErpIdentityClient({this.apiOrigin=erpApiOrigin,http.Client? httpClient}):_http=httpClient??http.Client();
   bool get configured=>Uri.tryParse(apiOrigin)?.scheme=='https'&&
     Uri.tryParse(apiOrigin)?.host.isNotEmpty==true;
-  void dispose(){_r1Pending.clear();_inventoryPending.clear();_purchasePending.clear();_http.close();}
+  void dispose(){_r1Pending.clear();_inventoryPending.clear();_purchasePending.clear();_transferPending.clear();_stocktakePending.clear();_http.close();}
   String _key()=>'erp-'+DateTime.now().microsecondsSinceEpoch.toString()+'-${++_sequence}';
   Future<Map<String,dynamic>> _request(String method,String path,{
     String? token,Map<String,dynamic>? body,int? revision,String? idempotencyKey,
@@ -160,6 +160,8 @@ class ErpIdentityClient {
       // An account switch cannot access another actor's pending operation.
       _inventoryPending.removeWhere((scope,_)=>!scope.startsWith('$actor:'));
     _purchasePending.removeWhere((scope,_)=>!scope.startsWith('$actor:'));
+      _transferPending.removeWhere((scope,_)=>!scope.startsWith('$actor:'));
+      _stocktakePending.removeWhere((scope,_)=>!scope.startsWith('$actor:'));
       _r1Pending.clear();
       return IdentitySession(actorId:actor,token:token,
         loginName:r['loginName'] as String? ?? username,
@@ -182,7 +184,7 @@ class ErpIdentityClient {
   Future<IdentitySession> refresh(IdentitySession current)=>restore(current.token);
   Future<void> logout(String token)async{
     try{await _request('POST','/v1/auth/logout',token:token);}
-    finally{_r1Pending.clear();_inventoryPending.clear();_purchasePending.clear();}
+    finally{_r1Pending.clear();_inventoryPending.clear();_purchasePending.clear();_transferPending.clear();_stocktakePending.clear();}
   }
   Future<List<IdentityUser>> users(String token)async{
     final r=await _request('GET','/v1/admin/users',token:token);
@@ -366,6 +368,117 @@ class ErpIdentityClient {
       key:key,path:path,revision:revision);
   }
   void clearPurchase(String id)=>_purchasePending.remove(id);
+
+  /// Transfer-scoped selectors work even without catalog.read permission.
+  Future<({List<Map<String,dynamic>> branches,List<Map<String,dynamic>> warehouses})>
+      transferScopes(String token,{String? branchId,String query=''})async{
+    final q=Uri(queryParameters:{
+      if(branchId!=null)'branchId':branchId,
+      if(query.isNotEmpty)'q':query,
+    }).query;
+    final raw=await _request('GET','/v1/inventory/transfers/scopes?$q',token:token);
+    List<Map<String,dynamic>> rows(String key)=>(raw[key] as List<dynamic>)
+      .map((x)=>Map<String,dynamic>.from(x as Map)).toList();
+    return (branches:rows('branches'),warehouses:rows('warehouses'));
+  }
+  /// Active SKUs for transfer creation; scoped to the source warehouse grant.
+  /// Unlike catalog screens this never asks for unrelated catalog.read rights.
+  Future<List<Map<String,dynamic>>> transferProducts(String token,{
+    required String branchId,required String sourceWarehouseId,String query=''})async{
+    final q=Uri(queryParameters:{'branchId':branchId,
+      'warehouseId':sourceWarehouseId,if(query.trim().isNotEmpty)'q':query.trim()}).query;
+    final raw=await _request('GET','/v1/inventory/transfers/products?$q',
+      token:token);
+    return (raw['items'] as List<dynamic>).map((x)=>
+      Map<String,dynamic>.from(x as Map)).toList();
+  }
+  /// Transfer lifecycle is separate from sales order and actual accepted stock.
+  Future<({List<Map<String,dynamic>> items,bool hasMore})> transferPage(
+    String token,{required String branchId,required String warehouseId,int offset=0})async{
+    if(offset<0||offset%100!=0)throw const ErpApiError(400,'Trang chuyển kho không hợp lệ.');
+    final query=Uri(queryParameters:{'branchId':branchId,
+      'warehouseId':warehouseId,'offset':'$offset'}).query;
+    final r=await _request('GET','/v1/inventory/transfers?$query',token:token);
+    return (items:(r['items'] as List<dynamic>).map((x)=>
+      Map<String,dynamic>.from(x as Map)).toList(),hasMore:r['hasMore']==true);
+  }
+  Future<Map<String,dynamic>> transferDetail(String token,String transferId,{
+      required String branchId,required String warehouseId,
+      required String sourceWarehouseId,required String destinationWarehouseId})async{
+    final q=Uri(queryParameters:{'branchId':branchId,'warehouseId':warehouseId,
+      'sourceWarehouseId':sourceWarehouseId,
+      'destinationWarehouseId':destinationWarehouseId}).query;
+    final r=await _request('GET','/v1/inventory/transfers/$transferId?$q',token:token);
+    return Map<String,dynamic>.from(r['transfer'] as Map);
+  }
+  Future<Map<String,dynamic>> transferCommand(String token,String path,
+    Map<String,dynamic> payload,{required int revision,required String key})=>
+    _request('POST','/v1/inventory/transfers$path',token:token,body:payload,
+       revision:revision,idempotencyKey:key);
+  final Map<String,({Map<String,dynamic> payload,String key,String path,int revision})>
+    _transferPending={};
+  ({Map<String,dynamic> payload,String key,String path,int revision})?
+    pendingTransfer(String scope){
+    final c=_transferPending[scope];
+    return c==null?null:(payload:Map<String,dynamic>.from(c.payload),
+       key:c.key,path:c.path,revision:c.revision);
+  }
+  void retainTransfer(String scope,Map<String,dynamic> payload,String key,{
+    required String path,required int revision}){
+    _transferPending[scope]=(payload:Map<String,dynamic>.from(payload),
+      key:key,path:path,revision:revision);
+  }
+  void clearTransfer(String scope)=>_transferPending.remove(scope);
+  List<String> transferPendingScopes(String actorId,String branchId,String warehouseId)=>
+    _transferPending.entries.where((entry){
+      final p=entry.value.payload;
+      return entry.key.startsWith('$actorId:')&&p['branchId']==branchId&&
+        (p['sourceWarehouseId']==warehouseId||p['destinationWarehouseId']==warehouseId);
+    }).map((entry)=>entry.key).toList();
+
+
+  Future<({List<Map<String,dynamic>> branches,List<Map<String,dynamic>> warehouses})>
+      stocktakeScopes(String token,{String? branchId,String query=''})async{
+    final q=Uri(queryParameters:{if(branchId!=null)'branchId':branchId,
+      if(query.isNotEmpty)'q':query}).query;
+    final r=await _request('GET','/v1/inventory/stocktakes/scopes?$q',token:token);
+    List<Map<String,dynamic>> list(String k)=>(r[k] as List<dynamic>).map((x)=>
+      Map<String,dynamic>.from(x as Map)).toList();
+    return (branches:list('branches'),warehouses:list('warehouses'));
+  }
+  Future<({List<Map<String,dynamic>> items,bool hasMore})> stocktakePage(
+    String token,{required String branchId,required String warehouseId,int offset=0})async{
+    if(offset<0||offset%100!=0)throw const ErpApiError(400,'Trang kiểm kê không hợp lệ.');
+    final q=Uri(queryParameters:{'branchId':branchId,'warehouseId':warehouseId,
+      'offset':'$offset'}).query;
+    final r=await _request('GET','/v1/inventory/stocktakes?$q',token:token);
+    return (items:(r['items'] as List<dynamic>).map((x)=>
+      Map<String,dynamic>.from(x as Map)).toList(),hasMore:r['hasMore']==true);
+  }
+  Future<Map<String,dynamic>> stocktakeDetail(String token,String id,{
+    required String branchId,required String warehouseId})async{
+    final q=Uri(queryParameters:{'branchId':branchId,'warehouseId':warehouseId}).query;
+    final r=await _request('GET','/v1/inventory/stocktakes/$id?$q',token:token);
+    return Map<String,dynamic>.from(r['stocktake'] as Map);
+  }
+  Future<Map<String,dynamic>> stocktakeCommand(String token,String suffix,
+    Map<String,dynamic> body,{required int revision,required String key})=>
+    _request('POST','/v1/inventory/stocktakes$suffix',token:token,
+      body:body,revision:revision,idempotencyKey:key);
+  final Map<String,({Map<String,dynamic> payload,String key,String suffix,int revision})>
+    _stocktakePending={};
+  ({Map<String,dynamic> payload,String key,String suffix,int revision})?
+      pendingStocktake(String scope){
+    final p=_stocktakePending[scope];
+    return p==null?null:(payload:Map<String,dynamic>.from(p.payload),
+      key:p.key,suffix:p.suffix,revision:p.revision);
+  }
+  void retainStocktake(String scope,Map<String,dynamic> payload,String key,{
+      required String suffix,required int revision}){
+    _stocktakePending[scope]=(payload:Map<String,dynamic>.from(payload),
+      key:key,suffix:suffix,revision:revision);
+  }
+  void clearStocktake(String scope)=>_stocktakePending.remove(scope);
 
   Future<IdentityUser> createUser(String token,String username,String password)async{
     final r=await _request('POST','/v1/admin/users',token:token,revision:0,
