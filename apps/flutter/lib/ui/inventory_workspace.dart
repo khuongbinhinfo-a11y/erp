@@ -130,8 +130,11 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
       // Any 5xx may mean COMMIT succeeded but the ACK was lost: retain exact key/body.
       // Authentication and revision conflicts are not evidence that the
       // earlier COMMIT did not happen. Keep command for exact replay.
+      // A server 409 is a definitive rolled-back domain/revision rejection:
+      // executeMutation replays committed receipts before domain checks.
+      // Keep the exact command only for transport/5xx and pre-replay auth errors.
       final uncertain=e.status==0||e.status>=500||e.status==401||
-        e.status==403||e.status==409;
+        e.status==403;
       if(!uncertain)widget.client.clearInventory(scope);
       notify(uncertain
         ?'Chưa xác minh kết quả máy chủ. Gửi lại đúng yêu cầu trước.':e.message,bad:true);

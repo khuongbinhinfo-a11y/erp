@@ -268,4 +268,57 @@ testWidgets('R3 paginates 101 ACTIVE holds separately from release history',
   expect(find.text('SO-100 · SP01'),findsNothing);
 });
 
+
+testWidgets('R3 rejects conflicting stock opening without locking the warehouse', (tester) async {
+  const headers={'content-type':'application/json; charset=utf-8'};
+  final pending=<String,dynamic>{'branchId':branch,'warehouseId':warehouse,
+    'productId':product,'quantity':'5'};
+  final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+    httpClient:MockClient((req) async {
+      if(req.url.path=='/v1/catalog/branches')return http.Response(
+        jsonEncode({'items':[{'id':branch,'name':'Chi nhánh chính'}]}),
+        200,headers:headers);
+      if(req.url.path=='/v1/catalog/warehouses')return http.Response(
+        jsonEncode({'items':[{'id':warehouse,'name':'Kho chính'}]}),
+        200,headers:headers);
+      if(req.url.path=='/v1/inventory/balances')return http.Response(
+        jsonEncode({'items':[]}),200,headers:headers);
+      if(req.url.path=='/v1/inventory/openings')return http.Response(
+        jsonEncode({'error':{'code':'OPENING_ALREADY_EXISTS'}}),
+        409,headers:headers);
+      return http.Response('{}',404,headers:headers);
+    }));
+  addTearDown(client.dispose);
+  tester.view.devicePixelRatio=1;
+  tester.view.physicalSize=const Size(1280,850);
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
+  final scope='$actor:$branch:$warehouse';
+  client.retainInventory(scope,pending,'stock-definite-conflict',
+    action:'openings',revision:0);
+  final session=IdentitySession(actorId:actor,token:'synthetic-token',
+    expiresAt:DateTime.now().add(const Duration(hours:1)),grants:const [
+      IdentityGrant(roleId:'read',permission:'inventory.read',
+        branchId:branch,warehouseId:warehouse),
+      IdentityGrant(roleId:'post',permission:'inventory.post',
+        branchId:branch,warehouseId:warehouse),
+    ]);
+  await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
+    home:Scaffold(body:SingleChildScrollView(
+      child:InventoryWorkspace(client:client,session:session)))));
+  for(var i=0;i<5;i++){
+    await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:60)));
+    await tester.pumpAndSettle();
+  }
+  expect(find.text('Xác minh lệnh kho đang chờ'),findsOneWidget);
+  await tester.tap(find.text('Xác minh lệnh kho đang chờ'));
+  await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:80)));
+  await tester.pumpAndSettle();
+  expect(client.pendingInventory(scope),isNull);
+  expect(find.text('Xác minh lệnh kho đang chờ'),findsNothing);
+  expect(tester.widget<OutlinedButton>(
+    find.widgetWithText(OutlinedButton,'Tồn đầu kỳ')).onPressed,isNotNull);
+  await tester.pump(const Duration(seconds:5));
+  await tester.pumpAndSettle();
+});
 }
