@@ -162,7 +162,10 @@ class ErpIdentityClient {
     _purchasePending.removeWhere((scope,_)=>!scope.startsWith('$actor:'));
       _transferPending.removeWhere((scope,_)=>!scope.startsWith('$actor:'));
       _stocktakePending.removeWhere((scope,_)=>!scope.startsWith('$actor:'));
-      _r1Pending.clear();
+      // A lost customer or pricing ACK can survive session expiry. A fresh
+      // login of the SAME actor may replay the exact idempotency key/body.
+      // Never carry another account's pending catalog data across a switch.
+      _r1Pending.removeWhere((scope,_)=>!scope.startsWith('$actor|'));
       return IdentitySession(actorId:actor,token:token,
         loginName:r['loginName'] as String? ?? username,
         expiresAt:DateTime.parse(r['expiresAt'] as String? ?? raw['expiresAt'] as String),
