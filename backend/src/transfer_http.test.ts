@@ -92,6 +92,20 @@ test("R3.3 transfer PostgreSQL: physical dispatch, in-transit, partial and raced
   const approve=await make(endpoint+"/"+id+"/approve",scope,0);
   assert.equal(approve.status,200,JSON.stringify(approve.body));
   assert.equal(approve.body.status,"APPROVED");
+  // A malformed zero-line document must never be dispatched by direct SQL.
+  const empty=await db.query<{id:string}>(
+   `INSERT INTO inventory_transfer(installation_id,branch_id,source_warehouse_id,
+     destination_warehouse_id,created_by,request_id)
+    VALUES($1,$2,$3,$4,$5,'empty-transfer-fixture') RETURNING id`,
+   [t,b,w,dest,root.actorId]);
+  await db.query(`UPDATE inventory_transfer SET status='APPROVED',
+      revision=revision+1,approved_by=$4,approved_at=now()
+    WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,
+    [t,b,empty.rows[0]!.id,root.actorId]);
+  await assert.rejects(db.query(`UPDATE inventory_transfer SET status='IN_TRANSIT',
+      revision=revision+1,dispatched_by=$4,dispatched_at=now()
+    WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,
+    [t,b,empty.rows[0]!.id,root.actorId]),/requires at least one line/i);
   // Codex P2: direct status changes cannot skip the physical dispatch ledger.
   await assert.rejects(db.query(
    `UPDATE inventory_transfer SET status='IN_TRANSIT',
@@ -215,6 +229,29 @@ test("R3.3 transfer PostgreSQL: physical dispatch, in-transit, partial and raced
     "GET",undefined,receiverToken)).status,200);
   assert.equal((await call(endpoint+"?branchId="+b+"&warehouseId="+w,
     "GET",undefined,receiverToken)).status,403);
+  // Creator-only warehouse assignment must appear in selectors even without read.
+  const creatorPass="Synthetic-transfer-creator-"+randomUUID();
+  const creator=(await db.query<{id:string}>(
+   `INSERT INTO app_user(installation_id,login_name,password_hash)
+     VALUES($1,'creator',$2) RETURNING id`,[t,await hashPassword(creatorPass)])).rows[0]!.id;
+  const creatorRole=(await db.query<{id:string}>(
+   `INSERT INTO app_role(installation_id,code)
+     VALUES($1,'TRANSFER_CREATOR_ONLY') RETURNING id`,[t])).rows[0]!.id;
+  await db.query(`INSERT INTO user_role(installation_id,user_id,role_id,branch_id)
+    VALUES($1,$2,$3,$4)`,[t,creator,creatorRole,b]);
+  await db.query(`INSERT INTO user_role_warehouse(
+    installation_id,user_id,role_id,branch_id,warehouse_id)
+    VALUES($1,$2,$3,$4,$5)`,[t,creator,creatorRole,b,w]);
+  await db.query(`INSERT INTO role_permission(installation_id,role_id,permission_code)
+    VALUES($1,$2,'inventory.transfer.create')`,[t,creatorRole]);
+  const creatorLogin=await call("/v1/auth/login","POST",
+    {loginName:"creator",password:creatorPass});
+  assert.equal(creatorLogin.status,200,JSON.stringify(creatorLogin.body));
+  const creatorScopes=await call(endpoint+"/scopes?branchId="+b,
+    "GET",undefined,creatorLogin.body.token);
+  assert.equal(creatorScopes.status,200,JSON.stringify(creatorScopes.body));
+  assert.deepEqual(creatorScopes.body.branches.map((x:Record<string,string>)=>x.id),[b]);
+  assert.deepEqual(creatorScopes.body.warehouses.map((x:Record<string,string>)=>x.id),[w]);
   const unknownWh=randomUUID();
   assert.equal((await call(endpoint+"?branchId="+b+"&warehouseId="+unknownWh,
     "GET",undefined,token)).status,403);
