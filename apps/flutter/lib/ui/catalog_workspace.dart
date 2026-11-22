@@ -713,6 +713,103 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     }
   }
 
+  Future<void> _productImages(Map<String,dynamic> product)async{
+    if(branchId==null)return;
+    final productId=product['id'] as String;
+    final branch=branchId!;
+    List<Map<String,dynamic>> images=[];
+    String? galleryError;
+    bool galleryBusy=false;
+    try{
+      images=await widget.client.productPhotos(
+        widget.session.token,branch,productId);
+    }on ErpApiError catch(e){galleryError=_errorMessage(e);}
+    if(!mounted)return;
+    await showDialog<void>(context:context,builder:(dialog)=>
+      StatefulBuilder(builder:(ctx,refresh)=>AlertDialog(
+        title:Text('Ảnh · ${product['name']}'),
+        content:SizedBox(
+          width:(MediaQuery.sizeOf(dialog).width-70).clamp(250.0,620.0),
+          child:SingleChildScrollView(child:Column(
+            mainAxisSize:MainAxisSize.min,crossAxisAlignment:CrossAxisAlignment.start,
+            children:[
+              const Text('Ảnh lưu riêng trên R2, chỉ người có quyền mới xem '
+                'được qua liên kết có thời hạn.',
+                style:TextStyle(fontSize:12,color:ErpTokens.muted)),
+              const SizedBox(height:14),
+              if(galleryBusy)const LinearProgressIndicator(),
+              if(galleryError!=null)Padding(
+                padding:const EdgeInsets.only(bottom:12),
+                child:Text(galleryError!,style:const TextStyle(
+                  color:ErpTokens.danger))),
+              if(images.isEmpty&&galleryError==null)
+                const Padding(padding:EdgeInsets.symmetric(vertical:20),
+                  child:Text('Chưa có hình ảnh cho sản phẩm này.')),
+              Wrap(spacing:10,runSpacing:10,children:[
+                for(final image in images)
+                  ClipRRect(borderRadius:BorderRadius.circular(8),
+                    child:Stack(children:[
+                      Image.network(image['downloadUrl'] as String,
+                        width:124,height:124,fit:BoxFit.cover,
+                        errorBuilder:(_,__,___)=>Container(
+                          width:124,height:124,color:ErpTokens.mint,
+                          child:const Icon(Icons.broken_image_outlined))),
+                      if(image['isPrimary']==true)
+                        const Positioned(left:3,top:3,
+                          child:Chip(label:Text('Ảnh chính'))),
+                    ])),
+              ]),
+            ]))),
+        actions:[
+          TextButton(onPressed:galleryBusy?null:()=>Navigator.pop(dialog),
+            child:const Text('Đóng')),
+          if(canWrite)FilledButton.icon(
+            key:const ValueKey('catalog-product-upload-image'),
+            icon:const Icon(Icons.add_photo_alternate_outlined),
+            onPressed:galleryBusy?null:()async{
+              try{
+                final selected=await FilePicker.platform.pickFiles(
+                  type:FileType.custom,
+                  allowedExtensions:['png','jpg','jpeg','webp'],
+                  withData:true);
+                if(selected==null||selected.files.isEmpty)return;
+                final first=selected.files.first;
+                final ext=first.extension?.toLowerCase();
+                final type=ext=='png'?'image/png':ext=='webp'?'image/webp':
+                  ext=='jpg'||ext=='jpeg'?'image/jpeg':null;
+                if(type==null||first.bytes==null||
+                  first.bytes!.isEmpty||first.bytes!.length>5242880){
+                  if(ctx.mounted)refresh(()=>galleryError=
+                    'Chọn PNG/JPG/WebP tối đa 5 MB.');
+                  return;
+                }
+                if(ctx.mounted)refresh((){
+                  galleryBusy=true;galleryError=null;
+                });
+                await widget.client.uploadProductPhoto(
+                  widget.session.token,widget.session.actorId,
+                  branch,productId,first.bytes!,type);
+                images=await widget.client.productPhotos(
+                  widget.session.token,branch,productId);
+                if(ctx.mounted)refresh(()=>{
+                  galleryBusy=false, galleryError=null,
+                });
+              }on ErpApiError catch(e){
+                if(ctx.mounted)refresh((){
+                  galleryBusy=false;galleryError=_errorMessage(e);
+                });
+              }catch(_){
+                if(ctx.mounted)refresh((){
+                  galleryBusy=false;
+                  galleryError='Chưa xác nhận ảnh. Chọn lại đúng ảnh để thử lại.';
+                });
+              }
+            },
+            label:const Text('Thêm ảnh')),
+        ],
+      )));
+  }
+
   bool get canEdit => canWrite && resource!='prices' && resource!='warehouses';
   Future<void> _edit(Map<String,dynamic> row)async{
     if(!canEdit||saving||branchId==null)return;
@@ -961,6 +1058,11 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                             icon:const Icon(Icons.edit_outlined,size:18),
                             tooltip:'Sửa/ngừng sử dụng',
                             onPressed:saving?null:()=>_edit(entry)),
+                          if(resource=='products')IconButton(
+                            key:ValueKey('catalog-product-images-'+entry['id'].toString()),
+                            icon:const Icon(Icons.photo_library_outlined,size:18),
+                            tooltip:'Thêm và xem ảnh sản phẩm',
+                            onPressed:saving?null:()=>_productImages(entry)),
                         ])
                       : Text(_cell(entry,c.$1))),
                 ])).toList())),
