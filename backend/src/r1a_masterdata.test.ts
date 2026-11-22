@@ -50,9 +50,9 @@ test("R1-A 0017: real 16→17 upgrade preserves existing customer group strings,
   assert.deepEqual(upgrade.applied,["0017_r1a_customer_directories.sql"]);
   const result=await db.query<{
     customer_group:string;customer_group_id:string|null;
-    customer_region_id:string|null;code:string;name:string;
+    customer_region_id:string|null;code:string;name:string;legacy_label:string|null;
    }>(`SELECT c.customer_group,c.customer_group_id,c.customer_region_id,
-    g.code,g.name FROM catalog_customer c
+    g.code,g.name,g.legacy_label FROM catalog_customer c
     JOIN catalog_customer_group g ON g.installation_id=c.installation_id
      AND g.branch_id=c.branch_id AND g.id=c.customer_group_id
     WHERE c.installation_id=$1 AND c.branch_id=$2 ORDER BY c.code`,[install,b]);
@@ -60,6 +60,14 @@ test("R1-A 0017: real 16→17 upgrade preserves existing customer group strings,
   assert.deepEqual(result.rows.map(x=>x.customer_group),legacyGroups);
   assert.ok(result.rows.every(x=>x.customer_group_id&&x.customer_region_id===null));
   assert.equal(result.rows[0]!.code,"VIP");
+  assert.ok(result.rows.every(x=>x.legacy_label===x.customer_group));
+  // Rename is allowed for UX, but historic price-rule identity remains fixed.
+  await db.query(`UPDATE catalog_customer_group SET name='Tên mới'
+    WHERE installation_id=$1 AND branch_id=$2 AND code='VIP'`,[install,b]);
+  await assert.rejects(
+    db.query(`UPDATE catalog_customer_group SET legacy_label='WRONG'
+      WHERE installation_id=$1 AND branch_id=$2 AND code='VIP'`,[install,b]),
+    /IMMUTABLE_CUSTOMER_GROUP_LEGACY_ALIAS/);
   const unicode="Bán sỉ";
   const hash=createHash("md5").update(unicode).digest("hex").slice(0,32);
   assert.equal(result.rows[1]!.code,"LEGACY-"+hash);
