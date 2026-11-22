@@ -171,6 +171,8 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
   if(!mounted)return;
   suppliers=suppliers.where((x)=>x['active']!=false).toList();
   products=products.where((x)=>x['active']!=false).toList();
+  final all=< _PurchaseLineInput >[];
+  final rows=< _PurchaseLineInput >[];
   final supplierSearch=TextEditingController(),productSearch=TextEditingController();
   String? supplier=suppliers.isEmpty?null:suppliers.first['id'].toString();
   Future<void> lookupSupplier(StateSetter refresh,BuildContext ctx)async{
@@ -207,8 +209,7 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
     });
    }on ErpApiError catch(e){inform(e.message,bad:true);}
   }
-  final all=< _PurchaseLineInput >[];
-  final rows=< _PurchaseLineInput >[];
+
   void addLine(){final line=_PurchaseLineInput(products.isEmpty?'':products.first['id'].toString());
     rows.add(line);all.add(line);}
   addLine();
