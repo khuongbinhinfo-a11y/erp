@@ -5,6 +5,7 @@ import 'catalog_workspace.dart';
 import 'inventory_workspace.dart';
 import 'purchasing_workspace.dart';
 import 'transfer_workspace.dart';
+import 'stocktake_workspace.dart';
 import 'sales_workspace.dart';
 import 'erp_toast.dart';
 import 'identity_client.dart';
@@ -18,6 +19,7 @@ enum CompanySection {
   warehouses('Kho hàng', 'Nhập, xuất và tồn kho', Icons.warehouse_outlined),
   purchases('Mua hàng', 'Đơn mua và nhận hàng nhà cung cấp', Icons.shopping_cart_outlined),
   transfers('Chuyển kho', 'Xuất, đang đi đường và nhận hàng', Icons.swap_horiz_outlined),
+  stocktakes('Kiểm kê', 'Kiểm đếm và ghi chênh lệch', Icons.fact_check_outlined),
   orders('Đơn hàng', 'Đơn hàng và chứng từ', Icons.receipt_long_outlined),
   receivables('Công nợ', 'Phải thu và thanh toán', Icons.account_balance_wallet_outlined),
   reports('Báo cáo', 'Báo cáo và đối soát', Icons.bar_chart_outlined);
@@ -54,6 +56,7 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
       CompanySection.warehouses=>has('inventory.read')||has('inventory.post'),
       CompanySection.purchases=>has('purchase.read')||has('purchase.create'),
       CompanySection.transfers=>has('inventory.transfer.read')||has('inventory.transfer.create'),
+      CompanySection.stocktakes=>has('inventory.stocktake.read')||has('inventory.stocktake.create'),
       CompanySection.orders=>has('orders.read')||has('orders.create'),
       CompanySection.receivables=>has('finance.receivables.read')||has('finance.payments.record'),
       CompanySection.reports=>p.any((x)=>x.endsWith('.read')),
@@ -136,6 +139,10 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
             : (active == CompanySection.transfers && !widget.previewOnly &&
                 widget.client != null && widget.session != null)
               ? TransferWorkspace(key:const ValueKey('transfer-workspace'),
+                  client:widget.client!,session:widget.session!)
+            : (active == CompanySection.stocktakes && !widget.previewOnly &&
+                widget.client != null && widget.session != null)
+              ? StocktakeWorkspace(key:const ValueKey('stocktake-workspace'),
                   client:widget.client!,session:widget.session!)
             : (!widget.previewOnly && widget.client != null && widget.session != null &&
                const [CompanySection.customers,CompanySection.products,
@@ -268,6 +275,7 @@ class _Register extends StatelessWidget {
       CompanySection.prices => const ['Mã bảng giá', 'Áp dụng từ', 'Kênh bán', 'Trạng thái'],
       CompanySection.warehouses => const ['Mã kho', 'Chi nhánh', 'Hàng tồn', 'Trạng thái'],
       CompanySection.transfers => const ['Kho xuất', 'Kho nhận', 'SL', 'Trạng thái'],
+      CompanySection.stocktakes => const ['Mã phiếu', 'Kho', 'Chênh lệch', 'Trạng thái'],
       CompanySection.purchases => const ['Mã đơn mua', 'Nhà cung cấp', 'Kho', 'Trạng thái'],
       CompanySection.orders => const ['Mã đơn hàng', 'Ngày tạo', 'Khách hàng', 'Trạng thái'],
       CompanySection.receivables => const ['Mã chứng từ', 'Khách hàng', 'Ngày ghi sổ', 'Số dư'],
