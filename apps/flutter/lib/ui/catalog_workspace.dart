@@ -147,6 +147,9 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     final extraUnits=<({TextEditingController unit,TextEditingController factor,
       TextEditingController sku,TextEditingController barcode})>[];
     final amount=TextEditingController(),discount=TextEditingController(text:'0');
+    final newGroupCode=TextEditingController(),newGroupName=TextEditingController();
+    String? groupError;
+    bool groupBusy=false;
     String? productId,priceListId,groupId;
     List<Map<String,dynamic>> availableProducts=[],availableLists=[],availableGroups=[];
     ModalRoute<dynamic>? formRoute;
@@ -238,15 +241,86 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                   if(availableGroups.isNotEmpty)...[
                     const SizedBox(height:12),
                     DropdownButtonFormField<String?>(
+                      key:ValueKey('catalog-product-group-$groupId'),
                       initialValue:groupId,isExpanded:true,
                       decoration:const InputDecoration(labelText:'Nhóm hàng (tùy chọn)'),
                       items:[
                         const DropdownMenuItem<String?>(value:null,child:Text('Chưa phân nhóm')),
                         ...availableGroups.map((g)=>DropdownMenuItem<String?>(
-                          value:g['id'] as String,child:Text(g['name'] as String))),
+                          value:g['id'] as String,
+                          child:Text(g['name'].toString(),overflow:TextOverflow.ellipsis))),
                       ],
                       onChanged:(v)=>refresh(()=>groupId=v)),
                   ],
+                  const SizedBox(height:12),
+                  const Text('Tạo nhóm hàng ngay tại đây',
+                    style:TextStyle(fontWeight:FontWeight.w700)),
+                  const SizedBox(height:6),
+                  Wrap(spacing:8,runSpacing:8,children:[
+                    SizedBox(width:160,child:TextField(
+                      key:const ValueKey('catalog-quick-group-code'),
+                      controller:newGroupCode,enabled:!groupBusy,
+                      decoration:const InputDecoration(labelText:'Mã nhóm'))),
+                    SizedBox(width:260,child:TextField(
+                      key:const ValueKey('catalog-quick-group-name'),
+                      controller:newGroupName,enabled:!groupBusy,
+                      decoration:const InputDecoration(labelText:'Tên nhóm'))),
+                    TextButton.icon(
+                      key:const ValueKey('catalog-quick-group-save'),
+                      onPressed:groupBusy?null:()async{
+                        final kind='catalog.create.groups';
+                        final old=widget.client.pendingR1(actor,branch,kind);
+                        final groupCode=newGroupCode.text.trim();
+                        final groupName=newGroupName.text.trim();
+                        if(old==null&&(groupCode.isEmpty||groupName.isEmpty)){
+                          refresh(()=>groupError='Cần nhập mã và tên nhóm hàng.');
+                          return;
+                        }
+                        final body=old?.payload??<String,dynamic>{
+                          'branchId':branch,'code':groupCode,'name':groupName,
+                        };
+                        final key=old?.key??
+                          'catalog-groups-${DateTime.now().microsecondsSinceEpoch}';
+                        if(old==null)widget.client.retainR1(actor,branch,kind,body,key);
+                        refresh((){groupBusy=true;groupError=null;});
+                        try{
+                          final created=await widget.client.createCatalogWithKey(
+                            widget.session.token,'groups',body,key:key);
+                          if(!ctx.mounted)return;
+                          widget.client.clearR1(actor,branch,kind);
+                          refresh((){
+                            availableGroups.add({
+                              'id':created['id'],'code':body['code'],'name':body['name'],
+                            });
+                            groupId=created['id'] as String;
+                            groupBusy=false;newGroupCode.clear();newGroupName.clear();
+                          });
+                        }on ErpApiError catch(e){
+                          if(!ctx.mounted)return;
+                          if(e.status==400||e.status==404||e.code=='DUPLICATE'){
+                            widget.client.clearR1(actor,branch,kind);
+                          }
+                          refresh((){
+                            groupBusy=false;
+                            groupError=e.code=='DUPLICATE'
+                              ?'Mã nhóm đã có. Sửa mã rồi thử lại.'
+                              :e.message;
+                          });
+                        }catch(_){
+                          if(ctx.mounted)refresh((){
+                            groupBusy=false;
+                            groupError='Chưa có xác nhận tạo nhóm. Nhấn lại để kiểm tra.';
+                          });
+                        }
+                      },
+                      icon:const Icon(Icons.add),
+                      label:const Text('Lưu nhóm')),
+                  ]),
+                  if(groupError!=null)Padding(
+                    padding:const EdgeInsets.only(top:6),
+                    child:Text(groupError!,
+                      style:const TextStyle(color:ErpTokens.danger))),
+
                   const SizedBox(height:16),
                   const Text('Quy cách bán và mã vạch',
                     style:TextStyle(fontWeight:FontWeight.w700)),
@@ -309,7 +383,9 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
             TextButton(onPressed:()=>Navigator.pop(dialog),child:const Text('Hủy')),
             FilledButton(
               key:const ValueKey('catalog-create-confirm'),
-              onPressed:(){
+              onPressed:groupBusy||resource=='products'&&
+                widget.client.pendingR1(actor,branch,'catalog.create.groups')!=null
+                ?null:(){
                 final body=<String,dynamic>{'branchId':branchId};
                 if(resource=='prices'){
                   body.addAll({
@@ -408,6 +484,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
         extra.barcode.dispose();
       }
       amount.dispose();discount.dispose();
+      newGroupCode.dispose();newGroupName.dispose();
     }
   }
 
