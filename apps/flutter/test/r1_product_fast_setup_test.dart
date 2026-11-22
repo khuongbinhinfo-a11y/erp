@@ -25,7 +25,7 @@ Future<void> flush(WidgetTester tester)async{
 void main(){
   testWidgets('product fast setup submits exact 3 SKU and barcodes with same retry receipt',
     (tester)async{
-    var attempts=0,complete=false;
+    var attempts=0,complete=false,groupCreated=0;
     final keys=<String?>[],bodies=<String>[];
     final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
       httpClient:MockClient((req)async{
@@ -34,6 +34,14 @@ void main(){
         }
         if(req.url.path=='/v1/catalog/groups'&&req.method=='GET'){
           return reply({'items':[]});
+        }
+        if(req.url.path=='/v1/catalog/groups'&&req.method=='POST'){
+          final payload=jsonDecode(req.body) as Map<String,dynamic>;
+          expect(payload['code'],'GRP01');
+          expect(payload['name'],'Đồ uống');
+          expect(req.headers['idempotency-key'],isNotEmpty);
+          groupCreated++;
+          return reply({'id':'group-1','code':'GRP01','name':'Đồ uống'},201);
         }
         if(req.url.path=='/v1/catalog/products'&&req.method=='GET'){
           return reply({'items':complete?[{
@@ -75,6 +83,12 @@ void main(){
     await flush(tester);
     await tester.enterText(find.byKey(const ValueKey('catalog-create-code')),'SP-001');
     await tester.enterText(find.byKey(const ValueKey('catalog-create-name')),'Nước uống');
+    await tester.enterText(find.byKey(const ValueKey('catalog-quick-group-code')),'GRP01');
+    await tester.enterText(find.byKey(const ValueKey('catalog-quick-group-name')),'Đồ uống');
+    await tester.ensureVisible(find.byKey(const ValueKey('catalog-quick-group-save')));
+    await tester.tap(find.byKey(const ValueKey('catalog-quick-group-save')));
+    await flush(tester);
+    expect(groupCreated,1);
     await tester.enterText(find.byKey(const ValueKey('catalog-base-barcode')),'BAR-BASE-01');
     await tester.enterText(find.byKey(const ValueKey('catalog-conversion-unit-0')),'thung');
     await tester.enterText(find.byKey(const ValueKey('catalog-conversion-factor-0')),'24');
@@ -100,6 +114,7 @@ void main(){
     expect(attempts,3);
     final payload=jsonDecode(bodies[0]) as Map<String,dynamic>;
     expect(payload['code'],'SP-001');
+    expect(payload['groupId'],'group-1');
     expect(payload['barcode'],'BAR-BASE-01');
     expect(payload['units'],[
       {'unitCode':'thung','toBase':'24','sku':'SP-THUNG','barcode':'BAR-THUNG-01'},
