@@ -180,6 +180,12 @@ test("R3.4 PostgreSQL: capture, recount, separate approval, stale guard and exac
    secondLogin.body.token);
   assert.equal(approved.status,200,JSON.stringify(approved.body));
   assert.equal(approved.body.status,"APPROVED");
+  // Direct PostgreSQL updates must not falsely mark a counted difference as
+  // posted without the exact immutable adjustment movement.
+  await assert.rejects(db.query(`UPDATE inventory_stocktake
+    SET status='POSTED',revision=revision+1,posted_by=$4,posted_at=now()
+    WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,
+    [t,b,id,root.actorId]),/requires counted and reconciled ledger facts/i);
   const posted=await make(endpoint+"/"+id+"/post",scope,3,"post-"+randomUUID());
   assert.equal(posted.status,200,JSON.stringify(posted.body));
   assert.equal(posted.body.status,"POSTED");
