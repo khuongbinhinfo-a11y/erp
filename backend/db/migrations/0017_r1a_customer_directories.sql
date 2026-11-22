@@ -57,8 +57,12 @@ CREATE INDEX catalog_customer_region_ref_idx ON catalog_customer
 -- installation and branch. Preserve valid legacy codes verbatim. Unicode labels
 -- receive a deterministic hash key; preserve the original label forever as an alias.
 WITH legacy AS (
- SELECT DISTINCT installation_id,branch_id,trim(customer_group) AS label
+ SELECT installation_id,branch_id,trim(customer_group) AS label
  FROM catalog_customer
+ WHERE customer_group IS NOT NULL AND length(trim(customer_group))>0
+ UNION
+ SELECT installation_id,branch_id,trim(customer_group) AS label
+ FROM catalog_sku_price_rule
  WHERE customer_group IS NOT NULL AND length(trim(customer_group))>0
 ), normalized AS (
  SELECT installation_id,branch_id,label,
@@ -101,6 +105,21 @@ BEGIN
       OR g.legacy_label IS DISTINCT FROM trim(c.customer_group))
  ) THEN
   RAISE EXCEPTION 'R1A_LEGACY_CUSTOMER_GROUP_HASH_OR_CODE_COLLISION';
+ END IF;
+ -- Rules may refer to a group with no current customers. Those directory
+ -- identities also need immutable aliases for future customer assignments.
+ IF EXISTS (
+  SELECT 1 FROM catalog_sku_price_rule r
+  LEFT JOIN catalog_customer_group g ON
+   g.installation_id=r.installation_id AND g.branch_id=r.branch_id
+   AND g.code=CASE
+     WHEN trim(r.customer_group) ~ '^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$'
+       THEN trim(r.customer_group)
+     ELSE 'LEGACY-' || substr(md5(trim(r.customer_group)),1,32) END
+  WHERE r.customer_group IS NOT NULL
+    AND (g.id IS NULL OR g.legacy_label IS DISTINCT FROM trim(r.customer_group))
+ ) THEN
+  RAISE EXCEPTION 'R1A_LEGACY_PRICE_GROUP_BACKFILL_OR_CODE_COLLISION';
  END IF;
 END; $$;
 
