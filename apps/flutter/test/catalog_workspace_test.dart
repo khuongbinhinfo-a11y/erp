@@ -384,7 +384,11 @@ void main(){
       await tester.ensureVisible(find.byKey(const ValueKey('catalog-quick-customer-group-code')));
       await tester.enterText(find.byKey(const ValueKey('catalog-quick-customer-group-code')),'kh_si');
       await tester.enterText(find.byKey(const ValueKey('catalog-quick-customer-group-name')),'Khách bán sỉ');
-      await tester.tap(find.byKey(const ValueKey('catalog-quick-customer-group-save')));
+      await tester.ensureVisible(find.byKey(
+        const ValueKey('catalog-quick-customer-group-save')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(
+        const ValueKey('catalog-quick-customer-group-save')));
       await tester.pumpAndSettle();
       await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:120)));
       await tester.pumpAndSettle();
@@ -392,7 +396,11 @@ void main(){
       await tester.ensureVisible(find.byKey(const ValueKey('catalog-quick-customer-region-code')));
       await tester.enterText(find.byKey(const ValueKey('catalog-quick-customer-region-code')),'kv_mt');
       await tester.enterText(find.byKey(const ValueKey('catalog-quick-customer-region-name')),'Mỹ Tho');
-      await tester.tap(find.byKey(const ValueKey('catalog-quick-customer-region-save')));
+      await tester.ensureVisible(find.byKey(
+        const ValueKey('catalog-quick-customer-region-save')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(
+        const ValueKey('catalog-quick-customer-region-save')));
       await tester.pumpAndSettle();
       await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:120)));
       await tester.pumpAndSettle();
