@@ -128,7 +128,14 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
  Future<void> submit(String path,Map<String,dynamic> payload,
      {required int revision})async{
   if(busy)return;
-  final scope=pendingScope;if(scope==null)return;
+  // Bind this command to its captured warehouse, not mutable UI selection.
+  final b=payload['branchId'],w=payload['warehouseId'];
+  if(b is! String||w is! String)return;
+  if(branchId!=b||warehouseId!=w){
+   inform('Chi nhánh hoặc kho đã thay đổi. Hãy mở lại tác vụ.',bad:true);
+   return;
+  }
+  final scope='${widget.session.actorId}:$b:$w';
   final held=widget.client.pendingPurchase(scope);
   if(held!=null&&(jsonEncode(held.payload)!=jsonEncode(payload)||
      held.path!=path||held.revision!=revision)){
@@ -145,7 +152,6 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
    inform('Máy chủ đã xác nhận nghiệp vụ mua hàng.');
    await reload();
   }on ErpApiError catch(e){
-   // 401/403/409 do not prove an earlier COMMIT failed; preserve exact retry.
    // The server checks committed mutation receipts before business validation.
    // A 409 is therefore a definite rejection, unlike 5xx/401/403.
    final unknown=e.status==0||e.status>=500||e.status==401||
@@ -170,7 +176,7 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
    products=lists[1].where((x)=>x['active']==true).toList();
   }on ErpApiError catch(e){inform(e.message,bad:true);return;}
   catch(_){inform('Không tải được nhà cung cấp và sản phẩm.',bad:true);return;}
-  if(!mounted)return;
+  if(!mounted||branchId!=b||warehouseId!=w)return;
   suppliers=suppliers.where((x)=>x['active']!=false).toList();
   products=products.where((x)=>x['active']!=false).toList();
   final all=< _PurchaseLineInput >[];
@@ -291,7 +297,7 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
     )));
    final selected=await Navigator.of(context,rootNavigator:true).push(route);
    await route.completed; // Keep every search/quantity controller valid during exit.
-   if(!mounted||selected==null)return;
+   if(!mounted||selected==null||branchId!=b||warehouseId!=w)return;
    final selectedLines=(selected['lines'] as List<dynamic>)
       .map((x)=>Map<String,dynamic>.from(x as Map)).toList();
    if(selectedLines.any((x)=>!validQuantity(x['quantity'] as String)||
@@ -318,7 +324,7 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
       ' sẽ được xử lý và lưu lịch sử trên máy chủ.'),
     actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Đóng')),
       FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:Text(next))]));
-  if(approved!=true||!mounted)return;
+  if(approved!=true||!mounted||branchId!=b||warehouseId!=w)return;
   final id=row['id'].toString(),revision=(row['revision'] as num).toInt();
   await submit('orders/$id/$action',{'branchId':b,'warehouseId':w},
     revision:revision);
@@ -331,7 +337,7 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
    order=await widget.client.purchasingOrder(
       widget.session.token,row['id'].toString(),b,w);
   }on ErpApiError catch(e){inform(e.message,bad:true);return;}
-  if(!mounted)return;
+  if(!mounted||branchId!=b||warehouseId!=w||hasPending)return;
   final items=(order['lines'] as List<dynamic>)
     .map((x)=>Map<String,dynamic>.from(x as Map)).toList();
   final controllers=<int,TextEditingController>{
@@ -371,7 +377,7 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
      ));
    final selected=await Navigator.of(context,rootNavigator:true).push(route);
    await route.completed; // Controller cleanup only after every field is unmounted.
-   if(!mounted||selected==null)return;
+   if(!mounted||selected==null||branchId!=b||warehouseId!=w)return;
    if(selected.isEmpty){inform('Cần nhập ít nhất một dòng có số lượng.',bad:true);return;}
    if(selected.any((x)=>!validQuantity(x['quantity'] as String))){
     inform('Số lượng thực nhận không hợp lệ.',bad:true);return;
