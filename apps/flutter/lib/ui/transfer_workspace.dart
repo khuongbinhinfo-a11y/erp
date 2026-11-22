@@ -424,7 +424,7 @@ class _TransferWorkspaceState extends State<TransferWorkspace>{
           onSubmitted:(v)=>loadWarehouses(query:v.trim()),
           decoration:InputDecoration(labelText:'Tìm kho',
             suffixIcon:IconButton(tooltip:'Tìm kho',icon:const Icon(Icons.search),
-              onPressed:()=>loadWarehouses(query:whSearch.text.trim())))),
+              onPressed:()=>loadWarehouses(query:whSearch.text.trim()))))),
       ]),
       const SizedBox(height:12),
       Wrap(spacing:10,runSpacing:8,children:[
