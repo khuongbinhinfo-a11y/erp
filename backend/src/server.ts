@@ -7,6 +7,7 @@ import { handleR1Http } from "./r1_catalog_http.ts";
 import { handleSalesHttp } from "./sales_http.ts";
 import { handleInventoryHttp } from "./inventory_http.ts";
 import { handleTransferHttp } from "./transfer_http.ts";
+import { handleStocktakeHttp } from "./stocktake_http.ts";
 import { handlePurchasingHttp } from "./purchasing_http.ts";
 
 function requestId(req: IncomingMessage): string {
@@ -86,6 +87,10 @@ export function buildApp(
     }
     if (url.pathname.startsWith("/v1/purchasing/")) {
       void handlePurchasingHttp(req,res,id,url,identityOptions,checkReady);
+      return;
+    }
+    if (url.pathname.startsWith("/v1/inventory/stocktakes")) {
+      void handleStocktakeHttp(req,res,id,url,identityOptions,checkReady);
       return;
     }
     if (url.pathname.startsWith("/v1/inventory/transfers")) {

@@ -38,8 +38,8 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
   pool=new Pool({connectionString:target.toString(),max:7,query_timeout:15000});
   pool.on("error",()=>{});
   const applied=await applyMigrations(pool,resolve(process.cwd(),"db/migrations"));
-  assert.equal(applied.applied.length,13);
-  assert.equal((await applyMigrations(pool,resolve(process.cwd(),"db/migrations"))).skipped.length,13);
+  assert.equal(applied.applied.length,14);
+  assert.equal((await applyMigrations(pool,resolve(process.cwd(),"db/migrations"))).skipped.length,14);
   const password="R1-test-"+randomUUID();
   const root=await bootstrapInstallation(pool,{
    code:"r1-test",displayName:"Synthetic R1 integration",
