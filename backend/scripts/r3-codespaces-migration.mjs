@@ -49,6 +49,9 @@ export function canonicalRemote(remote){
 export function checkOperator(e,branch,sha,remote,changes,apply=false){
  if(e.CODESPACES!=="true"||!e.CODESPACE_NAME||
     !String(e.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN??"").endsWith("app.github.dev")||
+    !/^ghu_[A-Za-z0-9_]{10,}$/.test(e.GITHUB_TOKEN??"")||
+    e.GITHUB_REPOSITORY!=="gustavjung24-ops/ERP"||
+    e.GITHUB_USER!=="gustavjung24-ops"||
     e.GITHUB_ACTIONS==="true"||e.CI==="true"||
     branch!=="main"||!canonicalRemote(remote))
    fail("ONLY_AUTHENTICATED_PRIMARY_MAIN_CODESPACES");
@@ -78,9 +81,14 @@ export function checkCodespaceRecord(record,name){
 function verifyCodespaceSession(e){
  if(!git(["rev-parse","--show-toplevel"]).startsWith("/workspaces/ERP"))
    fail("CODESPACES_REPO_MOUNT_INVALID");
+ // GitHub documents a short-lived ghu_ session token created on Codespaces
+ // start. It is REQUIRED here; local gh credential-store authentication alone
+ // cannot satisfy this check. Never print, persist, or pass it in argv.
  let record;
- try{record=JSON.parse(command("gh",["api","/user/codespaces/"+e.CODESPACE_NAME]));}
- catch{fail("CODESPACES_API_ATTESTATION_UNAVAILABLE");}
+ try{
+  record=JSON.parse(command("gh",["api","/user/codespaces/"+e.CODESPACE_NAME],
+    {GH_TOKEN:e.GITHUB_TOKEN,GH_HOST:"github.com"}));
+ }catch{fail("CODESPACES_SESSION_TOKEN_ATTESTATION_UNAVAILABLE");}
  checkCodespaceRecord(record,e.CODESPACE_NAME);
 }
 function safeURL(raw){
