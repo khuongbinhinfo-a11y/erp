@@ -138,6 +138,61 @@ END; $stocktake_guard$;
 CREATE TRIGGER inventory_stocktake_header_guard BEFORE INSERT OR UPDATE OR DELETE
  ON inventory_stocktake FOR EACH ROW EXECUTE FUNCTION erp_stocktake_header_guard();
 
+-- A posted physical count must have one latest accepted count for every SKU,
+-- every non-zero variance posted exactly once, and no intervening stock facts.
+-- Check at COMMIT because the API writes adjustment movements before status POSTED.
+CREATE FUNCTION erp_stocktake_post_commit_guard()
+RETURNS trigger LANGUAGE plpgsql AS $stocktake_post_guard$
+DECLARE has_lines boolean;
+BEGIN
+ SELECT EXISTS(
+   SELECT 1 FROM inventory_stocktake_line l
+    WHERE l.installation_id=NEW.installation_id AND l.branch_id=NEW.branch_id
+      AND l.stocktake_id=NEW.id
+ ) INTO has_lines;
+ IF NOT has_lines OR EXISTS(
+   SELECT 1 FROM inventory_stocktake_line l
+   LEFT JOIN LATERAL(
+     SELECT c.counted_base FROM inventory_stocktake_count c
+      WHERE c.installation_id=l.installation_id AND c.branch_id=l.branch_id
+        AND c.stocktake_id=l.stocktake_id AND c.line_no=l.line_no
+      ORDER BY c.round_no DESC LIMIT 1
+   ) counted ON true
+   WHERE l.installation_id=NEW.installation_id AND l.branch_id=NEW.branch_id
+     AND l.stocktake_id=NEW.id
+     AND (
+       counted.counted_base IS NULL
+       OR (
+         counted.counted_base<>l.snapshot_on_hand AND NOT EXISTS(
+           SELECT 1 FROM inventory_ledger m
+            WHERE m.installation_id=l.installation_id
+              AND m.branch_id=l.branch_id AND m.warehouse_id=NEW.warehouse_id
+              AND m.product_id=l.product_id AND m.kind='ADJUSTMENT'
+              AND m.source_type='STOCKTAKE' AND m.source_id=NEW.id
+              AND m.source_line=l.line_no
+              AND m.delta_base=counted.counted_base-l.snapshot_on_hand
+         )
+       )
+       OR (
+         SELECT count(*) FROM inventory_ledger m
+           WHERE m.installation_id=l.installation_id
+             AND m.branch_id=l.branch_id AND m.warehouse_id=NEW.warehouse_id
+             AND m.product_id=l.product_id
+       ) <> l.snapshot_movement_count + CASE
+         WHEN counted.counted_base<>l.snapshot_on_hand THEN 1 ELSE 0 END
+     )
+ ) THEN
+   RAISE EXCEPTION 'Stocktake posted document requires counted and reconciled ledger facts';
+ END IF;
+ RETURN NULL;
+END; $stocktake_post_guard$;
+CREATE CONSTRAINT TRIGGER inventory_stocktake_post_commit_guard
+ AFTER UPDATE ON inventory_stocktake
+ DEFERRABLE INITIALLY DEFERRED
+ FOR EACH ROW WHEN (NEW.status='POSTED')
+ EXECUTE FUNCTION erp_stocktake_post_commit_guard();
+
+
 -- A direct SQL movement cannot create arbitrary stocktake corrections.
 -- This enforces one approved count, matching SKU/warehouse and exact signed delta;
 -- no stock movement can silently cross the snapshot boundary.
@@ -164,7 +219,7 @@ BEGIN
  IF NEW.source_type IS DISTINCT FROM 'STOCKTAKE' OR
     status_now IS DISTINCT FROM 'APPROVED' OR
     expected_wh IS DISTINCT FROM NEW.warehouse_id OR
-    counted_qty IS NULL OR snapshot_qty IS NULL OR
+    counted_qty IS NULL OR snapshot_qty IS NULL OR NEW.delta_base=0 OR
     NEW.delta_base IS DISTINCT FROM counted_qty-snapshot_qty THEN
    RAISE EXCEPTION 'Stocktake ledger movement must match one approved counted line';
  END IF;
