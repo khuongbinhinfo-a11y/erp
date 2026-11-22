@@ -25,7 +25,7 @@ function send(res:ServerResponse,status:number,body:unknown,id:string,origin?:st
  if(origin){
   h["access-control-allow-origin"]=origin;
   h["access-control-allow-headers"]="content-type,authorization,idempotency-key,if-match,x-request-id";
-  h["access-control-allow-methods"]="GET,POST,OPTIONS";
+  h["access-control-allow-methods"]="GET,POST,PATCH,OPTIONS";
  }
  res.writeHead(status,h);res.end(JSON.stringify(body));
 }
@@ -441,7 +441,7 @@ export async function handleR1Http(req:IncomingMessage,res:ServerResponse,
             [t,branchId,targetId,name??null,activeFlag??null]);
         }else{
           const newActive=activeFlag??current.rows[0].active;
-          const newPrimary=newActive?(primaryFlag??current.rows[0].isPrimary):false;
+          const newPrimary=newActive?(primaryFlag??current.rows[0].isPrimary??false):false;
           if(newPrimary){
             // One primary per SKU, change prior choice atomically with the same
             // audited command. Concurrent writers cannot bypass unique index.
