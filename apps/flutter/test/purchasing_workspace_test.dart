@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
@@ -269,5 +270,80 @@ testWidgets('R3.2 definite overreceipt 409 releases PO lock for correction',
   expect(find.text('Nhận hàng'),findsOneWidget);
   await tester.pump(const Duration(seconds:5));
   await tester.pumpAndSettle();
+});
+
+testWidgets('R3.2 warehouse switch during detail load cannot post receipt to wrong scope',
+ (tester)async{
+  const w2='00000000-0000-4000-8000-000000000077';
+  const headers={'content-type':'application/json; charset=utf-8'};
+  final delayed=Completer<http.Response>();
+  var detailRequests=0,postRequests=0;
+  final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+   httpClient:MockClient((req)async{
+    if(req.url.path=='/v1/catalog/branches')return http.Response(jsonEncode({
+     'items':[{'id':branch,'name':'Chi nhánh chính'}]}),200,headers:headers);
+    if(req.url.path=='/v1/catalog/warehouses')return http.Response(jsonEncode({
+     'items':[{'id':warehouse,'name':'Kho chính'},{'id':w2,'name':'Kho phụ'}]}),
+     200,headers:headers);
+    if(req.url.path=='/v1/purchasing/orders'&&req.method=='GET')return
+      http.Response(jsonEncode({'items':[{'id':order,'documentNo':'PO-001',
+       'supplierName':'Nhà cung cấp A','warehouseId':warehouse,
+       'status':'CONFIRMED','revision':1,'lineCount':1}],'hasMore':false}),
+       200,headers:headers);
+    if(req.url.path=='/v1/purchasing/orders/$order'&&req.method=='GET'){
+      detailRequests++;
+      return delayed.future;
+    }
+    if(req.method=='POST'&&req.url.path.endsWith('/receipts'))postRequests++;
+    return http.Response('{}',404,headers:headers);
+   }));
+  addTearDown(client.dispose);
+  tester.view.devicePixelRatio=1;
+  tester.view.physicalSize=const Size(1280,850);
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
+  final session=IdentitySession(actorId:actor,token:'synthetic-token',
+    expiresAt:DateTime.now().add(const Duration(hours:1)),grants:[
+      const IdentityGrant(roleId:'read',permission:'purchase.read',branchId:branch),
+      const IdentityGrant(roleId:'recv',permission:'purchase.receive',
+        branchId:branch,warehouseId:warehouse),
+      const IdentityGrant(roleId:'stock',permission:'inventory.read',
+        branchId:branch,warehouseId:warehouse),
+      const IdentityGrant(roleId:'recv2',permission:'purchase.receive',
+        branchId:branch,warehouseId:w2),
+      const IdentityGrant(roleId:'stock2',permission:'inventory.read',
+        branchId:branch,warehouseId:w2),
+    ]);
+  await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
+    home:Scaffold(body:SingleChildScrollView(
+      child:PurchasingWorkspace(client:client,session:session)))));
+  for(var i=0;i<5;i++){
+    await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:80)));
+    await tester.pumpAndSettle();
+  }
+  expect(find.text('Nhận hàng'),findsOneWidget);
+  await tester.tap(find.text('Nhận hàng'));
+  await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:80)));
+  await tester.pumpAndSettle();
+  expect(detailRequests,1);
+  await tester.tap(find.text('Kho chính'));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text('Kho phụ').last);
+  for(var i=0;i<3;i++){
+    await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:80)));
+    await tester.pumpAndSettle();
+  }
+  delayed.complete(http.Response(jsonEncode({'order':{
+    'id':order,'revision':1,'lines':[{'lineNo':1,'sku':'SP01',
+      'name':'Hàng hóa','orderedBase':'3','receivedBase':'0'}]}}),
+    200,headers:headers));
+  for(var i=0;i<3;i++){
+    await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:80)));
+    await tester.pumpAndSettle();
+  }
+  expect(find.text('Ghi nhận hàng từ nhà cung cấp'),findsNothing);
+  expect(postRequests,0);
+  expect(client.pendingPurchase('$actor:$branch:$warehouse'),isNull);
+  expect(client.pendingPurchase('$actor:$branch:$w2'),isNull);
 });
 }
