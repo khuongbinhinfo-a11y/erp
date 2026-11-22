@@ -174,10 +174,24 @@ export function parsePrismaCredential(payload){
  if(url.hostname==="pooled.db.prisma.io")url.hostname="db.prisma.io";
  return {id,url:safeURL(url.toString())};
 }
+// A minted Prisma credential must never survive a bad one-time URL response.
+// The create result carries its id even if the URL is invalid or incomplete;
+// immediately revoke on validation failure, before any pool is constructed.
+export function validateMintedCredentialOrRevoke(result,revoke){
+ try{return parsePrismaCredential(result);}
+ catch(original){
+  const id=result?.connection?.id;
+  if(!/^con_[a-z0-9]+$/i.test(id??""))
+    fail("CREATED_CREDENTIAL_ID_UNKNOWN_MANUAL_REVOCATION_REQUIRED");
+  try{revoke(id);}
+  catch{fail("CREATED_CREDENTIAL_VALIDATION_REVOKE_FAILED");}
+  throw original;
+ }
+}
 function mintErpDbCredential(){
  const result=prismaCli(["postgres","connection","create",DATABASE,
   "--project",PROJECT]);
- return parsePrismaCredential(result);
+ return validateMintedCredentialOrRevoke(result,revokeErpDbCredential);
 }
 function revokeErpDbCredential(id){
  prismaCli(["postgres","connection","delete",id,"--confirm",id]);
@@ -249,9 +263,15 @@ async function main(mode){
  if(mode==="--apply")await maintenance();
  const credential=mintErpDbCredential();
  const u=credential.url;
- const pool=new Pool({connectionString:u.toString(),max:1,
-  connectionTimeoutMillis:20000,statement_timeout:300000,query_timeout:300000});
- pool.on("error",()=>console.error("ERP_R3_POSTGRES_POOL_DISCONNECTED"));
+ let pool;
+ try{
+  pool=new Pool({connectionString:u.toString(),max:1,
+   connectionTimeoutMillis:20000,statement_timeout:300000,query_timeout:300000});
+  pool.on("error",()=>console.error("ERP_R3_POSTGRES_POOL_DISCONNECTED"));
+ }catch{
+  revokeErpDbCredential(credential.id);
+  fail("ERP_R3_DB_POOL_INITIALIZATION_FAILED");
+ }
  let tmp,container;
  try{
   const v=await versions(pool);
