@@ -293,20 +293,37 @@ class ErpIdentityClient {
       throw const ErpApiError(502,'Địa chỉ lưu ảnh không hợp lệ.');
     try{
       final put=await _http.put(url,
-        headers:{'content-type':contentType},body:bytes)
+        // Signed If-None-Match prevents any client from overwriting a
+        // committed image while its 5-minute PUT URL remains valid.
+        headers:{'content-type':contentType,'if-none-match':'*'},body:bytes)
         .timeout(const Duration(seconds:35));
-      if(put.statusCode<200||put.statusCode>=300){
+      if(put.statusCode!=412&&
+        (put.statusCode<200||put.statusCode>=300)){
         throw const ErpApiError(503,'Chưa tải được ảnh lên kho lưu trữ.');
       }
+      // 412 means this immutable key already exists (e.g. lost ACK).
+      // Server-side HEAD + magic/length validation will reconcile it.
+
     }on ErpApiError{rethrow;}
     catch(_){
       throw const ErpApiError(504,
         'Chưa xác minh tải ảnh. Chọn lại ảnh này để thử đúng yêu cầu cũ.');
     }
-    final receipt=await _request('POST','$prefix/complete',
-      token:token,body:body,revision:0,idempotencyKey:key);
-    _mediaPending.remove(scope);
-    return receipt;
+    try{
+      final receipt=await _request('POST','$prefix/complete',
+        token:token,body:body,revision:0,idempotencyKey:key);
+      _mediaPending.remove(scope);
+      return receipt;
+    }on ErpApiError catch(e){
+      // Definitively rejected bytes cannot be replayed successfully. Keep
+      // ambiguous 503/504 and lost ACK commands with their original key.
+      if(e.status==400||e.status==413||e.status==415||
+         e.code=='IMAGE_UPLOAD_MISMATCH'||
+         e.code=='MAX_PRODUCT_IMAGES'||e.code=='PRODUCT_NOT_FOUND'){
+        _mediaPending.remove(scope);
+      }
+      rethrow;
+    }
   }
   Future<List<Map<String,dynamic>>> productPhotos(
     String token,String branchId,String productId)async{
