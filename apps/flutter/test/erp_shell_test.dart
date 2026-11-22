@@ -89,6 +89,9 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
     addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(const ErpApp(previewMode:true));
     expect(tester.view.physicalSize.width / tester.view.devicePixelRatio, greaterThan(960));
+    expect(find.text('RRP'), findsOneWidget);
+    expect(find.text('product by KB'), findsOneWidget);
+    expect(find.byType(CustomPaint), findsWidgets);
     final toggle=find.byKey(const ValueKey('erp-sidebar-toggle'));
     final logo=find.byKey(const ValueKey('erp-sidebar-logo'));
     expect(toggle,findsOneWidget);
