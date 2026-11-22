@@ -44,16 +44,15 @@ function scope(x:Record<string,unknown>):TransferScope{
 }
 function lines(x:unknown,receipt=false):TransferLine[]|TransferReceiptLine[]{
  if(!Array.isArray(x)||x.length<1||x.length>40)throw new TransferFault(400,"INVALID_LINES");
- return x.map((raw:unknown)=>{
-  const v=obj(raw);
-  if(receipt){
-   only(v,["transferLineNo","quantity"]);
-   const n=v.transferLineNo;
-   if(typeof n!=="number"||!Number.isSafeInteger(n)||n<1||n>10000||
-      !validBaseQty(v.quantity))throw new TransferFault(400,"INVALID_RECEIPT_LINE");
-   return {transferLineNo:n,quantity:v.quantity};
-  }
-  only(v,["productId","quantity"]);
+ if(receipt)return x.map((raw:unknown):TransferReceiptLine=>{
+  const v=obj(raw);only(v,["transferLineNo","quantity"]);
+  const n=v.transferLineNo;
+  if(typeof n!=="number"||!Number.isSafeInteger(n)||n<1||n>10000||
+     !validBaseQty(v.quantity))throw new TransferFault(400,"INVALID_RECEIPT_LINE");
+  return {transferLineNo:n,quantity:v.quantity};
+ });
+ return x.map((raw:unknown):TransferLine=>{
+  const v=obj(raw);only(v,["productId","quantity"]);
   if(!validBaseQty(v.quantity))throw new TransferFault(400,"INVALID_QTY");
   return {productId:uuid(v.productId),quantity:v.quantity};
  });
