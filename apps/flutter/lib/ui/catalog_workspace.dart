@@ -729,7 +729,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
       StatefulBuilder(builder:(ctx,refresh)=>AlertDialog(
         title:Text('Ảnh · ${product['name']}'),
         content:SizedBox(
-          width:(MediaQuery.sizeOf(dialog).width-70).clamp(250.0,620.0),
+          width:(MediaQuery.sizeOf(dialog).width-70).clamp(250.0,620.0).toDouble(),
           child:SingleChildScrollView(child:Column(
             mainAxisSize:MainAxisSize.min,crossAxisAlignment:CrossAxisAlignment.start,
             children:[
@@ -791,8 +791,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                   branch,productId,first.bytes!,type);
                 images=await widget.client.productPhotos(
                   widget.session.token,branch,productId);
-                if(ctx.mounted)refresh(()=>{
-                  galleryBusy=false, galleryError=null,
+                if(ctx.mounted)refresh((){
+                  galleryBusy=false;galleryError=null;
                 });
               }on ErpApiError catch(e){
                 if(ctx.mounted)refresh((){
