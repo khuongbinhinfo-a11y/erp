@@ -20,10 +20,11 @@ void main(){
   http.Response ok(Object data,int status)=>http.Response(jsonEncode(data),status,headers:headers);
   final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
    httpClient:MockClient((req)async{
-    if(req.url.path=='/v1/catalog/branches')return ok({'items':[
-      {'id':branch,'name':'Chi nhánh chính'}]},200);
-    if(req.url.path=='/v1/catalog/warehouses')return ok({'items':[
-      {'id':source,'name':'Kho chính'},{'id':dest,'name':'Kho nhận'}]},200);
+    if(req.url.path=='/v1/inventory/transfers/scopes')return ok({
+      'branches':[{'id':branch,'name':'Chi nhánh chính'}],
+      'warehouses':req.url.queryParameters.containsKey('branchId')?[
+        {'id':source,'name':'Kho chính'},{'id':dest,'name':'Kho nhận'}]:[],
+    },200);
     if(req.url.path=='/v1/inventory/transfers'&&req.method=='GET')
       return ok({'items':[{'id':transfer,'sourceWarehouseId':source,
         'destinationWarehouseId':dest,'sourceWarehouseName':'Kho chính',
