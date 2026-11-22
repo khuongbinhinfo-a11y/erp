@@ -1146,16 +1146,21 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
               Text(titles[resource]??'Danh mục',style:const TextStyle(
                 color:ErpTokens.ink,fontSize:18,fontWeight:FontWeight.w800)),
               if(branches.isNotEmpty)
-                DropdownButton<String>(
-                  key:const ValueKey('catalog-branch-picker'),
-                  value:branchId,
-                  items:branches.map((b)=>DropdownMenuItem<String>(
-                    value:b['id'] as String,
-                    child:Text('${b['code']} · ${b['name']}'))).toList(),
-                  onChanged:(next){
-                    if(next==null||next==branchId)return;
-                    setState(()=>branchId=next);_loadRecords();
-                  }),
+                SizedBox(
+                  width:(MediaQuery.sizeOf(context).width-96)
+                    .clamp(160.0,260.0).toDouble(),
+                  child:DropdownButton<String>(
+                    key:const ValueKey('catalog-branch-picker'),
+                    isExpanded:true,
+                    value:branchId,
+                    items:branches.map((b)=>DropdownMenuItem<String>(
+                      value:b['id'] as String,
+                      child:Text('${b['code']} · ${b['name']}',
+                        maxLines:1,overflow:TextOverflow.ellipsis))).toList(),
+                    onChanged:(next){
+                      if(next==null||next==branchId)return;
+                      setState(()=>branchId=next);_loadRecords();
+                    })),
               IconButton(
                 key:const ValueKey('catalog-refresh'),
                 tooltip:'Làm mới danh sách',
