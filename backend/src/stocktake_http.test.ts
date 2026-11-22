@@ -54,8 +54,8 @@ test("R3.4 PostgreSQL: capture, recount, separate approval, stale guard and exac
   const uri=new URL(source!);uri.pathname="/"+dbName;
   db=new Pool({connectionString:uri.toString(),max:8,query_timeout:12000});
   db.on("error",()=>{});
-  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).applied.length,14);
-  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).skipped.length,14);
+  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).applied.length,15);
+  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).skipped.length,15);
   const password="Synthetic-stocktake-"+randomUUID();
   const root=await bootstrapInstallation(db,{code:"stocktake-ci",displayName:"Stocktake CI",
     adminLogin:"owner",adminPassword:password});
