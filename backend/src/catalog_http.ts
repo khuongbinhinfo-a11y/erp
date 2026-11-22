@@ -592,7 +592,10 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
       if(search.length>64)throw new CatalogError(400,"SEARCH_TOO_LONG");
       const afterCode=resource==="unit-definitions"
         ?(url.searchParams.get("after")??""):"";
-      if(afterCode&&!/^[A-Za-z0-9][A-Za-z0-9._-]{0,23}$/.test(afterCode))
+      // Cursor comes from existing stored data, including legacy display
+      // strings such as "Hộp 12". New-code validation must not reject it.
+      if(afterCode&&([...afterCode].length>24||
+        afterCode.trim().length===0||/[\u0000-\u001f\u007f]/.test(afterCode)))
         throw new CatalogError(400,"INVALID_UNIT_CURSOR");
       const client=await pool.connect();
       try{
