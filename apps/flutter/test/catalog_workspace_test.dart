@@ -258,14 +258,6 @@ void main(){
 
   testWidgets('R1-A customer editor fits narrow viewport and uses coded group/region',
     (tester)async{
-      final originalErrorHandler=FlutterError.onError;
-      FlutterError.onError=(details){
-        // Exact render chain for the narrow viewport regression.
-        // ignore: avoid_print
-        print('R1A_LAYOUT_DIAGNOSTIC: ${details.toString()}');
-        originalErrorHandler?.call(details);
-      };
-      addTearDown(()=>FlutterError.onError=originalErrorHandler);
       var patches=0;
       Map<String,dynamic>? saved;
       final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
@@ -309,13 +301,8 @@ void main(){
       await tester.pumpAndSettle();
       await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:150)));
       await tester.pumpAndSettle();
-      final initialError=tester.takeException();
-      if(initialError is FlutterError){
-        // RenderFlex diagnostics include the originating widget/location.
-        // ignore: avoid_print
-        print(initialError.diagnostics.map((d)=>d.toStringDeep()).join('\\n'));
-      }
-      expect(initialError,isNull,reason:'initial mobile catalog overflow');
+      expect(tester.takeException(),isNull,
+        reason:'mobile catalog must not overflow before opening edit dialog');
       await tester.tap(find.byKey(const ValueKey('catalog-edit-customer-r1a')));
       await tester.pumpAndSettle();
       expect(tester.takeException(),isNull,reason:'opened edit dialog overflow');
@@ -341,6 +328,9 @@ void main(){
       expect(saved?.containsKey('customerGroupId'),false,
         reason:'unchanged group must not trigger irrelevant re-assignment');
       expect(saved?['branchId'],branch);
+      // A success toast owns an expiry timer; advance fake time before teardown.
+      await tester.pump(const Duration(seconds:5));
+      await tester.pumpAndSettle();
     });
 
 }
