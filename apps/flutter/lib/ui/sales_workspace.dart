@@ -124,7 +124,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       channels=items[3].where((x)=>x['active']==true).toList();
     }on ErpApiError catch(e){inform(e.message,error:true);return null;}
     catch(_){inform('Không tải được danh mục bán hàng.',error:true);return null;}
-    if(customers.isEmpty||skus.isEmpty||lists.isEmpty){
+    if((customers.isEmpty&&!can('catalog.write'))||skus.isEmpty||lists.isEmpty){
       if(mounted)setState(()=>missingCatalog=customers.isEmpty?'customers':
         skus.isEmpty?'products':'prices');
       inform('Hãy bổ sung dữ liệu bắt buộc trước khi lập đơn hàng.',error:true);
@@ -236,6 +236,22 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
 
     final skuSearch=TextEditingController();
     final customerSearch=TextEditingController();
+    final newCustomerCode=TextEditingController();
+    final newCustomerName=TextEditingController();
+    final newCustomerPhone=TextEditingController();
+    final newCustomerAddress=TextEditingController();
+    const quickCustomerKind='sales.customer.quick';
+    final savedQuickCustomer=widget.client.pendingR1(
+      widget.session.actorId,branch,quickCustomerKind);
+    bool quickCustomerVisible=savedQuickCustomer!=null,quickCustomerBusy=false;
+    Map<String,dynamic>? pendingQuickCustomer=savedQuickCustomer?.payload;
+    String? pendingQuickCustomerKey=savedQuickCustomer?.key;
+    if(pendingQuickCustomer!=null){
+      newCustomerCode.text=pendingQuickCustomer['code']?.toString()??'';
+      newCustomerName.text=pendingQuickCustomer['name']?.toString()??'';
+      newCustomerPhone.text=pendingQuickCustomer['phone']?.toString()??'';
+      newCustomerAddress.text=pendingQuickCustomer['deliveryAddress']?.toString()??'';
+    }
     final skuFocus=FocusNode();
     final customerFocus=FocusNode();
     Timer? skuDebounce,customerDebounce;
@@ -318,6 +334,75 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       invalidate(refresh);
       skuFocus.requestFocus();
     }
+    Future<void> createQuickCustomer(BuildContext ctx,StateSetter refresh)async{
+      if(!can('catalog.write')||quickCustomerBusy)return;
+      if(pendingQuickCustomer==null){
+        final code=newCustomerCode.text.trim().toUpperCase();
+        final name=newCustomerName.text.trim();
+        if(code.isEmpty||name.isEmpty){
+          refresh(()=>formError='Cần nhập mã và tên khách hàng mới.');
+          return;
+        }
+        final payload=<String,dynamic>{'branchId':branch,'code':code,'name':name};
+        if(newCustomerPhone.text.trim().isNotEmpty){
+          payload['phone']=newCustomerPhone.text.trim();
+        }
+        if(newCustomerAddress.text.trim().isNotEmpty){
+          payload['deliveryAddress']=newCustomerAddress.text.trim();
+        }
+        pendingQuickCustomer=payload;
+        pendingQuickCustomerKey=newKey();
+        widget.client.retainR1(widget.session.actorId,branch,
+          quickCustomerKind,payload,pendingQuickCustomerKey!);
+      }
+      refresh(()=>quickCustomerBusy=true);
+      try{
+        // Repeat the same payload/key only; a lost ACK must not create a second customer.
+        final result=await widget.client.createCatalogWithKey(
+          widget.session.token,'customers',pendingQuickCustomer!,
+          key:pendingQuickCustomerKey!);
+        if(!ctx.mounted)return;
+        final saved=<String,dynamic>{
+          ...pendingQuickCustomer!,
+          'id':result['id'],'code':result['code'],'name':result['name'],
+          'active':true,'paymentTermsDays':0,
+        };
+        chooseCustomer(saved,refresh);
+        widget.client.clearR1(widget.session.actorId,branch,quickCustomerKind);
+        refresh((){
+          quickCustomerVisible=false;
+          quickCustomerBusy=false;
+          pendingQuickCustomer=null;
+          pendingQuickCustomerKey=null;
+        });
+      }on ErpApiError catch(e){
+        if(!ctx.mounted)return;
+        refresh((){
+          quickCustomerBusy=false;
+          formError=e.message;
+          // Unknown commit outcome: keep the exact body/key for a safe retry.
+          // Auth failures do not prove the earlier commit rolled back.
+          // Retain the same request/key across reauthentication and form reopen.
+          final definite=e.status>=400&&e.status<500&&
+            e.status!=401&&e.status!=403&&e.status!=408&&
+            e.code!='UNKNOWN_OUTCOME';
+          if(definite){
+            widget.client.clearR1(widget.session.actorId,branch,quickCustomerKind);
+            pendingQuickCustomer=null;
+            pendingQuickCustomerKey=null;
+          }else{
+            formError=e.status==401||e.status==403
+              ?'Chưa xác minh tạo khách vì phiên hoặc quyền đã thay đổi. Yêu cầu được giữ để kiểm tra lại khi có quyền.'
+              :'Chưa xác minh được kết quả tạo khách. Bấm kiểm tra lại để gửi cùng mã yêu cầu.';
+          }
+        });
+      }catch(_){
+        if(ctx.mounted)refresh((){
+          quickCustomerBusy=false;
+          formError='Chưa xác minh được kết quả tạo khách. Bấm kiểm tra lại để gửi cùng mã yêu cầu.';
+        });
+      }
+    }
     Future<void> findCustomers(BuildContext ctx,StateSetter refresh)async{
       final term=customerSearch.text.trim();
       if(term.isEmpty){refresh(()=>customerMatches=[]);return;}
@@ -365,6 +450,17 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       });
     }
     Future<void> requestClose(BuildContext ctx)async{
+      if(quickCustomerBusy){
+        inform('Đang gửi yêu cầu tạo khách. Hãy kiểm tra kết quả trước khi đóng.',error:true);
+        return;
+      }
+      if(pendingQuickCustomer!=null){
+        // Persisted in the scoped client queue: leaving the form does not
+        // discard the original payload/key if session rights are lost.
+        inform('Yêu cầu tạo khách chưa xác minh đã được giữ lại. Mở lại đơn để kiểm tra khi có quyền.',error:true);
+        Navigator.pop(ctx);
+        return;
+      }
       if(stamp()==originalStamp&&note.text.trim()==originalNote){
         Navigator.pop(ctx);return;
       }
@@ -482,6 +578,65 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         prefixIcon:const Icon(Icons.person_search_outlined),
                         suffixIcon:IconButton(tooltip:'Tìm khách',onPressed:()=>findCustomers(ctx,refresh),
                           icon:const Icon(Icons.search))))),
+                    if(can('catalog.write'))Align(
+                      alignment:Alignment.centerLeft,
+                      child:TextButton.icon(
+                        key:const ValueKey('sales-quick-customer-toggle'),
+                        onPressed:quickCustomerBusy?null:()=>refresh((){
+                          quickCustomerVisible=!quickCustomerVisible;
+                        }),
+                        icon:const Icon(Icons.person_add_alt_1_outlined),
+                        label:const Text('Tạo khách nhanh'))),
+                    if(quickCustomerVisible)Container(
+                      key:const ValueKey('sales-quick-customer-panel'),
+                      margin:const EdgeInsets.symmetric(vertical:8),
+                      padding:const EdgeInsets.all(12),
+                      decoration:BoxDecoration(
+                        color:ErpTokens.mint,
+                        border:Border.all(color:ErpTokens.border),
+                        borderRadius:BorderRadius.circular(6)),
+                      child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+                        const Text('Thêm khách hàng vào danh mục',
+                          style:TextStyle(fontWeight:FontWeight.w700)),
+                        const SizedBox(height:8),
+                        Wrap(spacing:8,runSpacing:8,children:[
+                          SizedBox(width:narrow?280:140,child:TextField(
+                            key:const ValueKey('sales-quick-customer-code'),
+                            controller:newCustomerCode,
+                            enabled:!quickCustomerBusy&&pendingQuickCustomer==null,
+                            decoration:const InputDecoration(labelText:'Mã khách *'))),
+                          SizedBox(width:narrow?280:210,child:TextField(
+                            key:const ValueKey('sales-quick-customer-name'),
+                            controller:newCustomerName,
+                            enabled:!quickCustomerBusy&&pendingQuickCustomer==null,
+                            decoration:const InputDecoration(labelText:'Tên khách *'))),
+                          SizedBox(width:narrow?280:170,child:TextField(
+                            key:const ValueKey('sales-quick-customer-phone'),
+                            controller:newCustomerPhone,
+                            enabled:!quickCustomerBusy&&pendingQuickCustomer==null,
+                            keyboardType:TextInputType.phone,
+                            decoration:const InputDecoration(labelText:'Điện thoại'))),
+                          SizedBox(width:narrow?280:240,child:TextField(
+                            key:const ValueKey('sales-quick-customer-address'),
+                            controller:newCustomerAddress,
+                            enabled:!quickCustomerBusy&&pendingQuickCustomer==null,
+                            decoration:const InputDecoration(labelText:'Địa chỉ giao'))),
+                        ]),
+                        const SizedBox(height:8),
+                        Row(children:[
+                          TextButton(
+                            onPressed:quickCustomerBusy||pendingQuickCustomer!=null?null:
+                              ()=>refresh(()=>quickCustomerVisible=false),
+                            child:const Text('Đóng')),
+                          const SizedBox(width:8),
+                          FilledButton(
+                            key:const ValueKey('sales-quick-customer-save'),
+                            onPressed:quickCustomerBusy?null:
+                              ()=>createQuickCustomer(ctx,refresh),
+                            child:Text(quickCustomerBusy?'Đang lưu…':
+                              pendingQuickCustomer==null?'Lưu khách hàng':'Kiểm tra lại')),
+                        ]),
+                      ])),
                     if(customerBusy)const LinearProgressIndicator(),
                     if(customerMatches.isNotEmpty)ConstrainedBox(
                       constraints:const BoxConstraints(maxHeight:148),
@@ -798,6 +953,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     }finally{
       skuDebounce?.cancel();customerDebounce?.cancel();
       note.dispose();skuSearch.dispose();customerSearch.dispose();
+      newCustomerCode.dispose();newCustomerName.dispose();
+      newCustomerPhone.dispose();newCustomerAddress.dispose();
       skuFocus.dispose();customerFocus.dispose();
       for(final line in lines){line.dispose();}
     }
