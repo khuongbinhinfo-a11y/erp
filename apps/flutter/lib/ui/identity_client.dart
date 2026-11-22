@@ -381,6 +381,17 @@ class ErpIdentityClient {
       .map((x)=>Map<String,dynamic>.from(x as Map)).toList();
     return (branches:rows('branches'),warehouses:rows('warehouses'));
   }
+  /// Active SKUs for transfer creation; scoped to the source warehouse grant.
+  /// Unlike catalog screens this never asks for unrelated catalog.read rights.
+  Future<List<Map<String,dynamic>>> transferProducts(String token,{
+    required String branchId,required String sourceWarehouseId,String query=''})async{
+    final q=Uri(queryParameters:{'branchId':branchId,
+      'warehouseId':sourceWarehouseId,if(query.trim().isNotEmpty)'q':query.trim()}).query;
+    final raw=await _request('GET','/v1/inventory/transfers/products?$q',
+      token:token);
+    return (raw['items'] as List<dynamic>).map((x)=>
+      Map<String,dynamic>.from(x as Map)).toList();
+  }
   /// Transfer lifecycle is separate from sales order and actual accepted stock.
   Future<({List<Map<String,dynamic>> items,bool hasMore})> transferPage(
     String token,{required String branchId,required String warehouseId,int offset=0})async{
