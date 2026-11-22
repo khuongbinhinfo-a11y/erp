@@ -365,6 +365,35 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
     {active:false})).status,409,"barcode revision guards other-device stale edits");
   assert.equal((await patchR1("barcodes",otherBarcode.body.id,1,
     {barcode:"CHANGED"})).status,400,"barcode identity is immutable");
+  // Historic Unicode labels and new directory codes must resolve the
+  // SAME customer group. Neither policy may silently disappear or double stack.
+  const unicodeGroup=await legacy("customer-groups",{
+    code:"LEGACY-7e736d8317f82900ab34d1f5d56e3ed2",name:"Bán sỉ"});
+  assert.equal(unicodeGroup.status,201);
+  const unicodeCustomer=await legacy("customers",{
+    code:"KH-UNICODE",name:"Khách nhập theo nhóm cũ",
+    customerGroupId:unicodeGroup.body.id});
+  assert.equal(unicodeCustomer.status,201);
+  const newGroupRule=await r1("rules",{
+    ...basic,sellSkuId:skuId,scopeKind:"CUSTOMER_GROUP",
+    customerGroup:"LEGACY-7e736d8317f82900ab34d1f5d56e3ed2",
+    adjustment:"PERCENT_DISCOUNT",amount:"3.0000",priority:-1,
+    stacking:"STACKABLE"});
+  assert.equal(newGroupRule.status,201,JSON.stringify(newGroupRule.body));
+  const legacyRule=(await pool.query<{id:string}>(`INSERT INTO catalog_sku_price_rule
+    (installation_id,branch_id,price_list_id,sell_sku_id,scope_kind,
+      customer_group,adjustment,amount,priority,stacking,min_quantity,effective_from)
+    VALUES ($1,$2,$3,$4,'CUSTOMER_GROUP','Bán sỉ','PERCENT_DISCOUNT',
+      3.0000,-1,'STACKABLE',1,$5::timestamptz) RETURNING id`,
+    [root.installationId,b,list.body.id,skuId,now])).rows[0]!.id;
+  const unicodeQuote=await resolvePrice({
+    priceListId:list.body.id,sellSkuId:skuId,
+    quantity:"1",customerId:unicodeCustomer.body.id,priceAt});
+  assert.equal(unicodeQuote.status,200,JSON.stringify(unicodeQuote.body));
+  const equivalent=[newGroupRule.body.id,legacyRule];
+  assert.equal(unicodeQuote.body.quote.trace.filter(
+    (x:{ruleId:string})=>equivalent.includes(x.ruleId)).length,1,
+    "old label and new code are equivalent; the discount must apply exactly once");
   const inactive=await pool.query<{id:string}>(
    "INSERT INTO branch(installation_id,code,name) VALUES($1,'OTHER','Other') RETURNING id",
    [root.installationId]);
