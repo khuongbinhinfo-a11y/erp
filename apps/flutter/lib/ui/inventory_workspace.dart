@@ -17,6 +17,7 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
   String tab='balances',reservationState='ACTIVE';
   bool busy=false,loading=true,loadingMore=false,hasMore=false;
   int serial=0;
+  final warehouseLookup=TextEditingController();
   @override void initState(){super.initState();loadBranches();}
   @override void didUpdateWidget(covariant InventoryWorkspace old){
     super.didUpdateWidget(old);
@@ -25,7 +26,17 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
       loadBranches();
     }
   }
-  @override void dispose(){++serial;super.dispose();}
+  @override void dispose(){++serial;warehouseLookup.dispose();super.dispose();}
+  String? get pendingScope=>branchId==null||warehouseId==null?null:
+    '${widget.session.actorId}:${branchId!}:${warehouseId!}';
+  bool get hasPending=>pendingScope!=null&&
+    widget.client.pendingInventory(pendingScope!)!=null;
+  Future<void> retryPending()async{
+    final scope=pendingScope;if(scope==null)return;
+    final saved=widget.client.pendingInventory(scope);
+    if(saved==null||saved.action==null||saved.revision==null)return;
+    await send(saved.action!,saved.payload,intent:'replay',revision:saved.revision!);
+  }
   bool can(String permission)=>widget.session.grants.any((g)=>
     g.permission==permission&&g.branchId==branchId&&g.warehouseId==warehouseId);
   void notify(String message,{bool bad=false}){
@@ -47,12 +58,12 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
       if(mounted&&n==serial)setState((){loading=false;error='Không tải được chi nhánh.';});
     }
   }
-  Future<void> loadWarehouses()async{
+  Future<void> loadWarehouses({String query=''})async{
     final b=branchId;if(b==null)return;
     final n=++serial;setState((){loading=true;error=null;loadingMore=false;hasMore=false;rows=[];});
     try {
       final data=await widget.client.catalogItems(
-        widget.session.token,'warehouses',branchId:b);
+        widget.session.token,'warehouses',branchId:b,query:query);
       if(!mounted||n!=serial)return;
       warehouses=data.where((w)=>widget.session.grants.any((g)=>
         g.branchId==b&&g.warehouseId==w['id']&&g.permission.startsWith('inventory.'))).toList();
@@ -100,13 +111,14 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
   Future<void> send(String action,Map<String,dynamic> body,
       {required String intent,int revision=0})async{
     if(busy)return;
-    final scope=widget.session.actorId+':'+(warehouseId??'')+':'+intent;
+    final scope=pendingScope;if(scope==null)return;
     final held=widget.client.pendingInventory(scope);
-    if(held!=null&&jsonEncode(held.payload)!=jsonEncode(body)){
-      notify('Còn yêu cầu chưa xác minh. Không tạo yêu cầu khác.',bad:true);return;
+    if(held!=null&&(jsonEncode(held.payload)!=jsonEncode(body)||
+      held.action!=action||held.revision!=revision)){
+      notify('Hãy xác minh lệnh kho cũ trước khi tạo chứng từ mới.',bad:true);return;
     }
     final key=held?.key??'stock-'+DateTime.now().microsecondsSinceEpoch.toString();
-    widget.client.retainInventory(scope,body,key);
+    widget.client.retainInventory(scope,body,key,action:action,revision:revision);
     setState(()=>busy=true);
     try{
       await widget.client.inventoryAction(widget.session.token,action,body,
@@ -116,7 +128,10 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
       await reload();
     }on ErpApiError catch(e){
       // Any 5xx may mean COMMIT succeeded but the ACK was lost: retain exact key/body.
-      final uncertain=e.status==0||e.status>=500;
+      // Authentication and revision conflicts are not evidence that the
+      // earlier COMMIT did not happen. Keep command for exact replay.
+      final uncertain=e.status==0||e.status>=500||e.status==401||
+        e.status==403||e.status==409;
       if(!uncertain)widget.client.clearInventory(scope);
       notify(uncertain
         ?'Chưa xác minh kết quả máy chủ. Gửi lại đúng yêu cầu trước.':e.message,bad:true);
@@ -125,7 +140,8 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
     }finally{if(mounted)setState(()=>busy=false);}
   }
   Future<void> openStock()async{
-    final b=branchId,w=warehouseId;if(b==null||w==null||!can('inventory.post'))return;
+    final b=branchId,w=warehouseId;
+    if(b==null||w==null||hasPending||!can('inventory.post'))return;
     List<Map<String,dynamic>> products;
     try{
       products=await widget.client.catalogItems(
@@ -194,7 +210,8 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
     }finally{qty.dispose();lookupText.dispose();}
   }
   Future<void> reserve()async{
-    final b=branchId,w=warehouseId;if(b==null||w==null||!can('inventory.reserve'))return;
+    final b=branchId,w=warehouseId;
+    if(b==null||w==null||hasPending||!can('inventory.reserve'))return;
     List<Map<String,dynamic>> orders;
     try{
       orders=(await widget.client.salesOrders(widget.session.token,b))
@@ -280,7 +297,8 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
       intent:'hold:'+picked+':'+selected.toString());
   }
   Future<void> release(Map<String,dynamic> row)async{
-    final b=branchId,w=warehouseId;if(b==null||w==null||!can('inventory.reserve'))return;
+    final b=branchId,w=warehouseId;
+    if(b==null||w==null||hasPending||!can('inventory.reserve'))return;
     final ok=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(
       title:const Text('Giải phóng hàng đã giữ?'),
       content:Text('Đơn '+(row['documentNo']??'').toString()+' sẽ không còn giữ số hàng này.'),
@@ -310,7 +328,8 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
           Text(details,style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
         ])),
         if(tab=='reservations'&&row['state']=='ACTIVE'&&can('inventory.reserve'))
-          TextButton(onPressed:busy?null:()=>release(row),child:const Text('Giải phóng')),
+          TextButton(onPressed:busy||hasPending?null:()=>release(row),
+            child:const Text('Giải phóng')),
       ])),
       const Divider(height:1),
     ]);
@@ -336,6 +355,13 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
             child:Text((w['name']??'').toString(),overflow:TextOverflow.ellipsis))).toList(),
           onChanged:busy?null:(v){if(v!=null){setState(()=>warehouseId=v);reload();}},
         )),
+        SizedBox(width:small?300:260,child:TextField(
+          key:const ValueKey('inventory-warehouse-search'),
+          controller:warehouseLookup,
+          onSubmitted:(value)=>loadWarehouses(query:value.trim()),
+          decoration:InputDecoration(labelText:'Tìm mã hoặc tên kho',
+            suffixIcon:IconButton(tooltip:'Tìm kho',icon:const Icon(Icons.search),
+              onPressed:()=>loadWarehouses(query:warehouseLookup.text.trim())))),
       ]),
       const SizedBox(height:16),
       Wrap(spacing:10,runSpacing:10,children:[
@@ -350,11 +376,14 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
             setState(()=>reservationState=reservationState=='ACTIVE'?'RELEASED':'ACTIVE');
             reload();
           },child:Text(reservationState=='ACTIVE'?'Xem lịch sử đã giải phóng':'Xem hàng đang giữ')),
+        if(hasPending)OutlinedButton.icon(
+          onPressed:busy?null:retryPending,icon:const Icon(Icons.refresh),
+          label:const Text('Xác minh lệnh kho đang chờ')),
         if(can('inventory.post'))OutlinedButton.icon(
-          onPressed:busy?null:openStock,icon:const Icon(Icons.add),
+          onPressed:busy||hasPending?null:openStock,icon:const Icon(Icons.add),
           label:const Text('Tồn đầu kỳ')),
         if(can('inventory.reserve'))OutlinedButton.icon(
-          onPressed:busy?null:reserve,
+          onPressed:busy||hasPending?null:reserve,
           icon:const Icon(Icons.inventory_2_outlined),label:const Text('Giữ hàng')),
         IconButton(onPressed:busy?null:reload,
           tooltip:'Tải lại dữ liệu kho',icon:const Icon(Icons.refresh)),
