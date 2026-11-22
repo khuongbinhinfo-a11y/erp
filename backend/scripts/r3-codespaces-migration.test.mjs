@@ -4,7 +4,9 @@ import { BASE, R3, checkOperator, checkVersions, canonicalRemote, checkCodespace
 const sha="a".repeat(40);
 const remote="https://github.com/gustavjung24-ops/ERP.git";
 const base={CODESPACES:"true",CODESPACE_NAME:"synthetic-erp-codespace",
- GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN:"app.github.dev",ERP_APPROVED_SHA:sha,
+ GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN:"app.github.dev",
+ GITHUB_REPOSITORY:"gustavjung24-ops/ERP",GITHUB_USER:"gustavjung24-ops",
+ GITHUB_TOKEN:"ghu_synthetic_session_token_12345",ERP_APPROVED_SHA:sha,
  ERP_R3_MIGRATION_APPROVAL:"OWNER_APPROVED_R3_0011_0014_ERP_DB",
  ERP_TARGET_PROJECT_ID:"proj_ud3b1s5yn03vh0zp9cbs2upa",
  ERP_TARGET_DATABASE_ID:"db_jg2bl98hzi1jm06lwo0i4rqx"};
@@ -34,7 +36,9 @@ test("R3 canonical origin rejects lookalike host and Actions spoof",()=>{
  assert.equal(canonicalRemote("https://evil.example/gustavjung24-ops/ERP.git"),false);
  assert.equal(canonicalRemote("https://github.com/other/ERP.git"),false);
  for(const env of [{CI:"true"},{GITHUB_ACTIONS:"true"},{CODESPACE_NAME:""},
-   {GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN:"evil.example"}]){
+   {GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN:"evil.example"},
+   {GITHUB_TOKEN:"ghp_local_user_pat"},{GITHUB_TOKEN:""},
+   {GITHUB_REPOSITORY:"attacker/ERP"},{GITHUB_USER:"attacker"}]){
   assert.throws(()=>checkOperator({...base,...env},"main",sha,remote,[],true));
  }
 });
