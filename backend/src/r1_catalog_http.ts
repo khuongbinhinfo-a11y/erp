@@ -114,6 +114,12 @@ function patchMutation(req:IncomingMessage,
   if(!Number.isSafeInteger(n))throw new R1Error(400,"INVALID_REVISION");
   return {...ctx,idempotencyKey:key,expectedRevision:n};
 }
+async function hasR1A(db:Pool|PoolClient):Promise<boolean>{
+ const r=await db.query<{ready:boolean}>(`SELECT EXISTS(
+   SELECT 1 FROM public.schema_migrations
+   WHERE version='0017_r1a_customer_directories.sql') AS ready`);
+ return r.rows[0]?.ready===true;
+}
 async function schema(db:Pool){
  try{
   const r=await db.query<{ok:boolean}>(
@@ -298,8 +304,11 @@ async function listing(db:PoolClient,t:string,b:string,kind:Kind,q:string,skuId?
   return r.rows;
  }
  if(kind==="barcodes"){
+  // 0017 adds the row revision. Barcode listing must remain readable on 0016
+  // during a maintenance/rolling backend rollout.
+  const revision=(await hasR1A(db))?"c.revision::integer":"0::integer";
   const r=await db.query(`SELECT c.id,c.sell_sku_id AS "sellSkuId",s.sku,
-     c.barcode,c.is_primary AS "isPrimary",c.active,c.revision::integer
+     c.barcode,c.is_primary AS "isPrimary",c.active,${revision} AS revision
    FROM catalog_sku_barcode c JOIN catalog_sell_sku s ON
     s.installation_id=c.installation_id AND s.branch_id=c.branch_id
     AND s.id=c.sell_sku_id
@@ -395,6 +404,8 @@ export async function handleR1Http(req:IncomingMessage,res:ServerResponse,
   const patchPath=/^\/v1\/catalog\/r1\/(skus|barcodes|channels)\/([0-9a-f-]{36})$/i.exec(url.pathname);
   if(patchPath&&req.method==="PATCH"){
     const targetKind=patchPath[1] as "skus"|"barcodes"|"channels";
+    if(targetKind==="barcodes"&&!await hasR1A(pool))
+      throw new R1Error(503,"R1A_MIGRATION_REQUIRED");
     const targetId=id(patchPath[2]),raw=await body(req);
     const branchId=id(raw.branchId);
     if(targetKind==="skus")keys(raw,["branchId","active"]);
