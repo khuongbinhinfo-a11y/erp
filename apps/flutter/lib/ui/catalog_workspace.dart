@@ -328,7 +328,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                 if(resource=='customers')...[
                   const SizedBox(height:12),
                   DropdownButtonFormField<String?>(
-                    key:const ValueKey('catalog-create-customer-group'),
+                    key:ValueKey('catalog-create-customer-group-$customerGroupId'),
                     initialValue:customerGroupId,isExpanded:true,
                     decoration:const InputDecoration(
                       labelText:'Nhóm khách hàng',
@@ -367,7 +367,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                     style:const TextStyle(color:ErpTokens.danger,fontSize:12)),
                   const SizedBox(height:12),
                   DropdownButtonFormField<String?>(
-                    key:const ValueKey('catalog-create-customer-region'),
+                    key:ValueKey('catalog-create-customer-region-$customerRegionId'),
                     initialValue:customerRegionId,isExpanded:true,
                     decoration:const InputDecoration(
                       labelText:'Khu vực bán hàng',
