@@ -90,7 +90,8 @@ void main(){
    expect(find.text('Kho và tồn khả dụng'),findsOneWidget);
    // Stock display is only the backend projection, never a locally computed balance.
    expect(find.textContaining('SP01 · Hàng kiểm thử'),findsOneWidget);
-   expect(find.textContaining('Khả dụng: 5.000000'),findsOneWidget);
+   expect(find.textContaining('Tồn: 5  |  Đã giữ: 0  |  Khả dụng: 5'),findsOneWidget);
+   expect(find.textContaining('5.000000'),findsNothing);
    // A client preserves the immutable request body/key for a retry after lost ACK.
    final cmd={'branchId':branch,'warehouseId':warehouse,
      'productId':product,'quantity':'5'};
