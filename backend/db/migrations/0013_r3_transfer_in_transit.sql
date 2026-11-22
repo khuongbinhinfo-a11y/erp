@@ -97,6 +97,14 @@ CREATE TRIGGER inventory_transfer_line_guard BEFORE INSERT OR UPDATE OR DELETE
 
 CREATE FUNCTION erp_transfer_header_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+ IF TG_OP='INSERT' THEN
+   IF NEW.status IS DISTINCT FROM 'CREATED' OR NEW.revision<>0
+      OR NEW.approved_by IS NOT NULL OR NEW.approved_at IS NOT NULL
+      OR NEW.dispatched_by IS NOT NULL OR NEW.dispatched_at IS NOT NULL THEN
+     RAISE EXCEPTION 'Transfer must begin in CREATED without posting facts';
+   END IF;
+   RETURN NEW;
+ END IF;
  IF TG_OP='DELETE' THEN RAISE EXCEPTION 'Transfer document cannot be deleted'; END IF;
  IF (NEW.installation_id,NEW.branch_id,NEW.id,NEW.source_warehouse_id,
      NEW.destination_warehouse_id,NEW.note,NEW.created_by,NEW.request_id,NEW.created_at)
@@ -163,7 +171,7 @@ BEGIN
  END IF;
  RETURN NEW;
 END; $$;
-CREATE TRIGGER inventory_transfer_header_guard BEFORE UPDATE OR DELETE
+CREATE TRIGGER inventory_transfer_header_guard BEFORE INSERT OR UPDATE OR DELETE
  ON inventory_transfer FOR EACH ROW EXECUTE FUNCTION erp_transfer_header_guard();
 
 CREATE FUNCTION erp_transfer_receipt_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
