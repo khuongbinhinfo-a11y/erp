@@ -333,4 +333,83 @@ void main(){
       await tester.pumpAndSettle();
     });
 
+  testWidgets('R1-A quick customer setup creates coded directories and submits ID references',
+    (tester)async{
+      final creations=<String>[];
+      Map<String,dynamic>? customerBody;
+      const headers={'content-type':'application/json; charset=utf-8'};
+      final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+        httpClient:MockClient((req)async{
+          if(req.url.path=='/v1/catalog/branches')return http.Response(
+            jsonEncode({'items':[{'id':branch,'code':'MAIN','name':'Chi nhánh chính'}]}),
+            200,headers:headers);
+          if(req.method=='GET')return http.Response(
+            jsonEncode({'items':[]}),200,headers:headers);
+          if(req.url.path=='/v1/catalog/customer-groups'&&req.method=='POST'){
+            creations.add(req.url.path);
+            final body=jsonDecode(req.body) as Map<String,dynamic>;
+            expect(body['code'],'KH_SI');
+            expect(body['name'],'Khách bán sỉ');
+            return http.Response(jsonEncode({'id':'group-created'}),201,headers:headers);
+          }
+          if(req.url.path=='/v1/catalog/customer-regions'&&req.method=='POST'){
+            creations.add(req.url.path);
+            final body=jsonDecode(req.body) as Map<String,dynamic>;
+            expect(body['code'],'KV_MT');
+            return http.Response(jsonEncode({'id':'region-created'}),201,headers:headers);
+          }
+          if(req.url.path=='/v1/catalog/customers'&&req.method=='POST'){
+            customerBody=jsonDecode(req.body) as Map<String,dynamic>;
+            return http.Response(jsonEncode({'id':'customer-created'}),201,headers:headers);
+          }
+          return http.Response(jsonEncode({'error':{'code':'INVALID_ROUTE'}}),
+            404,headers:headers);
+        }));
+      addTearDown(client.dispose);
+      tester.view.devicePixelRatio=1;
+      tester.view.physicalSize=const Size(1024,800);
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
+        home:Scaffold(body:CompanyWorkspace(previewOnly:false,grants:grants,
+          session:activeSession(),client:client))));
+      await tester.tap(find.byKey(const ValueKey('company-CompanySection.customers')));
+      await tester.pumpAndSettle();
+      await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:150)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('catalog-create')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const ValueKey('catalog-create-code')),'KH-NEW');
+      await tester.enterText(find.byKey(const ValueKey('catalog-create-name')),'Khách mã mới');
+      await tester.ensureVisible(find.byKey(const ValueKey('catalog-quick-customer-group-code')));
+      await tester.enterText(find.byKey(const ValueKey('catalog-quick-customer-group-code')),'kh_si');
+      await tester.enterText(find.byKey(const ValueKey('catalog-quick-customer-group-name')),'Khách bán sỉ');
+      await tester.tap(find.byKey(const ValueKey('catalog-quick-customer-group-save')));
+      await tester.pumpAndSettle();
+      await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:120)));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('catalog-create-customer-group-group-created')),findsOneWidget);
+      await tester.ensureVisible(find.byKey(const ValueKey('catalog-quick-customer-region-code')));
+      await tester.enterText(find.byKey(const ValueKey('catalog-quick-customer-region-code')),'kv_mt');
+      await tester.enterText(find.byKey(const ValueKey('catalog-quick-customer-region-name')),'Mỹ Tho');
+      await tester.tap(find.byKey(const ValueKey('catalog-quick-customer-region-save')));
+      await tester.pumpAndSettle();
+      await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:120)));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('catalog-create-customer-region-region-created')),findsOneWidget);
+      await tester.ensureVisible(find.text('Lưu trên server'));
+      await tester.tap(find.text('Lưu trên server'));
+      await tester.pumpAndSettle();
+      await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:150)));
+      await tester.pumpAndSettle();
+      expect(creations,['/v1/catalog/customer-groups','/v1/catalog/customer-regions']);
+      expect(customerBody?['customerGroupId'],'group-created');
+      expect(customerBody?['customerRegionId'],'region-created');
+      expect(customerBody?.containsKey('customerGroup'),false,
+        reason:'never submit manually typed group label');
+      expect(tester.takeException(),isNull);
+      await tester.pump(const Duration(seconds:5));
+      await tester.pumpAndSettle();
+    });
+
 }
