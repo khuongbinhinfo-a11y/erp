@@ -19,7 +19,10 @@ test("R2 credentials are required and private links never expose the secret",()=
   assert.equal(uri.pathname,"/"+fake.bucket+"/"+key);
   assert.equal(uri.searchParams.get("X-Amz-Date"),"20261122T130000Z");
   assert.equal(uri.searchParams.get("X-Amz-Expires"),"300");
-  assert.equal(uri.searchParams.get("X-Amz-SignedHeaders"),"content-type;host");
+  assert.equal(uri.searchParams.get("X-Amz-SignedHeaders"),
+    "content-type;host;if-none-match");
+  assert.ok(signed.includes("if-none-match"),
+    "write-once condition must be bound by S3 signature");
   assert.match(uri.searchParams.get("X-Amz-Signature")??"",/^[a-f0-9]{64}$/);
   assert.ok(!signed.includes(fake.secretAccessKey),"Never leak R2 secret in signed URL");
   assert.equal(signed,presignR2(fake,"PUT",key,"image/png",at),
