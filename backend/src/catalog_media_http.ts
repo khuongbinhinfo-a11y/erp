@@ -12,7 +12,13 @@ const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]
 const MAX_BYTES=5*1024*1024;
 type MediaType="image/png"|"image/jpeg"|"image/webp";
 class MediaError extends Error{
-  constructor(readonly status:number,readonly code:string){super(code);}
+  readonly status:number;
+  readonly code:string;
+  constructor(status:number,code:string){
+    super(code);
+    this.status=status;
+    this.code=code;
+  }
 }
 function mime(value:unknown):MediaType{
   if(value!=="image/png"&&value!=="image/jpeg"&&value!=="image/webp")
