@@ -368,6 +368,18 @@ class ErpIdentityClient {
   }
   void clearPurchase(String id)=>_purchasePending.remove(id);
 
+  /// Transfer-scoped selectors work even without catalog.read permission.
+  Future<({List<Map<String,dynamic>> branches,List<Map<String,dynamic>> warehouses})>
+      transferScopes(String token,{String? branchId,String query=''})async{
+    final q=Uri(queryParameters:{
+      if(branchId!=null)'branchId':branchId,
+      if(query.isNotEmpty)'q':query,
+    }).query;
+    final raw=await _request('GET','/v1/inventory/transfers/scopes?$q',token:token);
+    List<Map<String,dynamic>> rows(String key)=>(raw[key] as List<dynamic>)
+      .map((x)=>Map<String,dynamic>.from(x as Map)).toList();
+    return (branches:rows('branches'),warehouses:rows('warehouses'));
+  }
   /// Transfer lifecycle is separate from sales order and actual accepted stock.
   Future<({List<Map<String,dynamic>> items,bool hasMore})> transferPage(
     String token,{required String branchId,required String warehouseId,int offset=0})async{
