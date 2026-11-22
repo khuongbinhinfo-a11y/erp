@@ -220,7 +220,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
               ]else...[
                 TextField(key:const ValueKey('catalog-create-code'),
                   controller:code,decoration:InputDecoration(
-                    labelText:resource=='products'?'SKU':'Mã',
+                    labelText:resource=='products'?'Mã hàng / SKU gốc':'Mã',
                     hintText:resource=='products'?'SKU-001':'MA-001')),
                 const SizedBox(height:12),
                 TextField(key:const ValueKey('catalog-create-name'),
@@ -358,7 +358,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                       controller:altBarcode,
                       decoration:const InputDecoration(labelText:'Mã vạch',hintText:'893...'))),
                     for(var idx=0;idx<extraUnits.length;idx++)...[
-                      const SizedBox(width:580,child:Divider()),
+                      SizedBox(width:(MediaQuery.sizeOf(ctx).width-80)
+                        .clamp(220.0,580.0).toDouble(),child:const Divider()),
                       SizedBox(width:210,child:TextField(
                         key:ValueKey('catalog-conversion-unit-${idx+1}'),
                         controller:extraUnits[idx].unit,
