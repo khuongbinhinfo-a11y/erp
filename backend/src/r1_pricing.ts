@@ -52,13 +52,36 @@ export async function resolveR1Price(db:PoolClient,input:Query){
     "SELECT currency FROM catalog_price_list WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active",
     [t,b,input.priceListId]);
   if(list.rows[0]?.currency!=="VND")throw new R1QuoteError(409,"PRICE_LIST_UNAVAILABLE");
-  let customerGroup:string|null=null;
+  // A customer selected from a canonical group can match both new CODE-based
+  // rules and immutable legacy LABEL-based rules. No historical rule is edited.
+  // Before 0017 is installed, legacy customer_group text still works.
+  const customerGroups=new Set<string>();
+  let canonicalGroup:string|null=null;
   if(customerId){
-    const r=await db.query<{customer_group:string|null}>(
-      "SELECT customer_group FROM catalog_customer WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active",
-      [t,b,customerId]);
+    const r=await db.query<{customer_group:string|null;customer_group_id:string|null}>(
+      "SELECT customer_group,customer_group_id FROM catalog_customer WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active",
+      [t,b,customerId]).catch(async(err:unknown)=>{
+        // Only tolerate the expected undefined_column of a pre-0017 schema,
+        // never hide auth, permission, provider or connectivity faults.
+        if(typeof err!=="object"||err===null||!("code" in err)||err.code!=="42703")
+          throw err;
+        const old=await db.query<{customer_group:string|null}>(
+          "SELECT customer_group FROM catalog_customer WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active",
+          [t,b,customerId]);
+        return {rows:old.rows.map(x=>({...x,customer_group_id:null}))};
+      });
     if(!r.rows[0])throw new R1QuoteError(409,"CUSTOMER_UNAVAILABLE");
-    customerGroup=r.rows[0].customer_group;
+    if(r.rows[0].customer_group)customerGroups.add(r.rows[0].customer_group);
+    if(r.rows[0].customer_group_id){
+      const mapped=await db.query<{code:string;name:string}>(`SELECT g.code,g.name
+        FROM catalog_customer_group g
+        WHERE g.installation_id=$1 AND g.branch_id=$2 AND g.id=$3`,
+        [t,b,r.rows[0].customer_group_id]);
+      if(!mapped.rows[0])throw new R1QuoteError(409,"CUSTOMER_GROUP_REFERENCE_INVALID");
+      canonicalGroup=mapped.rows[0].code;
+      customerGroups.add(mapped.rows[0].code);
+      customerGroups.add(mapped.rows[0].name);
+    }
   }
   if(channelId){
     const r=await db.query("SELECT id FROM catalog_sales_channel WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active",
@@ -114,10 +137,11 @@ export async function resolveR1Price(db:PoolClient,input:Query){
     if(stopped)break;
     const applies=(rule.customer_id===null||rule.customer_id===customerId)&&
       (rule.channel_id===null||rule.channel_id===channelId)&&
-      (rule.customer_group===null||rule.customer_group===customerGroup)&&
+      (rule.customer_group===null||customerGroups.has(rule.customer_group))&&
       (rule.scope_kind!=="CUSTOMER"||rule.customer_id===customerId)&&
       (rule.scope_kind!=="CHANNEL"||rule.channel_id===channelId)&&
-      (rule.scope_kind!=="CUSTOMER_GROUP"||rule.customer_group===customerGroup);
+      (rule.scope_kind!=="CUSTOMER_GROUP"||
+        rule.customer_group!==null&&customerGroups.has(rule.customer_group));
     if(!applies)continue;
     // Repeated identical immutable STACKABLE policies with different request
     // IDs or effective timestamps must never compound the same discount twice.
@@ -125,7 +149,10 @@ export async function resolveR1Price(db:PoolClient,input:Query){
     // parameters, scope, priority or quantity threshold.
     const canonical=JSON.stringify([rule.scope_kind,rule.adjustment,rule.amount,
       rule.priority,rule.stacking,rule.stop_processing,rule.channel_id,
-      rule.customer_id,rule.customer_group,rule.min_quantity]);
+      rule.customer_id,
+      rule.customer_group!==null&&canonicalGroup!==null&&customerGroups.has(rule.customer_group)
+        ?canonicalGroup:rule.customer_group,
+      rule.min_quantity]);
     if(equivalentPolicies.has(canonical))continue;
     equivalentPolicies.add(canonical);
     if(rule.stacking==="EXCLUSIVE"){
