@@ -121,8 +121,17 @@ test("Issue #7: catalog HTTP uses real PostgreSQL with tenant/branch RBAC, decim
         "each UOM returned exactly once across cursor boundary");
       assert.ok(allUnitCodes.includes("U120"),
         "last unit remains selectable even beyond initial page");
+      // Existing UOMs imported from older installations may contain spaces
+      // and Unicode; such codes must remain valid keyset cursor values.
+      await pool.query(`INSERT INTO catalog_unit_definition
+        (installation_id,branch_id,code,name)
+        VALUES($1,$2,'Hộp 12','Hộp 12')`,[root.installationId,b]);
+      const legacyCursor=await call("/v1/catalog/unit-definitions?branchId="+b+
+        "&after="+encodeURIComponent("Hộp 12"),"GET",undefined,token);
+      assert.equal(legacyCursor.status,200,
+        "legacy Unicode/space UOM codes are valid pagination boundaries");
       assert.equal((await call("/v1/catalog/unit-definitions?branchId="+b+
-        "&after=INVALID%20CURSOR","GET",undefined,token)).status,400);
+        "&after="+encodeURIComponent("bad\ncode"),"GET",undefined,token)).status,400);
       const customerKey="customer-"+randomUUID();
       const customerBody={branchId:b,code:"CUSTOMER-01",name:"Synthetic Customer"};
       const customer=await call("/v1/catalog/customers","POST",customerBody,token,
