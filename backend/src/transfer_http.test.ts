@@ -26,8 +26,8 @@ test("R3.3 transfer PostgreSQL: physical dispatch, in-transit, partial and raced
   const uri=new URL(source!);uri.pathname="/"+name;
   db=new Pool({connectionString:uri.toString(),max:8,query_timeout:12000});
   db.on("error",()=>{});
-  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).applied.length,13);
-  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).skipped.length,13);
+  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).applied.length,14);
+  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).skipped.length,14);
   const password="Synthetic-transfer-"+randomUUID();
   const root=await bootstrapInstallation(db,{code:"transfer-r3",displayName:"Transfer synthetic",
     adminLogin:"owner",adminPassword:password});
@@ -252,6 +252,14 @@ test("R3.3 transfer PostgreSQL: physical dispatch, in-transit, partial and raced
   assert.equal(creatorScopes.status,200,JSON.stringify(creatorScopes.body));
   assert.deepEqual(creatorScopes.body.branches.map((x:Record<string,string>)=>x.id),[b]);
   assert.deepEqual(creatorScopes.body.warehouses.map((x:Record<string,string>)=>x.id),[w]);
+  // SKU lookup uses only source transfer-create grant (no catalog.read).
+  const transferProducts=await call(endpoint+"/products?branchId="+b+
+    "&warehouseId="+w,"GET",undefined,creatorLogin.body.token);
+  assert.equal(transferProducts.status,200,JSON.stringify(transferProducts.body));
+  assert.deepEqual(transferProducts.body.items.map(
+    (x:Record<string,string>)=>x.id),[p]);
+  assert.equal((await call(endpoint+"/products?branchId="+b+
+    "&warehouseId="+dest,"GET",undefined,creatorLogin.body.token)).status,403);
   const unknownWh=randomUUID();
   assert.equal((await call(endpoint+"?branchId="+b+"&warehouseId="+unknownWh,
     "GET",undefined,token)).status,403);
