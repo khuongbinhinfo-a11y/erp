@@ -117,7 +117,13 @@ BEGIN
        AND (NEW.dispatched_by IS DISTINCT FROM OLD.dispatched_by
         OR NEW.dispatched_at IS DISTINCT FROM OLD.dispatched_at))
  THEN RAISE EXCEPTION 'Transfer lifecycle mutation invalid'; END IF;
- -- PostgreSQL must never accept an IN_TRANSIT header without all source issues.
+ -- PostgreSQL must never accept an IN_TRANSIT header without a positive line set.
+ IF OLD.status='APPROVED' AND NEW.status='IN_TRANSIT' AND NOT EXISTS(
+   SELECT 1 FROM inventory_transfer_line l
+    WHERE l.installation_id=OLD.installation_id AND l.branch_id=OLD.branch_id
+      AND l.transfer_id=OLD.id
+ ) THEN RAISE EXCEPTION 'Transfer dispatch requires at least one line'; END IF;
+ -- And every line must have an exact posted source issue.
  IF OLD.status='APPROVED' AND NEW.status='IN_TRANSIT' AND EXISTS(
    SELECT 1 FROM inventory_transfer_line l WHERE
      l.installation_id=OLD.installation_id AND l.branch_id=OLD.branch_id
