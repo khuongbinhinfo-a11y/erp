@@ -100,7 +100,7 @@ CREATE TRIGGER inventory_stocktake_count_guard BEFORE INSERT OR UPDATE OR DELETE
  ON inventory_stocktake_count FOR EACH ROW EXECUTE FUNCTION erp_stocktake_count_guard();
 
 -- No mutation of snapshot identity and only server-defined lifecycle transitions.
-CREATE FUNCTION erp_stocktake_header_guard() RETURNS trigger LANGUAGE plpgsql AS $
+CREATE FUNCTION erp_stocktake_header_guard() RETURNS trigger LANGUAGE plpgsql AS $stocktake_guard$
 BEGIN
  IF TG_OP='INSERT' THEN
    IF NEW.status IS DISTINCT FROM 'CREATED' OR NEW.revision<>0
@@ -134,7 +134,7 @@ BEGIN
        OR NEW.posted_at IS DISTINCT FROM OLD.posted_at))
  THEN RAISE EXCEPTION 'Stocktake lifecycle mutation invalid'; END IF;
  RETURN NEW;
-END; $$;
+END; $stocktake_guard$;
 CREATE TRIGGER inventory_stocktake_header_guard BEFORE INSERT OR UPDATE OR DELETE
  ON inventory_stocktake FOR EACH ROW EXECUTE FUNCTION erp_stocktake_header_guard();
 
