@@ -202,9 +202,7 @@ async function main(mode){
   console.log("ERP_R3_BASE_0010_CHECKSUM_AND_LEDGER_PREFLIGHT_PASS "+sha.slice(0,12));
   if(mode==="--check"){console.log("ERP_R3_CHECK_ONLY_NO_DATABASE_WRITES");return;}
   required(e,["AWS_ACCESS_KEY_ID","AWS_SECRET_ACCESS_KEY","ERP_BACKUP_S3_ENDPOINT",
-    "ERP_AGE_RECIPIENT","ERP_BACKUP_RECOVERY_KEY_CUSTODY"]);
-  if(e.ERP_BACKUP_RECOVERY_KEY_CUSTODY!=="VERIFIED")
-    fail("RECOVERY_KEY_CUSTODY_NOT_VERIFIED");
+    "ERP_AGE_RECIPIENT","ERP_AGE_RECOVERY_IDENTITY"]);
   const endpoint=new URL(e.ERP_BACKUP_S3_ENDPOINT);
   if(endpoint.protocol!=="https:"||endpoint.pathname!=="/"||endpoint.search)fail("S3_TLS_ENDPOINT_REQUIRED");
   // All external prerequisites must exist before creating the first production artifact.
@@ -217,8 +215,12 @@ async function main(mode){
   const dump=join(tmp,"baseline.dump"),encrypted=join(tmp,"baseline.dump.age");
   const portableList=join(tmp,"portable-restore.list");
   const durableCopy=join(tmp,"durable-readback.age");
-  const key=join(tmp,"rehearsal.agekey"),rehCipher=join(tmp,"rehearsal.dump.age");
-  const rehabCopy=join(tmp,"rehearsal-readback.age"),recovered=join(tmp,"verified.dump");
+  const key=join(tmp,"production-recovery.agekey");
+  const recovered=join(tmp,"verified-durable.dump");
+  writeFileSync(key,e.ERP_AGE_RECOVERY_IDENTITY.trim()+"\n",{mode:0o600});
+  const actualRecipient=command("age-keygen",["-y",key]).trim();
+  if(actualRecipient!==e.ERP_AGE_RECIPIENT)
+    fail("DURABLE_BACKUP_PRIVATE_KEY_RECIPIENT_MISMATCH");
   const base="s3://"+BUCKET+"/erp-db/R3/"+sha+"/"+
     Date.now().toString()+"-"+randomUUID()+"/";
   const aws=(action,source,dest)=>command("aws",[
@@ -233,23 +235,21 @@ async function main(mode){
   aws("download",base+"pre-0011-0014.dump.age",durableCopy);
   if(fileHash(encrypted)!==fileHash(durableCopy))fail("DURABLE_BACKUP_READBACK_HASH_MISMATCH");
   const durableHash=fileHash(encrypted);
-  command("age-keygen",["-o",key]);
-  const recipient=command("age-keygen",["-y",key]);
-  command("age",["-r",recipient,"-o",rehCipher,dump]);
-  aws("upload",rehCipher,base+"rehearsal.dump.age");
-  aws("download",base+"rehearsal.dump.age",rehabCopy);
-  if(fileHash(rehCipher)!==fileHash(rehabCopy))fail("REHEARSAL_CIPHERTEXT_HASH_MISMATCH");
-  command("age",["-d","-i",key,"-o",recovered,rehabCopy]);
-  if(fileHash(dump)!==fileHash(recovered))fail("REHEARSAL_DECRYPTED_DUMP_HASH_MISMATCH");
+  // Decrypt the ACTUAL durable object using its actual recovery identity.
+  // A separate ephemeral test key proves nothing about durable recoverability.
+  command("age",["-d","-i",key,"-o",recovered,durableCopy]);
+  if(fileHash(dump)!==fileHash(recovered))
+    fail("DURABLE_BACKUP_DECRYPT_RESTORE_HASH_MISMATCH");
   console.log("ERP_R3_DURABLE_BACKUP_AND_READBACK_PASS key="+base+"pre-0011-0014.dump.age sha256="+durableHash);
   // Separate PG17 Docker service: no restore, truncate or schema mutation on ERP-DB.
   const name="erp-r3-pg-"+randomBytes(6).toString("hex");
   const password=randomBytes(24).toString("hex");
   let started=false;
   try{
+   // Supply synthetic DB password as environment, never in process arguments.
    command("docker",["run","-d","--name",name,"-e","POSTGRES_USER=erp_rehearsal",
-    "-e","POSTGRES_PASSWORD="+password,"-e","POSTGRES_DB=erp_r3_restore",
-    "-p","127.0.0.1::5432","postgres:17"]);
+    "-e","POSTGRES_PASSWORD","-e","POSTGRES_DB=erp_r3_restore",
+    "-p","127.0.0.1::5432","postgres:17"],{POSTGRES_PASSWORD:password});
    started=true;
    const port=command("docker",["port",name,"5432/tcp"]).match(/127\.0\.0\.1:(\d+)/)?.[1];
    if(!port)fail("REHEARSAL_DOCKER_PORT_MISSING");
@@ -266,7 +266,7 @@ async function main(mode){
    // The portable snapshot deliberately excludes those extension objects,
    // while retaining every application table, index, trigger and row.
    const listing=command("pg_restore",["-l",recovered]).split("\n");
-   const portable=listing.filter(x=>!/\\bEXTENSION - |\\bCOMMENT - EXTENSION /.test(x));
+   const portable=listing.filter(x=>!/\bEXTENSION - |\bCOMMENT - EXTENSION /.test(x));
    writeFileSync(portableList,portable.join("\n"),{mode:0o600});
    command("pg_restore",["--no-owner","--no-acl","--exit-on-error",
       "--single-transaction","--use-list="+portableList,
