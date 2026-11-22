@@ -358,19 +358,31 @@ export function assertNewTableBackfill(row){
 }
 async function verifyNewTablesOnFirstApply(pool){
  const q=await pool.query(`WITH legacy AS (
-   SELECT DISTINCT installation_id,branch_id,trim(customer_group) AS label
+   SELECT installation_id,branch_id,trim(customer_group) AS label
    FROM catalog_customer
+   WHERE customer_group IS NOT NULL AND length(trim(customer_group))>0
+   UNION
+   SELECT installation_id,branch_id,trim(customer_group) AS label
+   FROM catalog_sku_price_rule
    WHERE customer_group IS NOT NULL AND length(trim(customer_group))>0
  ) SELECT
  (SELECT count(*)::text FROM legacy) AS expected,
  (SELECT count(*)::text FROM catalog_customer_group) AS actual,
- (SELECT count(*)::text FROM catalog_customer c
-  LEFT JOIN catalog_customer_group g ON
-   g.installation_id=c.installation_id AND g.branch_id=c.branch_id
-   AND g.id=c.customer_group_id
-  WHERE c.customer_group IS NOT NULL AND length(trim(c.customer_group))>0
-   AND (g.id IS NULL OR g.name IS DISTINCT FROM trim(c.customer_group)
-       OR g.legacy_label IS DISTINCT FROM trim(c.customer_group))) AS missing,
+ (
+   (SELECT count(*) FROM catalog_customer c
+     LEFT JOIN catalog_customer_group g ON
+       g.installation_id=c.installation_id AND g.branch_id=c.branch_id
+       AND g.id=c.customer_group_id
+     WHERE c.customer_group IS NOT NULL AND length(trim(c.customer_group))>0
+       AND (g.id IS NULL OR g.name IS DISTINCT FROM trim(c.customer_group)
+         OR g.legacy_label IS DISTINCT FROM trim(c.customer_group)))
+   +
+   (SELECT count(*) FROM catalog_sku_price_rule r
+     LEFT JOIN catalog_customer_group g ON
+       g.installation_id=r.installation_id AND g.branch_id=r.branch_id
+       AND g.legacy_label=trim(r.customer_group)
+     WHERE r.customer_group IS NOT NULL AND g.id IS NULL)
+ )::text AS missing,
  (SELECT count(*)::text FROM catalog_customer_region) AS regions,
  (SELECT count(*)::text FROM catalog_customer WHERE customer_region_id IS NOT NULL)
    AS assigned_regions,
