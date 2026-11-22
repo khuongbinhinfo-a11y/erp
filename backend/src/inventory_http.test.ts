@@ -32,8 +32,8 @@ test("R3 real PostgreSQL: on-hand, hold, release, no oversell, exact replay, RBA
   pool=new Pool({connectionString:u.toString(),max:8,query_timeout:12000});
   pool.on("error",()=>{});
   const installed=await applyMigrations(pool,resolve(process.cwd(),"db/migrations"));
-  assert.equal(installed.applied.length,15);
-  assert.equal((await applyMigrations(pool,resolve(process.cwd(),"db/migrations"))).skipped.length,15);
+  assert.equal(installed.applied.length,16);
+  assert.equal((await applyMigrations(pool,resolve(process.cwd(),"db/migrations"))).skipped.length,16);
   const password="R3-PG-Synthetic-"+randomUUID();
   const root=await bootstrapInstallation(pool,{code:"r3-test",displayName:"R3 stock integration",
    adminLogin:"owner",adminPassword:password});
