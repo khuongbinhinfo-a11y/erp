@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'package:material_ui/material_ui.dart';
 
 import 'erp_tokens.dart';
@@ -41,7 +40,6 @@ class _ErpShellState extends State<ErpShell> {
   bool collapsed = false;
   bool showIntroToast = true;
   bool companyNavigationLocked = false;
-  Timer? _toastTimer;
 
   @override
   void initState() {
@@ -50,9 +48,6 @@ class _ErpShellState extends State<ErpShell> {
     visibleModules=List<int>.generate(erpFeatures.length,(i)=>i)
       .where((i)=>widget.previewOnly||hasModuleAccess(i)).toList();
     if(visibleModules.isNotEmpty) selected=visibleModules.first;
-    _toastTimer = Timer(ErpTokens.toastDuration, () {
-      if (mounted) setState(() => showIntroToast = false);
-    });
   }
 
   @override
@@ -69,12 +64,6 @@ class _ErpShellState extends State<ErpShell> {
     }
   }
 
-  @override
-  void dispose() {
-    _toastTimer?.cancel();
-    super.dispose();
-  }
-
   void protectedLogout(){
     if(companyNavigationLocked){
       ErpToast.show(context,
@@ -85,7 +74,6 @@ class _ErpShellState extends State<ErpShell> {
     widget.onLogout?.call();
   }
   void dismissToast() {
-    _toastTimer?.cancel();
     if (showIntroToast) setState(() => showIntroToast = false);
   }
 
@@ -127,16 +115,30 @@ class _ErpShellState extends State<ErpShell> {
       ),
       body:withToast(Row(children:[
         if(desktop)AnimatedContainer(
+          key:const ValueKey('erp-floating-sidebar-frame'),
           duration:MediaQuery.of(context).disableAnimations
             ?Duration.zero:ErpTokens.drawerMotion,
           curve:Curves.easeOutCubic,
-          width:collapsed?78:246,
-          child:_Navigation(selected:selected,onSelect:select,
-            visibleModules:visibleModules,
-            onLogout:widget.onLogout==null?null:protectedLogout,
-            loginName:widget.session?.loginName,
-            collapsed:collapsed,
-            onToggle:()=>setState(()=>collapsed=!collapsed)),
+          width:collapsed?96:268,
+          // Canvas margins on three sides make the menu a floating surface.
+          padding:const EdgeInsets.fromLTRB(12,12,0,12),
+          child:Material(
+            elevation:13,
+            shadowColor:const Color(0x55102E24),
+            color:ErpTokens.sidebar,
+            borderRadius:const BorderRadius.only(
+              topLeft:Radius.circular(19),
+              bottomLeft:Radius.circular(19),
+              topRight:Radius.circular(14),
+              bottomRight:Radius.circular(14)),
+            clipBehavior:Clip.antiAlias,
+            child:_Navigation(selected:selected,onSelect:select,
+              visibleModules:visibleModules,
+              onLogout:widget.onLogout==null?null:protectedLogout,
+              loginName:widget.session?.loginName,
+              collapsed:collapsed,
+              onToggle:()=>setState(()=>collapsed=!collapsed)),
+          ),
         ),
         Expanded(key:const ValueKey('erp-content-slot'),
           child:_selectedContent()),
@@ -205,49 +207,12 @@ class _IntroToast extends StatelessWidget {
   const _IntroToast({required this.onDismiss});
 
   @override
-  Widget build(BuildContext context) => Semantics(
-    liveRegion: true,
-    child: Material(
-      key: const ValueKey('erp-startup-toast'),
-      elevation: 9,
-      color: ErpTokens.surface,
-      shadowColor: Colors.black26,
-      borderRadius: BorderRadius.circular(6),
-      child: Container(
-        decoration: BoxDecoration(
-          border: const Border(left: BorderSide(color: ErpTokens.fresh, width: 4)),
-          borderRadius: BorderRadius.circular(6),
-        ),
-        padding: const EdgeInsets.fromLTRB(14, 10, 6, 10),
-        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Padding(
-            padding: EdgeInsets.only(top: 3),
-            child: Icon(Icons.info_outline, size: 20, color: ErpTokens.primary)),
-          const SizedBox(width: 10),
-          Expanded(child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('Đang xem giao diện',
-                style: TextStyle(color: ErpTokens.ink, fontSize: 13,
-                  fontWeight: FontWeight.w800)),
-              if (MediaQuery.sizeOf(context).width >= 500) ...[
-                const SizedBox(height: 3),
-                const Text('Hãy đăng nhập để sử dụng chức năng.',
-                  style: TextStyle(color: ErpTokens.muted, fontSize: 12, height: 1.35)),
-              ],
-            ],
-          )),
-          IconButton(
-            key: const ValueKey('erp-toast-close'),
-            tooltip: 'Đóng thông báo',
-            onPressed: onDismiss,
-            icon: const Icon(Icons.close, size: 18),
-            color: ErpTokens.muted,
-            visualDensity: VisualDensity.compact,
-          ),
-        ]),
-      ),
-    ),
+  Widget build(BuildContext context) => ErpToastNotice(
+    key:const ValueKey('erp-startup-toast'),
+    title:'Đang xem giao diện',
+    message:'Hãy đăng nhập để sử dụng chức năng.',
+    onDismiss:onDismiss,
+    closeKey:const ValueKey('erp-toast-close'),
   );
 }
 
@@ -362,30 +327,47 @@ class _Navigation extends StatelessWidget {
               child: Semantics(
                 selected: active,
                 button: true,
-                child: Material(
-                  color: active ? const Color(0xFF265B42) : Colors.transparent,
-                  borderRadius: BorderRadius.circular(6),
-                  child: InkWell(
-                    key: ValueKey('nav-$index'),
-                    borderRadius: BorderRadius.circular(6),
-                    onTap: () => onSelect(index),
-                    child: Row(children: [
-                      Container(
-                        height: 44, width: 3,
-                        color: active ? ErpTokens.lime : Colors.transparent),
-                      SizedBox(width: compact ? 13 : 12),
-                      Icon(feature.icon, color: active
-                        ? ErpTokens.lime : ErpTokens.sidebarText, size: 20),
-                      if (!compact) ...[
-                        const SizedBox(width: 12),
-                        Expanded(child: Text(feature.title,
-                          style: TextStyle(color: Colors.white, fontSize: 14,
-                            fontWeight: active ? FontWeight.w800 : FontWeight.w500))),
-                        if (active)
-                          const Icon(Icons.chevron_right, color: ErpTokens.lime, size: 18),
-                        const SizedBox(width: 8),
-                      ],
-                    ]),
+                child: AnimatedContainer(
+                  key:ValueKey('erp-nav-surface-$index'),
+                  duration:MediaQuery.of(context).disableAnimations
+                    ?Duration.zero:ErpTokens.menuMotion,
+                  curve:Curves.easeOutCubic,
+                  decoration:BoxDecoration(
+                    color:active?const Color(0xFF285C42):Colors.transparent,
+                    borderRadius:BorderRadius.circular(13),
+                    border:Border.all(color:active
+                      ?const Color(0x667CCB9D):Colors.transparent)),
+                  child:Material(
+                    color:Colors.transparent,
+                    child:InkWell(
+                      key: ValueKey('nav-$index'),
+                      borderRadius: BorderRadius.circular(13),
+                      onTap: () => onSelect(index),
+                      child: Row(children: [
+                        SizedBox(height:46,width:compact?3:7),
+                        AnimatedContainer(
+                          duration:MediaQuery.of(context).disableAnimations
+                            ?Duration.zero:ErpTokens.menuMotion,
+                          curve:Curves.easeOutBack,
+                          width:compact?37:35,height:35,
+                          alignment:Alignment.center,
+                          decoration:BoxDecoration(
+                            color:active?ErpTokens.fresh:Colors.transparent,
+                            shape:BoxShape.circle),
+                          child:Icon(feature.icon,color:active
+                            ?Colors.white:ErpTokens.sidebarText,size:20)),
+                        if (!compact) ...[
+                          const SizedBox(width: 10),
+                          Expanded(child: Text(feature.title,
+                            maxLines:1,overflow:TextOverflow.ellipsis,
+                            style: TextStyle(color: Colors.white, fontSize: 14,
+                              fontWeight: active ? FontWeight.w800 : FontWeight.w500))),
+                          if (active)const Icon(Icons.chevron_right,
+                            color: ErpTokens.lime, size: 18),
+                          const SizedBox(width: 8),
+                        ],
+                      ]),
+                    ),
                   ),
                 ),
               ),

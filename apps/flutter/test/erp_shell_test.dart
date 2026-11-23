@@ -51,6 +51,7 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
   expect(find.text('Chưa có dữ liệu'), findsOneWidget);
   // The non-modal startup toast closes before interacting with pinned tabs.
   await tester.pump(const Duration(seconds: 5));
+  await tester.pump(const Duration(milliseconds: 250));
   expect(find.byKey(const ValueKey('erp-startup-toast')), findsNothing);
   await tester.tap(find.byKey(const ValueKey('admin-1')));
   await tester.pumpAndSettle();
@@ -63,8 +64,12 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
     await tester.pumpWidget(const ErpApp(previewMode:true));
     expect(find.byKey(const ValueKey('erp-startup-toast')), findsOneWidget);
     expect(find.text('Đang xem giao diện'), findsOneWidget);
+    // The notice starts off-canvas; wait for the entrance before tapping.
+    await tester.pump(const Duration(milliseconds:16));
+    await tester.pump(const Duration(milliseconds:320));
     await tester.tap(find.byKey(const ValueKey('erp-toast-close')));
     await tester.pump();
+    await tester.pump(const Duration(milliseconds:260));
     expect(find.byKey(const ValueKey('erp-startup-toast')), findsNothing);
     expect(find.text('Tổng quan điều hành'), findsOneWidget);
   });
@@ -75,6 +80,7 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
     await tester.pumpWidget(const ErpApp(previewMode:true));
     expect(find.byKey(const ValueKey('erp-startup-toast')), findsOneWidget);
     await tester.pump(const Duration(seconds: 5));
+    await tester.pump(const Duration(milliseconds: 250));
     expect(find.byKey(const ValueKey('erp-startup-toast')), findsNothing);
     await tester.tap(find.byIcon(Icons.menu));
     await tester.pumpAndSettle();
@@ -106,6 +112,30 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
     await tester.tap(find.byKey(const ValueKey('nav-2')));
     await tester.pumpAndSettle();
     expect(find.text('Người dùng và phân quyền'), findsOneWidget);
+  });
+
+  testWidgets('desktop sidebar floats on three canvas edges and animates collapse',
+    (tester)async{
+    tester.view.devicePixelRatio=1;
+    tester.view.physicalSize=const Size(1280,800);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(const ErpApp(previewMode:true));
+    final frame=find.byKey(const ValueKey('erp-floating-sidebar-frame'));
+    expect(frame,findsOneWidget);
+    final menu=find.descendant(of:frame,matching:find.byType(Material)).first;
+    final bounds=tester.getRect(menu);
+    expect(bounds.left,greaterThanOrEqualTo(12));
+    expect(bounds.top,greaterThanOrEqualTo(12));
+    expect(bounds.bottom,lessThanOrEqualTo(788));
+    expect(tester.widget<Material>(menu).elevation,greaterThan(0));
+    final expandedWidth=tester.getSize(frame).width;
+    await tester.tap(find.byKey(const ValueKey('erp-sidebar-toggle')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds:340));
+    expect(tester.getSize(frame).width,lessThan(expandedWidth));
+    expect(find.byKey(const ValueKey('erp-nav-surface-0')),findsOneWidget);
+    expect(find.byKey(const ValueKey('nav-2')),findsOneWidget);
   });
 
   testWidgets('unauthed production shows login and preview is explicit', (tester) async{
@@ -151,6 +181,10 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
     await tester.pumpWidget(MaterialApp(home:ErpShell(
       session:session,previewOnly:false,onLogout:(){})));
     expect(find.text('admin'),findsOneWidget);
+    final user=find.byKey(const ValueKey('erp-current-user'));
+    final logout=find.byKey(const ValueKey('erp-session-exit'));
+    expect((tester.getCenter(user).dy-tester.getCenter(logout).dy).abs(),
+      lessThan(10),reason:'Tên người dùng và đăng xuất phải ở cùng một hàng');
     final logo=find.byKey(const ValueKey('erp-sidebar-logo'));
     final toggle=find.byKey(const ValueKey('erp-sidebar-toggle'));
     expect(tester.getRect(toggle).center.dy,lessThan(tester.getRect(logo).bottom));

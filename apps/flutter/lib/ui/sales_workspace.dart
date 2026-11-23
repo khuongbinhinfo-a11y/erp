@@ -1520,7 +1520,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
             DataColumn(label:Text('Khách hàng')),
             DataColumn(label:Text('Thành tiền')),
             DataColumn(label:Text('Trạng thái')),
-            DataColumn(label:Text('')),
+            DataColumn(label:Text('Thao tác')),
           ],
           rows:orders.map((o)=>DataRow(cells:[
             DataCell(Text(o['documentNo'] as String? ?? 'Chưa cấp số')),

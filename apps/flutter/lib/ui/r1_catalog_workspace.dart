@@ -763,19 +763,22 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
                     style:TextStyle(color:ErpTokens.muted,fontSize:11)),
                 ])
               :Text(cell(x,c.$1)))).toList()+
-            [if(canEditLifecycle)DataCell(
-              IconButton(key:ValueKey('r1-edit-'+x['id'].toString()),
-                onPressed:busy?null:()=>editRow(x),
-                icon:const Icon(Icons.edit_outlined,size:18),
-                tooltip:'Sửa trạng thái/thông tin')),
-             if(widget.kind=='rules')DataCell(
-              x['scopeKind']!='BASE'&&x['retiredAt']==null&&canWrite
-                ? TextButton(onPressed:busy?null:()=>retirePolicy(x),
-                    child:Text(widget.client.pendingR1(widget.session.actorId,
-                      widget.branchId!, 'rules.retire.'+x['id'].toString())==null
-                        ?'Kết thúc':'Kiểm tra yêu cầu'))
-                :const Text('—'),
-            )])).toList()));
+            [if(widget.kind=='rules'||canEditLifecycle)DataCell(
+              Row(mainAxisSize:MainAxisSize.min,children:[
+                if(canEditLifecycle)IconButton(
+                  key:ValueKey('r1-edit-'+x['id'].toString()),
+                  onPressed:busy?null:()=>editRow(x),
+                  icon:const Icon(Icons.edit_outlined,size:18),
+                  tooltip:'Sửa trạng thái/thông tin'),
+                if(widget.kind=='rules')
+                  x['scopeKind']!='BASE'&&x['retiredAt']==null&&canWrite
+                    ? TextButton(onPressed:busy?null:()=>retirePolicy(x),
+                        child:Text(widget.client.pendingR1(widget.session.actorId,
+                          widget.branchId!, 'rules.retire.'+x['id'].toString())==null
+                            ?'Kết thúc':'Kiểm tra yêu cầu'))
+                    :const Text('—'),
+              ])),
+            ])).toList()));
     });
   }
   @override Widget build(BuildContext context){

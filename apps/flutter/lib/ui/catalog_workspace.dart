@@ -1605,7 +1605,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                 headingRowColor:const WidgetStatePropertyAll(ErpTokens.mint),
                 columns:columns.map((entry)=>DataColumn(
                   label:Text(entry.$2))).toList()+
-                  [if(resource=='prices')const DataColumn(label:Text('Điều chỉnh'))],
+                  [if(canEdit||resource=='prices')
+                    const DataColumn(label:Text('Thao tác'))],
                 rows:items.map((entry)=>DataRow(cells:[
                   for(final c in columns)DataCell(
                     resource=='prices'&&inlinePriceId==entry['id']&&
@@ -1624,9 +1625,28 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                           keyboardType:const TextInputType.numberWithOptions(decimal:true),
                           decoration:const InputDecoration(
                             labelText:'CK %',isDense:true)))
-                    : c.$1=='code'&&canEdit
-                      ? Row(mainAxisSize:MainAxisSize.min,children:[
-                          Text(_cell(entry,c.$1)),
+                    : Text(_cell(entry,c.$1))),
+                  if(canEdit||resource=='prices')DataCell(
+                    resource=='prices'
+                      ? (!canWrite?const Text('—'):
+                        inlinePriceId==entry['id']
+                          ? Row(mainAxisSize:MainAxisSize.min,children:[
+                            IconButton(key:const ValueKey('r1c-inline-price-save'),
+                              tooltip:'Lưu giá mới',icon:const Icon(Icons.check),
+                              onPressed:saving?null:()=>_saveInlinePrice(entry)),
+                            IconButton(tooltip:'Hủy sửa giá',
+                              icon:const Icon(Icons.close),
+                              onPressed:saving?null:()=>setState(()=>inlinePriceId=null)),
+                          ])
+                          : TextButton.icon(
+                            key:ValueKey('r1c-inline-price-edit-'+entry['id'].toString()),
+                            onPressed:saving?null:()=>_beginInlinePrice(entry),
+                            icon:const Icon(Icons.edit_outlined,size:16),
+                            label:Text(widget.client.pendingR1(widget.session.actorId,
+                              branchId!,'catalog.create.prices.'+
+                              entry['priceListId'].toString()+'.'+entry['productId'].toString())!=null
+                              ?'Kiểm tra yêu cầu':'Giá mới')))
+                      : Row(mainAxisSize:MainAxisSize.min,children:[
                           IconButton(
                             key:ValueKey('catalog-edit-'+entry['id'].toString()),
                             icon:const Icon(Icons.edit_outlined,size:18),
@@ -1641,7 +1661,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                                 ?null:entry['id'] as String;
                             })),
                           if(resource=='price-lists')IconButton(
-                            key:ValueKey('catalog-price-list-clone-' + entry['id'].toString()),
+                            key:ValueKey('catalog-price-list-clone-'+entry['id'].toString()),
                             icon:const Icon(Icons.content_copy_outlined,size:18),
                             tooltip:'Sao chép bảng giá cùng chính sách',
                             onPressed:saving?null:()=>_cloneList(entry)),
@@ -1650,26 +1670,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                             icon:const Icon(Icons.photo_library_outlined,size:18),
                             tooltip:'Thêm và xem ảnh sản phẩm',
                             onPressed:saving?null:()=>_productImages(entry)),
-                        ])
-                      : Text(_cell(entry,c.$1))),
-                  if(resource=='prices')DataCell(
-                    !canWrite?const Text('—'):
-                    inlinePriceId==entry['id']
-                      ? Row(mainAxisSize:MainAxisSize.min,children:[
-                        IconButton(key:const ValueKey('r1c-inline-price-save'),
-                          tooltip:'Lưu giá mới',icon:const Icon(Icons.check),
-                          onPressed:saving?null:()=>_saveInlinePrice(entry)),
-                        IconButton(tooltip:'Hủy sửa giá',icon:const Icon(Icons.close),
-                          onPressed:saving?null:()=>setState(()=>inlinePriceId=null)),
-                      ])
-                      : TextButton.icon(
-                        key:ValueKey('r1c-inline-price-edit-'+entry['id'].toString()),
-                        onPressed:saving?null:()=>_beginInlinePrice(entry),
-                        icon:const Icon(Icons.edit_outlined,size:16),
-                        label:Text(widget.client.pendingR1(widget.session.actorId,
-                          branchId!,'catalog.create.prices.'+
-                          entry['priceListId'].toString()+'.'+entry['productId'].toString())!=null
-                          ?'Kiểm tra yêu cầu':'Giá mới'))),
+                        ])),
                 ])).toList())),
             if(resource=='price-lists'&&assignmentListId!=null&&
               branchId!=null&&items.any((e)=>e['id']==assignmentListId))

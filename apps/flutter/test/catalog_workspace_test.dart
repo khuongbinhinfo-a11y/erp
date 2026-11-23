@@ -254,6 +254,14 @@ void main(){
     await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:120)));
     await tester.pumpAndSettle();
     expect(find.text('Khách ban đầu'),findsOneWidget);
+    final catalogTable=tester.widget<DataTable>(
+      find.byKey(const ValueKey('catalog-live-table')));
+    expect((catalogTable.columns.last.label as Text).data,'Thao tác');
+    expect(catalogTable.rows.single.cells.length,catalogTable.columns.length);
+    expect(catalogTable.rows.single.cells.first.child,isA<Text>(),
+      reason:'Ô Mã chỉ chứa mã, không có nút thao tác');
+    await tester.ensureVisible(find.byKey(const ValueKey('catalog-edit-row-1')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('catalog-edit-row-1')));
     await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const ValueKey('catalog-edit-name')),'Khách đã sửa');
@@ -317,7 +325,9 @@ void main(){
       await tester.pumpAndSettle();
       expect(tester.takeException(),isNull,
         reason:'mobile catalog must not overflow before opening edit dialog');
-      await tester.tap(find.byKey(const ValueKey('catalog-edit-customer-r1a')));
+      await tester.ensureVisible(find.byKey(const ValueKey('catalog-edit-customer-r1a')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('catalog-edit-customer-r1a')));
       await tester.pumpAndSettle();
       expect(tester.takeException(),isNull,reason:'opened edit dialog overflow');
       expect(find.byKey(const ValueKey('catalog-edit-scroll')),findsOneWidget);
