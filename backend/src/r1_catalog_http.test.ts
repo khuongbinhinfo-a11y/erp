@@ -314,8 +314,7 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
     sellSkuId:baseSku,quantity:"1",priceAt:"2026-11-26T00:00:00Z"});
   assert.equal(explicitExpired.status,409,"explicit list expiry must be enforced");
   const noActive=await auto({priceAt:"2026-11-26T00:00:00Z"});
-  // 'auto' keeps its original clock; check expiry independently.
-  assert.equal(noActive.status,200);
+  assert.equal(noActive.status,409,"no automatic list survives its end day");
   assert.equal((await resolvePrice({sellSkuId:baseSku,quantity:"1",
     priceAt:"2026-11-26T00:00:00Z"})).status,409);
   const inherit=await write("/v1/catalog/price-lists/"+scopedLists[0]+"/clone",
