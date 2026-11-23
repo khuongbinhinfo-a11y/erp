@@ -418,7 +418,7 @@ export async function handleR1Http(req:IncomingMessage,res:ServerResponse,
    const raw=await body(req);
    keys(raw,["branchId","sellSkuId","priceListId","quantity","customerId","channelId","priceAt"]);
    const branchId=id(raw.branchId),sellSkuId=id(raw.sellSkuId),
-    priceListId=id(raw.priceListId),quantity=decimal(raw.quantity,QTY);
+    priceListId=optionalId(raw.priceListId),quantity=decimal(raw.quantity,QTY);
    const db=await pool.connect();
    try{
     if(!await hasPermission(db,{installationId:t,actorId,branchId,permission:"catalog.read"}))
