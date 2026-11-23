@@ -237,6 +237,30 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
   });
   assert.equal(importedProduct.body.rows[0].action,"UNCHANGED",
     "formula-safe product names must round-trip unchanged");
+  const barcodeOwner=await create("products",{
+   code:"SPBC",name:"Sản phẩm có barcode",baseUnit:"CHAI",
+   groupId:productGroup.body.id,barcode:"BARCODE777"});
+  assert.equal(barcodeOwner.status,201,JSON.stringify(barcodeOwner.body));
+  await db.query('UPDATE catalog_sku_barcode SET active=false '+
+   'WHERE installation_id=$1 AND branch_id=$2 AND barcode=$3',
+   [root.installationId,branchId,"BARCODE777"]);
+  const withBarcode=(lines:string)=>({
+   ...productInput,fileName:"products-barcodes.csv",
+   contentBase64:Buffer.from("Mã SP,Tên SP,ĐVT,Nhóm,Barcode\n"+lines).toString("base64"),
+   mapping:{...productInput.mapping,barcode:"Barcode"},
+  });
+  const alreadyUsedBarcode=await preview(withBarcode(
+   "SPBCNEW,Trùng mã vạch,CHAI,NONGSAN,BARCODE777\n"));
+  assert.equal(alreadyUsedBarcode.status,200);
+  assert.equal(alreadyUsedBarcode.body.rows[0].error,"BARCODE_ALREADY_ASSIGNED",
+   "inactive barcode records still reserve their identity");
+  const fileBarcodeConflict=await preview(withBarcode(
+   "SPBC1,Đơn vị A,CHAI,NONGSAN,BARCODE888\n"+
+   "SPBC2,Đơn vị B,CHAI,NONGSAN,BARCODE888\n"));
+  assert.equal(fileBarcodeConflict.body.summary.error,2);
+  assert.deepEqual(fileBarcodeConflict.body.rows.map((row:{error:string})=>row.error),
+   ["DUPLICATE_FILE_BARCODE","DUPLICATE_FILE_BARCODE"]);
+
 
   const priceList=await create("price-lists",{code:"BANLE",name:"Giá bán lẻ"});
   assert.equal(priceList.status,201);
@@ -356,6 +380,16 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
   const skuAdded=await apply(skuCreate,skuPreview.body.hash);
   assert.equal(skuAdded.status,200,JSON.stringify(skuAdded.body));
   const skuId=skuAdded.body.applied[0].id;
+  const productSkuCollision=await preview({
+   ...productInput,fileName:"occupied-sku-product.csv",
+   contentBase64:Buffer.from("Mã SP,Tên SP,ĐVT,Nhóm\n"+
+    "SP01-T,Trùng mã SKU bán,CHAI,NONGSAN\n").toString("base64"),
+  });
+  assert.equal(productSkuCollision.status,200);
+  assert.equal(productSkuCollision.body.rows[0].error,
+   "PRODUCT_CODE_OCCUPIED_BY_SELL_SKU",
+   "a non-base sell SKU, including inactive, reserves the product base code");
+
   const occupiedSku=await preview(skuFile("SP01-OTHER","1",""));
   assert.equal(occupiedSku.body.summary.error,1,
     "a different code cannot take over an existing product/unit pair");
