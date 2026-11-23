@@ -238,7 +238,8 @@ void main(){
           expect(body['sellSkuId'],sellSku);
           expect(body['customerId'],customer);
           expect(body['priceListId'],priceList);
-          return reply({'quote':{'unitPrice':'35000','priceSignature':'source'}},200);
+          final amount=body['quantity']=='2'?'45000':'35000';
+          return reply({'quote':{'unitPrice':amount,'priceSignature':'source'}},200);
         }
         if(path=='/v1/catalog/price-lists'){
           return reply({'items':[{'id':priceList,
@@ -354,6 +355,29 @@ void main(){
     expect(find.byKey(const ValueKey('sales-line-0')),findsOneWidget);
     expect(tester.widget<TextField>(find.byKey(const ValueKey('sales-qty-0')))
       .focusNode?.hasFocus,isTrue,reason:'Selecting a SKU must focus its quantity');
+    // Removing a line must invalidate the quantity-tier price in an open picker.
+    await tester.enterText(find.byKey(const ValueKey('sales-sku-search')),'SKU-01');
+    await tester.pump(const Duration(milliseconds:280));
+    await tester.runAsync(() async=>
+      Future<void>.delayed(const Duration(milliseconds:120)));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('sales-sku-dropdown')),findsOneWidget);
+    await tester.ensureVisible(find.byKey(const ValueKey('sales-qty-0')));
+    await tester.enterText(find.byKey(const ValueKey('sales-qty-0')),'2');
+    await tester.runAsync(() async=>
+      Future<void>.delayed(const Duration(milliseconds:120)));
+    await tester.pumpAndSettle();
+    expect(find.text('45.000 ₫'),findsWidgets);
+    await tester.ensureVisible(find.byKey(const ValueKey('sales-remove-0')));
+    await tester.tap(find.byKey(const ValueKey('sales-remove-0')));
+    await tester.runAsync(() async=>
+      Future<void>.delayed(const Duration(milliseconds:120)));
+    await tester.pumpAndSettle();
+    expect(find.text('35.000 ₫'),findsWidgets,
+      reason:'Removed quantity tier must not remain in picker');
+    await tester.ensureVisible(find.byKey(const ValueKey('sales-sku-result-0')));
+    await tester.tap(find.byKey(const ValueKey('sales-sku-result-0')));
+    await tester.pumpAndSettle();
     // Escape cannot silently discard a composed sale.
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
