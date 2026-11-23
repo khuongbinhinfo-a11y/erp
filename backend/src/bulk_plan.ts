@@ -42,7 +42,7 @@ export function validEffectiveAt(value:string|undefined):boolean{
  const offsetHour=Number(m[8]??0),offsetMinute=Number(m[9]??0);
  const leap=y%4===0&&(y%100!==0||y%400===0);
  const maxDay=[31,leap?29:28,31,30,31,30,31,31,30,31,30,31][month-1];
- return y>=1&&month>=1&&month<=12&&day>=1&&day<=maxDay&&
+ return y>=1&&month>=1&&month<=12&&day>=1&&maxDay!==undefined&&day<=maxDay&&
   hour<=23&&minute<=59&&second<=59&&offsetHour<=23&&offsetMinute<=59&&
   Number.isFinite(Date.parse(value));
 }
@@ -323,7 +323,7 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
  // not in this import. After rows are normalized we validate the FINAL batch
  // state, so changing/retiring an owner and reassigning its phone works.
  const requestedPhones=res==="customers"?[...new Set(data.map(r=>
-  (r.phone??"").startsWith("'+")?r.phone.slice(1):r.phone)
+  (r.phone??"").startsWith("'+")?(r.phone??"").slice(1):r.phone)
   .filter((v):v is string=>Boolean(v&&/^\+?[0-9]{9,15}$/.test(v))))]:[];
  const phoneOwners=res==="customers"?await db.query<{code:string;phone:string}>(
   'SELECT code,phone FROM catalog_customer WHERE installation_id=$1 AND branch_id=$2 '+
