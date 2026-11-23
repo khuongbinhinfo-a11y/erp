@@ -747,7 +747,7 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
     }
     // A separate idempotent creation: source revision protects against
     // cloning an edited list without a deliberate user refresh.
-    const assignmentPath=/^\\/v1\\/catalog\\/price-lists\\/assignments\\/([0-9a-f-]{36})$/i
+    const assignmentPath=new RegExp("^/v1/catalog/price-lists/assignments/([0-9a-f-]{36})$","i")
       .exec(url.pathname);
     if(assignmentPath&&req.method==="PATCH"){
       if(!await hasR1CPriceSchema(pool))
