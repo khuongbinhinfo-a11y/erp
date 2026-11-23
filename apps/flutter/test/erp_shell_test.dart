@@ -174,6 +174,37 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
       reason:'Tab được chọn trở về đúng vị trí nổi');
   });
 
+  testWidgets('hover at left edge stays stable in expanded and compact sidebar',
+    (tester)async{
+    tester.view.devicePixelRatio=1;
+    tester.view.physicalSize=const Size(1440,900);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(const ErpApp(previewMode:true));
+    final hoverTarget=find.byKey(const ValueKey('erp-nav-motion-1'));
+    final mouse=await tester.createGesture(kind:PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location:const Offset(1000,800));
+    Future<void> checkEdge()async{
+      final region=tester.getRect(find.byKey(const ValueKey('nav-1')));
+      await mouse.moveTo(Offset(region.left+2,region.center.dy));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds:250));
+      expect(tester.widget<AnimatedSlide>(hoverTarget).offset.dx,greaterThan(0));
+      await tester.pump(const Duration(milliseconds:400));
+      expect(tester.widget<AnimatedSlide>(hoverTarget).offset.dx,greaterThan(0),
+        reason:'Vùng bấm không được rung khi icon trượt ra khỏi mép trái');
+      await mouse.moveTo(const Offset(1000,800));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds:230));
+    }
+    await checkEdge();
+    await tester.tap(find.byKey(const ValueKey('erp-sidebar-toggle')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds:350));
+    await checkEdge();
+  });
+
   testWidgets('unauthed production shows login and preview is explicit', (tester) async{
     await tester.pumpWidget(const ErpApp());
     expect(find.text('Đăng nhập hệ thống'),findsOneWidget);

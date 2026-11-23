@@ -273,30 +273,33 @@ class _SidebarNavTileState extends State<_SidebarNavTile>{
       padding:const EdgeInsets.symmetric(vertical:3),
       child:Tooltip(message:compact?widget.feature.title:'',
         child:Semantics(selected:active,button:true,
-          child:AnimatedSlide(
-            key:ValueKey('erp-nav-motion-$index'),
+          // InkWell remains still; only its contents slide on hover.
+          // Moving the hit-test region would flicker at the left edge.
+          child:AnimatedContainer(
+            key:ValueKey('erp-nav-surface-$index'),
             duration:duration,curve:Curves.easeOutCubic,
-            offset:hovered&&!active?const Offset(.035,0):Offset.zero,
-            child:AnimatedContainer(
-              key:ValueKey('erp-nav-surface-$index'),
+            decoration:BoxDecoration(
+              color:!active&&hovered?const Color(0xFF24563E):Colors.transparent,
+              borderRadius:BorderRadius.circular(12)),
+            child:TweenAnimationBuilder<double>(
+              key:ValueKey('erp-nav-selection-$index'),
+              tween:Tween<double>(begin:0,end:active?1:0),
               duration:duration,curve:Curves.easeOutCubic,
-              decoration:BoxDecoration(
-                color:!active&&hovered?const Color(0xFF24563E):Colors.transparent,
-                borderRadius:BorderRadius.circular(12)),
-              child:TweenAnimationBuilder<double>(
-                key:ValueKey('erp-nav-selection-$index'),
-                tween:Tween<double>(begin:0,end:active?1:0),
-                duration:duration,curve:Curves.easeOutCubic,
-                builder:(context,amount,child)=>CustomPaint(
-                  painter:_SidebarWavePainter(amount),
-                  child:child),
-                child:Material(
-                  color:Colors.transparent,
-                  child:InkWell(
-                    key:ValueKey('nav-$index'),
-                    onTap:()=>widget.onSelect(index),
-                    onHover:(v){if(mounted&&v!=hovered)setState(()=>hovered=v);},
-                    borderRadius:BorderRadius.circular(12),
+              builder:(context,amount,child)=>CustomPaint(
+                painter:_SidebarWavePainter(amount),
+                child:child),
+              child:Material(
+                color:Colors.transparent,
+                child:InkWell(
+                  key:ValueKey('nav-$index'),
+                  onTap:()=>widget.onSelect(index),
+                  onHover:(v){if(mounted&&v!=hovered)setState(()=>hovered=v);},
+                  borderRadius:BorderRadius.circular(12),
+                  child:AnimatedSlide(
+                    key:ValueKey('erp-nav-motion-$index'),
+                    duration:duration,curve:Curves.easeOutCubic,
+                    offset:hovered&&!active&&!noMotion
+                      ?const Offset(.035,0):Offset.zero,
                     child:Row(children:[
                       SizedBox(height:54,width:compact?3:7),
                       AnimatedScale(
