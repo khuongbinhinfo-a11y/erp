@@ -340,7 +340,7 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
    if(seen.has(idKey))throw new BulkFault("DUPLICATE_FILE_KEY");
    seen.add(idKey);
    const current=res==="prices"?known.get((refs.lists.get(raw.priceListCode??'')?.id??"?")+"|"+
-       (refs.products.get(raw.productCode)?.id??"?")):known.get(idKey);
+       (refs.products.get(raw.productCode??'')?.id??"?")):known.get(idKey);
    if(current&&input.mode==="CREATE")throw new BulkFault("ALREADY_EXISTS_USE_UPDATE");
    if(!current&&input.mode==="UPDATE")throw new BulkFault("NOT_FOUND_USE_CREATE");
    const converted=normalizeRow(res,input.mode,raw,current,refs,branch);
