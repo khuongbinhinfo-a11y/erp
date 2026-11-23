@@ -398,7 +398,7 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
                   key:const ValueKey('r1-sku-disable-reason'),
                   decoration:const InputDecoration(labelText:'Lý do ngừng SKU',
                     hintText:'Ví dụ: Nhập sai mã SKU'),
-                  maxLines:2,onChanged:(v)=>reason=v.trim()),
+                  maxLines:2,onChanged:(v)=>refresh(()=>reason=v.trim())),
               ],
               if(isBase)const Text(
                 'Nếu ngừng SKU gốc và không còn SKU bán nào hoạt động, '
