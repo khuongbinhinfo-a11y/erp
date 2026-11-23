@@ -23,7 +23,8 @@ export type BulkPlan={
 };
 
 export class BulkFault extends Error {
- constructor(readonly code:string,readonly status=400){super(code);}
+ readonly code:string;readonly status:number;
+ constructor(code:string,status=400){super(code);this.code=code;this.status=status;}
 }
 const CODE=/^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$/;
 const UNIT=/^.{1,24}$/u;
@@ -231,7 +232,7 @@ function normalizeRow(
    op.createUnit=!known;
   }else{
    if(raw.productCode!==undefined&&raw.productCode!==""&&
-      refs.products.get(raw.productCode)?.id!==current.productId)
+      refs.products.get(raw.productCode??'')?.id!==current.productId)
     throw new BulkFault("IMMUTABLE_SKU_PRODUCT");
    if(raw.unitCode!==undefined&&raw.unitCode!==""&&raw.unitCode!==current.unitCode)
     throw new BulkFault("IMMUTABLE_SKU_UNIT");
@@ -338,7 +339,7 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
        code(raw.productCode,"PRODUCT_CODE"):code(raw.code,"CODE");
    if(seen.has(idKey))throw new BulkFault("DUPLICATE_FILE_KEY");
    seen.add(idKey);
-   const current=res==="prices"?known.get((refs.lists.get(raw.priceListCode)?.id??"?")+"|"+
+   const current=res==="prices"?known.get((refs.lists.get(raw.priceListCode??'')?.id??"?")+"|"+
        (refs.products.get(raw.productCode)?.id??"?")):known.get(idKey);
    if(current&&input.mode==="CREATE")throw new BulkFault("ALREADY_EXISTS_USE_UPDATE");
    if(!current&&input.mode==="UPDATE")throw new BulkFault("NOT_FOUND_USE_CREATE");
