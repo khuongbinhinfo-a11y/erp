@@ -195,6 +195,7 @@ void main(){
     var useLongQuotedPrice=false;
     const warehouse='00000000-0000-4000-8000-000000000009';
     final traces=<String>[];
+    final skuQuoteQuantities=<String>[];
     http.Response reply(Object data,int status)=>http.Response(jsonEncode(data),status,
       headers:const {'content-type':'application/json; charset=utf-8'});
     final grants=[...rights,
@@ -238,6 +239,7 @@ void main(){
           expect(body['sellSkuId'],sellSku);
           expect(body['customerId'],customer);
           expect(body['priceListId'],priceList);
+          skuQuoteQuantities.add(body['quantity'].toString());
           final amount=body['quantity']=='2'?'45000':'35000';
           return reply({'quote':{'unitPrice':amount,'priceSignature':'source'}},200);
         }
@@ -367,14 +369,21 @@ void main(){
     await tester.runAsync(() async=>
       Future<void>.delayed(const Duration(milliseconds:120)));
     await tester.pumpAndSettle();
-    expect(find.text('45.000 ₫'),findsWidgets);
+    expect(skuQuoteQuantities,contains('2'),
+      reason:'R1-C must receive the edited selling quantity');
+    await tester.ensureVisible(find.byKey(const ValueKey('sales-sku-dropdown')));
+    await tester.pumpAndSettle();
+    expect(find.text('45.000 ₫'),findsWidgets,
+      reason:'Server quotes $skuQuoteQuantities; visible: ${tester.widgetList<Text>(find.byType(Text)).map((t)=>t.data).whereType<String>().where((t)=>t.contains('giá')||t.contains('₫')).toList()}');
     await tester.ensureVisible(find.byKey(const ValueKey('sales-remove-0')));
     await tester.tap(find.byKey(const ValueKey('sales-remove-0')));
     await tester.runAsync(() async=>
       Future<void>.delayed(const Duration(milliseconds:120)));
     await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const ValueKey('sales-sku-dropdown')));
+    await tester.pumpAndSettle();
     expect(find.text('35.000 ₫'),findsWidgets,
-      reason:'Removed quantity tier must not remain in picker');
+      reason:'Removed quantity tier must not remain in picker; $skuQuoteQuantities');
     await tester.ensureVisible(find.byKey(const ValueKey('sales-sku-result-0')));
     await tester.tap(find.byKey(const ValueKey('sales-sku-result-0')));
     await tester.pumpAndSettle();
