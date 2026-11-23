@@ -298,6 +298,31 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
    retireTx.release();createTx.release();
   }
 
+  // The export and preview must pick the same barcode even when neither
+  // of two active barcodes is marked primary.
+  const baseSell=(await db.query<{id:string}>(
+   'SELECT id FROM catalog_sell_sku WHERE installation_id=$1 AND branch_id=$2 '+
+   'AND product_id=$3 AND is_base',
+   [root.installationId,branchId,productId])).rows[0]!.id;
+  await db.query('INSERT INTO catalog_sku_barcode '+
+   '(installation_id,branch_id,sell_sku_id,barcode,is_primary) '+
+   'VALUES ($1,$2,$3,$4,false),($1,$2,$3,$5,false)',
+   [root.installationId,branchId,baseSell,"ZZZZ1200","AAAA1200"]);
+  const sortedExport=await request("/v1/catalog/bulk/export?branchId="+branchId+
+   "&resource=products","GET",undefined,token);
+  assert.equal(sortedExport.status,200);
+  const sortedCSV=sortedExport.body.content as string;
+  assert.match(sortedCSV,/AAAA1200/);
+  const sortedReimport=await preview({
+   ...productInput,fileName:"same-barcode.csv",
+   contentBase64:Buffer.from(sortedCSV).toString("base64"),
+   mapping:{code:"code",name:"name",baseUnit:"baseUnit",
+    groupCode:"groupCode",barcode:"barcode",active:"active"},
+  });
+  assert.equal(sortedReimport.body.summary.error,0,JSON.stringify(sortedReimport.body));
+  assert.equal(sortedReimport.body.rows.find((row:{key:string})=>row.key==="SP01")?.action,
+   "UNCHANGED","exported barcode must match preview's deterministic tie-breaker");
+
   const priceList=await create("price-lists",{code:"BANLE",name:"Giá bán lẻ"});
   assert.equal(priceList.status,201);
   const pricing=(amount:string,date:string)=>({
@@ -469,6 +494,32 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
     AND product_id=$3 AND active`,
     [root.installationId,branchId,productId])).rows[0]!.n,"2",
     "base and replacement pack SKU active; original pack is stopped");
+  // Two bulk files creating distinct units for the same product must lock
+  // the parent before either FK insert and complete without deadlock.
+  for(const uom of ["GOI","KET"]){
+   assert.equal((await create("unit-definitions",{code:uom,name:uom})).status,201);
+  }
+  const freshSku=(skuCode:string,unit:string,factor:number)=>({
+   branchId,resource:"skus",mode:"UPSERT",fileName:"new-unit.csv",
+   contentBase64:Buffer.from("Mã SKU,Mã SP,Đơn vị,Quy đổi\n"+
+    skuCode+",SP01,"+unit+","+factor+"\n").toString("base64"),
+   hasHeader:true,mapping:{code:"Mã SKU",productCode:"Mã SP",
+    unitCode:"Đơn vị",toBase:"Quy đổi"},
+  });
+  const [freshA,freshB]=[freshSku("SP01-GOI","GOI",6),freshSku("SP01-KET","KET",20)];
+  const [pA,pB]=await Promise.all([preview(freshA),preview(freshB)]);
+  assert.equal(pA.body.summary.create,1,JSON.stringify(pA.body));
+  assert.equal(pB.body.summary.create,1,JSON.stringify(pB.body));
+  const [resultA,resultB]=await Promise.all([
+   apply(freshA,pA.body.hash),apply(freshB,pB.body.hash)]);
+  assert.equal(resultA.status,200,JSON.stringify(resultA.body));
+  assert.equal(resultB.status,200,JSON.stringify(resultB.body));
+  const newSkuCount=await db.query<{total:string}>(
+   "SELECT count(*)::text AS total FROM catalog_sell_sku "+
+   "WHERE installation_id=$1 AND branch_id=$2 AND sku IN ('SP01-GOI','SP01-KET')",
+   [root.installationId,branchId]);
+  assert.equal(newSkuCount.rows[0]!.total,"2");
+
   const makePhoneTransfer=(csv:string)=>file(
    "Mã KH,Tên khách,Mã nhóm,Mã khu vực,Điện thoại,Hạn nợ\n"+csv);
   const phoneSeed=makePhoneTransfer(
