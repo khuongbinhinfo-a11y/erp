@@ -225,7 +225,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       quoteGeneration++;
       refresh((){
       quotes=null;quotedStamp=null;previewGrandTotal=null;previewSubtotal=null;
-      previewDiscountTotal=null;previewTaxTotal=null;formError=null;
+      previewDiscountTotal=null;previewTaxTotal=null;formError=null;quoteBusy=false;
       });
     }
     Future<void> preview(BuildContext context,StateSetter refresh)async{
