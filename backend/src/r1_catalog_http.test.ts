@@ -297,10 +297,10 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
     .body.quote.unitPrice,"30000.0000");
   assert.equal((await auto({customerId:c2.body.id}))
     .body.quote.unitPrice,"10000.0000");
-  const history=await request("/v1/catalog/price-lists/assignments?branchId="+b,
+  const assignmentHistory=await request("/v1/catalog/price-lists/assignments?branchId="+b,
     "GET",undefined,token);
-  assert.equal(history.status,200);
-  assert.ok(history.body.items.some((x:any)=>x.id===assigned[3]!.id&&x.active===false));
+  assert.equal(assignmentHistory.status,200);
+  assert.ok(assignmentHistory.body.items.some((x:any)=>x.id===assigned[3]!.id&&x.active===false));
   assert.equal((await request("/v1/catalog/price-lists/assignments?branchId="+b))
     .status,401,"assignments are never public");
   const overlapPayload={scopeKind:"DEFAULT",priceListId:scopedLists[1],priority:0};
