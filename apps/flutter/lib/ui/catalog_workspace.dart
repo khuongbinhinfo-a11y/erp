@@ -8,6 +8,7 @@ import 'erp_toast.dart';
 import 'identity_client.dart';
 import 'r1_catalog_workspace.dart';
 import 'catalog_bulk_workspace.dart';
+import 'price_list_assignments_panel.dart';
 
 /// Live, branch-scoped catalog. No offline confirmation and no fabricated rows.
 class CatalogWorkspace extends StatefulWidget {
@@ -29,7 +30,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
   int requestSerial=0;
   final search=TextEditingController();
   final inlineAmount=TextEditingController(),inlineDiscount=TextEditingController();
-  String? inlinePriceId;
+  String? inlinePriceId,assignmentListId;
 
   static const tabs=<String,List<ErpSectionTab<String>>>{
     'customers':[
@@ -82,7 +83,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     super.didUpdateWidget(oldWidget);
     if(oldWidget.session.token!=widget.session.token ||
       oldWidget.client!=widget.client || oldWidget.area!=widget.area){
-      requestSerial++;items=[];branches=[];branchId=null;inlinePriceId=null;
+      requestSerial++;items=[];branches=[];branchId=null;inlinePriceId=null;assignmentListId=null;
       productWriteReady=false;resource=widget.area;search.clear();
       _loadBranches();
     }
@@ -155,7 +156,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
   void _changeResource(String next){
     if(next==resource)return;
     setState((){
-      resource=next;search.clear();items=[];productWriteReady=false;inlinePriceId=null;
+      resource=next;search.clear();items=[];productWriteReady=false;inlinePriceId=null;assignmentListId=null;
     });
     _loadRecords();
   }
@@ -1348,6 +1349,13 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     final value=item[key];
     if(value==null)return '—';
     if(value is bool)return value?'Hoạt động':'Ngừng';
+    if(key=='effectiveFrom'||key=='effectiveTo'){
+      final day=DateTime.tryParse(value.toString())?.toUtc();
+      if(day==null)return '—';
+      final display=key=='effectiveTo'?day.subtract(const Duration(days:1)):day;
+      return '${display.day.toString().padLeft(2,'0')}/'
+        '${display.month.toString().padLeft(2,'0')}/${display.year}';
+    }
     return value.toString();
   }
   List<(String,String)> get columns=>switch(resource){
@@ -1365,7 +1373,9 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
       ('groupName','Nhóm hàng'),('baseUnit','Đơn vị tồn kho'),
       ('sellSkuCount','SKU bán'),('barcode','Mã vạch gốc'),
       ('active','Trạng thái')],
-    'price-lists'=>const [('code','Mã bảng giá'),('name','Bảng giá'),('currency','Tiền tệ'),('active','Trạng thái')],
+    'price-lists'=>const [('code','Mã bảng giá'),('name','Bảng giá'),
+      ('effectiveFrom','Từ ngày'),('effectiveTo','Đến hết ngày'),
+      ('priority','Ưu tiên'),('active','Trạng thái')],
     'prices'=>const [('priceListCode','Bảng giá'),('productCode','Mã hàng'),
       ('productName','Sản phẩm'),('amount','Đơn giá'),('discountRate','CK %'),
       ('effectiveAt','Hiệu lực')],
@@ -1424,7 +1434,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                         maxLines:1,overflow:TextOverflow.ellipsis))).toList(),
                     onChanged:(next){
                       if(next==null||next==branchId)return;
-                      setState((){branchId=next;inlinePriceId=null;});_loadRecords();
+                      setState((){branchId=next;inlinePriceId=null;assignmentListId=null;});_loadRecords();
                     })),
               IconButton(
                 key:const ValueKey('catalog-refresh'),
@@ -1506,6 +1516,14 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                             tooltip:'Sửa/ngừng sử dụng',
                             onPressed:saving?null:()=>_edit(entry)),
                           if(resource=='price-lists')IconButton(
+                            key:ValueKey('catalog-price-list-assignment-'+entry['id'].toString()),
+                            icon:const Icon(Icons.groups_outlined,size:18),
+                            tooltip:'Phân bổ bảng giá theo khách, nhóm, kênh',
+                            onPressed:()=>setState((){
+                              assignmentListId=assignmentListId==entry['id']
+                                ?null:entry['id'] as String;
+                            })),
+                          if(resource=='price-lists')IconButton(
                             key:ValueKey('catalog-price-list-clone-' + entry['id'].toString()),
                             icon:const Icon(Icons.content_copy_outlined,size:18),
                             tooltip:'Sao chép bảng giá cùng chính sách',
@@ -1536,6 +1554,14 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                           entry['priceListId'].toString()+'.'+entry['productId'].toString())!=null
                           ?'Kiểm tra yêu cầu':'Giá mới'))),
                 ])).toList())),
+            if(resource=='price-lists'&&assignmentListId!=null&&
+              branchId!=null&&items.any((e)=>e['id']==assignmentListId))
+              PriceListAssignmentsPanel(
+                key:ValueKey('assign-'+branchId!+'-'+assignmentListId!),
+                client:widget.client,session:widget.session,branchId:branchId!,
+                priceList:items.firstWhere((e)=>e['id']==assignmentListId),
+                canWrite:canWrite,
+                onClose:()=>setState(()=>assignmentListId=null)),
             if(resource=='products'&&!productWriteReady&&!loading)
               const Padding(padding:EdgeInsets.only(top:12),
                 child:Text('Đã xem được danh mục, nhưng chưa cập nhật đủ cấu trúc SKU để thêm sản phẩm.',
