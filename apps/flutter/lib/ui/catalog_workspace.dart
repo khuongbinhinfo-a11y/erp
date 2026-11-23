@@ -353,6 +353,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                   TextField(controller:listPriority,
                     key:const ValueKey('r1c-create-list-priority'),
                     keyboardType:TextInputType.number,
+                    onChanged:(_)=>refresh((){}),
                     decoration:const InputDecoration(labelText:'Mức ưu tiên bảng giá',
                       helperText:'Số lớn được ưu tiên trong cùng phạm vi')),
                   const SizedBox(height:8),
