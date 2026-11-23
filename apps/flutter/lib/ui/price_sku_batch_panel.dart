@@ -1,0 +1,272 @@
+import 'package:material_ui/material_ui.dart';
+import 'erp_display.dart';
+import 'erp_tokens.dart';
+import 'erp_toast.dart';
+import 'identity_client.dart';
+
+/// A SKU price correction appends a new BASE policy. Historical rules and
+/// prices on already accepted sales documents are never edited.
+class PriceSkuBatchPanel extends StatefulWidget {
+  final ErpIdentityClient client;
+  final IdentitySession session;
+  final String branchId;
+  final Map<String,dynamic> priceList;
+  final bool canWrite;
+  final VoidCallback onClose;
+  const PriceSkuBatchPanel({super.key,required this.client,
+    required this.session,required this.branchId,required this.priceList,
+    required this.canWrite,required this.onClose});
+  @override State<PriceSkuBatchPanel> createState()=>_PriceSkuBatchPanelState();
+}
+
+class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
+  final query=TextEditingController();
+  final sharedPrice=TextEditingController();
+  final selected=<String,Map<String,dynamic>>{};
+  final inputs=<String,TextEditingController>{};
+  final current=<String,String>{};
+  List<Map<String,dynamic>> rows=[];
+  bool loading=false,saving=false;
+  String? error;
+  int generation=0;
+  String get listId=>widget.priceList['id'].toString();
+  String get token=>widget.session.token;
+  @override void initState(){super.initState();load();}
+  @override void didUpdateWidget(covariant PriceSkuBatchPanel old){
+    super.didUpdateWidget(old);
+    if(old.branchId!=widget.branchId||old.priceList['id']!=listId||
+        old.session.token!=token){
+      generation++;query.clear();selected.clear();current.clear();
+      for(final field in inputs.values){field.dispose();}
+      inputs.clear();rows=[];load();
+    }
+  }
+  @override void dispose(){
+    generation++;query.dispose();sharedPrice.dispose();
+    for(final field in inputs.values){field.dispose();}
+    super.dispose();
+  }
+  Future<void> load()async{
+    final run=++generation;
+    setState((){loading=true;error=null;});
+    try{
+      final found=await widget.client.r1CatalogItems(token,'skus',
+        branchId:widget.branchId,query:query.text.trim());
+      if(mounted&&run==generation)setState((){
+        rows=found.where((x)=>x['active']!=false).toList();
+        loading=false;
+      });
+    }on ErpApiError catch(e){
+      if(mounted&&run==generation)setState((){
+        loading=false;error=e.message;
+      });
+    }catch(_){
+      if(mounted&&run==generation)setState((){
+        loading=false;error='Không tải được SKU. Vui lòng tìm lại.';
+      });
+    }
+  }
+  void selectSku(Map<String,dynamic> sku,bool checked){
+    final id=sku['id'].toString();
+    setState((){
+      if(checked){
+        selected[id]=sku;
+        inputs.putIfAbsent(id,()=>TextEditingController());
+      }else{
+        selected.remove(id);
+        current.remove(id);
+        inputs.remove(id)?.dispose();
+      }
+    });
+    if(checked)loadCurrent(id);
+  }
+  Future<void> loadCurrent(String id)async{
+    try{
+      final result=await widget.client.r1PriceQuote(token,{
+        'branchId':widget.branchId,'priceListId':listId,
+        'sellSkuId':id,'quantity':'1',
+      });
+      if(!mounted||!selected.containsKey(id))return;
+      final quote=Map<String,dynamic>.from(result['quote'] as Map);
+      setState(()=>current[id]=erpVndText(quote['unitPrice']));
+    }on ErpApiError catch(e){
+      if(mounted&&selected.containsKey(id))setState((){
+        current[id]=e.code=='SKU_HAS_NO_EFFECTIVE_BASE_PRICE'
+          ?'Chưa có giá':'Không tra được giá hiện tại';
+      });
+    }catch(_){
+      if(mounted&&selected.containsKey(id))
+        setState(()=>current[id]='Không tra được giá hiện tại');
+    }
+  }
+  void setSharedPrice(){
+    final amount=sharedPrice.text.trim();
+    if(!RegExp(r'^\d{1,14}(?:\.\d{1,4})?$').hasMatch(amount)){
+      setState(()=>error='Nhập đơn giá không âm, tối đa 4 số thập phân.');
+      return;
+    }
+    setState((){
+      error=null;
+      for(final id in selected.keys){inputs[id]!.text=amount;}
+    });
+  }
+  Future<void> save()async{
+    if(saving||!widget.canWrite||selected.isEmpty)return;
+    for(final id in selected.keys){
+      final amount=inputs[id]?.text.trim()??'';
+      if(!RegExp(r'^\d{1,14}(?:\.\d{1,4})?$').hasMatch(amount)){
+        setState(()=>error='Cần nhập giá hợp lệ cho tất cả SKU đã chọn.');
+        return;
+      }
+    }
+    setState((){saving=true;error=null;});
+    final ids=selected.keys.toList();
+    var done=0;
+    try{
+      for(final id in ids){
+        final kind='catalog.sku-price.$listId.$id';
+        final pending=widget.client.pendingR1(
+          widget.session.actorId,widget.branchId,kind);
+        final body=pending?.payload??<String,dynamic>{
+          'branchId':widget.branchId,'priceListId':listId,
+          'sellSkuId':id,'scopeKind':'BASE','adjustment':'FIXED_PRICE',
+          'amount':inputs[id]!.text.trim(),'priority':0,
+          'stacking':'EXCLUSIVE','stopProcessing':false,
+          'minQuantity':'1','effectiveFrom':DateTime.now().toUtc().toIso8601String(),
+        };
+        final key=pending?.key??
+          'price-sku-$id-${DateTime.now().microsecondsSinceEpoch}';
+        if(pending==null)widget.client.retainR1(
+          widget.session.actorId,widget.branchId,kind,body,key);
+        try{
+          await widget.client.createR1Catalog(token,'rules',body,key:key);
+        }on ErpApiError catch(e){
+          if(e.status==400||e.status==404||e.code=='PRICE_RULE_OVERLAP'||
+             e.code=='PRICE_TARGET_UNAVAILABLE'){
+            widget.client.clearR1(widget.session.actorId,widget.branchId,kind);
+          }
+          rethrow;
+        }
+        widget.client.clearR1(widget.session.actorId,widget.branchId,kind);
+        done++;
+        if(mounted)setState((){
+          selected.remove(id);current.remove(id);
+          inputs.remove(id)?.dispose();
+        });
+      }
+      if(mounted){
+        ErpToast.show(context,'Đã cập nhật giá $done SKU trên máy chủ.');
+        await load();
+      }
+    }on ErpApiError catch(e){
+      if(mounted)setState(()=>error='Đã lưu $done/${ids.length} SKU. ${e.message}');
+    }catch(_){
+      if(mounted)setState(()=>error='Đã lưu $done/${ids.length} SKU. '
+        'Các yêu cầu chưa xác nhận được giữ để thử lại cùng khóa.');
+    }finally{if(mounted)setState(()=>saving=false);}
+  }
+  @override Widget build(BuildContext context){
+    return Container(key:const ValueKey('price-sku-batch-panel'),
+      margin:const EdgeInsets.only(top:12),
+      padding:const EdgeInsets.all(14),
+      decoration:BoxDecoration(
+        color:ErpTokens.mint.withValues(alpha:0.18),
+        border:Border.all(color:ErpTokens.border),
+        borderRadius:BorderRadius.circular(8)),
+      child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+        Row(children:[
+          Expanded(child:Text('Sửa giá SKU · ${widget.priceList['code']}',
+            style:const TextStyle(fontSize:16,fontWeight:FontWeight.w800))),
+          IconButton(tooltip:'Đóng chỉnh giá SKU',onPressed:widget.onClose,
+            icon:const Icon(Icons.close)),
+        ]),
+        const Text('Chọn nhiều SKU, nhập giá mới tại từng dòng hoặc áp dụng chung. '
+          'Giá mới có hiệu lực ngay sau khi máy chủ xác nhận; đơn đã xác nhận không đổi.',
+          style:TextStyle(fontSize:12,color:ErpTokens.muted)),
+        const SizedBox(height:10),
+        Wrap(spacing:8,runSpacing:8,crossAxisAlignment:WrapCrossAlignment.center,
+          children:[
+            SizedBox(width:300,child:TextField(
+              key:const ValueKey('price-sku-search'),
+              controller:query,onSubmitted:(_)=>load(),
+              decoration:const InputDecoration(
+                labelText:'Tìm tên sản phẩm, mã SKU',isDense:true,
+                prefixIcon:Icon(Icons.search)))),
+            OutlinedButton.icon(onPressed:loading||saving?null:load,
+              icon:const Icon(Icons.search,size:17),
+              label:const Text('Tìm SKU')),
+            OutlinedButton(onPressed:loading||saving?null:()=>setState((){
+              for(final row in rows){
+                final id=row['id'].toString();
+                selected[id]=row;
+                inputs.putIfAbsent(id,()=>TextEditingController());
+              }
+            }),child:const Text('Chọn kết quả')),
+            TextButton(onPressed:saving?null:()=>setState((){
+              selected.clear();current.clear();
+              for(final input in inputs.values){input.dispose();}
+              inputs.clear();
+            }),child:const Text('Bỏ chọn')),
+            Text('Đã chọn ${selected.length} SKU',
+              style:const TextStyle(fontWeight:FontWeight.w700)),
+          ]),
+        if(loading)const Padding(padding:EdgeInsets.only(top:8),
+          child:LinearProgressIndicator()),
+        if(error!=null)Padding(padding:const EdgeInsets.symmetric(vertical:8),
+          child:Text(error!,style:const TextStyle(color:ErpTokens.danger))),
+        const SizedBox(height:8),
+        ConstrainedBox(constraints:const BoxConstraints(maxHeight:340),
+          child:ListView(shrinkWrap:true,children:[
+            for(final sku in [
+              ...selected.values,
+              ...rows.where((r)=>!selected.containsKey(r['id'].toString())),
+            ]) Builder(builder:(context){
+              final id=sku['id'].toString();
+              final checked=selected.containsKey(id);
+              return Container(
+                decoration:const BoxDecoration(border:Border(
+                  bottom:BorderSide(color:ErpTokens.border))),
+                padding:const EdgeInsets.symmetric(vertical:4),
+                child:Row(children:[
+                  Checkbox(key:ValueKey('price-sku-check-$id'),
+                    value:checked,onChanged:saving||!widget.canWrite?null:
+                      (value)=>selectSku(sku,value==true)),
+                  Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,
+                    children:[
+                      Text((sku['productName']??sku['name']??'Sản phẩm').toString(),
+                        maxLines:1,overflow:TextOverflow.ellipsis,
+                        style:const TextStyle(fontWeight:FontWeight.w700,fontSize:13)),
+                      Text('${sku['code']??sku['sku']} · ${sku['unitCode']??''} '
+                        '· Giá hiện tại: ${current[id]??(checked?'Đang tra…':'Chọn để tra')}',
+                        maxLines:2,overflow:TextOverflow.ellipsis,
+                        style:const TextStyle(fontSize:11,color:ErpTokens.muted)),
+                    ])),
+                  if(checked)SizedBox(width:130,
+                    child:TextField(
+                      key:ValueKey('price-sku-new-$id'),
+                      controller:inputs[id],enabled:!saving,
+                      keyboardType:const TextInputType.numberWithOptions(decimal:true),
+                      decoration:const InputDecoration(
+                        labelText:'Giá mới (₫)',isDense:true))),
+                ]),
+              );
+            }),
+          ])),
+        const SizedBox(height:10),
+        Wrap(spacing:8,runSpacing:8,crossAxisAlignment:WrapCrossAlignment.center,
+          children:[
+            SizedBox(width:175,child:TextField(
+              key:const ValueKey('price-sku-shared'),
+              controller:sharedPrice,
+              keyboardType:const TextInputType.numberWithOptions(decimal:true),
+              decoration:const InputDecoration(labelText:'Giá áp dụng chung (₫)',isDense:true))),
+            OutlinedButton(onPressed:saving||selected.isEmpty?null:setSharedPrice,
+              child:const Text('Áp cho SKU đã chọn')),
+            FilledButton.icon(key:const ValueKey('price-sku-save'),
+              onPressed:saving||selected.isEmpty||!widget.canWrite?null:save,
+              icon:const Icon(Icons.save_outlined,size:17),
+              label:Text(saving?'Đang lưu…':'Lưu ${selected.length} giá')),
+          ]),
+      ]));
+  }
+}
