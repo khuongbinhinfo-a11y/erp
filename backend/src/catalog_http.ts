@@ -364,8 +364,9 @@ export async function executeCreate(db:PoolClient,context:MutationContext,
     if(!("priceListId" in value))throw new CatalogError(400,"INVALID_PRICE");
     // Applies to BOTH single-price editing and bulk import: serialize same
     // effective-time insertions, without touching posted historical prices.
-    const scope=[installationId,branchId,value.priceListId,value.productId,
-      value.effectiveAt].join("|");
+    // Lock the whole list+product stream, not only one timestamp:
+    // an approved bulk preview must detect every concurrent price append.
+    const scope=[installationId,branchId,value.priceListId,value.productId].join("|");
     await db.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",[scope]);
     const duplicate=await db.query(
       "SELECT id FROM catalog_price_entry WHERE installation_id=$1 AND branch_id=$2 "+
