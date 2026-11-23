@@ -160,6 +160,12 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
    adjustment:"PERCENT_DISCOUNT",amount:"5.0000",
    priority:20,stacking:"STACKABLE"});
   assert.equal(identicalVip.status,201);
+  const overlap=await r1("rules",{...basic,sellSkuId:skuId,
+   scopeKind:"CUSTOMER_GROUP",customerGroup:"VIP",
+   adjustment:"PERCENT_DISCOUNT",amount:"7.0000",
+   priority:20,stacking:"STACKABLE"});
+  assert.equal(overlap.status,409,"overlapping conflicting policy must be rejected");
+  assert.equal(overlap.body.error?.code,"PRICE_RULE_OVERLAP");
   const customerRule=await r1("rules",{...basic,sellSkuId:skuId,
    scopeKind:"CUSTOMER",customerId:c2.body.id,
    adjustment:"FIXED_PRICE",amount:"100000.0000",
