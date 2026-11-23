@@ -202,6 +202,12 @@ export async function create(db:PoolClient,tenant:string,kind:Kind,parsed:Parsed
    unitCode:parsed.unitCode,toBase:parsed.toBase}};
  }
  if(kind==="skus"&&"productId" in parsed){
+  // Lock product first, the same order used by SKU lifecycle retirement.
+  // Recheck active after acquiring lock to prevent concurrent retirement.
+  const parent=await db.query<{active:boolean}>(
+   'SELECT active FROM catalog_product WHERE installation_id=$1 AND branch_id=$2 '+
+   'AND id=$3 FOR UPDATE',[tenant,b,parsed.productId]);
+  if(parent.rows[0]?.active!==true)throw new R1Error(409,"PRODUCT_UNAVAILABLE");
   const r=await db.query<{id:string}>(`INSERT INTO catalog_sell_sku
    (installation_id,branch_id,product_id,sku,unit_code,conversion_to_base)
    SELECT $1,$2,p.id,$4,$5,$6::numeric FROM catalog_product p
