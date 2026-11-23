@@ -237,13 +237,13 @@ class _SidebarWavePainter extends CustomPainter {
       ..close();
     final shader=const LinearGradient(
       begin:Alignment.centerLeft,end:Alignment.centerRight,
-      colors:[Color(0xFFF1FFF2),Color(0xFFD7F2E0)],
+      // Gentle translucent wave over the dark ERP green.
+      colors:[Color(0xC0F1FFF2),Color(0xB8D7F2E0)],
     ).createShader(Offset.zero & size);
     canvas.drawPath(shape,Paint()
-      ..shader=shader..colorFilter=ColorFilter.mode(
-        Color.fromRGBO(255,255,255,progress),BlendMode.modulate));
+      ..shader=shader..color=Color.fromRGBO(255,255,255,progress));
     canvas.drawPath(shape,Paint()
-      ..color=Color.fromRGBO(110,205,151,progress*.55)
+      ..color=Color.fromRGBO(110,205,151,progress*.34)
       ..style=PaintingStyle.stroke..strokeWidth=1);
   }
   @override bool shouldRepaint(covariant _SidebarWavePainter old)=>
