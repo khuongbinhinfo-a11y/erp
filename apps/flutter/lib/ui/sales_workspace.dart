@@ -962,24 +962,130 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                     const Padding(padding:EdgeInsets.only(top:4,bottom:2),
                       child:Text('F3 tìm hàng · F4 tìm khách · ↑↓ chọn · Enter thêm',
                         style:TextStyle(color:ErpTokens.muted,fontSize:11))),
-                    if(skuBusy)const LinearProgressIndicator(),
-                    if(skuMatches.isNotEmpty)ConstrainedBox(
-                      constraints:const BoxConstraints(maxHeight:190),
-                      child:ListView(shrinkWrap:true,children:[
-                        for(var i=0;i<skuMatches.length;i++)ListTile(
-                          key:ValueKey('sales-sku-result-'+i.toString()),
-                          selected:i==selectedSkuIndex,dense:true,
-                          title:Text((skuMatches[i]['productName']??'Sản phẩm').toString(),
-                            maxLines:1,overflow:TextOverflow.ellipsis),
-                          subtitle:Text(
-                            'SKU '+(skuMatches[i]['code']??skuMatches[i]['sku']??'').toString()+
-                            ' · '+(skuMatches[i]['unitCode']??'').toString()+
-                            ((skuMatches[i]['barcode']??'').toString().isEmpty?'':' · Barcode '+skuMatches[i]['barcode'].toString()),
-                            maxLines:2,overflow:TextOverflow.ellipsis),
-                          onTap:()=>chooseSku(skuMatches[i],refresh),
-                        ),
-                      ]),
-                    ),
+                    if(stockWarehouses.isNotEmpty)...[
+                      const SizedBox(height:8),
+                      DropdownButtonFormField<String>(
+                        key:ValueKey('sales-stock-warehouse-'+warehouseId.toString()),
+                        initialValue:warehouseId,isExpanded:true,
+                        decoration:const InputDecoration(labelText:'Kho tra khả dụng (tham khảo)',
+                          border:UnderlineInputBorder()),
+                        items:[
+                          const DropdownMenuItem<String>(value:null,
+                            child:Text('Chọn kho để xem khả dụng')),
+                          ...stockWarehouses.map((w)=>DropdownMenuItem<String>(
+                            value:w['id'] as String,
+                            child:Text((w['name']??w['code']??'Kho').toString(),
+                              overflow:TextOverflow.ellipsis))),
+                        ],
+                        onChanged:(id){
+                          warehouseId=id;stockGeneration++;
+                          refresh((){
+                            stockByProduct={};stockBusy=false;
+                            stockLoaded=false;stockComplete=false;stockError=null;
+                          });
+                          if(id!=null&&skuMatches.isNotEmpty)loadStock(ctx,refresh);
+                        }),
+                    ],
+                    if(skuBusy)const LinearProgressIndicator(minHeight:3),
+                    if(skuSearchError!=null)
+                      Padding(padding:const EdgeInsets.symmetric(vertical:8),
+                        child:Text(skuSearchError!,
+                          key:const ValueKey('sales-sku-error'),
+                          style:const TextStyle(color:ErpTokens.danger,fontSize:12))),
+                    if(skuMatches.isNotEmpty)
+                      Material(
+                        key:const ValueKey('sales-sku-dropdown'),
+                        elevation:9,shadowColor:const Color(0x33102E24),
+                        color:ErpTokens.surface,clipBehavior:Clip.antiAlias,
+                        shape:RoundedRectangleBorder(
+                          borderRadius:BorderRadius.circular(9),
+                          side:const BorderSide(color:ErpTokens.border)),
+                        child:Column(mainAxisSize:MainAxisSize.min,children:[
+                          Container(color:ErpTokens.mint,
+                            padding:const EdgeInsets.symmetric(horizontal:12,vertical:8),
+                            child:Row(children:[
+                              const Expanded(child:Text('TÊN SẢN PHẨM · MÃ / ĐVT',
+                                style:TextStyle(fontSize:10,fontWeight:FontWeight.w800,
+                                  color:ErpTokens.primary))),
+                              const Text('GIÁ / KHẢ DỤNG',
+                                style:TextStyle(fontSize:10,fontWeight:FontWeight.w800,
+                                  color:ErpTokens.primary)),
+                            ])),
+                          ConstrainedBox(
+                            constraints:const BoxConstraints(maxHeight:304),
+                            child:ListView.builder(
+                              controller:skuResultScroll,shrinkWrap:true,
+                              itemExtent:76,itemCount:skuMatches.length,
+                              itemBuilder:(context,i){
+                                final sku=skuMatches[i],id=sku['id'].toString();
+                                final unitPrice=skuQuotes[id]?['unitPrice'];
+                                final priceText=customer==null||list==null
+                                  ?'Chọn khách / bảng giá'
+                                  :unitPrice!=null?money(unitPrice)
+                                    :skuPriceBusy?'Đang tra giá…':'Chưa xác định giá';
+                                final stock=stockByProduct[sku['productId'].toString()];
+                                final available=warehouseId==null?'Chưa chọn kho'
+                                  :stockBusy?'Đang tra tồn…'
+                                  :stockError!=null?'Chưa xác định tồn'
+                                  :stock!=null
+                                    ?stock['available'].toString()+' '+(stock['baseUnit']??'đv gốc').toString()
+                                    :stockComplete?'0 đv gốc':'Chưa xác định tồn';
+                                return Material(
+                                  color:i==selectedSkuIndex
+                                    ?const Color(0xE0E8F3EB):Colors.transparent,
+                                  child:InkWell(
+                                    key:ValueKey('sales-sku-result-'+i.toString()),
+                                    onTap:()=>chooseSku(sku,refresh),
+                                    onHover:(hover){
+                                      if(hover&&selectedSkuIndex!=i){
+                                        refresh(()=>selectedSkuIndex=i);
+                                      }
+                                    },
+                                    child:Container(
+                                      decoration:const BoxDecoration(border:Border(
+                                        bottom:BorderSide(color:ErpTokens.border,width:.7))),
+                                      padding:const EdgeInsets.symmetric(horizontal:12,vertical:8),
+                                      child:Row(children:[
+                                        Expanded(child:Column(
+                                          crossAxisAlignment:CrossAxisAlignment.start,
+                                          mainAxisAlignment:MainAxisAlignment.center,children:[
+                                            Text((sku['productName']??'Sản phẩm').toString(),
+                                              maxLines:1,overflow:TextOverflow.ellipsis,
+                                              style:const TextStyle(fontSize:13,
+                                                fontWeight:FontWeight.w700,color:ErpTokens.ink)),
+                                            const SizedBox(height:3),
+                                            Text('SKU '+(sku['code']??sku['sku']??'').toString()+
+                                              ' · '+(sku['unitCode']??'').toString()+
+                                              ((sku['barcode']??'').toString().isEmpty
+                                                ?'':' · '+sku['barcode'].toString()),
+                                              maxLines:1,overflow:TextOverflow.ellipsis,
+                                              style:const TextStyle(fontSize:11,color:ErpTokens.muted)),
+                                          ])),
+                                        const SizedBox(width:8),
+                                        SizedBox(width:narrow?116:175,
+                                          child:Column(crossAxisAlignment:CrossAxisAlignment.end,
+                                            mainAxisAlignment:MainAxisAlignment.center,children:[
+                                              Text(priceText,maxLines:1,
+                                                overflow:TextOverflow.ellipsis,
+                                                style:TextStyle(fontSize:narrow?11:13,
+                                                  fontWeight:FontWeight.w800,
+                                                  color:unitPrice!=null?ErpTokens.primary:ErpTokens.muted)),
+                                              const SizedBox(height:3),
+                                              Text(available,maxLines:1,overflow:TextOverflow.ellipsis,
+                                                style:const TextStyle(fontSize:11,color:ErpTokens.muted)),
+                                            ])),
+                                      ]),
+                                    ),
+                                  ),
+                                );
+                              }),
+                          ),
+                          const Padding(
+                            padding:EdgeInsets.symmetric(horizontal:12,vertical:6),
+                            child:Text('Giá theo khách / chính sách · Tồn chỉ tham khảo; máy chủ xác nhận lại khi lưu đơn',
+                              style:TextStyle(fontSize:10,color:ErpTokens.muted))),
+                        ]),
+                      ),
                     const SizedBox(height:12),
                     if(lines.isNotEmpty&&!narrow)Padding(
                       padding:const EdgeInsets.symmetric(horizontal:8,vertical:7),
