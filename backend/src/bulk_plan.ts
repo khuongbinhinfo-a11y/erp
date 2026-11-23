@@ -432,8 +432,9 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
  const existingBarcodes=new Set(occupiedBarcodes.rows.map(x=>x.barcode));
  const fileBarcodeCounts=new Map<string,number>();
  if(res==="products")for(const raw of data){
-  if(raw.barcode&&!known.has(raw.code)){
-   fileBarcodeCounts.set(raw.barcode,(fileBarcodeCounts.get(raw.barcode)??0)+1);
+  const barcode=raw.barcode,productCode=raw.code;
+  if(barcode&&productCode&&!known.has(productCode)){
+   fileBarcodeCounts.set(barcode,(fileBarcodeCounts.get(barcode)??0)+1);
   }
  }
 
