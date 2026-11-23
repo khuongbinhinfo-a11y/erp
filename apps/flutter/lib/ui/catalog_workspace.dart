@@ -28,6 +28,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
   String? error;
   int requestSerial=0;
   final search=TextEditingController();
+  final inlineAmount=TextEditingController(),inlineDiscount=TextEditingController();
+  String? inlinePriceId;
 
   static const tabs=<String,List<ErpSectionTab<String>>>{
     'customers':[
@@ -80,13 +82,14 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     super.didUpdateWidget(oldWidget);
     if(oldWidget.session.token!=widget.session.token ||
       oldWidget.client!=widget.client || oldWidget.area!=widget.area){
-      requestSerial++;items=[];branches=[];branchId=null;
+      requestSerial++;items=[];branches=[];branchId=null;inlinePriceId=null;
       productWriteReady=false;resource=widget.area;search.clear();
       _loadBranches();
     }
   }
   @override void dispose(){
-    requestSerial++;search.dispose();super.dispose();
+    requestSerial++;search.dispose();inlineAmount.dispose();inlineDiscount.dispose();
+    super.dispose();
   }
   Future<void> _loadBranches() async {
     final stamp=++requestSerial;
@@ -152,7 +155,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
   void _changeResource(String next){
     if(next==resource)return;
     setState((){
-      resource=next;search.clear();items=[];productWriteReady=false;
+      resource=next;search.clear();items=[];productWriteReady=false;inlinePriceId=null;
     });
     _loadRecords();
   }
@@ -980,6 +983,55 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
       )));
   }
 
+  void _beginInlinePrice(Map<String,dynamic> row){
+    if(resource!='prices'||!canWrite||saving||branchId==null)return;
+    final listId=row['priceListId'],productId=row['productId'],id=row['id'];
+    if(listId is! String||productId is! String||id is! String)return;
+    final pending=widget.client.pendingR1(widget.session.actorId,branchId!,
+      'catalog.create.prices.'+listId+'.'+productId);
+    setState((){
+      inlinePriceId=id;
+      inlineAmount.text=(pending?.payload['amount']??row['amount']).toString();
+      inlineDiscount.text=(pending?.payload['discountRate']??row['discountRate']).toString();
+    });
+  }
+  Future<void> _saveInlinePrice(Map<String,dynamic> row)async{
+    if(resource!='prices'||!canWrite||saving||branchId==null||
+       inlinePriceId!=row['id'])return;
+    final listId=row['priceListId'],productId=row['productId'];
+    if(listId is! String||productId is! String)return;
+    final branch=branchId!,actor=widget.session.actorId;
+    final kind='catalog.create.prices.'+listId+'.'+productId;
+    final pending=widget.client.pendingR1(actor,branch,kind);
+    final payload=pending?.payload??<String,dynamic>{
+      'branchId':branch,'priceListId':listId,'productId':productId,
+      'amount':inlineAmount.text.trim(),'discountRate':inlineDiscount.text.trim(),
+      'effectiveAt':DateTime.now().toUtc().toIso8601String(),
+    };
+    final key=pending?.key??('r1c-inline-price-'+
+      DateTime.now().microsecondsSinceEpoch.toString());
+    if(pending==null)widget.client.retainR1(actor,branch,kind,payload,key);
+    setState(()=>saving=true);
+    try{
+      await widget.client.createCatalogWithKey(
+        widget.session.token,'prices',payload,key:key);
+      widget.client.clearR1(actor,branch,kind);
+      if(!mounted)return;
+      setState(()=>inlinePriceId=null);
+      ErpToast.show(context,'Đã ghi giá hiệu lực mới, lịch sử cũ được giữ nguyên.');
+      await _loadRecords();
+    }on ErpApiError catch(e){
+      if(e.status==400||e.status==404||e.code=='EFFECTIVE_PRICE_EXISTS'||
+          e.code=='INVALID_DECIMAL_STRING')
+        widget.client.clearR1(actor,branch,kind);
+      if(mounted)ErpToast.show(context,_errorMessage(e),isError:true);
+    }catch(_){
+      if(mounted)ErpToast.show(context,
+        'Chưa có xác nhận server. Bấm Lưu lại để kiểm tra đúng yêu cầu trước.',
+        isError:true);
+    }finally{if(mounted)setState(()=>saving=false);}
+  }
+
   Future<void> _cloneList(Map<String,dynamic> row)async{
     if(resource!='price-lists'||!canWrite||saving||branchId==null)return;
     final sourceId=row['id'],revision=row['revision'];
@@ -1371,7 +1423,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                         maxLines:1,overflow:TextOverflow.ellipsis))).toList(),
                     onChanged:(next){
                       if(next==null||next==branchId)return;
-                      setState(()=>branchId=next);_loadRecords();
+                      setState((){branchId=next;inlinePriceId=null;});_loadRecords();
                     })),
               IconButton(
                 key:const ValueKey('catalog-refresh'),
@@ -1424,10 +1476,27 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                 key:const ValueKey('catalog-live-table'),
                 headingRowColor:const WidgetStatePropertyAll(ErpTokens.mint),
                 columns:columns.map((entry)=>DataColumn(
-                  label:Text(entry.$2))).toList(),
+                  label:Text(entry.$2))).toList()+
+                  [if(resource=='prices')const DataColumn(label:Text('Điều chỉnh'))],
                 rows:items.map((entry)=>DataRow(cells:[
                   for(final c in columns)DataCell(
-                    c.$1=='code'&&canEdit
+                    resource=='prices'&&inlinePriceId==entry['id']&&
+                      c.$1=='amount'
+                      ? SizedBox(width:132,child:TextField(
+                          key:const ValueKey('r1c-inline-price-amount'),
+                          controller:inlineAmount,
+                          keyboardType:const TextInputType.numberWithOptions(decimal:true),
+                          decoration:const InputDecoration(
+                            labelText:'Giá mới',isDense:true)))
+                    : resource=='prices'&&inlinePriceId==entry['id']&&
+                      c.$1=='discountRate'
+                      ? SizedBox(width:102,child:TextField(
+                          key:const ValueKey('r1c-inline-price-discount'),
+                          controller:inlineDiscount,
+                          keyboardType:const TextInputType.numberWithOptions(decimal:true),
+                          decoration:const InputDecoration(
+                            labelText:'CK %',isDense:true)))
+                    : c.$1=='code'&&canEdit
                       ? Row(mainAxisSize:MainAxisSize.min,children:[
                           Text(_cell(entry,c.$1)),
                           IconButton(
@@ -1447,6 +1516,24 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                             onPressed:saving?null:()=>_productImages(entry)),
                         ])
                       : Text(_cell(entry,c.$1))),
+                  if(resource=='prices')DataCell(
+                    !canWrite?const Text('—'):
+                    inlinePriceId==entry['id']
+                      ? Row(mainAxisSize:MainAxisSize.min,children:[
+                        IconButton(key:const ValueKey('r1c-inline-price-save'),
+                          tooltip:'Lưu giá mới',icon:const Icon(Icons.check),
+                          onPressed:saving?null:()=>_saveInlinePrice(entry)),
+                        IconButton(tooltip:'Hủy sửa giá',icon:const Icon(Icons.close),
+                          onPressed:saving?null:()=>setState(()=>inlinePriceId=null)),
+                      ])
+                      : TextButton.icon(
+                        key:ValueKey('r1c-inline-price-edit-'+entry['id'].toString()),
+                        onPressed:saving?null:()=>_beginInlinePrice(entry),
+                        icon:const Icon(Icons.edit_outlined,size:16),
+                        label:Text(widget.client.pendingR1(widget.session.actorId,
+                          branchId!,'catalog.create.prices.'+
+                          entry['priceListId'].toString()+'.'+entry['productId'].toString())!=null
+                          ?'Kiểm tra yêu cầu':'Giá mới'))),
                 ])).toList())),
             if(resource=='products'&&!productWriteReady&&!loading)
               const Padding(padding:EdgeInsets.only(top:12),
