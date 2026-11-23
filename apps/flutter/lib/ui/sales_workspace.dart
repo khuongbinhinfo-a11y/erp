@@ -150,6 +150,16 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         // never be guessed. Catalog customer creation remains migration gated.
       }
     }
+    // Only warehouses granted to this actor may be offered for stock lookup.
+    List<Map<String,dynamic>> stockWarehouses=[];
+    if(can('inventory.read')){
+      try{
+        stockWarehouses=await widget.client.catalogItems(
+          widget.session.token,'warehouses',branchId:branch);
+      }catch(_){
+        // An unavailable inventory service does not block order drafting.
+      }
+    }
     if(!mounted)return null;
     String? customer=order?['customerId'] as String? ??
       (customers.length==1?customers.single['id'] as String:null);
@@ -283,8 +293,103 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     List<Map<String,dynamic>> customerMatches=[];
     int selectedSkuIndex=0,skuSearchGeneration=0;
     int selectedCustomerIndex=0,customerSearchGeneration=0;
-    String? skuResultsFor;
+    String? skuResultsFor,skuSearchError;
     bool skuBusy=false,customerBusy=false,starterUntouched=order==null;
+    bool skuPriceBusy=false,stockBusy=false,stockLoaded=false,stockComplete=false;
+    String? stockError,warehouseId=stockWarehouses.length==1
+      ?stockWarehouses.single['id'] as String:null;
+    int priceGeneration=0,stockGeneration=0;
+    Map<String,Map<String,dynamic>> skuQuotes={},stockByProduct={};
+    final skuResultScroll=ScrollController();
+    String priceContext()=>[customer??'',list??'',channel??''].join('|');
+    String skuQuantity(String id){
+      for(final line in lines){
+        if(line.sellSkuId==id&&quantityPattern.hasMatch(line.quantity.text.trim())&&
+            RegExp('[1-9]').hasMatch(line.quantity.text)){
+          return line.quantity.text.trim();
+        }
+      }
+      return '1';
+    }
+    Future<void> loadPrices(BuildContext ctx,StateSetter refresh,
+        List<Map<String,dynamic>> candidates)async{
+      final run=++priceGeneration;
+      final contextKey=priceContext();
+      refresh((){
+        skuQuotes={};
+        skuPriceBusy=customer!=null&&list!=null&&candidates.isNotEmpty;
+      });
+      if(!skuPriceBusy)return;
+      // Limit to 12 results and three concurrent lookups per batch.
+      for(var i=0;i<candidates.length;i+=3){
+        final found=await Future.wait(candidates.skip(i).take(3).map((sku)async{
+          final id=sku['id'].toString();
+          try{
+            final q=await widget.client.salesSkuPrice(widget.session.token,
+              branchId:branch,sellSkuId:id,customerId:customer!,
+              priceListId:list!,channelId:channel,quantity:skuQuantity(id));
+            return <String,dynamic>{'id':id,'quote':q};
+          }catch(_){return <String,dynamic>{'id':id};}
+        }));
+        if(!ctx.mounted||run!=priceGeneration||contextKey!=priceContext())return;
+        refresh((){
+          for(final row in found){
+            if(row['quote'] is Map<String,dynamic>){
+              skuQuotes[row['id'] as String]=row['quote'] as Map<String,dynamic>;
+            }
+          }
+        });
+      }
+      if(ctx.mounted&&run==priceGeneration)refresh(()=>skuPriceBusy=false);
+    }
+    Future<void> loadStock(BuildContext ctx,StateSetter refresh)async{
+      final warehouse=warehouseId;
+      final run=++stockGeneration;
+      if(warehouse==null)return;
+      refresh((){
+        stockBusy=true;stockLoaded=false;stockComplete=false;stockError=null;
+        stockByProduct={};
+      });
+      final found=<String,Map<String,dynamic>>{};
+      try{
+        var complete=false;
+        for(var offset=0;offset<2000;offset+=100){
+          final page=await widget.client.inventoryPage(widget.session.token,
+            'balances',branchId:branch,warehouseId:warehouse,offset:offset);
+          for(final row in page.items){found[row['productId'].toString()]=row;}
+          if(!page.hasMore){complete=true;break;}
+        }
+        if(!ctx.mounted||run!=stockGeneration||warehouseId!=warehouse)return;
+        refresh((){
+          stockByProduct=found;stockComplete=complete;
+          stockLoaded=true;stockBusy=false;
+          if(!complete)stockError='Tồn kho chưa được tải đầy đủ.';
+        });
+      }on ErpApiError catch(e){
+        if(ctx.mounted&&run==stockGeneration)refresh((){
+          stockBusy=false;stockLoaded=true;stockError=e.message;
+        });
+      }catch(_){
+        if(ctx.mounted&&run==stockGeneration)refresh((){
+          stockBusy=false;stockLoaded=true;stockError='Không tải được tồn kho.';
+        });
+      }
+    }
+    void pricingChanged(BuildContext ctx,StateSetter refresh){
+      invalidate(refresh);priceGeneration++;
+      if(skuMatches.isNotEmpty){
+        loadPrices(ctx,refresh,skuMatches);
+      }else{refresh((){skuQuotes={};skuPriceBusy=false;});}
+    }
+    void keepSkuVisible(){
+      WidgetsBinding.instance.addPostFrameCallback((_){
+        if(!skuResultScroll.hasClients)return;
+        final y=(selectedSkuIndex*76.0).clamp(
+          0.0,skuResultScroll.position.maxScrollExtent);
+        skuResultScroll.animateTo(y,
+          duration:const Duration(milliseconds:130),curve:Curves.easeOut);
+      });
+    }
     String customerLabel(Map<String,dynamic> x)=>
       (x['code']??'').toString()+' · '+(x['name']??'').toString();
     String selectedCustomer()=>customers.where((x)=>x['id']==customer).isEmpty
@@ -305,9 +410,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       }
       starterUntouched=false;
       skuSearch.clear();
-      skuSearchGeneration++;
-      skuResultsFor=null;
-      skuMatches=[];
+      skuSearchGeneration++;priceGeneration++;
+      skuResultsFor=null;skuSearchError=null;skuMatches=[];skuQuotes={};
       invalidate(refresh);
       // Fast entry: select the new row's quantity, not the search field.
       final selectedLine=lines.last;
@@ -1028,6 +1132,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       );
     }finally{
       skuDebounce?.cancel();customerDebounce?.cancel();
+      priceGeneration++;stockGeneration++;skuResultScroll.dispose();
       note.dispose();skuSearch.dispose();customerSearch.dispose();
       newCustomerCode.dispose();newCustomerName.dispose();
       newCustomerPhone.dispose();newCustomerAddress.dispose();
