@@ -406,7 +406,9 @@ async function main(mode){
  let tmp,container;
  try{
   const v=await versions(pool);
-  if(v.length===18){await validateSchema(pool,"after");await verifyNewTablesOnFirstApply(pool);
+  if(v.length===18){await validateSchema(pool,"after");
+    // Existing assignments may now contain live rows; a completed migration
+    // is not expected to remain empty on subsequent read-only checks.
     console.log("ERP_R1C_ALREADY_MIGRATED_18");return;}
   await validateSchema(pool,"before");
   await validateLegacyInputs(pool);
