@@ -425,41 +425,50 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     Future<void> findSkus(BuildContext ctx,StateSetter refresh,{bool addOnEnter=false})async{
       final term=skuSearch.text.trim();
       if(term.isEmpty)return;
-      final requestGeneration=++skuSearchGeneration;
-      refresh((){skuBusy=true;formError=null;skuMatches=[];
-        skuResultsFor=null;selectedSkuIndex=0;});
+      final request=++skuSearchGeneration;
+      priceGeneration++;
+      refresh((){
+        skuBusy=true;skuSearchError=null;skuMatches=[];skuQuotes={};
+        skuPriceBusy=false;skuResultsFor=null;selectedSkuIndex=0;
+      });
       try{
-        final found=await widget.client.catalogItems(widget.session.token,'r1/skus',
-          branchId:branch,query:term);
+        final found=await widget.client.catalogItems(widget.session.token,
+          'r1/skus',branchId:branch,query:term);
         if(!ctx.mounted||skuSearch.text.trim()!=term||
-          requestGeneration!=skuSearchGeneration)return;
-        final available=found.where((x)=>x['active']==true).toList();
-        refresh((){skuBusy=false;skuMatches=available;skuResultsFor=term;});
+            request!=skuSearchGeneration)return;
+        final available=found.where((sku)=>sku['active']==true).toList();
+        final visible=available.take(12).toList();
+        refresh((){
+          skuBusy=false;skuMatches=visible;skuResultsFor=term;
+          if(visible.isEmpty)skuSearchError='Không tìm thấy SKU đang bán.';
+        });
         if(addOnEnter&&available.isNotEmpty){
-          final exact=available.where((x)=>
-            (x['code']??x['sku']??'').toString().toLowerCase()==term.toLowerCase()||
-            (x['barcode']??'').toString().toLowerCase()==term.toLowerCase()).toList();
-          if(exact.length==1){chooseSku(exact.first,refresh);}
-          else if(available.length==1){chooseSku(available.first,refresh);}
+          final exact=available.where((sku)=>
+            (sku['code']??sku['sku']??'').toString().toLowerCase()==term.toLowerCase()||
+            (sku['barcode']??'').toString().toLowerCase()==term.toLowerCase()).toList();
+          if(exact.length==1){chooseSku(exact.single,refresh);return;}
+          if(available.length==1){chooseSku(available.single,refresh);return;}
         }
-        if(available.isEmpty)refresh(()=>
-          formError='Không tìm thấy SKU đang bán. Kiểm tra mã hàng hoặc barcode.');
+        if(visible.isNotEmpty){
+          loadPrices(ctx,refresh,visible);
+          if(warehouseId!=null&&!stockLoaded&&!stockBusy)loadStock(ctx,refresh);
+        }
       }on ErpApiError catch(e){
-        if(ctx.mounted&&requestGeneration==skuSearchGeneration)refresh((){
-          skuBusy=false;formError=e.message;
+        if(ctx.mounted&&request==skuSearchGeneration)refresh((){
+          skuBusy=false;skuSearchError=e.message;
         });
       }catch(_){
-        if(ctx.mounted&&requestGeneration==skuSearchGeneration)refresh((){
-          skuBusy=false;formError='Không tìm được sản phẩm. Vui lòng thử lại.';
+        if(ctx.mounted&&request==skuSearchGeneration)refresh((){
+          skuBusy=false;skuSearchError='Không tìm được sản phẩm. Thử lại.';
         });
       }
     }
-    void chooseCustomer(Map<String,dynamic> item,StateSetter refresh){
+    void chooseCustomer(BuildContext ctx,Map<String,dynamic> item,StateSetter refresh){
       if(!customers.any((x)=>x['id']==item['id']))customers.add(item);
       customer=item['id'] as String;
       customerSearch.clear();customerMatches=[];
       customerSearchGeneration++;
-      invalidate(refresh);
+      pricingChanged(ctx,refresh);
       skuFocus.requestFocus();
     }
     Future<void> createQuickCustomer(BuildContext ctx,StateSetter refresh)async{
@@ -507,7 +516,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           'active':true,'paymentTermsDays':
             pendingQuickCustomer!['paymentTermsDays']??0,
         };
-        chooseCustomer(saved,refresh);
+        chooseCustomer(ctx,saved,refresh);
         widget.client.clearR1(widget.session.actorId,branch,quickCustomerKind);
         refresh((){
           quickCustomerVisible=false;
@@ -688,7 +697,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         return KeyEventResult.handled;
                       }
                       if(event.logicalKey==LogicalKeyboardKey.enter){
-                        chooseCustomer(customerMatches[selectedCustomerIndex],refresh);
+                        chooseCustomer(ctx,customerMatches[selectedCustomerIndex],refresh);
                         return KeyEventResult.handled;
                       }
                       return KeyEventResult.ignored;
@@ -710,7 +719,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       onSubmitted:(_){
                         customerDebounce?.cancel();
                         if(customerMatches.isNotEmpty){
-                          chooseCustomer(customerMatches[selectedCustomerIndex],refresh);
+                          chooseCustomer(ctx,customerMatches[selectedCustomerIndex],refresh);
                         }else{findCustomers(ctx,refresh);}
                       },
                       decoration:InputDecoration(labelText:'Tìm khách theo mã, tên · F4',
@@ -829,7 +838,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           subtitle:Text((customerMatches[i]['deliveryAddress']??
                             customerMatches[i]['phone']??'').toString(),
                             maxLines:1,overflow:TextOverflow.ellipsis),
-                          onTap:()=>chooseCustomer(customerMatches[i],refresh),
+                          onTap:()=>chooseCustomer(ctx,customerMatches[i],refresh),
                         ),
                       ]),
                     ),
@@ -842,7 +851,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         items:customers.map((x)=>DropdownMenuItem<String>(
                           value:x['id'] as String,
                           child:Text(customerLabel(x),overflow:TextOverflow.ellipsis))).toList(),
-                        onChanged:(v){customer=v;invalidate(refresh);})),
+                        onChanged:(v){customer=v;pricingChanged(ctx,refresh);})),
                       const SizedBox(width:10),
                       Expanded(child:DropdownButtonFormField<String>(
                         key:ValueKey('sales-price-list-'+list.toString()),
@@ -851,7 +860,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         items:lists.map((x)=>DropdownMenuItem<String>(
                           value:x['id'] as String,child:Text((x['name']??'').toString(),
                             overflow:TextOverflow.ellipsis))).toList(),
-                        onChanged:(v){list=v;invalidate(refresh);})),
+                        onChanged:(v){list=v;pricingChanged(ctx,refresh);})),
                       const SizedBox(width:10),
                       Expanded(child:DropdownButtonFormField<String>(
                         key:ValueKey('sales-channel-'+channel.toString()),
@@ -863,7 +872,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                             value:x['id'] as String,
                             child:Text((x['name']??'').toString(),overflow:TextOverflow.ellipsis))),
                         ],
-                        onChanged:(v){channel=v;invalidate(refresh);})),
+                        onChanged:(v){channel=v;pricingChanged(ctx,refresh);})),
                     ])else Column(children:[
                       DropdownButtonFormField<String>(
                         key:ValueKey('sales-customer-'+customer.toString()),
@@ -872,7 +881,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         items:customers.map((x)=>DropdownMenuItem<String>(
                           value:x['id'] as String,
                           child:Text(customerLabel(x),overflow:TextOverflow.ellipsis))).toList(),
-                        onChanged:(v){customer=v;invalidate(refresh);}),
+                        onChanged:(v){customer=v;pricingChanged(ctx,refresh);}),
                       const SizedBox(height:8),
                       DropdownButtonFormField<String>(
                         key:ValueKey('sales-price-list-'+list.toString()),
@@ -881,7 +890,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         items:lists.map((x)=>DropdownMenuItem<String>(
                           value:x['id'] as String,
                           child:Text((x['name']??'').toString(),overflow:TextOverflow.ellipsis))).toList(),
-                        onChanged:(v){list=v;invalidate(refresh);}),
+                        onChanged:(v){list=v;pricingChanged(ctx,refresh);}),
                       const SizedBox(height:8),
                       DropdownButtonFormField<String>(
                         key:ValueKey('sales-channel-'+channel.toString()),
@@ -892,7 +901,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           ...channels.map((x)=>DropdownMenuItem<String>(
                             value:x['id'] as String,
                             child:Text((x['name']??'').toString(),overflow:TextOverflow.ellipsis))),
-                        ],onChanged:(v){channel=v;invalidate(refresh);}),
+                        ],onChanged:(v){channel=v;pricingChanged(ctx,refresh);}),
                     ]),
                     const SizedBox(height:8),
                     if(customers.any((x)=>x['id']==customer))
