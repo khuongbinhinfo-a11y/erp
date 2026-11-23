@@ -37,6 +37,23 @@ void main(){
     expect(notice,findsNothing);
   });
 
+  testWidgets('reduce motion skips movement but preserves four-second reading time',
+    (tester)async{
+    var dismissed=0;
+    await tester.pumpWidget(MaterialApp(home:MediaQuery(
+      data:const MediaQueryData(disableAnimations:true),
+      child:Scaffold(body:ErpToastNotice(
+        message:'Cần thời gian để đọc',
+        onDismiss:()=>dismissed++)))));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds:300));
+    expect(dismissed,0);
+    await tester.pump(const Duration(seconds:3));
+    expect(dismissed,0);
+    await tester.pump(const Duration(seconds:1));
+    expect(dismissed,1);
+  });
+
   testWidgets('close toast slides out immediately without changing app state',
     (tester)async{
     await tester.pumpWidget(MaterialApp(home:Scaffold(
