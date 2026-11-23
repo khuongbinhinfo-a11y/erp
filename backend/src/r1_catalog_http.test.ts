@@ -344,8 +344,20 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
     {name:"Stale edit"})).status,409);
   assert.equal((await patchR1("channels",channel.body.id,1,
     {code:"MCP_NEW"})).status,400,"channel identity is immutable");
-  assert.equal((await patchR1("skus",baseSku,0,{active:false})).status,409,
-    "base SKU cannot be disabled without product lifecycle decision");
+  assert.equal((await patchR1("skus",baseSku,0,{active:false})).status,400,
+    "SKU deactivation always requires an auditable reason");
+  const retiredBase=await patchR1("skus",baseSku,0,
+    {active:false,reason:"Nhập sai SKU đơn vị gốc"});
+  assert.equal(retiredBase.status,200,JSON.stringify(retiredBase.body));
+  assert.equal((await patchR1("skus",baseSku,0,
+    {active:true})).status,409,"stale base SKU revision must conflict");
+  const liveParent=(await pool.query<{active:boolean}>(`SELECT p.active FROM catalog_product p
+    JOIN catalog_sell_sku s ON s.installation_id=p.installation_id
+      AND s.branch_id=p.branch_id AND s.product_id=p.id
+    WHERE s.installation_id=$1 AND s.branch_id=$2 AND s.id=$3`,
+    [root.installationId,b,baseSku])).rows[0]!;
+  assert.equal(liveParent.active,true,
+    "other active sellable variants allow the product to remain active");
   const otherBarcode=await r1("barcodes",
     {sellSkuId:skuId,barcode:"BC-0002",isPrimary:false});
   assert.equal(otherBarcode.status,201);
@@ -386,7 +398,8 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
   assert.equal(unicodeQuote.body.quote.trace.filter(
     (x:{ruleId:string})=>equivalent.includes(x.ruleId)).length,1,
     "old label and new code are equivalent; the discount must apply exactly once");
-  const disabledSku=await patchR1("skus",skuId,0,{active:false});
+  const disabledSku=await patchR1("skus",skuId,0,
+    {active:false,reason:"Sai quy cách nhập thử"});
   assert.equal(disabledSku.status,200,JSON.stringify(disabledSku.body));
   assert.equal(disabledSku.body.revision,1);
   assert.equal((await patchR1("skus",skuId,0,{active:true})).status,409);
@@ -402,6 +415,21 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
     {active:false})).status,409,"barcode revision guards other-device stale edits");
   assert.equal((await patchR1("barcodes",otherBarcode.body.id,1,
     {barcode:"CHANGED"})).status,400,"barcode identity is immutable");
+  const onlyBaseProduct=await legacy("products",{
+    code:"SP-WRONG-BASE",name:"Sản phẩm nhập sai mã gốc",baseUnit:"cai",
+  });
+  assert.equal(onlyBaseProduct.status,201,JSON.stringify(onlyBaseProduct.body));
+  const onlyBaseSku=(await read("skus","SP-WRONG-BASE")).body.items[0];
+  const retiredLast=await patchR1("skus",onlyBaseSku.id,0,
+    {active:false,reason:"Ngừng SKU được nhập sai khi tạo"});
+  assert.equal(retiredLast.status,200,JSON.stringify(retiredLast.body));
+  assert.equal((await pool.query<{active:boolean}>(`SELECT active FROM catalog_product
+     WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,
+    [root.installationId,b,onlyBaseProduct.body.id])).rows[0]!.active,false,
+    "retiring last active SKU must deactivate parent product atomically");
+  assert.equal((await patchR1("skus",onlyBaseSku.id,1,{active:true})).status,409,
+    "re-enabling last SKU requires product reactivation first");
+  assert.equal((await read("skus","SP-WRONG-BASE")).body.items[0].active,false);
   const inactive=await pool.query<{id:string}>(
    "INSERT INTO branch(installation_id,code,name) VALUES($1,'OTHER','Other') RETURNING id",
    [root.installationId]);
