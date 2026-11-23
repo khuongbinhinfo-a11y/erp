@@ -5,7 +5,7 @@ import 'identity_client.dart';
 
 /// Compact inline editor: no duplicate pricing engine and no free-text IDs.
 class PriceListAssignmentsPanel extends StatefulWidget{
-  final IdentityClient client;
+  final ErpIdentityClient client;
   final IdentitySession session;
   final String branchId;
   final Map<String,dynamic> priceList;
