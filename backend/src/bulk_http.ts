@@ -92,7 +92,7 @@ async function exportRows(db:PoolClient,tenant:string,branch:string,kind:BulkRes
  case "prices":
   sql='SELECT DISTINCT ON (l.code,p.sku) l.code AS "priceListCode",'+
    'p.sku AS "productCode",e.amount::text,e.discount_rate::text AS "discountRate",'+
-   ` ${fmt} AS "effectiveAt" FROM catalog_price_entry e `++
+   ` to_char(e.effective_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "effectiveAt" FROM catalog_price_entry e `++
    'JOIN catalog_price_list l ON l.installation_id=e.installation_id '+
    'AND l.branch_id=e.branch_id AND l.id=e.price_list_id '+
    'JOIN catalog_product p ON p.installation_id=e.installation_id '+
