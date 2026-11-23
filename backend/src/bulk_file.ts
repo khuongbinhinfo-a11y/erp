@@ -179,9 +179,18 @@ export function parseBulkFile(fileName:string,contentBase64:string,hasHeader=tru
  return {headers,rows:rows.map(r=>Array.from({length:width},(_,i)=>r[i]??"")),
   firstLine:hasHeader?2:1,rowCount:rows.length};
 }
+/** Reverse only the apostrophe added by ERP's formula-safe CSV exporter.
+ * Applied to CSV text cells, not XLSX (whose formulas are never executed).
+ */
+export function restoreCsvGuard(value:string):string{
+ return /^'+[=+\-@\t\r]/.test(value)?value.slice(1):value;
+}
 export function bulkCsv(columns:string[],rows:string[][]):string{
  const quote=(v:string)=>{
-  const safe=/^[=+\-@\t\r]/.test(v)?"'"+v:v;
+  // Prefix exactly one apostrophe for formula-looking cells, including
+  // literal apostrophes preceding a formula token. This ensures any number
+  // of original apostrophes can round-trip through the CSV importer.
+  const safe=/^'*[=+\-@\t\r]/.test(v)?"'"+v:v;
   return /[",\r\n]/.test(safe)?'"'+safe.replaceAll('"','""')+'"':safe;
  };
  return [columns,...rows].map(r=>r.map(quote).join(",")).join("\r\n")+"\r\n";
