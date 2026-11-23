@@ -386,7 +386,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         if(!skuResultScroll.hasClients)return;
         final y=(selectedSkuIndex*76.0).clamp(
           0.0,skuResultScroll.position.maxScrollExtent);
-        skuResultScroll.animateTo(y,
+        skuResultScroll.animateTo(y.toDouble(),
           duration:const Duration(milliseconds:130),curve:Curves.easeOut);
       });
     }
@@ -649,8 +649,13 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
               return KeyEventResult.handled;
             }
             if(event.logicalKey==LogicalKeyboardKey.escape){
-              if(skuMatches.isNotEmpty||customerMatches.isNotEmpty){
-                refresh((){skuMatches=[];customerMatches=[];});
+              if(skuMatches.isNotEmpty||skuBusy||skuSearchError!=null||
+                   customerMatches.isNotEmpty){
+                skuSearchGeneration++;priceGeneration++;
+                refresh((){
+                  skuMatches=[];customerMatches=[];
+                  skuBusy=false;skuSearchError=null;
+                });
               }else{requestClose(ctx);}
               return KeyEventResult.handled;
             }
@@ -920,10 +925,12 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           skuResultsFor!=skuSearch.text.trim())return KeyEventResult.ignored;
                         if(event.logicalKey==LogicalKeyboardKey.arrowDown){
                           refresh(()=>selectedSkuIndex=(selectedSkuIndex+1)%skuMatches.length);
+                          keepSkuVisible();
                           return KeyEventResult.handled;
                         }
                         if(event.logicalKey==LogicalKeyboardKey.arrowUp){
                           refresh(()=>selectedSkuIndex=(selectedSkuIndex-1+skuMatches.length)%skuMatches.length);
+                          keepSkuVisible();
                           return KeyEventResult.handled;
                         }
                         if(event.logicalKey==LogicalKeyboardKey.enter){
@@ -937,10 +944,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         controller:skuSearch,focusNode:skuFocus,
                         onChanged:(_){
                           skuDebounce?.cancel();
-                          skuSearchGeneration++;
+                          skuSearchGeneration++;priceGeneration++;
                           refresh((){
-                            skuMatches=[];skuResultsFor=null;
-                            selectedSkuIndex=0;skuBusy=false;
+                            skuMatches=[];skuQuotes={};skuResultsFor=null;
+                            skuSearchError=null;selectedSkuIndex=0;
+                            skuBusy=false;skuPriceBusy=false;
                           });
                           if(skuSearch.text.trim().isNotEmpty){
                             skuDebounce=Timer(const Duration(milliseconds:220),
@@ -950,7 +958,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         textInputAction:TextInputAction.search,
                         onSubmitted:(_){
                           skuDebounce?.cancel();
-                          findSkus(ctx,refresh,addOnEnter:true);
+                          if(skuMatches.isNotEmpty&&skuResultsFor==skuSearch.text.trim()){
+                            chooseSku(skuMatches[selectedSkuIndex],refresh);
+                          }else{findSkus(ctx,refresh,addOnEnter:true);}
                         },
                         decoration:InputDecoration(labelText:'Tìm sản phẩm theo tên, SKU, barcode · F3',
                           hintText:'Nhập mã hàng hoặc quét barcode rồi Enter',
@@ -1017,7 +1027,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                               controller:skuResultScroll,shrinkWrap:true,
                               itemExtent:76,itemCount:skuMatches.length,
                               itemBuilder:(context,i){
-                                final sku=skuMatches[i],id=sku['id'].toString();
+                                final sku=skuMatches[i];
+                                final id=sku['id'].toString();
                                 final unitPrice=skuQuotes[id]?['unitPrice'];
                                 final priceText=customer==null||list==null
                                   ?'Chọn khách / bảng giá'
