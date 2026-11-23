@@ -190,8 +190,8 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
   assert.equal((await db.query<{n:string}>(
     'SELECT count(*)::text AS n FROM catalog_price_entry '+
     'WHERE installation_id=$1 AND branch_id=$2 AND product_id=$3',
-    [root.installationId,branchId,productId])).rows[0]!.n,"2",
-    "bulk price update appends new effective record without rewriting history");
+    [root.installationId,branchId,productId])).rows[0]!.n,"3",
+    "two bulk versions plus one concurrent single-price version are all preserved");
 
   const skuFile=(code:string,active:string,reason:string)=>({
    branchId,resource:"skus",mode:"UPSERT",fileName:"skus.csv",
