@@ -16,6 +16,7 @@ void main(){
         child:const Text('Hiện thông báo'))))));
     await tester.tap(find.text('Hiện thông báo'));
     await tester.pump();
+    await tester.pump(const Duration(milliseconds:16));
     final notice=find.byKey(const ValueKey('erp-active-toast'));
     expect(notice,findsOneWidget);
     final slide=find.descendant(of:notice,
@@ -31,6 +32,7 @@ void main(){
     expect(remaining,greaterThan(0));
     expect(remaining,lessThan(0.7));
     await tester.pump(const Duration(seconds:2));
+    await tester.pump();
     await tester.pump(const Duration(milliseconds:260));
     expect(notice,findsNothing);
   });
@@ -42,9 +44,11 @@ void main(){
         onPressed:()=>ErpToast.show(context,'Lưu ý kiểm tra giá',isError:true),
         child:const Text('Thông báo lỗi'))))));
     await tester.tap(find.text('Thông báo lỗi'));
+    await tester.pump();
     await tester.pump(const Duration(milliseconds:320));
     expect(find.byKey(const ValueKey('erp-active-toast')),findsOneWidget);
     await tester.tap(find.byTooltip('Đóng thông báo'));
+    await tester.pump();
     await tester.pump(const Duration(milliseconds:250));
     expect(find.byKey(const ValueKey('erp-active-toast')),findsNothing);
     expect(find.text('Thông báo lỗi'),findsOneWidget);
