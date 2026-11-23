@@ -2,7 +2,8 @@ import { inflateRawSync } from "node:zlib";
 
 /** Bounded, dependency-free CSV/XLSX reader: formulas/macros are never executed. */
 export class BulkFileFault extends Error {
- constructor(readonly code:string,readonly status=400){super(code);}
+ readonly code:string;readonly status:number;
+ constructor(code:string,status=400){super(code);this.code=code;this.status=status;}
 }
 const ROW_LIMIT=5000,FILE_LIMIT=6*1024*1024,TEXT_LIMIT=16*1024*1024;
 const decoder=new TextDecoder("utf-8",{fatal:true});
