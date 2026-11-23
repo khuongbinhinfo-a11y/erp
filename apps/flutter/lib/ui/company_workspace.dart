@@ -87,7 +87,9 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
       CompanySection.stocktakes=>has('inventory.stocktake.read')||has('inventory.stocktake.create'),
       CompanySection.orders=>has('orders.read')||has('orders.create'),
       CompanySection.receivables=>has('finance.receivables.read')||has('finance.payments.record'),
-      CompanySection.reports=>p.any((x)=>x.endsWith('.read')),
+      // Reports have no released API yet; a catalog.read grant must never
+      // implicitly expose finance or stock reporting.
+      CompanySection.reports=>has('reports.read'),
     };
   }
   List<CompanySection> get visibleSections=>CompanySection.values.where(canView).toList();
