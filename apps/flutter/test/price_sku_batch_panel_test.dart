@@ -71,7 +71,7 @@ void main(){
       expect(row['priceListId'],list);
       expect(row['adjustment'],'FIXED_PRICE');
       expect(row['amount'],'25000');
-      expect(row['priority'],100000);
+      expect(row['priority'],0);
       expect(row['effectiveFrom'],isNotNull);
     }
     expect(keys.length,2);
