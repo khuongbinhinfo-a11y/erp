@@ -103,7 +103,8 @@ void main(){
     await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
       home:Scaffold(body:CompanyWorkspace(previewOnly:false,
         grants:rights,session:loggedIn(),client:client))));
-    await tester.tap(find.byKey(const ValueKey('company-CompanySection.orders')));
+    await tester.ensureVisible(find.byKey(const ValueKey('company-CompanyGroup.sales')));
+    await tester.tap(find.byKey(const ValueKey('company-CompanyGroup.sales')));
     await tester.pumpAndSettle();
     await tester.runAsync(() async => Future<void>.delayed(const Duration(milliseconds:120)));
     await tester.pumpAndSettle();
@@ -285,7 +286,8 @@ void main(){
     await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
       home:Scaffold(body:CompanyWorkspace(previewOnly:false,
         grants:grants,session:session,client:client))));
-    await tester.tap(find.byKey(const ValueKey('company-CompanySection.orders')));
+    await tester.ensureVisible(find.byKey(const ValueKey('company-CompanyGroup.sales')));
+    await tester.tap(find.byKey(const ValueKey('company-CompanyGroup.sales')));
     await tester.pumpAndSettle();
     await tester.runAsync(() async=>Future<void>.delayed(const Duration(milliseconds:120)));
     await tester.pumpAndSettle();
