@@ -333,12 +333,21 @@ async function listing(db:PoolClient,t:string,b:string,kind:Kind,q:string,skuId?
   return r.rows;
  }
  const r=await db.query(`SELECT r.id,r.price_list_id AS "priceListId",
-    r.sell_sku_id AS "sellSkuId",s.sku,r.scope_kind AS "scopeKind",
+    l.code AS "priceListCode",r.sell_sku_id AS "sellSkuId",s.sku,
+    r.scope_kind AS "scopeKind",r.channel_id AS "channelId",ch.code AS "channelCode",
+    r.customer_id AS "customerId",c.code AS "customerCode",
+    r.customer_group AS "customerGroup",
     r.adjustment,r.amount::text,r.priority,r.stacking,
     r.stop_processing AS "stopProcessing",r.min_quantity::text AS "minQuantity",
     r.effective_from AS "effectiveFrom",r.effective_to AS "effectiveTo",
     x.retired_at AS "retiredAt"
    FROM catalog_sku_price_rule r
+   JOIN catalog_price_list l ON l.installation_id=r.installation_id
+      AND l.branch_id=r.branch_id AND l.id=r.price_list_id
+   LEFT JOIN catalog_sales_channel ch ON ch.installation_id=r.installation_id
+      AND ch.branch_id=r.branch_id AND ch.id=r.channel_id
+   LEFT JOIN catalog_customer c ON c.installation_id=r.installation_id
+      AND c.branch_id=r.branch_id AND c.id=r.customer_id
    LEFT JOIN catalog_sku_price_retirement x ON
      x.installation_id=r.installation_id AND x.branch_id=r.branch_id
      AND x.rule_id=r.id
@@ -346,7 +355,8 @@ async function listing(db:PoolClient,t:string,b:string,kind:Kind,q:string,skuId?
     ON s.installation_id=r.installation_id AND s.branch_id=r.branch_id
     AND s.id=r.sell_sku_id
    WHERE r.installation_id=$1 AND r.branch_id=$2
-    AND (s.sku ILIKE $3 OR r.scope_kind ILIKE $3)
+    AND (s.sku ILIKE $3 OR r.scope_kind ILIKE $3 OR l.code ILIKE $3
+       OR c.code ILIKE $3 OR ch.code ILIKE $3 OR r.customer_group ILIKE $3)
    ORDER BY r.created_at DESC,r.id DESC LIMIT 100`,[t,b,"%"+q+"%"]);
  return r.rows;
 }
