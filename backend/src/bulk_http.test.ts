@@ -163,6 +163,28 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
   };
   const roundtrip=await preview(exportedCustomerReimport);
   assert.equal(roundtrip.body.summary.unchanged,2,JSON.stringify(roundtrip.body));
+  const decoratedCustomer={
+   branchId,resource:"customers",mode:"UPSERT",fileName:"text-customer.csv",
+   contentBase64:Buffer.from("Mã KH,Tên khách,Địa chỉ giao\n"+
+    "KHFORM,@Home,-Kho hàng\n").toString("base64"),
+   hasHeader:true,mapping:{code:"Mã KH",name:"Tên khách",
+    deliveryAddress:"Địa chỉ giao"},
+  };
+  const decoratedPreview=await preview(decoratedCustomer);
+  assert.equal(decoratedPreview.body.summary.error,0);
+  assert.equal((await apply(decoratedCustomer,decoratedPreview.body.hash)).status,200);
+  const exportDecorated=await request("/v1/catalog/bulk/export?branchId="+branchId+
+    "&resource=customers","GET",undefined,token);
+  assert.equal(exportDecorated.status,200);
+  assert.match(exportDecorated.body.content,/'@Home/);
+  assert.match(exportDecorated.body.content,/'-Kho hàng/);
+  const decoratedRoundtrip=await preview({
+   ...exportedCustomerReimport,
+   contentBase64:Buffer.from(exportDecorated.body.content).toString("base64"),
+  });
+  const decoratedRow=decoratedRoundtrip.body.rows.find((row:{key:string})=>row.key==="KHFORM");
+  assert.equal(decoratedRow?.action,"UNCHANGED",
+   "formula-safe exported customer name/address must reimport unchanged");
   const inactiveCustomer=await create("customers",{
    code:"KH_IN",name:"Khách đã ngừng",customerGroupId:group.body.id,
    customerRegionId:region.body.id,phone:"+84900000031"});
@@ -199,6 +221,23 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
   const productReimport=await preview(productInput);
   assert.equal(productReimport.body.summary.unchanged,1,
     "exported unchanged product base UOM must not be rewritten");
+  const decoratedProduct=await request("/v1/catalog/products/"+productId,
+    "PATCH",{branchId,name:"@Product"},token,
+    {"idempotency-key":"product-formula-"+randomUUID(),"if-match":"0"});
+  assert.equal(decoratedProduct.status,200,JSON.stringify(decoratedProduct.body));
+  const exportedProduct=await request("/v1/catalog/bulk/export?branchId="+branchId+
+    "&resource=products","GET",undefined,token);
+  assert.equal(exportedProduct.status,200);
+  assert.match(exportedProduct.body.content,/'@Product/);
+  const importedProduct=await preview({
+   ...productInput,fileName:"export-products.csv",
+   contentBase64:Buffer.from(exportedProduct.body.content).toString("base64"),
+   mapping:{code:"code",name:"name",baseUnit:"baseUnit",
+    groupCode:"groupCode",barcode:"barcode",active:"active"},
+  });
+  assert.equal(importedProduct.body.rows[0].action,"UNCHANGED",
+    "formula-safe product names must round-trip unchanged");
+
   const priceList=await create("price-lists",{code:"BANLE",name:"Giá bán lẻ"});
   assert.equal(priceList.status,201);
   const pricing=(amount:string,date:string)=>({
