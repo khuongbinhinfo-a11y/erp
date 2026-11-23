@@ -33,10 +33,10 @@ void main(){
         switch(request.url.path){
           case '/v1/catalog/branches':
             return http.Response(jsonEncode({'items':[
-              {'id':branch,'code':'MAIN','name':'Chi nhánh chính'}]}),200);
+              {'id':branch,'code':'MAIN','name':'Chi nhanh chinh'}]}),200);
           case '/v1/catalog/customers':
             return http.Response(jsonEncode({'items':[
-              {'id':customer,'code':'KH1','name':'Khách hàng 1','active':true}]}),200);
+              {'id':customer,'code':'KH1','name':'Khach hang 1','active':true}]}),200);
           case '/v1/catalog/customer-groups':
           case '/v1/catalog/customer-regions':
           case '/v1/catalog/r1/channels':
@@ -44,11 +44,11 @@ void main(){
           case '/v1/catalog/r1/skus':
             return http.Response(jsonEncode({'items':[
               {'id':sku,'productId':product,'code':'SP-01','sku':'SP-01',
-               'productName':'Sản phẩm A','unitCode':'THUNG','active':true}]}),200);
+               'productName':'San pham A','unitCode':'THUNG','active':true}]}),200);
           case '/v1/catalog/price-lists':
             return http.Response(jsonEncode({'items':[
-              {'id':listA,'code':'BASE','name':'Giá mặc định','active':true},
-              {'id':listB,'code':'KH','name':'Giá khách hàng','active':true},
+              {'id':listA,'code':'BASE','name':'Gia mac dinh','active':true},
+              {'id':listB,'code':'KH','name':'Gia khach hang','active':true},
             ]}),200);
           case '/v1/sales/orders':
             return http.Response(jsonEncode({'items':[]}),200);
