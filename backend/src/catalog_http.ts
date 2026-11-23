@@ -6,6 +6,7 @@ import { hasPermission } from "./rbac.ts";
 import { executeMutation, MutationFault, requireRevision, type MutationContext } from "./mutation.ts";
 import { validIdempotencyKey } from "./contracts.ts";
 import type { IdentityOptions } from "./identity_http.ts";
+import { clonePriceList } from "./r1c_price_list.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CODE = /^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$/;
@@ -657,6 +658,34 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
           confirmationAllowed:false,requestId},requestId,corsOrigin);
       }finally{db.release();}
       return;
+    }
+    // A separate idempotent creation: source revision protects against
+    // cloning an edited list without a deliberate user refresh.
+    const clonePath=/^\/v1\/catalog\/price-lists\/([0-9a-f-]{36})\/clone$/i.exec(url.pathname);
+    if(clonePath&&req.method==="POST"){
+      if(!await hasR1CatalogSchema(pool))
+        throw new CatalogError(503,"R1_PRICE_SCHEMA_REQUIRED");
+      const raw=await payloadFrom(req);
+      if(Object.keys(raw).some(k=>!["branchId","code","name","sourceRevision"].includes(k)))
+        throw new CatalogError(400,"UNKNOWN_FIELD");
+      const branchId=requireUuid(raw.branchId),sourceId=requireUuid(clonePath[1]);
+      const code=requireCode(raw.code),name=requireName(raw.name);
+      const sourceRevision=raw.sourceRevision;
+      if(typeof sourceRevision!=="number"||!Number.isSafeInteger(sourceRevision)||
+         sourceRevision<0)throw new CatalogError(400,"INVALID_REVISION");
+      const input={branchId,sourceId,sourceRevision,code,name};
+      const context=requestMutation(req,requestId,actorId,tenant,
+        "catalog.price_lists.clone",input);
+      const outcome=await executeMutation(pool,context,{
+        authorize:(db,ctx)=>hasPermission(db,{installationId:ctx.installationId,
+          actorId:ctx.actorId,permission:"catalog.write",branchId}),
+        execute:async(db,ctx)=>{
+          const result=await clonePriceList(db,{...input,installationId:ctx.installationId});
+          if(!result)throw new CatalogError(404,"PRICE_LIST_NOT_FOUND");
+          return result;
+        },
+      });
+      send(res,outcome.status,outcome.body,requestId,corsOrigin);return;
     }
     const updatePath=/^\/v1\/catalog\/(customers|customer-groups|customer-regions|suppliers|groups|products|price-lists|unit-definitions)\/([0-9a-f-]{36})$/.exec(url.pathname);
     if(updatePath&&req.method==="PATCH"){
