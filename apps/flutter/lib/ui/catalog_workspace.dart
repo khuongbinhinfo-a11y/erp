@@ -7,6 +7,7 @@ import 'erp_display.dart';
 import 'erp_toast.dart';
 import 'identity_client.dart';
 import 'r1_catalog_workspace.dart';
+import 'catalog_bulk_workspace.dart';
 
 /// Live, branch-scoped catalog. No offline confirmation and no fabricated rows.
 class CatalogWorkspace extends StatefulWidget {
@@ -34,6 +35,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
       ErpSectionTab('customer-groups','Nhóm khách'),
       ErpSectionTab('customer-regions','Khu vực'),
       ErpSectionTab('suppliers','Nhà cung cấp'),
+      ErpSectionTab('bulk','Nhập Excel/CSV'),
     ],
     'products':[
       ErpSectionTab('products','Sản phẩm'),
@@ -42,6 +44,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
       ErpSectionTab('units','Đơn vị và quy đổi'),
       ErpSectionTab('skus','SKU bán hàng'),
       ErpSectionTab('barcodes','Mã vạch'),
+      ErpSectionTab('bulk','Nhập Excel/CSV'),
     ],
     'price-lists':[
       ErpSectionTab('price-lists','Bảng giá'),
@@ -49,6 +52,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
       ErpSectionTab('channels','Kênh bán'),
       ErpSectionTab('rules','Chính sách giá'),
       ErpSectionTab('quote','Tra giá theo khách'),
+      ErpSectionTab('bulk','Nhập Excel/CSV'),
     ],
     'warehouses':[
       ErpSectionTab('warehouses','Kho được cấp quyền'),
@@ -60,7 +64,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     'products':'Sản phẩm','groups':'Nhóm hàng',
     'unit-definitions':'Đơn vị tính',
     'price-lists':'Bảng giá','prices':'Lịch sử đơn giá',
-    'warehouses':'Kho hàng',
+    'warehouses':'Kho hàng','bulk':'Nhập Excel/CSV',
   };
 
   static const r1Kinds={'units','skus','barcodes','channels','rules','quote'};
@@ -115,7 +119,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     : e.message;
 
   Future<void> _loadRecords()async{
-    if(isR1){if(mounted)setState(()=>loading=false);return;}
+    if(isR1||resource=='bulk'){if(mounted)setState(()=>loading=false);return;}
     final currentBranch=branchId;
     if(currentBranch==null)return;
     final stamp=++requestSerial;
@@ -1248,13 +1252,33 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
           keyPrefix:'catalog-inner',selected:resource,
           items:tabs[widget.area]!,onSelected:_changeResource),
       const SizedBox(height:16),
+      if(resource=='bulk')Column(
+        crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+          if(branches.isNotEmpty)
+            Padding(padding:const EdgeInsets.only(bottom:12),
+              child:Align(alignment:Alignment.centerLeft,
+                child:SizedBox(width:280,child:DropdownButtonFormField<String>(
+                  key:const ValueKey('catalog-bulk-branch'),
+                  isExpanded:true,initialValue:branchId,
+                  decoration:const InputDecoration(labelText:'Chi nhánh'),
+                  items:branches.map((b)=>DropdownMenuItem<String>(
+                    value:b['id'] as String,
+                    child:Text(b['code'].toString()+' · '+b['name'].toString(),
+                      overflow:TextOverflow.ellipsis))).toList(),
+                  onChanged:(v){if(v!=null)setState(()=>branchId=v);}
+                )))),
+          CatalogBulkWorkspace(
+            key:ValueKey('bulk-'+widget.area+'-'+branchId.toString()),
+            client:widget.client,session:widget.session,branchId:branchId,
+            canWrite:canWrite,initialArea:widget.area),
+        ]),
       if(isR1)R1CatalogWorkspace(
         key:ValueKey('r1-workspace-'+resource+'-'+branchId.toString()),
         kind:resource,branchId:branchId,branches:branches,
         client:widget.client,session:widget.session,
         changeBranch:(next){setState(()=>branchId=next);},
       ),
-      if(!isR1)Card(clipBehavior:Clip.antiAlias,
+      if(!isR1&&resource!='bulk')Card(clipBehavior:Clip.antiAlias,
         child:Padding(padding:const EdgeInsets.all(18),child:Column(
           crossAxisAlignment:CrossAxisAlignment.start,children:[
             Wrap(spacing:12,runSpacing:10,crossAxisAlignment:WrapCrossAlignment.center,children:[
