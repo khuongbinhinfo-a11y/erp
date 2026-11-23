@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -68,6 +69,74 @@ void main(){
    '/v1/catalog/bulk/apply']);
   expect(keys,[null,null,'bulk-constant-key']);
  });
+ testWidgets('R1-B CSV template and export deliver valid UTF-8 BOM bytes to browser saver',
+  (tester)async{
+   final paths=<String>[],downloads=<({String name,Uint8List bytes})>[];
+   final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+    httpClient:MockClient((request)async{
+     paths.add(request.url.path);
+     expect(request.method,'GET');
+     expect(request.url.queryParameters['resource'],'customers');
+     expect(request.url.queryParameters['branchId'],branch);
+     expect(request.headers['authorization'],'Bearer r1b-synthetic-token');
+     final template=request.url.path.endsWith('/template');
+     return http.Response(jsonEncode({
+      'fileName':template?'mau-khach-hang.csv':'khach-hang.csv',
+      'content':template?'Mã KH,Tên khách\n':'\uFEFFMã KH,Tên khách\nKH01,Nguyễn Văn A\n',
+     }),200,headers:{'content-type':'application/json; charset=utf-8'});
+    }));
+   addTearDown(client.dispose);
+   tester.view.devicePixelRatio=1;
+   tester.view.physicalSize=const Size(1024,800);
+   addTearDown(tester.view.resetPhysicalSize);
+   addTearDown(tester.view.resetDevicePixelRatio);
+   await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
+    home:Scaffold(body:SingleChildScrollView(
+     child:CatalogBulkWorkspace(client:client,session:session(),
+      branchId:branch,canWrite:true,initialArea:'customers',
+      saveCsvForTest:(name,bytes)async{
+       downloads.add((name:name,bytes:bytes));
+      })))));
+   await tester.tap(find.byKey(const ValueKey('catalog-bulk-template')));
+   await tester.pumpAndSettle();
+   await tester.tap(find.byKey(const ValueKey('catalog-bulk-export')));
+   await tester.pumpAndSettle();
+   expect(paths,['/v1/catalog/bulk/template','/v1/catalog/bulk/export']);
+   expect(downloads.map((d)=>d.name),['mau-khach-hang.csv','khach-hang.csv']);
+   expect(downloads[0].bytes.take(3).toList(),[0xEF,0xBB,0xBF]);
+   expect(downloads[1].bytes.take(3).toList(),[0xEF,0xBB,0xBF]);
+   // Dart's UTF-8 decoder intentionally strips the leading BOM; assert it
+   // in raw bytes separately and ensure there is no duplicate BOM.
+   expect(utf8.decode(downloads[0].bytes),'Mã KH,Tên khách\n');
+   expect(utf8.decode(downloads[1].bytes),
+    'Mã KH,Tên khách\nKH01,Nguyễn Văn A\n',
+    reason:'CSV already containing a BOM must never get a second BOM');
+   expect(find.byKey(const ValueKey('catalog-bulk-error')),findsNothing);
+   expect(tester.takeException(),isNull);
+  });
+
+ testWidgets('R1-B CSV save failure shows actionable browser guidance',
+  (tester)async{
+   final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+    httpClient:MockClient((_)async=>http.Response(jsonEncode({
+     'fileName':'mau.csv','content':'Mã,Tên\n',
+    }),200,headers:{'content-type':'application/json; charset=utf-8'})));
+   addTearDown(client.dispose);
+   tester.view.devicePixelRatio=1;
+   tester.view.physicalSize=const Size(1024,800);
+   addTearDown(tester.view.resetPhysicalSize);
+   addTearDown(tester.view.resetDevicePixelRatio);
+   await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
+    home:Scaffold(body:SingleChildScrollView(
+     child:CatalogBulkWorkspace(client:client,session:session(),
+      branchId:branch,canWrite:true,initialArea:'customers',
+      saveCsvForTest:(_,__)async{throw UnsupportedError('download blocked');})))));
+   await tester.tap(find.byKey(const ValueKey('catalog-bulk-template')));
+   await tester.pumpAndSettle();
+   expect(find.textContaining('Trình duyệt không hỗ trợ tải CSV'),findsOneWidget);
+   expect(tester.takeException(),isNull);
+  });
+
  testWidgets('R1-B exposes controlled import under Company secondary tabs without fake rows',
   (tester)async{
    final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',

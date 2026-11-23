@@ -13,8 +13,11 @@ class CatalogBulkWorkspace extends StatefulWidget{
   final String? branchId;
   final bool canWrite;
   final String initialArea;
+  /// Optional save hook for UI regression tests; production uses file_picker.
+  final Future<void> Function(String fileName,Uint8List bytes)? saveCsvForTest;
   const CatalogBulkWorkspace({super.key,required this.client,required this.session,
-    required this.branchId,required this.canWrite,required this.initialArea});
+    required this.branchId,required this.canWrite,required this.initialArea,
+    this.saveCsvForTest});
   @override State<CatalogBulkWorkspace> createState()=>_CatalogBulkWorkspaceState();
 }
 class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
@@ -220,15 +223,30 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
         template:template);
       if(!mounted)return;
       final fileName=result['fileName']?.toString()??'erp.csv';
-      final bytes=Uint8List.fromList(utf8.encode('\uFEFF'+
-        (result['content']?.toString()??'')));
-      await FilePicker.platform.saveFile(dialogTitle:'Lưu dữ liệu CSV',
-        fileName:fileName,type:FileType.custom,
-        allowedExtensions:const ['csv'],bytes:bytes);
+      final csv=result['content'];
+      if(csv is! String)throw const FormatException('MISSING_CSV_CONTENT');
+      // UTF-8 BOM keeps Vietnamese text readable in Excel. Avoid duplicating
+      // BOM if a server already included it.
+      final bytes=Uint8List.fromList(
+        utf8.encode(csv.startsWith('\uFEFF')?csv:'\uFEFF$csv'));
+      if(widget.saveCsvForTest case final save?){
+        await save(fileName,bytes);
+      }else{
+        // file_picker 8.x throws UnsupportedError on Web. 9.2.3 implements a
+        // browser download while retaining the desktop save-file contract.
+        await FilePicker.platform.saveFile(dialogTitle:'Lưu dữ liệu CSV',
+          fileName:fileName,type:FileType.custom,
+          allowedExtensions:const ['csv'],bytes:bytes);
+      }
     }on ErpApiError catch(e){
       if(mounted)setState(()=>error='Không xuất được: '+(e.code??e.message));
-    }catch(_){
-      if(mounted)setState(()=>error='Không lưu được CSV trên thiết bị.');
+    }on UnsupportedError{
+      if(mounted)setState(()=>error='Trình duyệt không hỗ trợ tải CSV. '
+        'Hãy cập nhật trình duyệt hoặc mở trên Chrome/Edge.');
+    }catch(e){
+      if(mounted)setState(()=>error='Không tải được CSV ('+
+        e.runtimeType.toString()+'). '
+        'Kiểm tra quyền tải tệp của trình duyệt rồi thử lại.');
     }finally{if(mounted)setState(()=>busy=false);}
   }
   Widget _mappingEditor(){
