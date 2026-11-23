@@ -568,6 +568,34 @@ export async function applyBulkPlan(db:PoolClient,ctx:MutationContext,
   for(const scope of locks)
    await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[scope]);
  }
+ if(input.resource==="skus"){
+  // Lock every affected parent BEFORE inserting any canonical unit (FK KEY
+  // SHARE) or sell SKU (FOR UPDATE). A sorted global order prevents opposing
+  // multi-product bulk files from deadlocking each other.
+  const fileRows=mappedRows(input,parseBulkFile(
+   input.fileName,input.contentBase64,input.hasHeader));
+  const productCodes=[...new Set(fileRows.map(r=>r.productCode).filter(
+   (v):v is string=>Boolean(v)))];
+  const skuCodes=[...new Set(fileRows.map(r=>r.code).filter(
+   (v):v is string=>Boolean(v)))];
+  const [direct,existing]=await Promise.all([
+   db.query<{id:string}>(
+    'SELECT id FROM catalog_product WHERE installation_id=$1 AND branch_id=$2 '+
+    'AND sku=ANY($3::text[])',
+    [ctx.installationId,input.branchId,productCodes]),
+   db.query<{id:string}>(
+    'SELECT product_id AS id FROM catalog_sell_sku WHERE installation_id=$1 '+
+    'AND branch_id=$2 AND sku=ANY($3::text[])',
+    [ctx.installationId,input.branchId,skuCodes]),
+  ]);
+  const parentIds=[...new Set([...direct.rows,...existing.rows].map(r=>r.id))].sort();
+  for(const id of parentIds){
+   await db.query(
+    'SELECT id FROM catalog_product WHERE installation_id=$1 AND branch_id=$2 '+
+    'AND id=$3 FOR UPDATE',
+    [ctx.installationId,input.branchId,id]);
+  }
+ }
  const plan=await buildBulkPlan(db,ctx.installationId,ctx.actorId,input);
  if(plan.summary.error||plan.hash!==expectedHash)
   throw new BulkFault("PREVIEW_STALE_OR_HAS_ERRORS",409);
