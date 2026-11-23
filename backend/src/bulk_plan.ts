@@ -3,7 +3,7 @@ import type { PoolClient } from "pg";
 import { canonicalPayload,requireRevision,type MutationContext } from "./mutation.ts";
 import { checkCreate,executeCreate,parseEdit,applyEdit } from "./catalog_http.ts";
 import { parse as parseR1,create as createR1 } from "./r1_catalog_http.ts";
-import { parseBulkFile,type ParsedBulkFile } from "./bulk_file.ts";
+import { parseBulkFile,restoreCsvGuard,type ParsedBulkFile } from "./bulk_file.ts";
 
 export type BulkResource="customers"|"products"|"skus"|"prices";
 export type BulkMode="CREATE"|"UPDATE"|"UPSERT";
@@ -128,8 +128,11 @@ export function mappedRows(input:BulkInput,parsed:ParsedBulkFile){
   if(!parsed.headers.includes(column))throw new BulkFault("MAPPING_HEADER_NOT_FOUND");
  }
  const pairs=Object.entries(input.mapping).map(([f,h])=>[f,parsed.headers.indexOf(h)] as const);
- return parsed.rows.map(cells=>Object.fromEntries(pairs.map(([f,index])=>
-  [f,(cells[index]??"").trim()])) as Record<string,string>);
+ const isCsv=/\.csv$/i.test(input.fileName);
+ return parsed.rows.map(cells=>Object.fromEntries(pairs.map(([f,index])=>{
+  const cell=(cells[index]??"").trim();
+  return [f,isCsv?restoreCsvGuard(cell):cell];
+ })) as Record<string,string>);
 }
 function code(v:string|undefined,kind:string):string{
  if(!v||!CODE.test(v))throw new BulkFault("INVALID_"+kind);
