@@ -297,7 +297,7 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
                       key:ValueKey('price-sku-new-$id'),
                       controller:inputs[id],enabled:!saving&&!unresolved(id),
                       keyboardType:const TextInputType.numberWithOptions(decimal:true),
-                      decoration:const InputDecoration(
+                      decoration:InputDecoration(
                         labelText:unresolved(id)?'Giá chờ xác nhận':'Giá mới (₫)',isDense:true))),
                 ]),
               );
