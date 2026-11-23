@@ -316,6 +316,17 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
   'sku=ANY($3::text[]) OR id IN (SELECT product_id FROM catalog_sell_sku '+
   'WHERE installation_id=$1 AND branch_id=$2 AND sku=ANY($3::text[])))',
   [tenant,branch,[...new Set([...all("code"),...all("productCode")])]]);
+ // A newly created product also claims its code as the base sell SKU.
+ // Existing non-base and inactive sell SKU codes reserve that namespace.
+ const sellSkuCodes=res==="products"?await db.query<{code:string}>(
+  'SELECT sku AS code FROM catalog_sell_sku WHERE installation_id=$1 '+
+  'AND branch_id=$2 AND sku=ANY($3::text[])',
+  [tenant,branch,all("code")]):{rows:[]};
+ // Barcodes remain globally unique within the branch even when inactive.
+ const occupiedBarcodes=res==="products"?await db.query<{barcode:string}>(
+  'SELECT barcode FROM catalog_sku_barcode WHERE installation_id=$1 '+
+  'AND branch_id=$2 AND barcode=ANY($3::text[])',
+  [tenant,branch,all("barcode")]):{rows:[]};
  const customers=res==="customers"?await db.query<Record<string,any>>(
   'SELECT id,code,name,customer_group_id AS "customerGroupId",'+
   'customer_region_id AS "customerRegionId",phone,delivery_address AS "deliveryAddress",'+
@@ -417,6 +428,15 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
   mapBy(prices.rows,x=>x.priceListId+"|"+x.productId);
  const occupiedSkuPairs=mapBy(skuUnitOccupancy.rows,
   x=>x.productId+"|"+x.unitCode);
+ const occupiedSellSkuCodes=new Set(sellSkuCodes.rows.map(x=>x.code));
+ const existingBarcodes=new Set(occupiedBarcodes.rows.map(x=>x.barcode));
+ const fileBarcodeCounts=new Map<string,number>();
+ if(res==="products")for(const raw of data){
+  if(raw.barcode&&!known.has(raw.code)){
+   fileBarcodeCounts.set(raw.barcode,(fileBarcodeCounts.get(raw.barcode)??0)+1);
+  }
+ }
+
  const selectedSkuPairs=new Set<string>();
  const rows:BulkRow[]=[],seen=new Set<string>();
  for(let i=0;i<data.length;i++){
@@ -432,6 +452,15 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
    if(current&&input.mode==="CREATE")throw new BulkFault("ALREADY_EXISTS_USE_UPDATE");
    if(!current&&input.mode==="UPDATE")throw new BulkFault("NOT_FOUND_USE_CREATE");
    const converted=normalizeRow(res,input.mode,raw,current,refs,branch);
+   if(res==="products"&&!current){
+    if(occupiedSellSkuCodes.has(idKey))
+     throw new BulkFault("PRODUCT_CODE_OCCUPIED_BY_SELL_SKU");
+    const barcode=raw.barcode;
+    if(barcode&&existingBarcodes.has(barcode))
+     throw new BulkFault("BARCODE_ALREADY_ASSIGNED");
+    if(barcode&&(fileBarcodeCounts.get(barcode)??0)>1)
+     throw new BulkFault("DUPLICATE_FILE_BARCODE");
+   }
    if(res==="skus"){
     const productId=converted.operation.productId??current?.productId;
     const unitCode=converted.operation.unitCode??current?.unitCode;
