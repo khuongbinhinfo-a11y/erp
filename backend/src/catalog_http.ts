@@ -257,8 +257,7 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
       [tenant,branchId,"%"+search+"%",afterCode]);
     return rows.rows;
   }
-  const values=resource==="prices"?[tenant,branchId]:
-    [tenant,branchId,"%"+search+"%"];
+  const values=[tenant,branchId,"%"+search+"%"];
   // Installations staged on catalog 0006/0007 must still list products
   // even before the separate R1 SKU/barcode migration 0009 is applied.
   const r1Ready=resource==="products"&&await hasR1CatalogSchema(db);
@@ -279,8 +278,18 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
     'payment_terms_days AS "paymentTermsDays",active,revision::integer FROM catalog_customer';
   const r=await db.query(
     resource==="prices"
-      ?`${selections.prices} WHERE installation_id=$1 AND branch_id=$2
-          ORDER BY effective_at DESC,id LIMIT 100`
+      ?`SELECT e.id,e.price_list_id AS "priceListId",l.code AS "priceListCode",
+          e.product_id AS "productId",p.sku AS "productCode",p.name AS "productName",
+          e.amount::text,e.discount_rate::text AS "discountRate",
+          e.effective_at AS "effectiveAt"
+          FROM catalog_price_entry e
+          JOIN catalog_product p ON p.installation_id=e.installation_id
+            AND p.branch_id=e.branch_id AND p.id=e.product_id
+          JOIN catalog_price_list l ON l.installation_id=e.installation_id
+            AND l.branch_id=e.branch_id AND l.id=e.price_list_id
+          WHERE e.installation_id=$1 AND e.branch_id=$2
+            AND (p.sku ILIKE $3 OR p.name ILIKE $3 OR l.code ILIKE $3)
+          ORDER BY e.effective_at DESC,e.id DESC LIMIT 100`
       :`${resource==="products"?productSelection:resource==="customers"?customerSelection:selections[resource]} WHERE installation_id=$1 AND branch_id=$2
           AND (${resource==="products"?"sku":"code"} ILIKE $3 OR name ILIKE $3
           ${resource==="customers"?"OR phone ILIKE $3 OR customer_group ILIKE $3":""})
