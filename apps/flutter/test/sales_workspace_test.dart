@@ -435,16 +435,19 @@ void main(){
     await tester.pumpAndSettle();
     await tester.runAsync(() async=>Future<void>.delayed(const Duration(milliseconds:120)));
     await tester.pumpAndSettle();
-    expect(quoteCount,1);
+    // Automatic server quotes now run whenever the SKU/quantity changes;
+    // manual refresh must not be required to reach a usable price.
+    expect(quoteCount,greaterThanOrEqualTo(1));
     expect(find.textContaining('35.000 ₫'),findsWidgets);
     // Large server amounts and a carton unit must fit a 320px viewport.
     useLongQuotedPrice=true;
+    final countBeforeManualRefresh=quoteCount;
     await tester.tap(find.byKey(const ValueKey('sales-quote')));
     await tester.pumpAndSettle();
     await tester.runAsync(() async=>
       Future<void>.delayed(const Duration(milliseconds:120)));
     await tester.pumpAndSettle();
-    expect(quoteCount,2);
+    expect(quoteCount,countBeforeManualRefresh+1);
     for(final viewport in const [Size(1440,900),Size(1280,800),
       Size(390,844),Size(360,740),Size(320,700)]){
       tester.view.physicalSize=viewport;
