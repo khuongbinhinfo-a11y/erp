@@ -303,7 +303,7 @@ class _PriceListAssignmentsPanelState extends State<PriceListAssignmentsPanel>{
                                 if(selected==true){selectedTargets.add(id);}
                                 else{selectedTargets.remove(id);}
                               }));
-                          }))),
+                          })),
                   ),
                   const Padding(padding:EdgeInsets.only(top:3),
                     child:Text('Có thể tìm tiếp và chọn thêm; chỉ chọn trong kết quả tải từ máy chủ.',
