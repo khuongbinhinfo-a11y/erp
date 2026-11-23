@@ -66,12 +66,18 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
       });
     }
   }
+  String priceKind(String id)=>'catalog.sku-price.$listId.$id';
+  bool unresolved(String id)=>widget.client.pendingR1(
+    widget.session.actorId,widget.branchId,priceKind(id))!=null;
   void selectSku(Map<String,dynamic> sku,bool checked){
     final id=sku['id'].toString();
     setState((){
       if(checked){
         selected[id]=sku;
-        inputs.putIfAbsent(id,()=>TextEditingController());
+        final input=inputs.putIfAbsent(id,()=>TextEditingController());
+        final pending=widget.client.pendingR1(
+          widget.session.actorId,widget.branchId,priceKind(id));
+        if(pending!=null)input.text=pending.payload['amount'].toString();
       }else{
         selected.remove(id);
         current.remove(id);
@@ -107,7 +113,9 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
     }
     setState((){
       error=null;
-      for(final id in selected.keys){inputs[id]!.text=amount;}
+      for(final id in selected.keys){
+        if(!unresolved(id))inputs[id]!.text=amount;
+      }
     });
   }
   Future<void> save()async{
@@ -118,6 +126,28 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
         setState(()=>error='Cần nhập giá hợp lệ cho tất cả SKU đã chọn.');
         return;
       }
+    }
+    final retained=<String,String>{};
+    for(final id in selected.keys){
+      final previous=widget.client.pendingR1(
+        widget.session.actorId,widget.branchId,priceKind(id));
+      if(previous!=null)retained[id]=previous.payload['amount'].toString();
+    }
+    if(retained.isNotEmpty){
+      final ack=await showDialog<bool>(context:context,
+        builder:(dialog)=>AlertDialog(
+          title:const Text('Kiểm tra cập nhật giá chưa xác nhận'),
+          content:Text('Có ${retained.length} yêu cầu giá chưa rõ kết quả. '
+            'Hệ thống phải gửi lại đúng giá và mã yêu cầu cũ trước: '
+            '${retained.values.join(", ")} ₫. '
+            'Sau khi kiểm tra kết quả cũ, anh/chị có thể cập nhật giá mới.'),
+          actions:[
+            TextButton(onPressed:()=>Navigator.pop(dialog,false),
+              child:const Text('Quay lại')),
+            FilledButton(onPressed:()=>Navigator.pop(dialog,true),
+              child:const Text('Kiểm tra yêu cầu cũ')),
+          ]));
+      if(ack!=true||!mounted)return;
     }
     final confirmed=await showDialog<bool>(context:context,
       builder:(dialog)=>AlertDialog(
@@ -138,13 +168,13 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
     var done=0;
     try{
       for(final id in ids){
-        final kind='catalog.sku-price.$listId.$id';
+        final kind=priceKind(id);
         final pending=widget.client.pendingR1(
           widget.session.actorId,widget.branchId,kind);
         final body=pending?.payload??<String,dynamic>{
           'branchId':widget.branchId,'priceListId':listId,
           'sellSkuId':id,'scopeKind':'BASE','adjustment':'FIXED_PRICE',
-          'amount':inputs[id]!.text.trim(),'priority':100000,
+          'amount':inputs[id]!.text.trim(),'priority':0,
           'stacking':'EXCLUSIVE','stopProcessing':false,
           'minQuantity':'1','effectiveFrom':DateTime.now().toUtc().toIso8601String(),
         };
@@ -213,7 +243,10 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
               for(final row in rows){
                 final id=row['id'].toString();
                 selected[id]=row;
-                inputs.putIfAbsent(id,()=>TextEditingController());
+                final input=inputs.putIfAbsent(id,()=>TextEditingController());
+                final pending=widget.client.pendingR1(
+                  widget.session.actorId,widget.branchId,priceKind(id));
+                if(pending!=null)input.text=pending.payload['amount'].toString();
               }
             }),child:const Text('Chọn kết quả')),
             TextButton(onPressed:saving?null:()=>setState((){
@@ -262,10 +295,10 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
                   if(checked)SizedBox(width:130,
                     child:TextField(
                       key:ValueKey('price-sku-new-$id'),
-                      controller:inputs[id],enabled:!saving,
+                      controller:inputs[id],enabled:!saving&&!unresolved(id),
                       keyboardType:const TextInputType.numberWithOptions(decimal:true),
                       decoration:const InputDecoration(
-                        labelText:'Giá mới (₫)',isDense:true))),
+                        labelText:unresolved(id)?'Giá chờ xác nhận':'Giá mới (₫)',isDense:true))),
                 ]),
               );
             }),
