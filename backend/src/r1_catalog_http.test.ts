@@ -330,6 +330,18 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
    "same numeric threshold with different strings must serialize");
   assert.equal(decimalRace.find(x=>x.status===409)?.body.error?.code,
     "PRICE_RULE_OVERLAP");
+  const laterBase=await r1("rules",{...lockBase,
+   amount:"25000.0000",minQuantity:"1.000",
+   effectiveFrom:"2026-11-22T00:00:00Z"});
+  assert.equal(laterBase.status,201,JSON.stringify(laterBase.body));
+  const latestBase=await resolvePrice({
+   priceListId:decimalLockList.body.id,sellSkuId:baseSku,
+   quantity:"1",priceAt:new Date().toISOString(),
+  });
+  assert.equal(latestBase.status,200,JSON.stringify(latestBase.body));
+  assert.equal(latestBase.body.quote.unitPrice,"25000.0000",
+   "later immutable BASE rule supersedes older price without retirement");
+
 
   // Order API must use the same R1 resolver as the visible customer/channel quote.
   // Two distinct sell units of one product are permitted on the same commercial order.
