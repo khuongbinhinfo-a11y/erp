@@ -84,6 +84,9 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
   String money(dynamic raw)=>erpVndText(raw);
   String errorMessage(ErpApiError e)=>switch(e.code){
     'SKU_HAS_NO_EFFECTIVE_BASE_PRICE'=>'Chưa có giá cơ sở hiệu lực cho SKU này.',
+    'NO_APPLICABLE_PRICE_LIST'=>'Không có bảng giá áp dụng cho khách, nhóm, kênh và ngày tra.',
+    'PRICE_LIST_ASSIGNMENT_MIGRATION_REQUIRED'=>'Chưa cập nhật cơ chế gán bảng giá trên máy chủ.',
+    'PRICE_LIST_UNAVAILABLE_OR_EXPIRED'=>'Bảng giá đã hết hạn hoặc ngừng sử dụng.',
     'DUPLICATE'=>'Mã đã tồn tại. Vui lòng kiểm tra lại.',
     'IMMUTABLE_OR_UNIT_MISMATCH'=>'Hệ số phải đúng với đơn vị quy đổi đã tạo.',
     'PRODUCT_UNAVAILABLE'=>'Sản phẩm không còn sử dụng.',
@@ -169,7 +172,7 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
         unitDefinitions=uoms.where((x)=>x['active']!=false).toList();
         productId=products.isEmpty?null:products.first['id'] as String;
         skuId=skus.isEmpty?null:skus.first['id'] as String;
-        listId=lists.isEmpty?null:lists.first['id'] as String;
+        listId=isQuote?null:(lists.isEmpty?null:lists.first['id'] as String);
         customerId=null;channelId=null;
         for(final c in fields.values){c.clear();}
         // Never guess carton units or conversions from a sample value.
@@ -309,13 +312,13 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
     }finally{if(mounted)setState(()=>busy=false);}
   }
   Future<void> simulate()async{
-    if(busy||widget.branchId==null||skuId==null||listId==null)return;
+    if(busy||widget.branchId==null||skuId==null)return;
     final stamp=++quoteSerial;
     setState((){busy=true;error=null;quote=null;});
     try{
       final result=await widget.client.r1PriceQuote(widget.session.token,{
         'branchId':widget.branchId,'sellSkuId':skuId,
-        'priceListId':listId,'quantity':getField('quantity'),
+        if(listId!=null)'priceListId':listId,'quantity':getField('quantity'),
         if(customerId!=null)'customerId':customerId,
         if(channelId!=null)'channelId':channelId,
         if(quoteDay!=null)'priceAt':DateTime(
@@ -513,7 +516,23 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
               slot(textField('name','Tên kênh',hint:'Đặt hàng trực tuyến')),
             ],
             if(widget.kind=='rules'||isQuote)...[
-              slot(dropdown('Bảng giá',listId,lists,(v)=>changeQuoteContext(()=>listId=v))),
+              if(isQuote)slot(DropdownButtonFormField<String>(
+                key:const ValueKey('r1-quote-price-list-select'),
+                isExpanded:true,initialValue:listId,
+                decoration:const InputDecoration(labelText:'Bảng giá',
+                  helperText:'Tự chọn theo khách, nhóm, kênh và mức ưu tiên'),
+                items:[
+                  const DropdownMenuItem<String>(value:null,
+                    child:Text('Tự chọn bảng giá phù hợp')),
+                  ...lists.map((x)=>DropdownMenuItem<String>(
+                    value:x['id'] as String,
+                    child:Text('${x['code']} · ${x['name']}',
+                      overflow:TextOverflow.ellipsis))),
+                ],
+                onChanged:(v)=>changeQuoteContext(()=>listId=v),
+              ))
+              else slot(dropdown('Bảng giá',listId,lists,
+                (v)=>changeQuoteContext(()=>listId=v))),
               slot(dropdown('SKU bán',skuId,skus,(v)=>changeQuoteContext(()=>skuId=v))),
               if(isQuote||scope=='CUSTOMER'||scope=='PROMOTION')
                 slot(dropdown('Khách hàng',customerId,customers,
@@ -651,6 +670,14 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
               key:const ValueKey('r1-quote-price'),
               style:const TextStyle(fontSize:22,fontWeight:FontWeight.w800,
                 color:ErpTokens.primary)),
+            const SizedBox(height:6),
+            Text('SKU: ${quote!['sku']} · ${quote!['productName']} · '
+              'ĐVT: ${quote!['unitCode']} · SL: ${quote!['quantity']}',
+              key:const ValueKey('r1-quote-item-context')),
+            Text('Bảng giá: ${quote!['priceListCode']??quote!['priceListId']}'),
+            Text('${quote!['priceListSelectionReason']??'Bảng giá chỉ định'}',
+              key:const ValueKey('r1-quote-list-reason'),
+              style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
             Text('Thành tiền: '+money(quote!['lineTotal'])),
             Text('Quy đổi về đơn vị gốc: '+erpDecimalText(quote!['normalizedBaseQuantity'])),
             const SizedBox(height:12),
