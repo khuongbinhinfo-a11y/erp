@@ -534,6 +534,52 @@ export async function applyBulkPlan(db:PoolClient,ctx:MutationContext,
  const plan=await buildBulkPlan(db,ctx.installationId,ctx.actorId,input);
  if(plan.summary.error||plan.hash!==expectedHash)
   throw new BulkFault("PREVIEW_STALE_OR_HAS_ERRORS",409);
+ if(input.resource==="customers"){
+  // PostgreSQL's active-phone unique index is immediate (not deferrable).
+  // Releasing all donor phone slots before assigning recipients is required
+  // for swaps and one-way transfers regardless of CSV row ordering.
+  // This intermediate state is NOT committed; final catalog edits perform
+  // the normal revision increment inside the same audited mutation.
+  const finals=plan.rows.filter(r=>r.action!=="ERROR").map(row=>({
+   row,
+   active:typeof row.after?.active==="boolean"?row.after.active:
+    row.before?row.before.active:true,
+   phone:row.after&&Object.hasOwn(row.after,"phone")?
+    row.after.phone:row.before?.phone,
+  }));
+  const claims=new Map<string,Set<string>>();
+  for(const f of finals)
+   if(f.active===true&&typeof f.phone==="string"&&f.phone!==""){
+    if(!claims.has(f.phone))claims.set(f.phone,new Set());
+    claims.get(f.phone)!.add(f.row.key);
+   }
+  const donors=finals.filter(f=>{
+   const original=f.row.before;
+   if(f.row.action!=="UPDATE"||!original||original.active!==true||
+      typeof original.phone!=="string"||original.phone==="")return false;
+   const claimants=claims.get(original.phone);
+   return Boolean(claimants&&[...claimants].some(code=>code!==f.row.key)&&
+    (f.active!==true||f.phone!==original.phone));
+  }).sort((a,b)=>String(a.row.internal?.id).localeCompare(String(b.row.internal?.id)));
+  for(const donor of donors){
+   const id=donor.row.internal?.id;
+   if(typeof id!=="string")throw new BulkFault("PREVIEW_STALE_OR_HAS_ERRORS",409);
+   const result=await db.query<{phone:string|null;active:boolean;revision:number}>(
+    'SELECT phone,active,revision::int FROM catalog_customer '+
+    'WHERE installation_id=$1 AND branch_id=$2 AND id=$3 FOR UPDATE',
+    [ctx.installationId,input.branchId,id]);
+   const old=result.rows[0];
+   if(!old||old.revision!==donor.row.revision||old.phone!==donor.row.before?.phone||
+      old.active!==true)throw new BulkFault("PREVIEW_STALE_OR_HAS_ERRORS",409);
+   if(donor.active===false){
+    await db.query('UPDATE catalog_customer SET active=false WHERE installation_id=$1 '+
+     'AND branch_id=$2 AND id=$3',[ctx.installationId,input.branchId,id]);
+   }else{
+    await db.query('UPDATE catalog_customer SET phone=NULL WHERE installation_id=$1 '+
+     'AND branch_id=$2 AND id=$3',[ctx.installationId,input.branchId,id]);
+   }
+  }
+ }
  const applied:{line:number;action:string;id:string;reason?:string}[]=[];
  const skuProductsToCheck=new Set<string>();
  for(const row of plan.rows){
