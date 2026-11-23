@@ -453,7 +453,7 @@ export async function applyBulkPlan(db:PoolClient,ctx:MutationContext,
  const plan=await buildBulkPlan(db,ctx.installationId,ctx.actorId,input);
  if(plan.summary.error||plan.hash!==expectedHash)
   throw new BulkFault("PREVIEW_STALE_OR_HAS_ERRORS",409);
- const applied:{line:number;action:string;id:string}[]=[];
+ const applied:{line:number;action:string;id:string;reason?:string}[]=[];
  const skuProductsToCheck=new Set<string>();
  for(const row of plan.rows){
   if(row.action==="UNCHANGED")continue;
@@ -519,7 +519,8 @@ export async function applyBulkPlan(db:PoolClient,ctx:MutationContext,
   };
   const response=await result();
   const body=response.body as Record<string,unknown>;
-  applied.push({line:row.line,action:row.action,id:String(body.id??data.id)});
+  applied.push({line:row.line,action:row.action,id:String(body.id??data.id),
+   ...(input.resource==="skus"&&data.active===false?{reason:String(data.reason)}:{})});
  }
  for(const productId of [...skuProductsToCheck].sort()){
   const live=await db.query('SELECT 1 FROM catalog_sell_sku WHERE installation_id=$1 '+
