@@ -7,7 +7,7 @@ export class R1QuoteError extends Error {
   constructor(status:number,code:string){super(code);this.status=status;this.code=code;}
 }
 type Query={
-  installationId:string;branchId:string;sellSkuId:string;priceListId:string;
+  installationId:string;branchId:string;sellSkuId:string;priceListId?:string;
   quantity:string;customerId?:string;channelId?:string;priceAt:string;
 };
 type Rule={
@@ -48,10 +48,9 @@ export async function resolveR1Price(db:PoolClient,input:Query){
        AND s.active AND p.active`,[t,b,input.sellSkuId]);
   const item=sku.rows[0];
   if(!item)throw new R1QuoteError(404,"SKU_UNAVAILABLE");
-  const list=await db.query<{currency:string}>(
-    "SELECT currency FROM catalog_price_list WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active",
-    [t,b,input.priceListId]);
-  if(list.rows[0]?.currency!=="VND")throw new R1QuoteError(409,"PRICE_LIST_UNAVAILABLE");
+  let selectedListId=input.priceListId?.toLowerCase();
+  let priceListSelectionReason="Bảng giá được chọn trực tiếp";
+  let customerGroupId:string|null=null;
   // A customer selected from a canonical group can match both new CODE-based
   // rules and immutable legacy LABEL-based rules. No historical rule is edited.
   // Before 0017 is installed, legacy customer_group text still works.
@@ -75,6 +74,7 @@ export async function resolveR1Price(db:PoolClient,input:Query){
         [t,b,r.rows[0].customer_group_id]);
       if(!mapped.rows[0])throw new R1QuoteError(409,"CUSTOMER_GROUP_REFERENCE_INVALID");
       canonicalGroup=mapped.rows[0].code;
+      customerGroupId=r.rows[0].customer_group_id;
       customerGroups.add(mapped.rows[0].code);
       // Do not derive historical matching from editable group.name.
       if(mapped.rows[0].legacy_label)
@@ -86,6 +86,55 @@ export async function resolveR1Price(db:PoolClient,input:Query){
       [t,b,channelId]);
     if(!r.rows[0])throw new R1QuoteError(409,"CHANNEL_UNAVAILABLE");
   }
+  // New installations may select the list by customer -> group -> channel
+  // -> default. Existing order callers still supply an explicit list ID.
+  const gate=await db.query<{ready:boolean}>(`SELECT EXISTS(
+    SELECT 1 FROM public.schema_migrations
+    WHERE version='0018_r1c_price_list_assignment.sql') AS ready`);
+  const scoped=gate.rows[0]?.ready===true;
+  if(!selectedListId){
+    if(!scoped)throw new R1QuoteError(503,"PRICE_LIST_ASSIGNMENT_MIGRATION_REQUIRED");
+    const winner=await db.query<{
+      id:string;code:string;scopeKind:string;priority:number;
+    }>(`SELECT l.id,l.code,a.scope_kind AS "scopeKind",a.priority
+      FROM catalog_price_list_assignment a
+      JOIN catalog_price_list l ON l.installation_id=a.installation_id
+        AND l.branch_id=a.branch_id AND l.id=a.price_list_id
+      WHERE a.installation_id=$1 AND a.branch_id=$2 AND a.active
+        AND l.active AND l.currency='VND'
+        AND (a.effective_from IS NULL OR a.effective_from<=$3::timestamptz)
+        AND (a.effective_to IS NULL OR a.effective_to>$3::timestamptz)
+        AND (l.effective_from IS NULL OR l.effective_from<=$3::timestamptz)
+        AND (l.effective_to IS NULL OR l.effective_to>$3::timestamptz)
+        AND ((a.scope_kind='DEFAULT')
+          OR (a.scope_kind='CUSTOMER' AND a.customer_id=$4::uuid)
+          OR (a.scope_kind='CUSTOMER_GROUP'
+            AND a.customer_group_id=$5::uuid)
+          OR (a.scope_kind='CHANNEL' AND a.channel_id=$6::uuid))
+      ORDER BY CASE a.scope_kind WHEN 'CUSTOMER' THEN 4
+        WHEN 'CUSTOMER_GROUP' THEN 3 WHEN 'CHANNEL' THEN 2 ELSE 1 END DESC,
+        a.priority DESC,l.priority DESC,
+        a.effective_from DESC NULLS LAST,l.effective_from DESC NULLS LAST,
+        a.id ASC LIMIT 1`,
+      [t,b,input.priceAt,customerId??null,customerGroupId,channelId??null]);
+    if(!winner.rows[0])throw new R1QuoteError(409,"NO_APPLICABLE_PRICE_LIST");
+    selectedListId=winner.rows[0].id;
+    const label=winner.rows[0].scopeKind==="CUSTOMER"?"khách hàng":
+      winner.rows[0].scopeKind==="CUSTOMER_GROUP"?"nhóm khách":
+      winner.rows[0].scopeKind==="CHANNEL"?"kênh bán":"mặc định";
+    priceListSelectionReason="Tự chọn bảng giá "+winner.rows[0].code+
+      " theo "+label+" · ưu tiên "+winner.rows[0].priority;
+  }
+  const list=await db.query<{currency:string;code:string}>(
+    scoped?`SELECT currency,code FROM catalog_price_list
+      WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active
+        AND (effective_from IS NULL OR effective_from<=$4::timestamptz)
+        AND (effective_to IS NULL OR effective_to>$4::timestamptz)`:
+      `SELECT currency,code FROM catalog_price_list
+      WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active`,
+    scoped?[t,b,selectedListId,input.priceAt]:[t,b,selectedListId]);
+  if(list.rows[0]?.currency!=="VND")
+    throw new R1QuoteError(409,"PRICE_LIST_UNAVAILABLE_OR_EXPIRED");
   const rules=await db.query<Rule>(`SELECT r.id,r.scope_kind,r.adjustment,r.amount::text,
       r.priority,r.stacking,r.stop_processing,r.channel_id,r.customer_id,r.customer_group,r.min_quantity::text,r.effective_from
     FROM catalog_sku_price_rule r
@@ -99,7 +148,7 @@ export async function resolveR1Price(db:PoolClient,input:Query){
           AND x.rule_id=r.id AND x.retired_at<=$5::timestamptz
       )
     ORDER BY r.priority DESC,r.effective_from DESC,r.id DESC`,
-    [t,b,input.priceListId,input.sellSkuId,input.priceAt,input.quantity]);
+    [t,b,selectedListId,input.sellSkuId,input.priceAt,input.quantity]);
   const base=rules.rows.find(r=>r.scope_kind==="BASE");
   let basePrice:string|null=base?.amount??null;
   let sourceId:string|null=base?.id??null;
@@ -114,7 +163,7 @@ export async function resolveR1Price(db:PoolClient,input:Query){
         AND e.price_list_id=$3 AND e.product_id=$4
         AND e.effective_at<=$5::timestamptz
       ORDER BY e.effective_at DESC,e.id DESC LIMIT 1`,
-      [t,b,input.priceListId,item.productId,input.priceAt]);
+      [t,b,selectedListId,item.productId,input.priceAt]);
     const old=q.rows[0];
     if(old){
       const computed=await db.query<{unit:string}>(
@@ -186,7 +235,8 @@ export async function resolveR1Price(db:PoolClient,input:Query){
     sellSkuId:item.id,productId:item.productId,sku:item.sku,productName:item.name,unitCode:item.unitCode,
     conversionToBase:item.toBase,quantity:input.quantity,
     normalizedBaseQuantity:total.rows[0]!.normalized,
-    currency:"VND",priceListId:input.priceListId.toLowerCase(),customerId:customerId??null,
+    currency:"VND",priceListId:selectedListId,priceListCode:list.rows[0]!.code,
+    priceListSelectionReason,customerId:customerId??null,
     channelId:channelId??null,basePrice,unitPrice:price,
     lineTotal:total.rows[0]!.total,priceAt:input.priceAt,
     trace,stockStatus:"NOT_VERIFIED",confirmationAllowed:false,
