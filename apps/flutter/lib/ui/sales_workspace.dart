@@ -166,6 +166,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     String? list=order?['priceListId'] as String? ??
       (lists.length==1?lists.single['id'] as String:null);
     String? channel=order?['channelId'] as String?;
+    bool listManuallySelected=order!=null;
+    int listResolveGeneration=0;
     final note=TextEditingController(text:order?['note'] as String? ?? '');
     final lines=<_OrderLine>[];
     if(order?['lines'] is List){
@@ -400,6 +402,63 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         loadPrices(ctx,refresh,skuMatches);
       }else{refresh((){skuQuotes={};skuPriceBusy=false;});}
     }
+    // R1-C owns customer/group/channel -> price-list selection. Resolve the
+    // selected list from the server once per commercial context, instead of
+    // making the operator choose it on every new order.
+    Future<void> resolveList(BuildContext ctx,StateSetter refresh,
+        {String? sellSkuId})async{
+      if(customer==null||listManuallySelected)return;
+      final skuId=sellSkuId??(lines.isNotEmpty?lines.first.sellSkuId:
+        skuMatches.isNotEmpty?skuMatches.first['id'].toString():null);
+      if(skuId==null)return;
+      final currentCustomer=customer!,currentChannel=channel;
+      final run=++listResolveGeneration;
+      if(lists.length==1){
+        final only=lists.single['id'] as String;
+        if(list!=only){list=only;pricingChanged(ctx,refresh);}
+        return;
+      }
+      try{
+        final result=await widget.client.r1PriceQuote(widget.session.token,{
+          'branchId':branch,'sellSkuId':skuId,'customerId':currentCustomer,
+          'quantity':'1',
+          if(currentChannel!=null)'channelId':currentChannel,
+        });
+        if(!ctx.mounted||run!=listResolveGeneration||
+            currentCustomer!=customer||currentChannel!=channel||
+            listManuallySelected)return;
+        final quote=Map<String,dynamic>.from(result['quote'] as Map);
+        final chosen=quote['priceListId'] as String?;
+        if(chosen==null)return;
+        if(!lists.any((x)=>x['id']==chosen)){
+          lists.add({'id':chosen,'code':quote['priceListCode'],
+            'name':quote['priceListCode']??'Bảng giá tự chọn','active':true});
+        }
+        if(list!=chosen){
+          list=chosen;
+          pricingChanged(ctx,refresh);
+        }else{
+          if(skuMatches.isNotEmpty)loadPrices(ctx,refresh,skuMatches);
+          scheduleQuote(ctx,refresh);
+        }
+      }on ErpApiError catch(e){
+        if(ctx.mounted&&run==listResolveGeneration&&list==null){
+          refresh(()=>formError='Chưa có bảng giá áp dụng cho khách này: ${e.message}');
+        }
+      }catch(_){
+        if(ctx.mounted&&run==listResolveGeneration&&list==null){
+          refresh(()=>formError='Chưa xác định bảng giá theo khách. '
+            'Hãy kiểm tra phân bổ bảng giá hoặc chọn thủ công.');
+        }
+      }
+    }
+    void customerPricingChanged(BuildContext ctx,StateSetter refresh){
+      listResolveGeneration++;
+      listManuallySelected=false;
+      if(lists.length>1)list=null;
+      pricingChanged(ctx,refresh);
+      resolveList(ctx,refresh);
+    }
     void keepSkuVisible(){
       WidgetsBinding.instance.addPostFrameCallback((_){
         if(!skuResultScroll.hasClients)return;
@@ -433,7 +492,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       skuResultsFor=null;skuSearchError=null;
       skuMatches=[];skuAllMatches=[];skuExplicitSelection=false;skuQuotes={};
       invalidate(refresh);
-      scheduleQuote(ctx,refresh);
+      if(!listManuallySelected&&lists.length>1){
+        resolveList(ctx,refresh,sellSkuId:id);
+      }else{scheduleQuote(ctx,refresh);}
       // Fast entry: select the new row's quantity, not the search field.
       final selectedLine=lines.last;
       WidgetsBinding.instance.addPostFrameCallback((_){
@@ -491,7 +552,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           if(available.length==1){chooseSku(ctx,available.single,refresh);return;}
         }
         if(visible.isNotEmpty){
-          loadPrices(ctx,refresh,visible);
+          if(customer!=null&&!listManuallySelected&&list==null&&lists.length>1){
+            resolveList(ctx,refresh,sellSkuId:visible.first['id'].toString());
+          }else{loadPrices(ctx,refresh,visible);}
           if(warehouseId!=null&&!stockLoaded&&!stockBusy)loadStock(ctx,refresh);
         }
       }on ErpApiError catch(e){
@@ -509,7 +572,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       customer=item['id'] as String;
       customerSearch.clear();customerMatches=[];
       customerSearchGeneration++;
-      pricingChanged(ctx,refresh);
+      customerPricingChanged(ctx,refresh);
       skuFocus.requestFocus();
     }
     Future<void> createQuickCustomer(BuildContext ctx,StateSetter refresh)async{
@@ -928,7 +991,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         items:customers.map((x)=>DropdownMenuItem<String>(
                           value:x['id'] as String,
                           child:Text(customerLabel(x),overflow:TextOverflow.ellipsis))).toList(),
-                        onChanged:(v){customer=v;pricingChanged(ctx,refresh);})),
+                        onChanged:(v){customer=v;customerPricingChanged(ctx,refresh);})),
                       const SizedBox(width:10),
                       Expanded(child:DropdownButtonFormField<String>(
                         key:ValueKey('sales-price-list-'+list.toString()),
@@ -937,7 +1000,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         items:lists.map((x)=>DropdownMenuItem<String>(
                           value:x['id'] as String,child:Text((x['name']??'').toString(),
                             overflow:TextOverflow.ellipsis))).toList(),
-                        onChanged:(v){list=v;pricingChanged(ctx,refresh);})),
+                        onChanged:(v){listResolveGeneration++;listManuallySelected=true;
+                          list=v;pricingChanged(ctx,refresh);})),
                       const SizedBox(width:10),
                       Expanded(child:DropdownButtonFormField<String>(
                         key:ValueKey('sales-channel-'+channel.toString()),
@@ -949,7 +1013,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                             value:x['id'] as String,
                             child:Text((x['name']??'').toString(),overflow:TextOverflow.ellipsis))),
                         ],
-                        onChanged:(v){channel=v;pricingChanged(ctx,refresh);})),
+                        onChanged:(v){channel=v;customerPricingChanged(ctx,refresh);})),
                     ])else Column(children:[
                       DropdownButtonFormField<String>(
                         key:ValueKey('sales-customer-'+customer.toString()),
@@ -958,7 +1022,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         items:customers.map((x)=>DropdownMenuItem<String>(
                           value:x['id'] as String,
                           child:Text(customerLabel(x),overflow:TextOverflow.ellipsis))).toList(),
-                        onChanged:(v){customer=v;pricingChanged(ctx,refresh);}),
+                        onChanged:(v){customer=v;customerPricingChanged(ctx,refresh);}),
                       const SizedBox(height:8),
                       DropdownButtonFormField<String>(
                         key:ValueKey('sales-price-list-'+list.toString()),
@@ -967,7 +1031,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         items:lists.map((x)=>DropdownMenuItem<String>(
                           value:x['id'] as String,
                           child:Text((x['name']??'').toString(),overflow:TextOverflow.ellipsis))).toList(),
-                        onChanged:(v){list=v;pricingChanged(ctx,refresh);}),
+                        onChanged:(v){listResolveGeneration++;listManuallySelected=true;
+                          list=v;pricingChanged(ctx,refresh);}),
                       const SizedBox(height:8),
                       DropdownButtonFormField<String>(
                         key:ValueKey('sales-channel-'+channel.toString()),
@@ -978,7 +1043,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           ...channels.map((x)=>DropdownMenuItem<String>(
                             value:x['id'] as String,
                             child:Text((x['name']??'').toString(),overflow:TextOverflow.ellipsis))),
-                        ],onChanged:(v){channel=v;pricingChanged(ctx,refresh);}),
+                        ],onChanged:(v){channel=v;customerPricingChanged(ctx,refresh);}),
                     ]),
                     const SizedBox(height:8),
                     if(customers.any((x)=>x['id']==customer))
