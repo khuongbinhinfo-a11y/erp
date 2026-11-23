@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash,randomUUID } from "node:crypto";
+import { r1QuoteSignature } from "./r1_pricing.ts";
 import { spawnSync } from "node:child_process";
 import type { AddressInfo } from "node:net";
 import { resolve } from "node:path";
@@ -15,6 +16,32 @@ const local=(()=>{
  try{const u=new URL(url??"");return ["localhost","127.0.0.1"].includes(u.hostname)&&u.pathname==="/erp_ci";}
  catch{return false;}
 })();
+
+test("R1-C: presentation-only explanation does not change historical price receipt",()=>{
+ const historical={
+  sellSkuId:"s",productId:"p",sku:"SP",unitCode:"CAI",
+  conversionToBase:"1.000000",quantity:"1.000",
+  normalizedBaseQuantity:"1.000000",
+  customerId:null,channelId:null,priceListId:"l",
+  basePrice:"12000.0000",unitPrice:"12000.0000",lineTotal:"12000",
+  trace:[{ruleId:"r",scope:"BASE_RULE",adjustment:"FIXED_PRICE",
+    amount:"12000.0000",result:"12000.0000"}],
+ };
+ const oldFingerprint={
+  sellSkuId:"s",productId:"p",sku:"SP",unitCode:"CAI",
+  conversionToBase:"1.000000",quantity:"1",
+  normalizedBaseQuantity:"1.000000",customerId:null,channelId:null,
+  priceListId:"l",basePrice:"12000.0000",
+  unitPrice:"12000.0000",lineTotal:"12000",trace:historical.trace,
+ };
+ const expected=createHash("sha256").update(JSON.stringify(oldFingerprint)).digest("hex");
+ type Quote=Parameters<typeof r1QuoteSignature>[0];
+ assert.equal(r1QuoteSignature(historical as unknown as Quote),expected);
+ const decorated={...historical,trace:[{...historical.trace[0]!,
+  reason:"Giá cơ sở của SKU",priority:100,minQuantity:"1",
+  effectiveFrom:"2026-11-23T00:00:00Z",stacking:"STACKABLE"}]};
+ assert.equal(r1QuoteSignature(decorated as unknown as Quote),expected);
+});
 
 test("R1 never allows a retired B1 operator to run a newer migration",()=>{
  for(const script of ["scripts/b1-production-migration.mjs","scripts/b1-resume-preflight.mjs"]){
@@ -251,6 +278,40 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
   assert.equal(readOriginalList.body.items.find((x:any)=>
     x.id===list.body.id)?.code,"SELL","cloning must not edit source identity");
 
+  // Regression: two active BASE policies of equal priority and a shared
+  // effective timestamp must resolve in the same order after cloning.
+  // Direct inserts represent legitimate pre-R1-C immutable legacy history.
+  const precedenceList=await legacy("price-lists",{
+   code:"PRIO",name:"Nguồn kiểm thử thứ tự chính sách"});
+  assert.equal(precedenceList.status,201);
+  await pool.query(`INSERT INTO catalog_sku_price_rule
+   (installation_id,branch_id,price_list_id,sell_sku_id,scope_kind,
+    adjustment,amount,priority,effective_from)
+   VALUES ($1,$2,$3,$4,'BASE','FIXED_PRICE',21000,90,
+     transaction_timestamp()-interval '2 days'),
+    ($1,$2,$3,$4,'BASE','FIXED_PRICE',22000,90,
+     transaction_timestamp()-interval '1 day'),
+    ($1,$2,$3,$4,'BASE','FIXED_PRICE',23000,90,
+     transaction_timestamp()-interval '1 day')`,
+   [root.installationId,b,precedenceList.body.id,baseSku]);
+  const sameClock=new Date().toISOString();
+  const priorityBefore=await resolvePrice({
+   priceListId:precedenceList.body.id,sellSkuId:baseSku,quantity:"1",
+   priceAt:sameClock});
+  assert.equal(priorityBefore.status,200,JSON.stringify(priorityBefore.body));
+  const copiedPriority=await write("/v1/catalog/price-lists/"+
+   precedenceList.body.id+"/clone",{
+    code:"PRIO-COPY",name:"Bản sao thứ tự",sourceRevision:0,
+   });
+  assert.equal(copiedPriority.status,201,JSON.stringify(copiedPriority.body));
+  assert.equal(copiedPriority.body.copiedRules,3);
+  const priorityAfter=await resolvePrice({
+   priceListId:copiedPriority.body.id,sellSkuId:baseSku,quantity:"1",
+   priceAt:sameClock});
+  assert.equal(priorityAfter.status,200,JSON.stringify(priorityAfter.body));
+  assert.equal(priorityAfter.body.quote.unitPrice,
+    priorityBefore.body.quote.unitPrice,
+    "cloned equal-priority rule order must match source");
   // Order API must use the same R1 resolver as the visible customer/channel quote.
   // Two distinct sell units of one product are permitted on the same commercial order.
   const orderPayload={
