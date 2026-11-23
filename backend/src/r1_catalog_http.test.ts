@@ -312,6 +312,25 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
   assert.equal(priorityAfter.body.quote.unitPrice,
     priorityBefore.body.quote.unitPrice,
     "cloned equal-priority rule order must match source");
+  // Distinct spelling of the SAME decimal quantity must take a single
+  // advisory lock; concurrent conflicting prices cannot both commit.
+  const decimalLockList=await legacy("price-lists",{
+   code:"LOCK-TEST",name:"Kiểm thử khóa chính sách"});
+  assert.equal(decimalLockList.status,201);
+  const lockBase={
+   priceListId:decimalLockList.body.id,sellSkuId:baseSku,
+   scopeKind:"BASE",adjustment:"FIXED_PRICE",priority:51,
+   effectiveFrom:"2026-11-21T00:00:00Z",
+  };
+  const decimalRace=await Promise.all([
+   r1("rules",{...lockBase,amount:"23000.0000",minQuantity:"1"}),
+   r1("rules",{...lockBase,amount:"24000.0000",minQuantity:"1.000"}),
+  ]);
+  assert.deepEqual(decimalRace.map(x=>x.status).sort((a,b)=>a-b),[201,409],
+   "same numeric threshold with different strings must serialize");
+  assert.equal(decimalRace.find(x=>x.status===409)?.body.error?.code,
+    "PRICE_RULE_OVERLAP");
+
   // Order API must use the same R1 resolver as the visible customer/channel quote.
   // Two distinct sell units of one product are permitted on the same commercial order.
   const orderPayload={
