@@ -7,6 +7,8 @@ import { executeMutation, MutationFault, requireRevision, type MutationContext }
 import { validIdempotencyKey } from "./contracts.ts";
 import type { IdentityOptions } from "./identity_http.ts";
 import { clonePriceList } from "./r1c_price_list.ts";
+import { PriceAssignmentFault,parsePriceAssignment,createPriceAssignment,
+  listPriceAssignments,togglePriceAssignment } from "./r1c_price_assignment.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CODE = /^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$/;
@@ -745,6 +747,57 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
     }
     // A separate idempotent creation: source revision protects against
     // cloning an edited list without a deliberate user refresh.
+    const assignmentPath=/^\\/v1\\/catalog\\/price-lists\\/assignments\\/([0-9a-f-]{36})$/i
+      .exec(url.pathname);
+    if(assignmentPath&&req.method==="PATCH"){
+      if(!await hasR1CPriceSchema(pool))
+        throw new CatalogError(503,"R1C_PRICE_LIST_MIGRATION_REQUIRED");
+      const raw=await payloadFrom(req);
+      if(Object.keys(raw).some(k=>!["branchId","active"].includes(k))||
+        typeof raw.active!=="boolean")
+        throw new CatalogError(400,"INVALID_ASSIGNMENT_UPDATE");
+      const branchId=requireUuid(raw.branchId),id=requireUuid(assignmentPath[1]);
+      const active=raw.active;
+      const context=requestMutation(req,requestId,actorId,tenant,
+        "catalog.price_lists.assignments.toggle",{branchId,id,active},true);
+      const result=await executeMutation(pool,context,{
+        authorize:(db,ctx)=>hasPermission(db,{installationId:ctx.installationId,
+          actorId:ctx.actorId,permission:"catalog.write",branchId}),
+        execute:(db,ctx)=>togglePriceAssignment(db,ctx.installationId,branchId,
+          id,ctx.expectedRevision,active),
+      });
+      send(res,result.status,result.body,requestId,corsOrigin);return;
+    }
+    if(url.pathname==="/v1/catalog/price-lists/assignments"){
+      if(!await hasR1CPriceSchema(pool))
+        throw new CatalogError(503,"R1C_PRICE_LIST_MIGRATION_REQUIRED");
+      if(req.method==="GET"){
+        const branchId=requireUuid(url.searchParams.get("branchId"));
+        const q=(url.searchParams.get("q")??"").trim();
+        if(q.length>64)throw new CatalogError(400,"SEARCH_TOO_LONG");
+        const db=await pool.connect();
+        try{
+          if(!await hasPermission(db,{installationId:tenant,actorId,
+            permission:"catalog.read",branchId}))
+            throw new CatalogError(403,"CATALOG_READ_DENIED");
+          const items=await listPriceAssignments(db,tenant,branchId,q);
+          send(res,200,{items,requestId},requestId,corsOrigin);
+        }finally{db.release();}
+        return;
+      }
+      if(req.method==="POST"){
+        const input=parsePriceAssignment(await payloadFrom(req));
+        const context=requestMutation(req,requestId,actorId,tenant,
+          "catalog.price_lists.assignments.create",input);
+        const result=await executeMutation(pool,context,{
+          authorize:(db,ctx)=>hasPermission(db,{installationId:ctx.installationId,
+            actorId:ctx.actorId,permission:"catalog.write",branchId:input.branchId}),
+          execute:(db,ctx)=>createPriceAssignment(db,ctx.installationId,input),
+        });
+        send(res,result.status,result.body,requestId,corsOrigin);return;
+      }
+      throw new CatalogError(405,"METHOD_NOT_ALLOWED");
+    }
     const clonePath=/^\/v1\/catalog\/price-lists\/([0-9a-f-]{36})\/clone$/i.exec(url.pathname);
     if(clonePath&&req.method==="POST"){
       if(!await hasR1CatalogSchema(pool)||
@@ -842,7 +895,7 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
     }
     fail(res,405,"METHOD_NOT_ALLOWED",requestId,corsOrigin);
   }catch(error){
-    if(error instanceof CatalogError){fail(res,error.status,error.code,requestId,corsOrigin);return;}
+    if(error instanceof CatalogError||error instanceof PriceAssignmentFault){fail(res,error.status,error.code,requestId,corsOrigin);return;}
     if(error instanceof MutationFault){fail(res,error.httpStatus,error.code,requestId,corsOrigin);return;}
     if(typeof error==="object"&&error!==null&&"code" in error){
       if(error.code==="23505"){fail(res,409,"DUPLICATE",requestId,corsOrigin);return;}
