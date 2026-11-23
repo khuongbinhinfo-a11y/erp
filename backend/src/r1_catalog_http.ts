@@ -245,9 +245,12 @@ export async function create(db:PoolClient,tenant:string,kind:Kind,parsed:Parsed
   // Two conflicting policies at identical priority/threshold/target and
   // overlapping effective periods are ambiguous. Lock that exact commercial
   // scope so concurrent requests cannot both pass the overlap check.
+  const [whole="0",fraction=""]=parsed.minQuantity.split(".");
+  const cleanFraction=fraction.replace(/0+$/,"");
+  const canonicalQuantity=cleanFraction?whole+"."+cleanFraction:whole;
   const scopeLock=JSON.stringify([tenant,b,parsed.priceListId,parsed.sellSkuId,
     parsed.scopeKind,parsed.channelId??null,parsed.customerId??null,
-    parsed.customerGroup??null,parsed.priority,parsed.minQuantity]);
+    parsed.customerGroup??null,parsed.priority,canonicalQuantity]);
   await db.query("SELECT pg_advisory_xact_lock(hashtextextended($1::text,0))",[scopeLock]);
   const args=[tenant,b,parsed.priceListId,parsed.sellSkuId,parsed.scopeKind,
     parsed.channelId??null,parsed.customerId??null,parsed.customerGroup??null,
