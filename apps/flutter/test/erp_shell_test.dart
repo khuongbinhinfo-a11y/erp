@@ -1,4 +1,5 @@
 import 'package:material_ui/material_ui.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:erp_distribution/main.dart';
 import 'package:erp_distribution/ui/erp_shell.dart';
@@ -97,7 +98,14 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
     addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(const ErpApp(previewMode:true));
     expect(tester.view.physicalSize.width / tester.view.devicePixelRatio, greaterThan(960));
-    expect(find.text('RRP'), findsOneWidget);
+    expect(find.text('ERP'), findsOneWidget);
+    expect(find.text('RRP'), findsNothing);
+    final logoAsset=find.descendant(
+      of:find.byKey(const ValueKey('erp-sidebar-logo')),
+      matching:find.byType(Image));
+    expect(logoAsset,findsOneWidget);
+    expect((tester.widget<Image>(logoAsset).image as AssetImage).assetName,
+      'assets/images/erp_sidebar_logo.webp');
     expect(find.text('product by KB'), findsOneWidget);
     expect(find.byType(CustomPaint), findsWidgets);
     final toggle=find.byKey(const ValueKey('erp-sidebar-toggle'));
@@ -136,6 +144,65 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
     expect(tester.getSize(frame).width,lessThan(expandedWidth));
     expect(find.byKey(const ValueKey('erp-nav-surface-0')),findsOneWidget);
     expect(find.byKey(const ValueKey('nav-2')),findsOneWidget);
+  });
+
+  testWidgets('hover moves unselected tab and selected tab has curved surface',
+    (tester)async{
+    tester.view.devicePixelRatio=1;
+    tester.view.physicalSize=const Size(1440,900);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(const ErpApp(previewMode:true));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds:260));
+    expect(find.byKey(const ValueKey('erp-nav-selection-0')),findsOneWidget);
+    final moving=find.byKey(const ValueKey('erp-nav-motion-1'));
+    expect(tester.widget<AnimatedSlide>(moving).offset,Offset.zero);
+    final mouse=await tester.createGesture(kind:PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location:const Offset(800,800));
+    await mouse.moveTo(tester.getCenter(find.byKey(const ValueKey('nav-1'))));
+    await tester.pump();
+    expect(tester.widget<AnimatedSlide>(moving).offset.dx,greaterThan(0),
+      reason:'Hover phải làm mục menu trượt nhẹ sang phải');
+    await tester.pump(const Duration(milliseconds:250));
+    await tester.tap(find.byKey(const ValueKey('nav-1')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds:250));
+    expect(find.byKey(const ValueKey('erp-nav-selection-1')),findsOneWidget);
+    expect(tester.widget<AnimatedSlide>(moving).offset,Offset.zero,
+      reason:'Tab được chọn trở về đúng vị trí nổi');
+  });
+
+  testWidgets('hover at left edge stays stable in expanded and compact sidebar',
+    (tester)async{
+    tester.view.devicePixelRatio=1;
+    tester.view.physicalSize=const Size(1440,900);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(const ErpApp(previewMode:true));
+    final hoverTarget=find.byKey(const ValueKey('erp-nav-motion-1'));
+    final mouse=await tester.createGesture(kind:PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location:const Offset(1000,800));
+    Future<void> checkEdge()async{
+      final region=tester.getRect(find.byKey(const ValueKey('nav-1')));
+      await mouse.moveTo(Offset(region.left+2,region.center.dy));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds:250));
+      expect(tester.widget<AnimatedSlide>(hoverTarget).offset.dx,greaterThan(0));
+      await tester.pump(const Duration(milliseconds:400));
+      expect(tester.widget<AnimatedSlide>(hoverTarget).offset.dx,greaterThan(0),
+        reason:'Vùng bấm không được rung khi icon trượt ra khỏi mép trái');
+      await mouse.moveTo(const Offset(1000,800));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds:230));
+    }
+    await checkEdge();
+    await tester.tap(find.byKey(const ValueKey('erp-sidebar-toggle')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds:350));
+    await checkEdge();
   });
 
   testWidgets('unauthed production shows login and preview is explicit', (tester) async{
