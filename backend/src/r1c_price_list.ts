@@ -13,8 +13,10 @@ export async function clonePriceList(db:PoolClient,input:{
   const {installationId:t,branchId:b,sourceId,code,name}=input;
   const original=await db.query<{revision:string;currency:string}>(
     `SELECT revision::text,currency FROM catalog_price_list
-     WHERE installation_id=$1 AND branch_id=$2 AND id=$3 FOR SHARE`,
+     WHERE installation_id=$1 AND branch_id=$2 AND id=$3 FOR UPDATE`,
     [t,b,sourceId]);
+  // FOR UPDATE serializes concurrent price/rule inserts via their FK
+  // KEY SHARE checks, preventing a mixed point-in-time snapshot.
   if(!original.rows[0])return null;
   requireRevision(input.sourceRevision,Number(original.rows[0].revision));
   // NOW() is stable inside the surrounding executeMutation transaction.
