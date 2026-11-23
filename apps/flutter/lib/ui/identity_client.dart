@@ -269,6 +269,33 @@ class ErpIdentityClient {
     }
     return collected;
   }
+  /// Master directories use code-based keyset paging; no first-100 truncation
+  /// in customer group / sales region pickers. Codes are never free-form input.
+  Future<List<Map<String,dynamic>>> catalogDirectoryAll(
+      String token,String resource,{required String branchId,String query=''})async{
+    if(resource!='customer-groups'&&resource!='customer-regions')
+      throw ArgumentError.value(resource,'resource','Danh mục không hỗ trợ');
+    final found=<Map<String,dynamic>>[];
+    final seen=<String>{};
+    String? after;
+    while(true){
+      final suffix=Uri(queryParameters:{
+        'branchId':branchId,
+        if(query.trim().isNotEmpty)'q':query.trim(),
+        if(after!=null)'after':after,
+      }).query;
+      final raw=await _request('GET','/v1/catalog/$resource?$suffix',token:token);
+      final values=(raw['items'] as List<dynamic>)
+        .map((v)=>Map<String,dynamic>.from(v as Map)).toList();
+      found.addAll(values);
+      final next=raw['nextAfter'];
+      if(next is! String||next.isEmpty)break;
+      if(!seen.add(next))throw const ErpApiError(502,
+        'Danh mục trả về trang bị lặp. Vui lòng tải lại.');
+      after=next;
+    }
+    return found;
+  }
   /// Product write readiness is explicit: catalog 0006/0007 can still be
   /// viewed, but SKU/barcode creation requires the separately migrated R1 schema.
   Future<({List<Map<String,dynamic>> items,bool writeReady})> catalogProducts(
@@ -380,6 +407,12 @@ class ErpIdentityClient {
     Map<String,dynamic> fields,{required String key})=>
       _request('POST','/v1/catalog/r1/rules/$ruleId/retire',token:token,
         body:fields,revision:0,idempotencyKey:key);
+  /// Correct lifecycle fields only; SKU/barcode identity and UOM factors
+  /// are immutable. Optimistic revision + idempotency are server validated.
+  Future<Map<String,dynamic>> updateR1Catalog(
+      String token,String kind,String id,int revision,Map<String,dynamic> fields)=>
+    _request('PATCH','/v1/catalog/r1/$kind/$id',token:token,
+      body:fields,revision:revision);
   /// Price simulation is read-only; it never changes order, stock or money ledger.
   Future<Map<String,dynamic>> r1PriceQuote(String token,
     Map<String,dynamic> context)=>_request(

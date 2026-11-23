@@ -9,8 +9,8 @@
   "scripts": {
     "dev": "node --experimental-strip-types src/main.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test src/health.test.ts src/mutation.test.ts src/rbac.test.ts src/auth.test.ts src/identity_http.test.ts src/catalog_http.test.ts src/r2_media_signer.test.ts src/migrate_production.test.ts src/migrate_catalog_production.test.ts src/maintenance.test.ts src/cutover_gate.test.ts src/sales_http.test.ts src/r1_catalog_http.test.ts src/inventory_http.test.ts src/purchasing_http.test.ts src/transfer_http.test.ts src/stocktake_http.test.ts scripts/r3-codespaces-migration.test.mjs scripts/r1-media-codespaces-migration.test.mjs",
-    "test:integration": "node --experimental-strip-types --test src/mutation.test.ts src/rbac.test.ts src/auth.test.ts src/identity_http.test.ts src/catalog_http.test.ts src/r2_media_signer.test.ts src/sales_http.test.ts src/r1_catalog_http.test.ts src/inventory_http.test.ts src/purchasing_http.test.ts src/transfer_http.test.ts src/stocktake_http.test.ts",
+    "test": "node --experimental-strip-types --test src/health.test.ts src/mutation.test.ts src/rbac.test.ts src/auth.test.ts src/identity_http.test.ts src/catalog_http.test.ts src/r2_media_signer.test.ts src/migrate_production.test.ts src/migrate_catalog_production.test.ts src/maintenance.test.ts src/cutover_gate.test.ts src/sales_http.test.ts src/r1_catalog_http.test.ts src/r1a_masterdata.test.ts src/inventory_http.test.ts src/purchasing_http.test.ts src/transfer_http.test.ts src/stocktake_http.test.ts scripts/r3-codespaces-migration.test.mjs scripts/r1-media-codespaces-migration.test.mjs scripts/r1a-codespaces-migration.test.mjs",
+    "test:integration": "node --experimental-strip-types --test src/mutation.test.ts src/rbac.test.ts src/auth.test.ts src/identity_http.test.ts src/catalog_http.test.ts src/r2_media_signer.test.ts src/sales_http.test.ts src/r1_catalog_http.test.ts src/r1a_masterdata.test.ts src/inventory_http.test.ts src/purchasing_http.test.ts src/transfer_http.test.ts src/stocktake_http.test.ts",
     "build": "tsc",
     "start": "node dist/main.js",
     "db:migrate:ci": "node --experimental-strip-types src/migrate.ts",
@@ -21,7 +21,9 @@
     "db:migrate:r3:codespaces": "node --experimental-strip-types scripts/r3-codespaces-migration.mjs",
     "test:r3:operator": "node --experimental-strip-types --test scripts/r3-codespaces-migration.test.mjs",
     "db:migrate:r1-media:codespaces": "node --experimental-strip-types scripts/r1-media-codespaces-migration.mjs",
-    "test:r1-media:operator": "node --experimental-strip-types --test scripts/r1-media-codespaces-migration.test.mjs"
+    "test:r1-media:operator": "node --experimental-strip-types --test scripts/r1-media-codespaces-migration.test.mjs",
+    "db:migrate:r1a:codespaces": "node --experimental-strip-types scripts/r1a-codespaces-migration.mjs",
+    "test:r1a:operator": "node --experimental-strip-types --test scripts/r1a-codespaces-migration.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

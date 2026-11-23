@@ -38,8 +38,8 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
   pool=new Pool({connectionString:target.toString(),max:7,query_timeout:15000});
   pool.on("error",()=>{});
   const applied=await applyMigrations(pool,resolve(process.cwd(),"db/migrations"));
-  assert.equal(applied.applied.length,16);
-  assert.equal((await applyMigrations(pool,resolve(process.cwd(),"db/migrations"))).skipped.length,16);
+  assert.equal(applied.applied.length,17);
+  assert.equal((await applyMigrations(pool,resolve(process.cwd(),"db/migrations"))).skipped.length,17);
   const password="R1-test-"+randomUUID();
   const root=await bootstrapInstallation(pool,{
    code:"r1-test",displayName:"Synthetic R1 integration",
@@ -82,8 +82,12 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
    {origin:"https://evil.example"})).status,403);
   assert.equal((await read("skus")).status,200);
 
+  const vipGroup=await legacy("customer-groups",{code:"VIP",name:"Khách VIP"});
+  const standardGroup=await legacy("customer-groups",{code:"STANDARD",name:"Khách phổ thông"});
+  assert.equal(vipGroup.status,201);
+  assert.equal(standardGroup.status,201);
   const c1=await legacy("customers",{
-   code:"KH-01",name:"Khách thử A",customerGroup:"VIP",
+   code:"KH-01",name:"Khách thử A",customerGroupId:vipGroup.body.id,
    phone:"+84900000001",deliveryAddress:"Địa chỉ kiểm thử",paymentTermsDays:15,
   });
   assert.equal(c1.status,201,JSON.stringify(c1.body));
@@ -93,7 +97,7 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
   assert.equal(customers.body.items[0].phone,"+84900000001");
   assert.equal(customers.body.items[0].paymentTermsDays,15);
   const c2=await legacy("customers",{code:"KH-02",name:"Khách thử B",
-   customerGroup:"STANDARD",phone:"+84900000002"});
+   customerGroupId:standardGroup.body.id,phone:"+84900000002"});
   assert.equal(c2.status,201);
 
   const product=await legacy("products",{
@@ -323,6 +327,81 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
   await assert.rejects(pool.query(
    "DELETE FROM catalog_sku_price_retirement WHERE rule_id=$1",[timeBound.body.id]),
    /immutable/i);
+  const patchR1=(kind:string,targetId:string,revision:number,
+    fields:Record<string,unknown>,key="update-r1-"+randomUUID())=>
+    request("/v1/catalog/r1/"+kind+"/"+targetId,"PATCH",
+      {branchId:b,...fields},token,
+      {"idempotency-key":key,"if-match":String(revision)});
+  const channelKey="channel-edit-"+randomUUID();
+  const updatedChannel=await patchR1("channels",channel.body.id,0,
+    {name:"Kênh bán thị trường",active:true},channelKey);
+  assert.equal(updatedChannel.status,200,JSON.stringify(updatedChannel.body));
+  assert.equal(updatedChannel.body.revision,1);
+  assert.deepEqual((await patchR1("channels",channel.body.id,0,
+    {name:"Kênh bán thị trường",active:true},channelKey)).body,
+    updatedChannel.body,"channel update must be idempotent");
+  assert.equal((await patchR1("channels",channel.body.id,0,
+    {name:"Stale edit"})).status,409);
+  assert.equal((await patchR1("channels",channel.body.id,1,
+    {code:"MCP_NEW"})).status,400,"channel identity is immutable");
+  assert.equal((await patchR1("skus",baseSku,0,{active:false})).status,409,
+    "base SKU cannot be disabled without product lifecycle decision");
+  const otherBarcode=await r1("barcodes",
+    {sellSkuId:skuId,barcode:"BC-0002",isPrimary:false});
+  assert.equal(otherBarcode.status,201);
+  // Historic Unicode labels and new directory codes must resolve the
+  // SAME customer group. Neither policy may silently disappear or double stack.
+  // Synthetic migrated dictionary row includes a frozen legacy alias,
+  // which is intentionally unavailable to ordinary POST/PATCH APIs.
+  const unicodeGroupId=(await pool.query<{id:string}>(`INSERT INTO catalog_customer_group
+    (installation_id,branch_id,code,name,legacy_label)
+    VALUES($1,$2,'LEGACY-7e736d8317f82900ab34d1f5d56e3ed2',
+      'Bán sỉ','Bán sỉ') RETURNING id`,
+    [root.installationId,b])).rows[0]!.id;
+  const unicodeCustomer=await legacy("customers",{
+    code:"KH-UNICODE",name:"Khách nhập theo nhóm cũ",
+    customerGroupId:unicodeGroupId});
+  assert.equal(unicodeCustomer.status,201);
+  const newGroupRule=await r1("rules",{
+    ...basic,sellSkuId:skuId,scopeKind:"CUSTOMER_GROUP",
+    customerGroup:"LEGACY-7e736d8317f82900ab34d1f5d56e3ed2",
+    adjustment:"PERCENT_DISCOUNT",amount:"3.0000",priority:-1,
+    stacking:"STACKABLE"});
+  assert.equal(newGroupRule.status,201,JSON.stringify(newGroupRule.body));
+  const legacyRule=(await pool.query<{id:string}>(`INSERT INTO catalog_sku_price_rule
+    (installation_id,branch_id,price_list_id,sell_sku_id,scope_kind,
+      customer_group,adjustment,amount,priority,stacking,min_quantity,effective_from)
+    VALUES ($1,$2,$3,$4,'CUSTOMER_GROUP','Bán sỉ','PERCENT_DISCOUNT',
+      3.0000,-1,'STACKABLE',1,$5::timestamptz) RETURNING id`,
+    [root.installationId,b,list.body.id,skuId,now])).rows[0]!.id;
+  const renamed=await request("/v1/catalog/customer-groups/"+unicodeGroupId,"PATCH",
+    {branchId:b,name:"Tên nhóm đổi sau migration",active:true},token,
+    {"idempotency-key":"rename-group-"+randomUUID(),"if-match":"0"});
+  assert.equal(renamed.status,200,JSON.stringify(renamed.body));
+  const unicodeQuote=await resolvePrice({
+    priceListId:list.body.id,sellSkuId:skuId,
+    quantity:"1",customerId:unicodeCustomer.body.id,priceAt});
+  assert.equal(unicodeQuote.status,200,JSON.stringify(unicodeQuote.body));
+  const equivalent=[newGroupRule.body.id,legacyRule];
+  assert.equal(unicodeQuote.body.quote.trace.filter(
+    (x:{ruleId:string})=>equivalent.includes(x.ruleId)).length,1,
+    "old label and new code are equivalent; the discount must apply exactly once");
+  const disabledSku=await patchR1("skus",skuId,0,{active:false});
+  assert.equal(disabledSku.status,200,JSON.stringify(disabledSku.body));
+  assert.equal(disabledSku.body.revision,1);
+  assert.equal((await patchR1("skus",skuId,0,{active:true})).status,409);
+  assert.equal((await patchR1("skus",skuId,1,{toBase:"24"})).status,400,
+    "an immutable conversion must not become editable");
+  const promote=await patchR1("barcodes",otherBarcode.body.id,0,
+    {active:true,isPrimary:true});
+  assert.equal(promote.status,200,JSON.stringify(promote.body));
+  const barcodes=await read("barcodes");
+  assert.equal(barcodes.body.items.find((x:any)=>x.id===otherBarcode.body.id)?.isPrimary,true);
+  assert.equal(barcodes.body.items.find((x:any)=>x.id===code.body.id)?.isPrimary,false);
+  assert.equal((await patchR1("barcodes",otherBarcode.body.id,0,
+    {active:false})).status,409,"barcode revision guards other-device stale edits");
+  assert.equal((await patchR1("barcodes",otherBarcode.body.id,1,
+    {barcode:"CHANGED"})).status,400,"barcode identity is immutable");
   const inactive=await pool.query<{id:string}>(
    "INSERT INTO branch(installation_id,code,name) VALUES($1,'OTHER','Other') RETURNING id",
    [root.installationId]);

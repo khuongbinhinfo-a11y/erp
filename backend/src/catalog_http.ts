@@ -123,14 +123,35 @@ function requestMutation(req:IncomingMessage,id:string,actorId:string,tenant:str
   return {installationId:tenant,actorId,requestId:id,action,
     idempotencyKey:key,expectedRevision:parsed,payload};
 }
-type Resource="customers"|"suppliers"|"groups"|"products"|"price-lists"|"prices"|"warehouses"|"unit-definitions";
-const resources=new Set<Resource>(["customers","suppliers","groups","products","price-lists","prices","warehouses","unit-definitions"]);
+type Resource="customers"|"customer-groups"|"customer-regions"|"suppliers"|"groups"|"products"|"price-lists"|"prices"|"warehouses"|"unit-definitions";
+const resources=new Set<Resource>(["customers","customer-groups","customer-regions","suppliers","groups","products","price-lists","prices","warehouses","unit-definitions"]);
 function resourceOf(value:string):Resource{
   if(!resources.has(value as Resource))throw new CatalogError(404,"UNKNOWN_RESOURCE");
   return value as Resource;
 }
 const selections:Record<Resource,string>={
-  "customers":'SELECT id,code,name,customer_group AS "customerGroup",phone,delivery_address AS "deliveryAddress",payment_terms_days AS "paymentTermsDays",active,revision::integer FROM catalog_customer',
+  "customers":`SELECT id,code,name,customer_group AS "customerGroup",
+    customer_group_id AS "customerGroupId",customer_region_id AS "customerRegionId",
+    (SELECT g.code FROM catalog_customer_group g WHERE
+      g.installation_id=catalog_customer.installation_id AND
+      g.branch_id=catalog_customer.branch_id AND g.id=catalog_customer.customer_group_id)
+      AS "customerGroupCode",
+    (SELECT g.name FROM catalog_customer_group g WHERE
+      g.installation_id=catalog_customer.installation_id AND
+      g.branch_id=catalog_customer.branch_id AND g.id=catalog_customer.customer_group_id)
+      AS "customerGroupName",
+    (SELECT r.code FROM catalog_customer_region r WHERE
+      r.installation_id=catalog_customer.installation_id AND
+      r.branch_id=catalog_customer.branch_id AND r.id=catalog_customer.customer_region_id)
+      AS "customerRegionCode",
+    (SELECT r.name FROM catalog_customer_region r WHERE
+      r.installation_id=catalog_customer.installation_id AND
+      r.branch_id=catalog_customer.branch_id AND r.id=catalog_customer.customer_region_id)
+      AS "customerRegionName",
+    phone,delivery_address AS "deliveryAddress",
+    payment_terms_days AS "paymentTermsDays",active,revision::integer FROM catalog_customer`,
+  "customer-groups":'SELECT id,code,name,active,revision::integer FROM catalog_customer_group',
+  "customer-regions":'SELECT id,code,name,active,revision::integer FROM catalog_customer_region',
   "suppliers":'SELECT id,code,name,active,revision::integer FROM catalog_supplier',
   "groups":'SELECT id,code,name,active,revision::integer FROM catalog_product_group',
   "unit-definitions":'SELECT id,code,name,active,revision::integer FROM catalog_unit_definition',
@@ -157,6 +178,8 @@ const selections:Record<Resource,string>={
 };
 const tableFor:Record<Exclude<Resource,"warehouses"|"prices">,string>={
   "customers":"catalog_customer",
+  "customer-groups":"catalog_customer_group",
+  "customer-regions":"catalog_customer_region",
   "suppliers":"catalog_supplier",
   "groups":"catalog_product_group",
   "unit-definitions":"catalog_unit_definition",
@@ -176,6 +199,24 @@ async function hasUnitDictionary(db:Pool|PoolClient):Promise<boolean>{
       "SELECT EXISTS(SELECT 1 FROM public.schema_migrations WHERE version='0015_r1_unit_dictionary.sql') AS ok");
     return result.rows[0]?.ok===true;
   }catch{return false;}
+}
+async function hasCustomerDirectories(db:Pool|PoolClient):Promise<boolean>{
+  try{
+    const r=await db.query<{ok:boolean}>(
+      "SELECT EXISTS(SELECT 1 FROM public.schema_migrations WHERE version='0017_r1a_customer_directories.sql') AS ok");
+    return r.rows[0]?.ok===true;
+  }catch{return false;}
+}
+// IDs, never free-text labels, are the client contract for shared directories.
+// All lookups are tenant+branch scoped and deny disabled selections.
+async function activeDirectoryCode(db:PoolClient,table:"catalog_customer_group"|"catalog_customer_region"|"catalog_product_group",
+  installationId:string,branchId:string,ref:string|null):Promise<string|null>{
+  if(ref===null)return null;
+  const r=await db.query<{code:string;active:boolean}>(
+    `SELECT code,active FROM ${table} WHERE installation_id=$1 AND branch_id=$2 AND id=$3 FOR SHARE`,
+    [installationId,branchId,ref]);
+  if(r.rows[0]?.active!==true)throw new CatalogError(400,"INVALID_OR_INACTIVE_DIRECTORY");
+  return r.rows[0]!.code;
 }
 async function hasCatalogSchema(db:Pool):Promise<boolean>{
   try {
@@ -199,12 +240,16 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
   }
   if(!await hasPermission(db,{installationId:tenant,actorId,permission:"catalog.read",branchId}))
     throw new CatalogError(403,"CATALOG_READ_DENIED");
+  if((resource==="customer-groups"||resource==="customer-regions")&&
+     !await hasCustomerDirectories(db))
+    throw new CatalogError(503,"CUSTOMER_DICTIONARY_MIGRATION_REQUIRED");
   if(resource==="unit-definitions"&&!await hasUnitDictionary(db))
     throw new CatalogError(503,"UNIT_DICTIONARY_MIGRATION_REQUIRED");
-  if(resource==="unit-definitions"){
+  if(resource==="unit-definitions"||resource==="customer-groups"||
+     resource==="customer-regions"){
     // Keyset cursor ensures every UOM remains reachable, not just the first
     // 100 codes. Code is unique within installation+branch.
-    const rows=await db.query(`${selections["unit-definitions"]}
+    const rows=await db.query(`${selections[resource]}
       WHERE installation_id=$1 AND branch_id=$2
         AND (code ILIKE $3 OR name ILIKE $3) AND code>$4
       ORDER BY code,id LIMIT 100`,
@@ -224,11 +269,18 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
         g.branch_id=catalog_product.branch_id AND g.id=catalog_product.group_id)
       AS "groupName",0::integer AS "sellSkuCount",NULL::text AS barcode,
       active,revision::integer FROM catalog_product`;
+  const customerReady=resource==="customers"&&await hasCustomerDirectories(db);
+  const customerSelection=customerReady?selections.customers:
+    'SELECT id,code,name,customer_group AS "customerGroup",NULL::uuid AS "customerGroupId",'+
+    'NULL::uuid AS "customerRegionId",NULL::text AS "customerGroupCode",'+
+    'customer_group AS "customerGroupName",NULL::text AS "customerRegionCode",'+
+    'NULL::text AS "customerRegionName",phone,delivery_address AS "deliveryAddress",'+
+    'payment_terms_days AS "paymentTermsDays",active,revision::integer FROM catalog_customer';
   const r=await db.query(
     resource==="prices"
       ?`${selections.prices} WHERE installation_id=$1 AND branch_id=$2
           ORDER BY effective_at DESC,id LIMIT 100`
-      :`${resource==="products"?productSelection:selections[resource]} WHERE installation_id=$1 AND branch_id=$2
+      :`${resource==="products"?productSelection:resource==="customers"?customerSelection:selections[resource]} WHERE installation_id=$1 AND branch_id=$2
           AND (${resource==="products"?"sku":"code"} ILIKE $3 OR name ILIKE $3
           ${resource==="customers"?"OR phone ILIKE $3 OR customer_group ILIKE $3":""})
           ORDER BY ${resource==="products"?"sku":"code"},id LIMIT 100`,
@@ -287,14 +339,17 @@ function checkCreate(resource:Resource,raw:Record<string,unknown>){
     return {branchId,code,name,baseUnit,groupId,barcode,units:conversions};
   }
   if(resource==="customers"){
-    const customerGroup=raw.customerGroup==null?null:requireName(raw.customerGroup,64);
+    if(Object.keys(raw).some(k=>!["branchId","code","name","customerGroupId","customerRegionId","phone","deliveryAddress","paymentTermsDays"].includes(k)))
+      throw new CatalogError(400,"UNKNOWN_FIELD");
+    const customerGroupId=raw.customerGroupId==null?null:requireUuid(raw.customerGroupId);
+    const customerRegionId=raw.customerRegionId==null?null:requireUuid(raw.customerRegionId);
     const phone=raw.phone==null?null:requirePhone(raw.phone);
     const deliveryAddress=raw.deliveryAddress==null?null:requireName(raw.deliveryAddress,500);
     const paymentTermsDays=raw.paymentTermsDays??0;
     if(typeof paymentTermsDays!=="number"||!Number.isInteger(paymentTermsDays)||
       paymentTermsDays<0||paymentTermsDays>365)
       throw new CatalogError(400,"INVALID_PAYMENT_TERMS");
-    return {branchId,code,name,customerGroup,phone,deliveryAddress,paymentTermsDays};
+    return {branchId,code,name,customerGroupId,customerRegionId,phone,deliveryAddress,paymentTermsDays};
   }
   return {branchId,code,name};
 }
@@ -337,6 +392,8 @@ async function executeCreate(db:PoolClient,context:MutationContext,
           throw new CatalogError(400,"UNIT_DISABLED");
       }
     }
+    if(value.groupId!==null)
+      await activeDirectoryCode(db,"catalog_product_group",installationId,branchId,value.groupId??null);
     const r=await db.query<{id:string}>(
       `INSERT INTO catalog_product(installation_id,branch_id,sku,name,group_id,base_unit)
        VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
@@ -384,25 +441,36 @@ async function executeCreate(db:PoolClient,context:MutationContext,
   if(!("code" in value))throw new CatalogError(400,"INVALID_RESOURCE");
   const table=tableFor[resource];
   const withGroup=resource==="customers";
+  let groupCode:string|null=null;
+  if(withGroup){
+    if(!("customerGroupId" in value))throw new CatalogError(400,"INVALID_CUSTOMER_REFERENCE");
+    groupCode=await activeDirectoryCode(db,"catalog_customer_group",
+      installationId,branchId,value.customerGroupId??null);
+    await activeDirectoryCode(db,"catalog_customer_region",
+      installationId,branchId,value.customerRegionId??null);
+  }
   const r=await db.query<{id:string}>(
     withGroup
       ?`INSERT INTO ${table}
-         (installation_id,branch_id,code,name,customer_group,phone,delivery_address,payment_terms_days)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`
+         (installation_id,branch_id,code,name,customer_group,customer_group_id,customer_region_id,
+          phone,delivery_address,payment_terms_days)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`
       :`INSERT INTO ${table}(installation_id,branch_id,code,name)
          VALUES ($1,$2,$3,$4) RETURNING id`,
-    withGroup?[installationId,branchId,value.code,value.name,
-      "customerGroup" in value?value.customerGroup:null,
+    withGroup?[installationId,branchId,value.code,value.name,groupCode,
+      "customerGroupId" in value?value.customerGroupId:null,
+      "customerRegionId" in value?value.customerRegionId:null,
       "phone" in value?value.phone:null,"deliveryAddress" in value?value.deliveryAddress:null,
       "paymentTermsDays" in value?value.paymentTermsDays:0]:
       [installationId,branchId,value.code,value.name]);
   return {status:201,body:{id:r.rows[0]!.id,code:value.code,name:value.name,revision:0}};
 }
 
-type Editable = "customers"|"suppliers"|"groups"|"products"|"price-lists"|"unit-definitions";
-const editable = new Set<Editable>(["customers","suppliers","groups","products","price-lists","unit-definitions"]);
+type Editable = "customers"|"customer-groups"|"customer-regions"|"suppliers"|"groups"|"products"|"price-lists"|"unit-definitions";
+const editable = new Set<Editable>(["customers","customer-groups","customer-regions","suppliers","groups","products","price-lists","unit-definitions"]);
 const editTables:Record<Editable,string>={
   "customers":"catalog_customer","suppliers":"catalog_supplier",
+  "customer-groups":"catalog_customer_group","customer-regions":"catalog_customer_region",
   "groups":"catalog_product_group","products":"catalog_product",
   "unit-definitions":"catalog_unit_definition",
   "price-lists":"catalog_price_list",
@@ -411,7 +479,7 @@ function parseEdit(resource:Editable,raw:Record<string,unknown>){
   const branchId=requireUuid(raw.branchId);
   const columns:Record<string,unknown>={};
   const allow=new Set(["branchId","name","active",
-    ...(resource==="customers"?["customerGroup","phone","deliveryAddress","paymentTermsDays"]:[]),
+    ...(resource==="customers"?["customerGroupId","customerRegionId","phone","deliveryAddress","paymentTermsDays"]:[]),
     ...(resource==="products"?["groupId"]:[])]);
   if(Object.keys(raw).some(key=>!allow.has(key)))throw new CatalogError(400,"UNKNOWN_FIELD");
   if(Object.prototype.hasOwnProperty.call(raw,"name"))
@@ -420,9 +488,10 @@ function parseEdit(resource:Editable,raw:Record<string,unknown>){
     if(typeof raw.active!=="boolean")throw new CatalogError(400,"INVALID_ACTIVE");
     columns.active=raw.active;
   }
-  if(resource==="customers"&&Object.prototype.hasOwnProperty.call(raw,"customerGroup")){
-    columns.customer_group=raw.customerGroup===null?null:requireName(raw.customerGroup,64);
-  }
+  if(resource==="customers"&&Object.prototype.hasOwnProperty.call(raw,"customerGroupId"))
+    columns.customer_group_id=raw.customerGroupId===null?null:requireUuid(raw.customerGroupId);
+  if(resource==="customers"&&Object.prototype.hasOwnProperty.call(raw,"customerRegionId"))
+    columns.customer_region_id=raw.customerRegionId===null?null:requireUuid(raw.customerRegionId);
   if(resource==="customers"&&Object.prototype.hasOwnProperty.call(raw,"phone")){
     columns.phone=raw.phone===null?null:requirePhone(raw.phone);
   }
@@ -454,6 +523,17 @@ async function applyEdit(db:PoolClient,context:MutationContext,
     [installationId,value.branchId,targetId]);
   if(row.rowCount===0)throw new CatalogError(404,"NOT_FOUND");
   requireRevision(expectedRevision,Number(row.rows[0]!.revision));
+  if(resource==="customers"){
+    if(Object.prototype.hasOwnProperty.call(value.columns,"customer_group_id"))
+      value.columns.customer_group=await activeDirectoryCode(db,"catalog_customer_group",
+        installationId,value.branchId,value.columns.customer_group_id as string|null);
+    if(Object.prototype.hasOwnProperty.call(value.columns,"customer_region_id"))
+      await activeDirectoryCode(db,"catalog_customer_region",
+        installationId,value.branchId,value.columns.customer_region_id as string|null);
+  }
+  if(resource==="products"&&Object.prototype.hasOwnProperty.call(value.columns,"group_id"))
+    await activeDirectoryCode(db,"catalog_product_group",
+      installationId,value.branchId,value.columns.group_id as string|null);
   const columnEntries=Object.entries(value.columns);
   const sets=columnEntries.map(([key],i)=>key+"=$"+(i+4));
   const args=[installationId,value.branchId,targetId,...columnEntries.map(x=>x[1])];
@@ -567,10 +647,13 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
       }finally{db.release();}
       return;
     }
-    const updatePath=/^\/v1\/catalog\/(customers|suppliers|groups|products|price-lists|unit-definitions)\/([0-9a-f-]{36})$/.exec(url.pathname);
+    const updatePath=/^\/v1\/catalog\/(customers|customer-groups|customer-regions|suppliers|groups|products|price-lists|unit-definitions)\/([0-9a-f-]{36})$/.exec(url.pathname);
     if(updatePath&&req.method==="PATCH"){
       const resource=updatePath[1] as Editable;
       if(!editable.has(resource))throw new CatalogError(404,"UNKNOWN_RESOURCE");
+      if((resource==="customers"||resource==="customer-groups"||
+        resource==="customer-regions")&&!await hasCustomerDirectories(pool))
+        throw new CatalogError(503,"CUSTOMER_DICTIONARY_MIGRATION_REQUIRED");
       const targetId=requireUuid(updatePath[2]);
       const input=parseEdit(resource,await payloadFrom(req));
       const payload={id:targetId,branchId:input.branchId,...input.columns};
@@ -584,23 +667,27 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
       send(res,outcome.status,outcome.body,requestId,corsOrigin);return;
     }
     const resource=resourceOf(url.pathname.slice("/v1/catalog/".length));
+    if((resource==="customer-groups"||resource==="customer-regions")&&
+       !await hasCustomerDirectories(pool))
+      throw new CatalogError(503,"CUSTOMER_DICTIONARY_MIGRATION_REQUIRED");
     if(resource==="unit-definitions"&&!await hasUnitDictionary(pool))
       throw new CatalogError(503,"UNIT_DICTIONARY_MIGRATION_REQUIRED");
     if(req.method==="GET"){
       const branchId=requireUuid(url.searchParams.get("branchId"));
       const search=(url.searchParams.get("q")??"").trim();
       if(search.length>64)throw new CatalogError(400,"SEARCH_TOO_LONG");
-      const afterCode=resource==="unit-definitions"
-        ?(url.searchParams.get("after")??""):"";
+      const paged=resource==="unit-definitions"||resource==="customer-groups"||
+        resource==="customer-regions";
+      const afterCode=paged?(url.searchParams.get("after")??""):"";
       // Cursor comes from existing stored data, including legacy display
       // strings such as "Hộp 12". New-code validation must not reject it.
-      if(afterCode&&([...afterCode].length>24||
+      if(afterCode&&([...afterCode].length>(resource==="unit-definitions"?24:64)||
         afterCode.trim().length===0||/[\u0000-\u001f\u007f]/.test(afterCode)))
         throw new CatalogError(400,"INVALID_UNIT_CURSOR");
       const client=await pool.connect();
       try{
         const rows=await listing(client,tenant,actorId,branchId,resource,search,afterCode);
-        const nextAfter=resource==="unit-definitions"&&rows.length===100
+        const nextAfter=paged&&rows.length===100
           ?(rows[rows.length-1] as {code:string}).code:null;
         send(res,200,{items:rows,
           ...(nextAfter?{nextAfter}:{}),
@@ -613,6 +700,9 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
       // R1 sale variants/barcodes do not exist on 0006/0007-only installations.
       // Reject BEFORE the mutation transaction, never expose a half-created
       // product or a generic retryable provider error.
+      if((resource==="customers"||resource==="customer-groups"||
+        resource==="customer-regions")&&!await hasCustomerDirectories(pool))
+        throw new CatalogError(503,"CUSTOMER_DICTIONARY_MIGRATION_REQUIRED");
       if(resource==="products"&&!await hasR1CatalogSchema(pool))
         throw new CatalogError(503,"R1_PRODUCT_SCHEMA_REQUIRED");
       const input=checkCreate(resource,await payloadFrom(req));

@@ -27,7 +27,7 @@ test("Issue #7: catalog HTTP uses real PostgreSQL with tenant/branch RBAC, decim
     pool=new Pool({connectionString:target.toString(),max:5,query_timeout:12000});
     pool.on("error",()=>{});
     const applied=await applyMigrations(pool,resolve(process.cwd(),"db/migrations"));
-    assert.equal(applied.applied.length,16);
+    assert.equal(applied.applied.length,17);
     const ownerPassword="Owner-test-"+randomUUID();
     const root=await bootstrapInstallation(pool,{code:"catalog-ci",displayName:"Catalog Integration CI",
       adminLogin:"root",adminPassword:ownerPassword});
@@ -132,8 +132,24 @@ test("Issue #7: catalog HTTP uses real PostgreSQL with tenant/branch RBAC, decim
         "legacy Unicode/space UOM codes are valid pagination boundaries");
       assert.equal((await call("/v1/catalog/unit-definitions?branchId="+b+
         "&after="+encodeURIComponent("bad\ncode"),"GET",undefined,token)).status,400);
+      const masterGroup=await create("customer-groups",
+        {code:"KH_SI",name:"Khách bán sỉ"},"group-"+randomUUID(),token);
+      const masterRegion=await create("customer-regions",
+        {code:"KV_MT",name:"Khu vực Mỹ Tho"},"region-"+randomUUID(),token);
+      assert.equal(masterGroup.status,201,JSON.stringify(masterGroup.body));
+      assert.equal(masterRegion.status,201,JSON.stringify(masterRegion.body));
+      assert.equal((await create("customers",{
+        code:"KH-INVALID-REF",name:"Tham chiếu sai",
+        customerRegionId:randomUUID(),
+      },"invalid-ref-"+randomUUID(),token)).status,400,
+        "customer cannot reference another installation/branch or unknown region");
+      assert.equal((await create("customers",{
+        code:"KH-TEXT-REF",name:"Không nhập nhóm text",customerGroup:"KH_SI",
+      },"invalid-text-"+randomUUID(),token)).status,400,
+        "customer group is selected by stable ID, not free text");
       const customerKey="customer-"+randomUUID();
-      const customerBody={branchId:b,code:"CUSTOMER-01",name:"Synthetic Customer"};
+      const customerBody={branchId:b,code:"CUSTOMER-01",name:"Synthetic Customer",
+        customerGroupId:masterGroup.body.id,customerRegionId:masterRegion.body.id};
       const customer=await call("/v1/catalog/customers","POST",customerBody,token,
         {"idempotency-key":customerKey,"if-match":"0"});
       assert.equal(customer.status,201,JSON.stringify(customer.body));
@@ -148,8 +164,12 @@ test("Issue #7: catalog HTTP uses real PostgreSQL with tenant/branch RBAC, decim
         {"idempotency-key":customerKey,"if-match":"0"})).status,409);
       assert.equal((await create("customers",{code:"CUSTOMER-01",name:"Duplicate"},
         "duplicate-"+randomUUID(),token)).status,409);
-      assert.equal((await call("/v1/catalog/customers?branchId="+b+"&q=CUSTOMER-01",
-        "GET",undefined,token)).body.items.length,1);
+      const customerList=await call("/v1/catalog/customers?branchId="+b+"&q=CUSTOMER-01",
+        "GET",undefined,token);
+      assert.equal(customerList.body.items.length,1);
+      assert.equal(customerList.body.items[0].customerGroupCode,"KH_SI");
+      assert.equal(customerList.body.items[0].customerRegionCode,"KV_MT");
+      assert.equal(customerList.body.items[0].customerGroupId,masterGroup.body.id);
       const productPayload={
         code:"SKU-0001",name:"Synthetic Product",groupId:group.body.id,baseUnit:"cai",
         barcode:"BASE-0001",
@@ -311,8 +331,8 @@ test("Issue #7: catalog HTTP uses real PostgreSQL with tenant/branch RBAC, decim
       const audit=await pool.query<{total:string}>(
         "SELECT count(*)::text AS total FROM audit_event WHERE installation_id=$1 AND action_code LIKE 'catalog.%'",
         [root.installationId]);
-      assert.equal(audit.rows[0]!.total,"15",
-        "8 creations and 7 distinct PATCH mutations each audited once; replay not double counted");
+      assert.equal(audit.rows[0]!.total,"17",
+        "10 creations and 7 distinct PATCH mutations audited once; replay not double counted");
     }finally{await new Promise<void>((ok,fail)=>app.close(e=>e?fail(e):ok()));}
   }finally{
     if(pool)await pool.end();

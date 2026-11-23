@@ -41,7 +41,8 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
       'priority','minQuantity','customerGroup'])
       key:TextEditingController(),
   };
-  List<Map<String,dynamic>> items=[],products=[],skus=[],lists=[],customers=[],channels=[];
+  List<Map<String,dynamic>> items=[],products=[],skus=[],lists=[],customers=[],channels=[],
+    customerGroups=[],unitDefinitions=[];
   String? error,productId,skuId,listId,customerId,channelId;
   String scope='BASE',adjustment='FIXED_PRICE',stacking='EXCLUSIVE';
   int promotionDays=7;
@@ -137,6 +138,25 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
         widget.client.catalogItems(widget.session.token,'customers',branchId:branch),
         widget.client.catalogItems(widget.session.token,'r1/channels',branchId:branch),
       ]);
+      // Auxiliary master directories are optional for legacy R1 scopes.
+      // Do not break barcode entry or price quotation when 0017 is pending.
+      List<Map<String,dynamic>> groups=[],uoms=[];
+      if(widget.kind=='rules'){
+        try{
+          groups=await widget.client.catalogDirectoryAll(
+            widget.session.token,'customer-groups',branchId:branch);
+        }on ErpApiError catch(e){
+          if(e.status!=503)rethrow;
+        }
+      }
+      if(widget.kind=='units'||widget.kind=='skus'){
+        try{
+          uoms=await widget.client.catalogUnitDefinitionsAll(
+            widget.session.token,branchId:branch);
+        }on ErpApiError catch(e){
+          if(e.status!=503)rethrow;
+        }
+      }
       if(!mounted||widget.branchId!=branch)return;
       setState((){
         products=fetched[0].where((x)=>x['active']!=false).toList();
@@ -144,6 +164,8 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
         lists=fetched[2].where((x)=>x['active']!=false).toList();
         customers=fetched[3].where((x)=>x['active']!=false).toList();
         channels=fetched[4].where((x)=>x['active']!=false).toList();
+        customerGroups=groups.where((x)=>x['active']!=false).toList();
+        unitDefinitions=uoms.where((x)=>x['active']!=false).toList();
         productId=products.isEmpty?null:products.first['id'] as String;
         skuId=skus.isEmpty?null:skus.first['id'] as String;
         listId=lists.isEmpty?null:lists.first['id'] as String;
@@ -334,6 +356,80 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
         isError:true);
     }finally{if(mounted)setState(()=>busy=false);}
   }
+  bool get canEditLifecycle=>canWrite &&
+    const {'skus','barcodes','channels'}.contains(widget.kind);
+  Future<void> editRow(Map<String,dynamic> row)async{
+    if(!canEditLifecycle||busy||widget.branchId==null)return;
+    final targetId=row['id'],revision=row['revision'];
+    if(targetId is! String||revision is! int)return;
+    final branch=widget.branchId!;
+    var active=row['active']==true;
+    var primary=row['isPrimary']==true;
+    var name=(row['name']??'').toString();
+    final isBase=widget.kind=='skus'&&row['isBase']==true;
+    final originalName=name,originalActive=active,originalPrimary=primary;
+    final fields=await showDialog<Map<String,dynamic>>(context:context,
+      builder:(dialog)=>StatefulBuilder(builder:(ctx,refresh)=>AlertDialog(
+        key:const ValueKey('r1-lifecycle-edit-dialog'),
+        insetPadding:const EdgeInsets.symmetric(horizontal:12,vertical:12),
+        title:Text('Sửa '+heading.toLowerCase()),
+        content:SizedBox(width:(MediaQuery.sizeOf(ctx).width-70)
+          .clamp(220.0,460.0).toDouble(),
+          child:SingleChildScrollView(child:Column(
+            mainAxisSize:MainAxisSize.min,
+            crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+              Text('Mã: ${row['code']??row['barcode']??'—'}',
+                style:const TextStyle(fontSize:12,color:ErpTokens.muted)),
+              if(widget.kind=='channels')...[
+                const SizedBox(height:12),
+                TextFormField(initialValue:name,maxLength:160,
+                  decoration:const InputDecoration(labelText:'Tên kênh bán'),
+                  onChanged:(v)=>name=v),
+              ],
+              const SizedBox(height:12),
+              SwitchListTile(contentPadding:EdgeInsets.zero,
+                key:const ValueKey('r1-lifecycle-active'),
+                title:const Text('Đang sử dụng'),value:active,
+                onChanged:isBase?null:(v)=>refresh(()=>active=v)),
+              if(isBase)const Text(
+                'SKU tồn kho gốc không thể ngừng riêng lẻ. '
+                'Ngừng sản phẩm theo đúng quy trình thay thế.',
+                style:TextStyle(color:ErpTokens.muted,fontSize:12)),
+              if(widget.kind=='barcodes')SwitchListTile(
+                contentPadding:EdgeInsets.zero,
+                key:const ValueKey('r1-lifecycle-primary'),
+                title:const Text('Mã vạch chính'),value:primary&&active,
+                onChanged:active?(v)=>refresh(()=>primary=v):null),
+              const Text('Mã SKU, mã vạch và hệ số quy đổi đã tạo '
+                'không được sửa trực tiếp. Ngừng mã sai và tạo mã mới.',
+                style:TextStyle(color:ErpTokens.muted,fontSize:12)),
+            ]))),
+        actions:[
+          TextButton(onPressed:()=>Navigator.pop(dialog),child:const Text('Hủy')),
+          FilledButton(key:const ValueKey('r1-lifecycle-save'),
+            onPressed:()=>Navigator.pop(dialog,{
+              'branchId':branch,
+              if(widget.kind=='channels'&&name!=originalName)'name':name.trim(),
+              if(active!=originalActive)'active':active,
+              if(widget.kind=='barcodes'&&(primary!=originalPrimary||
+                !active&&originalPrimary))
+                'isPrimary':active&&primary,
+            }),child:const Text('Lưu thay đổi')),
+        ],
+      )));
+    if(fields==null||!mounted||fields.length==1)return;
+    setState(()=>busy=true);
+    try{
+      await widget.client.updateR1Catalog(widget.session.token,widget.kind,
+        targetId,revision,fields);
+      if(!mounted)return;
+      ErpToast.show(context,'Đã cập nhật trên server.');
+      await reload();
+    }on ErpApiError catch(e){
+      if(mounted){ErpToast.show(context,errorMessage(e),isError:true);await reload();}
+    }finally{if(mounted)setState(()=>busy=false);}
+  }
+
   Widget editor(double width){
     final wide=width>660;
     final slotWidth=wide?280.0:width-34;
@@ -351,7 +447,17 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
               slot(dropdown('Sản phẩm',productId,products,
                 (v)=>setState(()=>productId=v))),
               if(widget.kind=='skus')slot(textField('code','Mã SKU',hint:'SP001-T')),
-              slot(textField('unitCode','Đơn vị',hint:'thung')),
+              slot(DropdownButtonFormField<String>(
+                key:const ValueKey('r1-unit-directory-select'),
+                isExpanded:true,
+                initialValue:unitDefinitions.any((u)=>u['code']==getField('unitCode'))
+                  ?getField('unitCode'):null,
+                decoration:const InputDecoration(labelText:'Đơn vị tính'),
+                items:unitDefinitions.map((u)=>DropdownMenuItem<String>(
+                  value:u['code'] as String,
+                  child:Text("${u['code']} · ${u['name']}",
+                    overflow:TextOverflow.ellipsis))).toList(),
+                onChanged:(v)=>setState(()=>fields['unitCode']!.text=v??''))),
               slot(textField('toBase','Hệ số quy đổi',numeric:true,hint:'12.000000')),
             ],
             if(widget.kind=='barcodes')...[
@@ -402,7 +508,21 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
                 onChanged:(v){if(v!=null)setState(()=>promotionDays=v);},
               )),
               if(scope=='CUSTOMER_GROUP'||scope=='CUSTOMER'||scope=='PROMOTION')
-                slot(textField('customerGroup','Nhóm khách')),
+                slot(DropdownButtonFormField<String?>(
+                  key:const ValueKey('r1-customer-group-directory-select'),
+                  isExpanded:true,
+                  initialValue:customerGroups.any((g)=>g['code']==getField('customerGroup'))
+                    ?getField('customerGroup'):null,
+                  decoration:const InputDecoration(labelText:'Nhóm khách hàng'),
+                  items:[
+                    const DropdownMenuItem<String?>(
+                      value:null,child:Text('Không áp dụng')),
+                    ...customerGroups.map((g)=>DropdownMenuItem<String?>(
+                      value:g['code'] as String,
+                      child:Text("${g['code']} · ${g['name']}",
+                        overflow:TextOverflow.ellipsis))),
+                  ],
+                  onChanged:(v)=>setState(()=>fields['customerGroup']!.text=v??''))),
               slot(DropdownButtonFormField<String>(
                 initialValue:adjustment,
                 decoration:const InputDecoration(labelText:'Cách tính giá'),
@@ -471,9 +591,12 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
   List<(String,String)> get columns=>switch(widget.kind){
     'units'=>const [('productCode','Sản phẩm'),('unitCode','Đơn vị'),('toBase','Quy đổi')],
     'skus'=>const [('code','SKU'),('productName','Sản phẩm'),
-      ('unitCode','Đơn vị'),('toBase','Quy đổi'),('barcode','Mã vạch')],
-    'barcodes'=>const [('barcode','Mã vạch'),('isPrimary','Mã chính')],
-    'channels'=>const [('code','Mã'),('name','Kênh bán')],
+      ('unitCode','Đơn vị'),('toBase','Quy đổi'),('barcode','Mã vạch'),
+      ('active','Đang dùng')],
+    'barcodes'=>const [('barcode','Mã vạch'),('isPrimary','Mã chính'),
+      ('active','Đang dùng')],
+    'channels'=>const [('code','Mã'),('name','Kênh bán'),
+      ('active','Đang dùng')],
     'rules'=>const [('sku','SKU'),('scopeKind','Áp dụng'),
       ('adjustment','Cách tính'),('amount','Giá / tỷ lệ'),('priority','Ưu tiên')],
     _=>const [],
@@ -498,6 +621,10 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
             children:[
               ...columns.map((c)=>Padding(padding:const EdgeInsets.only(bottom:5),
                 child:Text(c.$2+': '+cell(x,c.$1)))),
+              if(canEditLifecycle)TextButton.icon(
+                key:ValueKey('r1-edit-'+x['id'].toString()),
+                onPressed:busy?null:()=>editRow(x),
+                icon:const Icon(Icons.edit_outlined),label:const Text('Sửa')),
               if(widget.kind=='rules'&&canWrite&&x['scopeKind']!='BASE'&&x['retiredAt']==null)
                 TextButton.icon(onPressed:busy?null:()=>retirePolicy(x),
                   icon:const Icon(Icons.event_busy),
@@ -509,7 +636,8 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
         child:DataTable(headingRowColor:const WidgetStatePropertyAll(ErpTokens.mint),
           headingTextStyle:const TextStyle(color:ErpTokens.ink,fontWeight:FontWeight.w700),
           columns:columns.map((c)=>DataColumn(label:Text(c.$2))).toList()+
-            [if(widget.kind=='rules')const DataColumn(label:Text('Thao tác'))],
+            [if(widget.kind=='rules'||canEditLifecycle)
+              const DataColumn(label:Text('Thao tác'))],
           rows:items.map((x)=>DataRow(cells:columns.map((c)=>
             DataCell(c.$1=='scopeKind'&&widget.kind=='rules'
               ? Column(mainAxisAlignment:MainAxisAlignment.center,
@@ -519,7 +647,12 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
                     style:TextStyle(color:ErpTokens.muted,fontSize:11)),
                 ])
               :Text(cell(x,c.$1)))).toList()+
-            [if(widget.kind=='rules')DataCell(
+            [if(canEditLifecycle)DataCell(
+              IconButton(key:ValueKey('r1-edit-'+x['id'].toString()),
+                onPressed:busy?null:()=>editRow(x),
+                icon:const Icon(Icons.edit_outlined,size:18),
+                tooltip:'Sửa trạng thái/thông tin')),
+             if(widget.kind=='rules')DataCell(
               x['scopeKind']!='BASE'&&x['retiredAt']==null&&canWrite
                 ? TextButton(onPressed:busy?null:()=>retirePolicy(x),
                     child:Text(widget.client.pendingR1(widget.session.actorId,
