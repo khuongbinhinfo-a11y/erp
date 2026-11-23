@@ -1174,6 +1174,10 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     var phone=(row['phone']??'').toString();
     var deliveryAddress=(row['deliveryAddress']??'').toString();
     var paymentTermsDays=(row['paymentTermsDays']??0).toString();
+    var listPriority=(row['priority']??0).toString();
+    DateTime? listStart=DateTime.tryParse(row['effectiveFrom']?.toString()??'');
+    DateTime? listEnd=DateTime.tryParse(row['effectiveTo']?.toString()??'')
+      ?.toUtc().subtract(const Duration(days:1));
     final oldGroupId=row['customerGroupId'] as String?;
     final oldRegionId=row['customerRegionId'] as String?;
     final oldProductGroupId=row['groupId'] as String?;
@@ -1226,6 +1230,44 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                     initialValue:name,onChanged:(value)=>name=value,
                     maxLength:resource=='unit-definitions'?80:160,
                     decoration:const InputDecoration(labelText:'Tên')),
+                  if(resource=='price-lists')...[
+                    const SizedBox(height:12),
+                    TextFormField(
+                      key:const ValueKey('r1c-edit-list-priority'),
+                      initialValue:listPriority,
+                      keyboardType:TextInputType.number,
+                      decoration:const InputDecoration(labelText:'Ưu tiên bảng giá'),
+                      onChanged:(v)=>refresh(()=>listPriority=v)),
+                    const SizedBox(height:8),
+                    Wrap(spacing:8,runSpacing:6,children:[
+                      OutlinedButton.icon(
+                        key:const ValueKey('r1c-edit-list-from'),
+                        onPressed:()async{
+                          final picked=await _pickPriceDay(context,listStart,
+                            'Có hiệu lực từ');
+                          if(picked!=null&&context.mounted)
+                            refresh(()=>listStart=picked);
+                        },icon:const Icon(Icons.event,size:16),
+                        label:Text(_dateLabel(listStart,'Bắt đầu ngay'))),
+                      if(listStart!=null)IconButton(
+                        tooltip:'Bỏ ngày bắt đầu',
+                        onPressed:()=>refresh(()=>listStart=null),
+                        icon:const Icon(Icons.close,size:16)),
+                      OutlinedButton.icon(
+                        key:const ValueKey('r1c-edit-list-to'),
+                        onPressed:()async{
+                          final picked=await _pickPriceDay(context,listEnd,
+                            'Đến hết ngày');
+                          if(picked!=null&&context.mounted)
+                            refresh(()=>listEnd=picked);
+                        },icon:const Icon(Icons.event_busy,size:16),
+                        label:Text(_dateLabel(listEnd,'Không giới hạn'))),
+                      if(listEnd!=null)IconButton(
+                        tooltip:'Bỏ ngày kết thúc',
+                        onPressed:()=>refresh(()=>listEnd=null),
+                        icon:const Icon(Icons.close,size:16)),
+                    ]),
+                  ],
                   if(resource=='products')...[
                     const SizedBox(height:12),
                     DropdownButtonFormField<String?>(
@@ -1307,8 +1349,17 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
         actions:[
           TextButton(onPressed:()=>Navigator.pop(dialog),child:const Text('Hủy')),
           FilledButton(key:const ValueKey('catalog-edit-save'),
-            onPressed:()=>Navigator.pop(dialog,{
+            onPressed:resource=='price-lists'&&(
+              int.tryParse(listPriority.trim())==null||
+              (int.tryParse(listPriority.trim())??0).abs()>100000||
+              (listStart!=null&&listEnd!=null&&listEnd!.isBefore(listStart!)))
+              ?null:()=>Navigator.pop(dialog,{
               'branchId':branchId,'name':name.trim(),'active':active,
+              if(resource=='price-lists')...{
+                'effectiveFrom':listStart?.toIso8601String(),
+                'effectiveTo':listEnd?.add(const Duration(days:1)).toIso8601String(),
+                'priority':int.parse(listPriority.trim()),
+              },
               if(resource=='products'&&productGroupId!=oldProductGroupId)
                 'groupId':productGroupId,
               if(resource=='customers')...{
