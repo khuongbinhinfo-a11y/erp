@@ -181,7 +181,7 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
               child:const Text('Quay lại')),
             FilledButton(key:const ValueKey('catalog-bulk-confirm'),
               onPressed:()=>Navigator.pop(dialog,true),
-              child:const Text('Áp dụng trên server')),
+              child:const Text('Xác nhận nhập')),
           ]));
       if(confirmed!=true||!mounted)return;
     }
@@ -209,42 +209,47 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
             '). Xem trước lại trước khi ghi.';
         });
       }else{
-        setState(()=>error='Chưa xác nhận COMMIT ('+(e.code??e.message)+
+        setState(()=>error='Chưa xác nhận lưu dữ liệu ('+(e.code??e.message)+
           '). Bấm “Kiểm tra yêu cầu” để gửi lại đúng khóa, không tạo bản ghi trùng.');
       }
     }finally{if(mounted)setState(()=>busy=false);}
   }
-  Future<void> _saveCsv({required bool template})async{
+  Future<void> _saveCsv({required bool template,bool excel=false})async{
     final branch=widget.branchId;
     if(branch==null||busy)return;
     setState((){busy=true;error=null;});
     try{
       final result=await widget.client.bulkCsvFile(widget.session.token,kind,branch,
-        template:template);
+        template:template,format:excel?'xlsx':'csv');
       if(!mounted)return;
-      final fileName=result['fileName']?.toString()??'erp.csv';
-      final csv=result['content'];
-      if(csv is! String)throw const FormatException('MISSING_CSV_CONTENT');
-      // UTF-8 BOM keeps Vietnamese text readable in Excel. Avoid duplicating
-      // BOM if a server already included it.
-      final bytes=Uint8List.fromList(
-        utf8.encode(csv.startsWith('\uFEFF')?csv:'\uFEFF$csv'));
+      final fileName=result['fileName']?.toString()??(excel?'danh-muc.xlsx':'danh-muc.csv');
+      final Uint8List bytes;
+      if(excel){
+        final encoded=result['contentBase64'];
+        if(encoded is! String)throw const FormatException('MISSING_XLSX_CONTENT');
+        bytes=base64Decode(encoded);
+      }else{
+        final csv=result['content'];
+        if(csv is! String)throw const FormatException('MISSING_CSV_CONTENT');
+        bytes=Uint8List.fromList(
+          utf8.encode(csv.startsWith('\uFEFF')?csv:'\uFEFF$csv'));
+      }
       if(widget.saveCsvForTest case final save?){
         await save(fileName,bytes);
       }else{
         // file_picker 8.x throws UnsupportedError on Web. 9.2.3 implements a
         // browser download while retaining the desktop save-file contract.
-        await FilePicker.platform.saveFile(dialogTitle:'Lưu dữ liệu CSV',
+        await FilePicker.platform.saveFile(dialogTitle:'Lưu dữ liệu Excel/CSV',
           fileName:fileName,type:FileType.custom,
-          allowedExtensions:const ['csv'],bytes:bytes);
+          allowedExtensions:excel?const ['xlsx']:const ['csv'],bytes:bytes);
       }
     }on ErpApiError catch(e){
       if(mounted)setState(()=>error='Không xuất được: '+(e.code??e.message));
     }on UnsupportedError{
-      if(mounted)setState(()=>error='Trình duyệt không hỗ trợ tải CSV. '
+      if(mounted)setState(()=>error='Trình duyệt không hỗ trợ tải tệp. '
         'Hãy cập nhật trình duyệt hoặc mở trên Chrome/Edge.');
     }catch(e){
-      if(mounted)setState(()=>error='Không tải được CSV ('+
+      if(mounted)setState(()=>error='Không tải được tệp ('+
         e.runtimeType.toString()+'). '
         'Kiểm tra quyền tải tệp của trình duyệt rồi thử lại.');
     }finally{if(mounted)setState(()=>busy=false);}
@@ -339,7 +344,7 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
         onPressed:busy||hasError||!widget.canWrite||pendingPayload!=null
           ?null:_apply,
         icon:const Icon(Icons.save_outlined),
-        label:const Text('Xác nhận và áp dụng toàn bộ trên server')),
+        label:const Text('Xác nhận nhập toàn bộ')),
     ]);
   }
   @override Widget build(BuildContext context){
@@ -348,7 +353,7 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
         style:TextStyle(fontWeight:FontWeight.w800,fontSize:19,color:ErpTokens.ink)),
       const SizedBox(height:6),
       const Text('Quy trình: chọn file → ánh xạ cột → xem trước trước/sau → xác nhận. '
-        'Dữ liệu chỉ được ghi sau ACK từ server. Một file tối đa 5.000 dòng và 6 MB.',
+        'Chỉ lưu dữ liệu sau khi máy chủ xác nhận. Một file tối đa 5.000 dòng và 6 MB.',
         style:TextStyle(color:ErpTokens.muted,fontSize:12)),
       const SizedBox(height:15),
       Wrap(spacing:12,runSpacing:10,children:[
@@ -376,6 +381,12 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
         OutlinedButton.icon(key:const ValueKey('catalog-bulk-export'),
           onPressed:canOperate?()=>_saveCsv(template:false):null,
           icon:const Icon(Icons.file_download_outlined),label:const Text('Xuất dữ liệu CSV')),
+        OutlinedButton.icon(key:const ValueKey('catalog-bulk-template-xlsx'),
+          onPressed:canOperate?()=>_saveCsv(template:true,excel:true):null,
+          icon:const Icon(Icons.table_chart_outlined),label:const Text('Tải mẫu Excel')),
+        OutlinedButton.icon(key:const ValueKey('catalog-bulk-export-xlsx'),
+          onPressed:canOperate?()=>_saveCsv(template:false,excel:true):null,
+          icon:const Icon(Icons.table_view_outlined),label:const Text('Xuất Excel có định dạng')),
       ]),
       const SizedBox(height:14),
       Wrap(spacing:12,runSpacing:12,crossAxisAlignment:WrapCrossAlignment.center,
@@ -415,7 +426,7 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
           icon:const Icon(Icons.sync),
           label:const Text('Kiểm tra yêu cầu đã gửi (retry cùng khóa)'))),
       if(applied!=null)Padding(padding:const EdgeInsets.only(top:12),
-        child:Text('Server xác nhận: '+
+        child:Text('Đã lưu: '+
           (applied!['applied'] as List? ?? []).length.toString()+
           ' dòng được ghi; các dòng không đổi được giữ nguyên.',
           key:const ValueKey('catalog-bulk-applied'),
