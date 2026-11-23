@@ -985,11 +985,12 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     final sourceId=row['id'],revision=row['revision'];
     if(sourceId is! String||revision is! int)return;
     final branch=branchId!,actor=widget.session.actorId;
-    final kind='catalog.clone.price-lists.$sourceId';
+    final kind='catalog.clone.price-lists.'+sourceId;
     final pending=widget.client.pendingR1(actor,branch,kind);
     Map<String,dynamic>? payload=pending?.payload;
     if(payload==null){
-      var code='${row['code']}-COPY',name='Bản sao ${row['name']}';
+      var code=row['code'].toString()+'-COPY';
+      var name='Bản sao '+row['name'].toString();
       payload=await showDialog<Map<String,dynamic>>(context:context,
         builder:(dialog)=>StatefulBuilder(builder:(ctx,refresh)=>AlertDialog(
           key:const ValueKey('catalog-price-list-clone-dialog'),
@@ -1015,7 +1016,42 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
               child:const Text('Hủy')),
             FilledButton(
               key:const ValueKey('catalog-clone-confirm'),
-              onPressed:RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]{1,63}
+              onPressed:code.length>=2&&code.length<=64&&
+                RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]*').stringMatch(code)==code&&
+                name.isNotEmpty&&name.length<=160
+                ?()=>Navigator.pop(dialog,<String,dynamic>{
+                  'branchId':branch,'sourceRevision':revision,
+                  'code':code,'name':name,
+                }):null,
+              child:const Text('Sao chép')),
+          ],
+        )));
+    }
+    if(payload==null||!mounted)return;
+    final key=pending?.key??('catalog-clone-'+sourceId+'-'+
+      DateTime.now().microsecondsSinceEpoch.toString());
+    if(pending==null)widget.client.retainR1(actor,branch,kind,payload,key);
+    setState(()=>saving=true);
+    try{
+      final result=await widget.client.clonePriceList(
+        widget.session.token,sourceId,payload,key:key);
+      widget.client.clearR1(actor,branch,kind);
+      if(!mounted)return;
+      ErpToast.show(context,'Đã sao chép '+result['copiedPrices'].toString()+
+        ' giá và '+result['copiedRules'].toString()+' chính sách.');
+      await _loadRecords();
+    }on ErpApiError catch(e){
+      if(e.status==400||e.status==404||e.code=='DUPLICATE'||
+          e.code=='REVISION_CONFLICT')
+        widget.client.clearR1(actor,branch,kind);
+      if(mounted)ErpToast.show(context,_errorMessage(e),isError:true);
+    }catch(_){
+      if(mounted)ErpToast.show(context,
+        'Chưa có xác nhận server. Chọn sao chép lần nữa để kiểm tra đúng yêu cầu.',
+        isError:true);
+    }finally{if(mounted)setState(()=>saving=false);}
+  }
+
   Future<void> _edit(Map<String,dynamic> row)async{
     if(!canEdit||saving||branchId==null)return;
     final id=row['id'],revision=row['revision'];
