@@ -112,6 +112,18 @@ function requireIso(value:unknown):string{
     !Number.isFinite(Date.parse(value))) throw new CatalogError(400,"INVALID_EFFECTIVE_AT");
   return new Date(value).toISOString();
 }
+function r1cDate(value:unknown):string|null{
+  return value===null?null:requireIso(value);
+}
+function r1cPriority(value:unknown):number{
+  if(typeof value!=="number"||!Number.isSafeInteger(value)||
+    value< -100000||value>100000)throw new CatalogError(400,"INVALID_PRICE_PRIORITY");
+  return value;
+}
+function r1cRange(start:string|null,end:string|null):void{
+  if(start!==null&&end!==null&&Date.parse(end)<=Date.parse(start))
+    throw new CatalogError(400,"INVALID_PRICE_LIST_PERIOD");
+}
 function requestMutation(req:IncomingMessage,id:string,actorId:string,tenant:string,
   action:string,payload:Record<string,unknown>,versioned=false):MutationContext{
   const key=req.headers["idempotency-key"];
@@ -208,6 +220,14 @@ async function hasUnitDictionary(db:Pool|PoolClient):Promise<boolean>{
     return result.rows[0]?.ok===true;
   }catch{return false;}
 }
+async function hasR1CPriceSchema(db:Pool|PoolClient):Promise<boolean>{
+  try{
+    const r=await db.query<{ready:boolean}>(`SELECT EXISTS(
+      SELECT 1 FROM public.schema_migrations
+      WHERE version='0018_r1c_price_list_assignment.sql') AS ready`);
+    return r.rows[0]?.ready===true;
+  }catch{return false;}
+}
 async function hasCustomerDirectories(db:Pool|PoolClient):Promise<boolean>{
   try{
     const r=await db.query<{ok:boolean}>(
@@ -283,6 +303,12 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
     'customer_group AS "customerGroupName",NULL::text AS "customerRegionCode",'+
     'NULL::text AS "customerRegionName",phone,delivery_address AS "deliveryAddress",'+
     'payment_terms_days AS "paymentTermsDays",active,revision::integer FROM catalog_customer';
+  const listSelection=resource==="price-lists"&&await hasR1CPriceSchema(db)
+    ?'SELECT id,code,name,currency,active,revision::integer,priority,'
+      +'effective_from AS "effectiveFrom",effective_to AS "effectiveTo" FROM catalog_price_list'
+    :'SELECT id,code,name,currency,active,revision::integer,0::integer AS priority,'
+      +'NULL::timestamptz AS "effectiveFrom",NULL::timestamptz AS "effectiveTo" '
+      +'FROM catalog_price_list';
   const r=await db.query(
     resource==="prices"
       ?`SELECT e.id,e.price_list_id AS "priceListId",l.code AS "priceListCode",
@@ -297,7 +323,7 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
           WHERE e.installation_id=$1 AND e.branch_id=$2
             AND (p.sku ILIKE $3 OR p.name ILIKE $3 OR l.code ILIKE $3)
           ORDER BY e.effective_at DESC,e.id DESC LIMIT 100`
-      :`${resource==="products"?productSelection:resource==="customers"?customerSelection:selections[resource]} WHERE installation_id=$1 AND branch_id=$2
+      :`${resource==="products"?productSelection:resource==="customers"?customerSelection:resource==="price-lists"?listSelection:selections[resource]} WHERE installation_id=$1 AND branch_id=$2
           AND (${resource==="products"?"sku":"code"} ILIKE $3 OR name ILIKE $3
           ${resource==="customers"?"OR phone ILIKE $3 OR customer_group ILIKE $3":""})
           ORDER BY ${resource==="products"?"sku":"code"},id LIMIT 100`,
@@ -318,6 +344,21 @@ export function checkCreate(resource:Resource,raw:Record<string,unknown>){
   }
   const code=resource==="unit-definitions"?requireUnitCode(raw.code):requireCode(raw.code);
   const name=requireName(raw.name,resource==="unit-definitions"?80:160);
+  if(resource==="price-lists"){
+    if(Object.keys(raw).some(k=>!["branchId","code","name","effectiveFrom",
+      "effectiveTo","priority"].includes(k)))
+      throw new CatalogError(400,"UNKNOWN_FIELD");
+    const hasWindow=["effectiveFrom","effectiveTo","priority"]
+      .some(k=>Object.prototype.hasOwnProperty.call(raw,k));
+    if(hasWindow){
+      const effectiveFrom=raw.effectiveFrom==null?null:r1cDate(raw.effectiveFrom);
+      const effectiveTo=raw.effectiveTo==null?null:r1cDate(raw.effectiveTo);
+      const priority=r1cPriority(raw.priority??0);
+      r1cRange(effectiveFrom,effectiveTo);
+      return {branchId,code,name,effectiveFrom,effectiveTo,priority};
+    }
+    return {branchId,code,name};
+  }
   if(resource==="unit-definitions"){
     if(Object.keys(raw).some(k=>!["branchId","code","name"].includes(k)))
       throw new CatalogError(400,"UNKNOWN_FIELD");
@@ -401,6 +442,18 @@ export async function executeCreate(db:PoolClient,context:MutationContext,
     return {status:201,body:{id:item.id,priceListId:value.priceListId,
       productId:value.productId,amount:item.amount,discountRate:item.discountRate,
       effectiveAt:item.effectiveAt.toISOString()}};
+  }
+  if(resource==="price-lists"&&"effectiveFrom" in value){
+    if(!await hasR1CPriceSchema(db))
+      throw new CatalogError(503,"R1C_PRICE_LIST_MIGRATION_REQUIRED");
+    const r=await db.query<{id:string}>(`INSERT INTO catalog_price_list
+      (installation_id,branch_id,code,name,effective_from,effective_to,priority)
+      VALUES($1,$2,$3,$4,$5::timestamptz,$6::timestamptz,$7) RETURNING id`,
+      [installationId,branchId,value.code,value.name,
+        value.effectiveFrom,value.effectiveTo,value.priority]);
+    return {status:201,body:{id:r.rows[0]!.id,code:value.code,
+      name:value.name,revision:0,effectiveFrom:value.effectiveFrom,
+      effectiveTo:value.effectiveTo,priority:value.priority}};
   }
   if(resource==="products"){
     if(!("baseUnit" in value))throw new CatalogError(400,"INVALID_PRODUCT");
@@ -508,7 +561,8 @@ export function parseEdit(resource:Editable,raw:Record<string,unknown>){
   const columns:Record<string,unknown>={};
   const allow=new Set(["branchId","name","active",
     ...(resource==="customers"?["customerGroupId","customerRegionId","phone","deliveryAddress","paymentTermsDays"]:[]),
-    ...(resource==="products"?["groupId"]:[])]);
+    ...(resource==="products"?["groupId"]:[]),
+    ...(resource==="price-lists"?["effectiveFrom","effectiveTo","priority"]:[])]);
   if(Object.keys(raw).some(key=>!allow.has(key)))throw new CatalogError(400,"UNKNOWN_FIELD");
   if(Object.prototype.hasOwnProperty.call(raw,"name"))
     columns.name=requireName(raw.name,resource==="unit-definitions"?80:160);
@@ -532,6 +586,16 @@ export function parseEdit(resource:Editable,raw:Record<string,unknown>){
       throw new CatalogError(400,"INVALID_PAYMENT_TERMS");
     columns.payment_terms_days=raw.paymentTermsDays;
   }
+  if(resource==="price-lists"){
+    if(Object.prototype.hasOwnProperty.call(raw,"effectiveFrom"))
+      columns.effective_from=r1cDate(raw.effectiveFrom);
+    if(Object.prototype.hasOwnProperty.call(raw,"effectiveTo"))
+      columns.effective_to=r1cDate(raw.effectiveTo);
+    if(Object.prototype.hasOwnProperty.call(raw,"priority"))
+      columns.priority=r1cPriority(raw.priority);
+    if(columns.effective_from!==undefined&&columns.effective_to!==undefined)
+      r1cRange(columns.effective_from as string|null,columns.effective_to as string|null);
+  }
   if(resource==="products"&&Object.prototype.hasOwnProperty.call(raw,"groupId")){
     columns.group_id=raw.groupId===null?null:requireUuid(raw.groupId);
   }
@@ -544,6 +608,10 @@ export async function applyEdit(db:PoolClient,context:MutationContext,
   if(!await hasPermission(db,{installationId,actorId,
     permission:"catalog.write",branchId:value.branchId}))
     throw new MutationFault("FORBIDDEN",403);
+  if(resource==="price-lists"&&
+    Object.keys(value.columns).some(x=>["effective_from","effective_to","priority"].includes(x))&&
+    !await hasR1CPriceSchema(db))
+    throw new CatalogError(503,"R1C_PRICE_LIST_MIGRATION_REQUIRED");
   const table=editTables[resource];
   const row=await db.query<{revision:string}>(
     `SELECT revision::text FROM ${table} WHERE installation_id=$1
