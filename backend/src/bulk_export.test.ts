@@ -1,3 +1,4 @@
+import { inflateRawSync } from "node:zlib";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { bulkExport,bulkVietnameseHeaders,bulkXlsx } from "./bulk_export.ts";
@@ -51,4 +52,31 @@ test("R1-B: XLSX ZIP/XML contains freeze/header style/filter and no executable f
  const workbook=parseBulkFile("safe.xlsx",file.toString("base64"));
  assert.equal(workbook.rows[0]![1],"=2+2");
  assert.equal(workbook.rows[0]![4],"0001234567890");
+});
+
+function extractSheet(file:Buffer):string{
+ let offset=0;
+ while(offset+30<=file.length&&file.readUInt32LE(offset)===0x04034b50){
+  const method=file.readUInt16LE(offset+8);
+  const length=file.readUInt32LE(offset+18),nameSize=file.readUInt16LE(offset+26),
+   extraSize=file.readUInt16LE(offset+28);
+  const name=file.subarray(offset+30,offset+30+nameSize).toString("utf8");
+  const at=offset+30+nameSize+extraSize;
+  if(name==="xl/worksheets/sheet1.xml")
+   return (method===8?inflateRawSync(file.subarray(at,at+length)):
+    file.subarray(at,at+length)).toString("utf8");
+  offset=at+length;
+ }
+ throw new Error("WORKSHEET_NOT_FOUND");
+}
+test("R1-B P2: high-precision Excel amounts stay text, smaller amounts stay numeric",()=>{
+ const rows=[
+  ["BG01","SP01","1234567890123.1234","10.00","2026-11-23T00:00:00.000Z"],
+  ["BG01","SP02","1234.50","2.50","2026-11-23T00:00:00.000Z"],
+ ];
+ const file=bulkXlsx("prices",rows);
+ const xml=extractSheet(file);
+ assert.match(xml,/<c r="C2" t="inlineStr"><is><t xml:space="preserve">1234567890123\.1234/);
+ assert.match(xml,/<c r="C3" s="3"><v>1234\.50<\/v><\/c>/);
+ assert.deepEqual(parseBulkFile("price.xlsx",file.toString("base64")).rows,rows);
 });
