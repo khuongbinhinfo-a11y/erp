@@ -507,6 +507,21 @@ class ErpIdentityClient {
       body:{'branchId':branchId,'priceListId':priceListId,
         'productId':productId,'expectedPriceEntryId':expectedPriceEntryId});
   }
+  /// Read-only R1-C price for one selling SKU, customer, channel and quantity.
+  /// The order quote and save must still be revalidated by the backend.
+  Future<Map<String,dynamic>> salesSkuPrice(String token,{
+    required String branchId,required String sellSkuId,
+    required String customerId,required String priceListId,
+    required String quantity,String? channelId,
+  })async{
+    final response=await _request('POST','/v1/catalog/r1/resolve',
+      token:token,body:{
+        'branchId':branchId,'sellSkuId':sellSkuId,
+        'customerId':customerId,'priceListId':priceListId,
+        'quantity':quantity,if(channelId!=null)'channelId':channelId,
+      });
+    return Map<String,dynamic>.from(response['quote'] as Map);
+  }
   /// Quotes a whole sales basket in one server context, with decimal totals.
   /// This does not create an order or change inventory/receivables.
   Future<Map<String,dynamic>> salesPricePreview(String token,
