@@ -335,6 +335,31 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
   'AND e.price_list_id=ANY($3::uuid[]) AND e.product_id=ANY($4::uuid[]) '+
   'ORDER BY e.price_list_id,e.product_id,e.effective_at DESC,e.id DESC',
   [tenant,branch,priceLists.rows.map(l=>l.id),products.rows.map(p=>p.id)]):{rows:[]};
+ // Find every EXACT requested timestamp, including historical versions
+ // older than the most recent price. PostgreSQL compares timestamptz directly,
+ // preserving microseconds and timezone offsets without JavaScript rounding.
+ const requested=res==="prices"?data.map((r,index)=>({
+  rowIndex:index,priceListCode:r.priceListCode??"",
+  productCode:r.productCode??"",effectiveAt:r.effectiveAt??"",
+ })):[];
+ const occupied=res==="prices"?await db.query<Record<string,any>>(`
+  SELECT x."rowIndex",e.id,e.amount::text,
+   e.discount_rate::text AS "discountRate",
+   e.effective_at AS "effectiveAt",e.price_list_id AS "priceListId",
+   e.product_id AS "productId"
+  FROM jsonb_to_recordset($3::jsonb) AS x(
+   "rowIndex" integer,"priceListCode" text,"productCode" text,"effectiveAt" text)
+  JOIN catalog_price_list l ON l.installation_id=$1 AND l.branch_id=$2
+   AND l.code=x."priceListCode"
+  JOIN catalog_product p ON p.installation_id=$1 AND p.branch_id=$2
+   AND p.sku=x."productCode"
+  JOIN catalog_price_entry e ON e.installation_id=$1 AND e.branch_id=$2
+   AND e.price_list_id=l.id AND e.product_id=p.id
+   AND e.effective_at=CASE
+     WHEN x."effectiveAt" ~ '^\\d{4}-\\d\\d-\\d\\dT' THEN x."effectiveAt"::timestamptz
+     ELSE NULL END`,
+  [tenant,branch,JSON.stringify(requested)]):{rows:[]};
+ const occupiedByRow=mapBy(occupied.rows,x=>String(x.rowIndex));
  const refs={
   products:mapBy(products.rows,x=>x.code),
   groups:mapBy(groups.rows,x=>x.code),
@@ -362,22 +387,24 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
    if(!current&&input.mode==="UPDATE")throw new BulkFault("NOT_FOUND_USE_CREATE");
    const converted=normalizeRow(res,input.mode,raw,current,refs,branch);
    const after=clean(converted.after);
-   const before=current?clean(Object.fromEntries(Object.entries(current)
-    .map(([k,v])=>[k,v instanceof Date?v.toISOString():v]))):null;
+
    const revision=current?(typeof current.revision==="number"?current.revision:0):null;
-   const samePrice=current&&res==="prices"&&
-    equalDecimal(current.amount,after.amount)&&
-    equalDecimal(current.discountRate,after.discountRate)&&
-    new Date(current.effectiveAt).toISOString()===new Date(String(after.effectiveAt)).toISOString();
-   const isSame=current&&(res==="prices"?samePrice:Object.entries(converted.operation)
-    .filter(([k])=>k!=="branchId"&&k!=="reason")
-    .every(([k,v])=>equal((current as Record<string,unknown>)[k],v)));
-   const action:BulkAction=!current?"CREATE":isSame?"UNCHANGED":"UPDATE";
-   if(current&&res==="prices"&&action==="UPDATE"&&
-    new Date(current.effectiveAt).toISOString()===new Date(String(after.effectiveAt)).toISOString())
+   const exact=res==="prices"?occupiedByRow.get(String(i)):undefined;
+   const samePrice=exact&&res==="prices"&&
+    equalDecimal(exact.amount,after.amount)&&
+    equalDecimal(exact.discountRate,after.discountRate);
+   if(exact&&!samePrice)
     throw new BulkFault("PRICE_EFFECTIVE_TIME_CONFLICT");
-   rows.push({line,key:idKey,action,before,after,revision,error:null,
-    internal:{...converted.operation,id:current?.id??null}});
+   const isSame=res==="prices"?Boolean(samePrice):
+    Boolean(current&&Object.entries(converted.operation)
+     .filter(([k])=>k!=="branchId"&&k!=="reason")
+     .every(([k,v])=>equal((current as Record<string,unknown>)[k],v)));
+   const action:BulkAction=!current?"CREATE":isSame?"UNCHANGED":"UPDATE";
+   const matched=exact??current;
+   const beforeMatched=matched?clean(Object.fromEntries(Object.entries(matched)
+    .map(([k,v])=>[k,v instanceof Date?v.toISOString():v]))):null;
+   rows.push({line,key:idKey,action,before:beforeMatched,after,revision,error:null,
+    internal:{...converted.operation,id:matched?.id??null}});
   }catch(e){
    rows.push({line,key,action:"ERROR",before:null,after:null,revision:null,
     error:e instanceof BulkFault?e.code:"INVALID_ROW"});
@@ -401,10 +428,33 @@ export function publicBulkPlan(plan:BulkPlan):BulkPlan{
 }
 export async function applyBulkPlan(db:PoolClient,ctx:MutationContext,
  input:BulkInput,expectedHash:string):Promise<{status:number;body:unknown}>{
+ if(input.resource==="prices"){
+  // Preview uses GET, apply must acquire same scope locks as single-price
+  // inserts BEFORE checking the preview hash. Deterministic order avoids
+  // deadlocks when two batches overlap multiple price lists/products.
+  const raw=mappedRows(input,parseBulkFile(input.fileName,input.contentBase64,input.hasHeader));
+  const listCodes=[...new Set(raw.map(r=>r.priceListCode).filter(Boolean) as string[])];
+  const productCodes=[...new Set(raw.map(r=>r.productCode).filter(Boolean) as string[])];
+  const lists=await db.query<{id:string;code:string}>(
+   'SELECT id,code FROM catalog_price_list WHERE installation_id=$1 AND branch_id=$2 '+
+   'AND code=ANY($3::text[])',[ctx.installationId,input.branchId,listCodes]);
+  const products=await db.query<{id:string;code:string}>(
+   'SELECT id,sku AS code FROM catalog_product WHERE installation_id=$1 AND branch_id=$2 '+
+   'AND sku=ANY($3::text[])',[ctx.installationId,input.branchId,productCodes]);
+  const listIds=new Map(lists.rows.map(r=>[r.code,r.id]));
+  const productIds=new Map(products.rows.map(r=>[r.code,r.id]));
+  const locks=[...new Set(raw.map(r=>{
+   const l=listIds.get(r.priceListCode??''),p=productIds.get(r.productCode??'');
+   return l&&p?[ctx.installationId,input.branchId,l,p].join('|'):null;
+  }).filter((x):x is string=>x!==null))].sort();
+  for(const scope of locks)
+   await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[scope]);
+ }
  const plan=await buildBulkPlan(db,ctx.installationId,ctx.actorId,input);
  if(plan.summary.error||plan.hash!==expectedHash)
   throw new BulkFault("PREVIEW_STALE_OR_HAS_ERRORS",409);
  const applied:{line:number;action:string;id:string}[]=[];
+ const skuProductsToCheck=new Set<string>();
  for(const row of plan.rows){
   if(row.action==="UNCHANGED")continue;
   if(!row.internal)throw new BulkFault("INVALID_PLAN",500);
@@ -456,15 +506,10 @@ export async function applyBulkPlan(db:PoolClient,ctx:MutationContext,
     await db.query('UPDATE catalog_sell_sku SET active=$4,revision=revision+1 '+
      'WHERE installation_id=$1 AND branch_id=$2 AND id=$3',
      [ctx.installationId,input.branchId,data.id,data.active]);
-    if(data.active===false){
-     const live=await db.query('SELECT 1 FROM catalog_sell_sku WHERE installation_id=$1 '+
-      'AND branch_id=$2 AND product_id=$3 AND active LIMIT 1',
-      [ctx.installationId,input.branchId,old.rows[0].productId]);
-     if(live.rowCount===0)await db.query(
-      'UPDATE catalog_product SET active=false,revision=revision+1 '+
-      'WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active',
-      [ctx.installationId,input.branchId,old.rows[0].productId]);
-    }
+    // A file can disable an old SKU before creating its replacement.
+    // Defer parent retirement until ALL SKU rows have been processed,
+    // independent of file order.
+    if(data.active===false)skuProductsToCheck.add(old.rows[0].productId);
     return {status:200,body:{id:data.id}};
    }
    return executeCreate(db,ctx,"prices",checkCreate("prices",{
@@ -475,6 +520,15 @@ export async function applyBulkPlan(db:PoolClient,ctx:MutationContext,
   const response=await result();
   const body=response.body as Record<string,unknown>;
   applied.push({line:row.line,action:row.action,id:String(body.id??data.id)});
+ }
+ for(const productId of [...skuProductsToCheck].sort()){
+  const live=await db.query('SELECT 1 FROM catalog_sell_sku WHERE installation_id=$1 '+
+   'AND branch_id=$2 AND product_id=$3 AND active LIMIT 1',
+   [ctx.installationId,input.branchId,productId]);
+  if(live.rowCount===0)await db.query(
+   'UPDATE catalog_product SET active=false,revision=revision+1 '+
+   'WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active',
+   [ctx.installationId,input.branchId,productId]);
  }
  return {status:200,body:{applied,summary:plan.summary,hash:expectedHash}};
 }
