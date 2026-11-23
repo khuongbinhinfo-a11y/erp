@@ -1079,9 +1079,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                                     onTap:()=>chooseSku(sku,refresh),
                                     onHover:(hover){
                                       if(hover&&selectedSkuIndex!=i){
-                                        refresh((){
-                                          selectedSkuIndex=i;skuExplicitSelection=true;
-                                        });
+                                        // Hover updates the visual row; only arrow keys signal an
+                                        // intentional keyboard override of a scanned exact ID.
+                                        refresh(()=>selectedSkuIndex=i);
                                       }
                                     },
                                     child:Container(
