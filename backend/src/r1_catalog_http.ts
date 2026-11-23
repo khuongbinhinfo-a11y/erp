@@ -242,6 +242,33 @@ export async function create(db:PoolClient,tenant:string,kind:Kind,parsed:Parsed
       [tenant,b,parsed.customerGroup]);
     if(group.rowCount!==1)throw new R1Error(400,"CUSTOMER_GROUP_REFERENCE_REQUIRED");
   }
+  // Two conflicting policies at identical priority/threshold/target and
+  // overlapping effective periods are ambiguous. Lock that exact commercial
+  // scope so concurrent requests cannot both pass the overlap check.
+  const scopeLock=JSON.stringify([tenant,b,parsed.priceListId,parsed.sellSkuId,
+    parsed.scopeKind,parsed.channelId??null,parsed.customerId??null,
+    parsed.customerGroup??null,parsed.priority,parsed.minQuantity]);
+  await db.query("SELECT pg_advisory_xact_lock(hashtextextended($1::text,0))",[scopeLock]);
+  const args=[tenant,b,parsed.priceListId,parsed.sellSkuId,parsed.scopeKind,
+    parsed.channelId??null,parsed.customerId??null,parsed.customerGroup??null,
+    parsed.adjustment,parsed.amount,parsed.priority,parsed.stacking,
+    parsed.stopProcessing,parsed.minQuantity,parsed.effectiveFrom,parsed.effectiveTo??null];
+  const clash=await db.query(`SELECT r.id FROM catalog_sku_price_rule r
+    WHERE r.installation_id=$1 AND r.branch_id=$2
+      AND r.price_list_id=$3 AND r.sell_sku_id=$4 AND r.scope_kind=$5
+      AND r.channel_id IS NOT DISTINCT FROM $6::uuid
+      AND r.customer_id IS NOT DISTINCT FROM $7::uuid
+      AND r.customer_group IS NOT DISTINCT FROM $8::text
+      AND r.priority=$11 AND r.min_quantity=$14::numeric
+      AND r.effective_from<coalesce($16::timestamptz,'infinity'::timestamptz)
+      AND coalesce(r.effective_to,'infinity'::timestamptz)>$15::timestamptz
+      AND (r.adjustment<>$9 OR r.amount<>$10::numeric
+        OR r.stacking<>$12 OR r.stop_processing<>$13)
+      AND NOT EXISTS (SELECT 1 FROM catalog_sku_price_retirement x
+        WHERE x.installation_id=r.installation_id AND x.branch_id=r.branch_id
+          AND x.rule_id=r.id AND x.retired_at<=transaction_timestamp())
+    LIMIT 1`,args);
+  if(clash.rows.length)throw new R1Error(409,"PRICE_RULE_OVERLAP");
   const r=await db.query<{id:string}>(`INSERT INTO catalog_sku_price_rule
    (installation_id,branch_id,price_list_id,sell_sku_id,scope_kind,
     channel_id,customer_id,customer_group,adjustment,amount,priority,stacking,
@@ -255,10 +282,7 @@ export async function create(db:PoolClient,tenant:string,kind:Kind,parsed:Parsed
      AND p.branch_id=s.branch_id AND p.id=s.product_id AND p.active
    WHERE l.installation_id=$1 AND l.branch_id=$2 AND l.id=$3 AND l.active
    RETURNING id`,
-   [tenant,b,parsed.priceListId,parsed.sellSkuId,parsed.scopeKind,
-    parsed.channelId??null,parsed.customerId??null,parsed.customerGroup??null,
-    parsed.adjustment,parsed.amount,parsed.priority,parsed.stacking,
-    parsed.stopProcessing,parsed.minQuantity,parsed.effectiveFrom,parsed.effectiveTo??null]);
+   args);
   if(!r.rows[0])throw new R1Error(409,"PRICE_TARGET_UNAVAILABLE");
   return {status:201,body:{id:r.rows[0].id,scopeKind:parsed.scopeKind,
     adjustment:parsed.adjustment,amount:parsed.amount,priceListId:parsed.priceListId,
