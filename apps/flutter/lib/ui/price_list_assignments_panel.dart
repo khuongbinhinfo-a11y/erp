@@ -20,7 +20,7 @@ class _PriceListAssignmentsPanelState extends State<PriceListAssignmentsPanel>{
   final priority=TextEditingController(text:'0');
   final search=TextEditingController();
   String scope='DEFAULT';
-  String? target;
+  final selectedTargets=<String>{};
   DateTime? from,until;
   List<Map<String,dynamic>> rows=[],customers=[],groups=[],channels=[];
   bool busy=false,loading=true;
@@ -34,7 +34,7 @@ class _PriceListAssignmentsPanelState extends State<PriceListAssignmentsPanel>{
     if(old.branchId!=branch||old.priceList['id']!=listId||
         old.session.token!=token){
       rows=[];customers=[];groups=[];channels=[];
-      scope='DEFAULT';target=null;from=null;until=null;load();
+      scope='DEFAULT';selectedTargets.clear();from=null;until=null;load();
     }
   }
   @override void dispose(){priority.dispose();search.dispose();super.dispose();}
@@ -56,7 +56,7 @@ class _PriceListAssignmentsPanelState extends State<PriceListAssignmentsPanel>{
         customers=all[1].where((x)=>x['active']!=false).toList();
         groups=all[2].where((x)=>x['active']!=false).toList();
         channels=all[3].where((x)=>x['active']!=false).toList();
-        target=null;loading=false;
+        loading=false;
       });
     }on ErpApiError catch(e){
       if(mounted)setState((){
@@ -114,55 +114,90 @@ class _PriceListAssignmentsPanelState extends State<PriceListAssignmentsPanel>{
   }
   Future<void> save()async{
     if(busy||loading||!widget.canWrite)return;
-    final current=widget.client.pendingR1(widget.session.actorId,
-      branch,'catalog.assign.price-list.$listId');
-    if(current==null){
-      if(scope!='DEFAULT'&&(target==null||target!.isEmpty)){
-        ErpToast.show(context,'Chọn đối tượng áp dụng bảng giá.',isError:true);
-        return;
-      }
-      if(from!=null&&until!=null&&until!.isBefore(from!)){
-        ErpToast.show(context,'Ngày kết thúc phải từ ngày bắt đầu trở đi.',isError:true);
-        return;
-      }
-      final p=int.tryParse(priority.text.trim());
-      if(p==null||p< -100000||p>100000){
-        ErpToast.show(context,'Mức ưu tiên phải là số nguyên từ -100000 đến 100000.',
-          isError:true);
-        return;
-      }
+    final targets=scope=='DEFAULT'?<String>['']:selectedTargets.toList();
+    if(targets.isEmpty){
+      ErpToast.show(context,'Chọn ít nhất một đối tượng áp dụng.',isError:true);
+      return;
     }
-    final body=current?.payload??<String,dynamic>{
-      'branchId':branch,'priceListId':listId,'scopeKind':scope,
-      'priority':int.parse(priority.text.trim()),
-      if(scope=='CUSTOMER')'customerId':target,
-      if(scope=='CUSTOMER_GROUP')'customerGroupId':target,
-      if(scope=='CHANNEL')'channelId':target,
-      'effectiveFrom':from?.toIso8601String(),
-      // API windows are [from, to). UI end day is inclusive.
-      'effectiveTo':endExclusive(until)?.toIso8601String(),
-    };
-    final key=current?.key??'r1c-list-assign-${DateTime.now().microsecondsSinceEpoch}';
-    if(current==null)widget.client.retainR1(widget.session.actorId,
-      branch,'catalog.assign.price-list.$listId',body,key);
+    if(from!=null&&until!=null&&until!.isBefore(from!)){
+      ErpToast.show(context,'Ngày kết thúc phải từ ngày bắt đầu trở đi.',isError:true);
+      return;
+    }
+    final p=int.tryParse(priority.text.trim());
+    if(p==null||p< -100000||p>100000){
+      ErpToast.show(context,'Ưu tiên phải là số nguyên từ -100000 đến 100000.',
+        isError:true);
+      return;
+    }
+    final retained=<String,Map<String,dynamic>>{};
+    for(final id in targets){
+      final kind='catalog.assign.price-list.$listId.$scope.${id.isEmpty?'default':id}';
+      final previous=widget.client.pendingR1(widget.session.actorId,branch,kind);
+      if(previous!=null)retained[id]=previous.payload;
+    }
+    if(retained.isNotEmpty){
+      final first=retained.values.first;
+      final confirmed=await showDialog<bool>(context:context,
+        builder:(dialog)=>AlertDialog(
+          title:const Text('Kiểm tra phân bổ chưa xác nhận'),
+          content:Text('Có ${retained.length} đối tượng cần kiểm tra yêu cầu trước. '
+            'Hệ thống sẽ gửi lại đúng nội dung đã xác nhận trước đó '
+            '(ưu tiên ${first['priority']}, hiệu lực ${first['effectiveFrom']??'không giới hạn'} '
+            'đến ${first['effectiveTo']??'không giới hạn'}). '
+            'Các thay đổi mới về ưu tiên hoặc ngày phải thực hiện ở lượt sau.'),
+          actions:[
+            TextButton(onPressed:()=>Navigator.pop(dialog,false),
+              child:const Text('Quay lại')),
+            FilledButton(onPressed:()=>Navigator.pop(dialog,true),
+              child:const Text('Kiểm tra yêu cầu cũ')),
+          ]));
+      if(confirmed!=true||!mounted)return;
+    }
     setState(()=>busy=true);
+    var completed=0;
     try{
-      await widget.client.assignPriceList(token,body,key:key);
-      widget.client.clearR1(widget.session.actorId,
-        branch,'catalog.assign.price-list.$listId');
+      // The server contract assigns one scoped target per command. Batch
+      // deliberately sends separate stable idempotency keys, not a widened
+      // unscoped assignment or a JSON array the API cannot validate.
+      for(final id in targets){
+        final kind='catalog.assign.price-list.$listId.$scope.${id.isEmpty?'default':id}';
+        final pending=widget.client.pendingR1(widget.session.actorId,branch,kind);
+        final body=pending?.payload??<String,dynamic>{
+          'branchId':branch,'priceListId':listId,'scopeKind':scope,
+          'priority':p,
+          if(scope=='CUSTOMER')'customerId':id,
+          if(scope=='CUSTOMER_GROUP')'customerGroupId':id,
+          if(scope=='CHANNEL')'channelId':id,
+          'effectiveFrom':from?.toIso8601String(),
+          'effectiveTo':endExclusive(until)?.toIso8601String(),
+        };
+        final key=pending?.key??
+          'r1c-list-assign-${DateTime.now().microsecondsSinceEpoch}-$id';
+        if(pending==null)widget.client.retainR1(
+          widget.session.actorId,branch,kind,body,key);
+        try{
+          await widget.client.assignPriceList(token,body,key:key);
+        }on ErpApiError catch(e){
+          if(e.status==400||e.status==404||
+              ['PRICE_LIST_ASSIGNMENT_OVERLAP','ASSIGNMENT_TARGET_UNAVAILABLE',
+               'PRICE_LIST_UNAVAILABLE'].contains(e.code)){
+            widget.client.clearR1(widget.session.actorId,branch,kind);
+          }
+          rethrow;
+        }
+        widget.client.clearR1(widget.session.actorId,branch,kind);
+        completed++;
+        if(mounted)setState(()=>selectedTargets.remove(id));
+      }
       if(!mounted)return;
-      ErpToast.show(context,'Đã gán bảng giá trên máy chủ.');
+      ErpToast.show(context,'Đã gán bảng giá cho $completed đối tượng.');
       await load();
     }on ErpApiError catch(e){
-      if(e.status==400||e.status==404||
-          ['PRICE_LIST_ASSIGNMENT_OVERLAP','ASSIGNMENT_TARGET_UNAVAILABLE',
-           'PRICE_LIST_UNAVAILABLE'].contains(e.code))
-        widget.client.clearR1(widget.session.actorId,
-          branch,'catalog.assign.price-list.$listId');
-      if(mounted)ErpToast.show(context,e.message,isError:true);
+      if(mounted)ErpToast.show(context,
+        'Đã lưu $completed/${targets.length}. ${e.message}',isError:true);
     }catch(_){
       if(mounted)ErpToast.show(context,
-        'Chưa xác nhận gán bảng giá. Bấm lưu lại để kiểm tra yêu cầu cũ.',
+        'Đã lưu $completed/${targets.length}. Mục chưa xác nhận giữ nguyên yêu cầu để kiểm tra lại.',
         isError:true);
     }finally{if(mounted)setState(()=>busy=false);}
   }
@@ -255,18 +290,49 @@ class _PriceListAssignmentsPanelState extends State<PriceListAssignmentsPanel>{
                   DropdownMenuItem(value:'CHANNEL',child:Text('Kênh bán')),
                 ],
                 onChanged:busy?null:(v){if(v!=null)setState((){
-                  scope=v;target=null;
+                  scope=v;selectedTargets.clear();
                 });})),
-              if(scope!='DEFAULT')SizedBox(width:wide?220:260,
-                child:DropdownButtonFormField<String>(
-                  key:ValueKey('r1c-target-$scope'),initialValue:target,
-                  isExpanded:true,decoration:InputDecoration(
-                    labelText:scopeName(scope),isDense:true),
-                  items:eligible.map((x)=>DropdownMenuItem<String>(
-                    value:x['id'] as String,
-                    child:Text('${x['code']} · ${x['name']}',
-                      overflow:TextOverflow.ellipsis))).toList(),
-                  onChanged:busy?null:(v)=>setState(()=>target=v))),
+              if(scope!='DEFAULT')SizedBox(width:wide?380:260,
+                child:Column(crossAxisAlignment:CrossAxisAlignment.start,
+                  mainAxisSize:MainAxisSize.min,children:[
+                  Row(children:[
+                    Expanded(child:Text('${scopeName(scope)} · đã chọn ${selectedTargets.length}',
+                      style:const TextStyle(fontWeight:FontWeight.w700,fontSize:12))),
+                    TextButton(onPressed:busy?null:()=>setState((){
+                      selectedTargets.addAll(eligible.map((e)=>e['id'].toString()));
+                    }),child:const Text('Chọn kết quả')),
+                    TextButton(onPressed:busy?null:()=>setState(()=>selectedTargets.clear()),
+                      child:const Text('Bỏ chọn')),
+                  ]),
+                  DecoratedBox(decoration:BoxDecoration(
+                      border:Border.all(color:ErpTokens.border),
+                      borderRadius:BorderRadius.circular(6)),
+                    child:ConstrainedBox(constraints:const BoxConstraints(maxHeight:156),
+                      child:eligible.isEmpty
+                        ?const Padding(padding:EdgeInsets.all(12),
+                          child:Text('Không có kết quả. Tìm mã hoặc tên phía trên.'))
+                        :ListView.builder(shrinkWrap:true,itemCount:eligible.length,
+                          itemBuilder:(context,i){
+                            final option=eligible[i];
+                            final id=option['id'].toString();
+                            return CheckboxListTile(
+                              key:ValueKey('r1c-target-check-$id'),
+                              dense:true,controlAffinity:ListTileControlAffinity.leading,
+                              contentPadding:const EdgeInsets.symmetric(horizontal:8),
+                              title:Text("${option['code']} · ${option['name']}",
+                                maxLines:1,overflow:TextOverflow.ellipsis,
+                                style:const TextStyle(fontSize:12)),
+                              value:selectedTargets.contains(id),
+                              onChanged:busy?null:(selected)=>setState((){
+                                if(selected==true){selectedTargets.add(id);}
+                                else{selectedTargets.remove(id);}
+                              }));
+                          })),
+                  ),
+                  const Padding(padding:EdgeInsets.only(top:3),
+                    child:Text('Có thể tìm tiếp và chọn thêm; chỉ chọn trong kết quả tải từ máy chủ.',
+                      style:TextStyle(fontSize:11,color:ErpTokens.muted))),
+                ])),
               SizedBox(width:120,child:TextField(
                 key:const ValueKey('r1c-assignment-priority'),
                 controller:priority,keyboardType:TextInputType.number,
@@ -289,9 +355,8 @@ class _PriceListAssignmentsPanelState extends State<PriceListAssignmentsPanel>{
               FilledButton.icon(
                 key:const ValueKey('r1c-assign-save'),
                 onPressed:busy?null:save,icon:const Icon(Icons.check,size:18),
-                label:Text(widget.client.pendingR1(widget.session.actorId,branch,
-                  'catalog.assign.price-list.$listId')!=null
-                  ?'Kiểm tra yêu cầu':'Gán bảng giá')),
+                label:Text(scope=='DEFAULT'?'Gán mặc định':
+                  'Gán ${selectedTargets.length} đối tượng')),
             ]),
           const SizedBox(height:12),
           if(rows.isEmpty)const Text('Chưa có phân bổ cho bảng giá này.',
