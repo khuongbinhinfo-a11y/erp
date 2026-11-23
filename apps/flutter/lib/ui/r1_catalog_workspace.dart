@@ -46,6 +46,7 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
   String? error,productId,skuId,listId,customerId,channelId;
   String scope='BASE',adjustment='FIXED_PRICE',stacking='EXCLUSIVE';
   int promotionDays=7;
+  DateTime? ruleStartDay,ruleEndDay,quoteDay;
   bool primary=true,stopProcessing=false,loading=true,busy=false,form=false;
   int generation=0,seq=0,quoteSerial=0;
   Map<String,dynamic>? pending,quote;
@@ -65,7 +66,7 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
     if(old.branchId!=widget.branchId||old.kind!=widget.kind||
       old.session.token!=widget.session.token||old.client!=widget.client){
       generation++;quoteSerial++;form=false;pending=null;pendingKey=null;quote=null;
-      query.clear();items=[];reload();
+      query.clear();items=[];ruleStartDay=null;ruleEndDay=null;quoteDay=null;reload();
     }
   }
   @override void dispose(){
@@ -178,6 +179,7 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
         fields['minQuantity']!.text='1';
         fields['priority']!.text='0';
         scope='BASE';adjustment='FIXED_PRICE';stacking='EXCLUSIVE';promotionDays=7;
+        ruleStartDay=null;ruleEndDay=null;quoteDay=null;
         primary=true;stopProcessing=false;form=true;
       });
     }on ErpApiError catch(e){
@@ -211,6 +213,22 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
       keyboardType:numeric?const TextInputType.numberWithOptions(decimal:true):TextInputType.text,
       decoration:InputDecoration(labelText:title,hintText:hint));
   }
+  String dayLabel(DateTime? day,String empty)=>day==null?empty:
+    '${day.day.toString().padLeft(2,'0')}/${day.month.toString().padLeft(2,'0')}/${day.year}';
+  Future<void> chooseDay(String mode)async{
+    final current=mode=='start'?ruleStartDay:mode=='end'?ruleEndDay:quoteDay;
+    final chosen=await showDatePicker(context:context,
+      initialDate:current??DateTime.now(),
+      firstDate:DateTime(2020),lastDate:DateTime(2100),
+      helpText:mode=='start'?'Ngày bắt đầu':
+        mode=='end'?'Ngày hết hiệu lực (tính hết ngày)':'Tra giá tại ngày');
+    if(!mounted||chosen==null)return;
+    setState((){
+      if(mode=='start')ruleStartDay=chosen;
+      else if(mode=='end')ruleEndDay=chosen;
+      else{quoteDay=chosen;quote=null;quoteSerial++;}
+    });
+  }
   Future<void> save()async{
     if(busy||widget.branchId==null)return;
     Map<String,dynamic> payload;
@@ -238,15 +256,22 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
             scope=='CUSTOMER_GROUP'&&getField('customerGroup').isEmpty){
             setState(()=>error='Vui lòng chọn thông tin áp dụng của quy tắc.');return;
           }
-          final start=DateTime.now().toUtc();
+          final start=ruleStartDay==null?DateTime.now().toUtc():
+            DateTime(ruleStartDay!.year,ruleStartDay!.month,ruleStartDay!.day).toUtc();
+          final end=ruleEndDay!=null
+            ?DateTime(ruleEndDay!.year,ruleEndDay!.month,ruleEndDay!.day+1).toUtc()
+            :scope=='PROMOTION'?start.add(Duration(days:promotionDays)):null;
+          if(end!=null&&!end.isAfter(start)){
+            setState(()=>error='Ngày kết thúc phải sau thời điểm bắt đầu.');
+            return;
+          }
           payload.addAll({
             'priceListId':listId,'sellSkuId':skuId,'scopeKind':scope,
             'adjustment':adjustment,'amount':getField('amount'),
             'priority':rank,'stacking':stacking,'stopProcessing':stopProcessing,
             'minQuantity':getField('minQuantity'),
             'effectiveFrom':start.toIso8601String(),
-            if(scope=='PROMOTION')
-              'effectiveTo':start.add(Duration(days:promotionDays)).toIso8601String(),
+            if(end!=null)'effectiveTo':end.toIso8601String(),
             ...r1RuleRestrictions(scope,customerId:customerId,
               channelId:channelId,customerGroup:getField('customerGroup')),
           });break;
@@ -292,6 +317,8 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
         'priceListId':listId,'quantity':getField('quantity'),
         if(customerId!=null)'customerId':customerId,
         if(channelId!=null)'channelId':channelId,
+        if(quoteDay!=null)'priceAt':DateTime(
+          quoteDay!.year,quoteDay!.month,quoteDay!.day,12).toUtc().toIso8601String(),
       });
       if(mounted&&stamp==quoteSerial)
         setState(()=>quote=Map<String,dynamic>.from(result['quote'] as Map));
@@ -550,6 +577,28 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
               slot(textField('amount','Giá hoặc tỷ lệ',numeric:true)),
               slot(textField('minQuantity','Từ số lượng',numeric:true)),
               slot(textField('priority','Mức ưu tiên',numeric:true)),
+              slot(Row(children:[
+                Expanded(child:OutlinedButton.icon(
+                  key:const ValueKey('r1-rule-start-day'),
+                  onPressed:busy?null:()=>chooseDay('start'),
+                  icon:const Icon(Icons.event,size:17),
+                  label:Text(dayLabel(ruleStartDay,'Bắt đầu ngay'),
+                    overflow:TextOverflow.ellipsis))),
+                if(ruleStartDay!=null)IconButton(
+                  tooltip:'Bắt đầu ngay',icon:const Icon(Icons.close,size:17),
+                  onPressed:()=>setState(()=>ruleStartDay=null)),
+              ])),
+              slot(Row(children:[
+                Expanded(child:OutlinedButton.icon(
+                  key:const ValueKey('r1-rule-end-day'),
+                  onPressed:busy?null:()=>chooseDay('end'),
+                  icon:const Icon(Icons.event_busy,size:17),
+                  label:Text(dayLabel(ruleEndDay,'Không đặt ngày kết thúc'),
+                    overflow:TextOverflow.ellipsis))),
+                if(ruleEndDay!=null)IconButton(
+                  tooltip:'Không giới hạn',icon:const Icon(Icons.close,size:17),
+                  onPressed:()=>setState(()=>ruleEndDay=null)),
+              ])),
               slot(DropdownButtonFormField<String>(
                 initialValue:stacking,
                 decoration:const InputDecoration(labelText:'Kết hợp quy tắc'),
@@ -561,7 +610,21 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
               slot(SwitchListTile(title:const Text('Dừng xử lý tại đây'),
                 value:stopProcessing,onChanged:(v)=>setState(()=>stopProcessing=v))),
             ],
-            if(isQuote)slot(textField('quantity','Số lượng',numeric:true)),
+
+            if(isQuote)...[
+              slot(textField('quantity','Số lượng',numeric:true)),
+              slot(Row(children:[
+                Expanded(child:OutlinedButton.icon(
+                  key:const ValueKey('r1-quote-date'),
+                  onPressed:busy?null:()=>chooseDay('quote'),
+                  icon:const Icon(Icons.event,size:17),
+                  label:Text(dayLabel(quoteDay,'Giá hiện tại'),
+                    overflow:TextOverflow.ellipsis))),
+                if(quoteDay!=null)IconButton(
+                  tooltip:'Tra giá hiện tại',icon:const Icon(Icons.close,size:17),
+                  onPressed:()=>changeQuoteContext(()=>quoteDay=null)),
+              ])),
+            ],
           ]),
           if(widget.kind=='rules')const Padding(
             padding:EdgeInsets.only(top:14),
