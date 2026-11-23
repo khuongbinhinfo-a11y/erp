@@ -146,6 +146,16 @@ function equal(a:unknown,b:unknown):boolean{
 function mapBy<T extends Record<string,any>>(items:T[],key:(item:T)=>string):Map<string,T>{
  return new Map(items.map(v=>[key(v),v]));
 }
+/** Compare fixed-decimal strings exactly, without IEEE754 rounding. */
+export function equalDecimal(a:unknown,b:unknown):boolean{
+ const normalize=(value:unknown):string=>{
+  const raw=String(value),parts=raw.split(".");
+  const integer=(parts[0]??"0").replace(/^0+(?=\d)/,"");
+  const fraction=(parts[1]??"").replace(/0+$/,"");
+  return integer+(fraction?"."+fraction:"");
+ };
+ return normalize(a)===normalize(b);
+}
 const exactDecimal=(s:string|undefined,rx:RegExp,codeName:string,optional=false):string|undefined=>{
  if(optional&&(s===undefined||s===""))return undefined;
  if(!s||!rx.test(s))throw new BulkFault("INVALID_"+codeName);
@@ -225,7 +235,7 @@ function normalizeRow(
    if(!UNIT.test(unit)||!refs.units.has(unit)||refs.units.get(unit)?.active!==true)
     throw new BulkFault("UNIT_CODE_NOT_FOUND_OR_INACTIVE");
    const known=refs.productUnits.get(p.id+"|"+unit);
-   if(known&&Number(known.toBase)!==Number(factor))
+   if(known&&!equalDecimal(known.toBase,factor))
     throw new BulkFault("CANONICAL_CONVERSION_MISMATCH");
    if(unit===p.baseUnit)throw new BulkFault("BASE_SKU_ALREADY_CANONICAL");
    if(flag(raw.active)===false)throw new BulkFault("CREATE_INACTIVE_UNSUPPORTED");
@@ -239,7 +249,7 @@ function normalizeRow(
    if(raw.unitCode!==undefined&&raw.unitCode!==""&&raw.unitCode!==current.unitCode)
     throw new BulkFault("IMMUTABLE_SKU_UNIT");
    if(raw.toBase!==undefined&&raw.toBase!==""&&
-      Number(raw.toBase)!==Number(current.toBase))
+      !equalDecimal(raw.toBase,current.toBase))
     throw new BulkFault("IMMUTABLE_SKU_CONVERSION");
    const a=flag(raw.active);
    if(a!==undefined)assign("active",a);
@@ -356,8 +366,8 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
     .map(([k,v])=>[k,v instanceof Date?v.toISOString():v]))):null;
    const revision=current?(typeof current.revision==="number"?current.revision:0):null;
    const samePrice=current&&res==="prices"&&
-    Number(current.amount)===Number(after.amount)&&
-    Number(current.discountRate)===Number(after.discountRate)&&
+    equalDecimal(current.amount,after.amount)&&
+    equalDecimal(current.discountRate,after.discountRate)&&
     new Date(current.effectiveAt).toISOString()===new Date(String(after.effectiveAt)).toISOString();
    const isSame=current&&(res==="prices"?samePrice:Object.entries(converted.operation)
     .filter(([k])=>k!=="branchId"&&k!=="reason")
