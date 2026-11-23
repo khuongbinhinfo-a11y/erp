@@ -133,7 +133,7 @@ void main(){
       saveCsvForTest:(_,__)async{throw UnsupportedError('download blocked');})))));
    await tester.tap(find.byKey(const ValueKey('catalog-bulk-template')));
    await tester.pumpAndSettle();
-   expect(find.textContaining('Trình duyệt không hỗ trợ tải CSV'),findsOneWidget);
+   expect(find.textContaining('Trình duyệt không hỗ trợ tải tệp'),findsOneWidget);
    expect(tester.takeException(),isNull);
   });
 
