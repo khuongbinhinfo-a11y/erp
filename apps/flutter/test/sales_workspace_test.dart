@@ -193,6 +193,7 @@ void main(){
   testWidgets('R2: scan barcode, quote and recover lost confirm ACK without double posting', (tester)async{
     var saved=false,confirmed=false,confirmCount=0,quoteCount=0,skuSearchCount=0;
     var useLongQuotedPrice=false;
+    var stockRequests=0;
     const warehouse='00000000-0000-4000-8000-000000000009';
     const precedingSku='00000000-0000-4000-8000-00000000000a';
     final traces=<String>[];
@@ -239,6 +240,11 @@ void main(){
         }
         if(path=='/v1/inventory/balances'){
           expect(request.url.queryParameters['warehouseId'],warehouse);
+          stockRequests++;
+          if(stockRequests==1){
+            return reply({'error':{'code':'INVENTORY_TEMPORARY',
+              'message':'Kho tạm thời không phản hồi'}},503);
+          }
           return reply({'items':[{'productId':product,'available':'8',
             'baseUnit':'cái'}],'hasMore':false},200);
         }
@@ -350,6 +356,13 @@ void main(){
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('sales-sku-dropdown')),findsOneWidget);
     expect(find.text('35.000 ₫'),findsWidgets);
+    expect(find.text('Chưa xác định tồn'),findsWidgets,
+      reason:'Transient inventory failure must not fabricate stock');
+    await tester.tap(find.byTooltip('Tìm hàng'));
+    await tester.runAsync(() async=>
+      Future<void>.delayed(const Duration(milliseconds:120)));
+    await tester.pumpAndSettle();
+    expect(stockRequests,2,reason:'Search again must retry scoped inventory after 503');
     expect(find.text('8 cái'),findsOneWidget);
     expect(find.textContaining('SKU SKU-01'),findsWidgets);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
