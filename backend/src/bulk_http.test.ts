@@ -274,6 +274,10 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
    const concurrentCreation=createR1(createTx,root.installationId,"skus",
     parseR1("skus",{branchId,productId:barcodeOwner.body.id,
      sku:"SPBC-THUNG",unitCode:"THUNG",toBase:"24"}));
+   // Attach rejection handling immediately. Under a busy CI runner, the
+   // expected PRODUCT_UNAVAILABLE can reject before the delayed assertion.
+   const creationRejected=assert.rejects(concurrentCreation,/PRODUCT_UNAVAILABLE/,
+    "creation must recheck active after waiting for retiring parent lock");
    await new Promise<void>(resolve=>setTimeout(resolve,40));
    await retireTx.query('UPDATE catalog_sell_sku SET active=false '+
     'WHERE installation_id=$1 AND branch_id=$2 AND product_id=$3',
@@ -282,8 +286,7 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
     'WHERE installation_id=$1 AND branch_id=$2 AND id=$3',
     [root.installationId,branchId,barcodeOwner.body.id]);
    await retireTx.query("COMMIT");
-   await assert.rejects(concurrentCreation,/PRODUCT_UNAVAILABLE/,
-    "creation must recheck active after waiting for retiring parent lock");
+   await creationRejected;
    const impossibleChild=await db.query('SELECT 1 FROM catalog_sell_sku '+
     "WHERE installation_id=$1 AND branch_id=$2 AND sku='SPBC-THUNG'",
     [root.installationId,branchId]);

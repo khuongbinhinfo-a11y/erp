@@ -77,7 +77,10 @@ void main(){
         grants:rights,session:IdentitySession(actorId:actor,token:'test-token',
           expiresAt:DateTime.now().add(const Duration(hours:1)),grants:rights),
         client:client))));
-    await tester.tap(find.byKey(const ValueKey('company-CompanySection.products')));
+    await tester.ensureVisible(find.byKey(const ValueKey('company-CompanyGroup.catalog')));
+    await tester.tap(find.byKey(const ValueKey('company-CompanyGroup.catalog')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('company-sub-CompanySection.products')));
     await flush(tester);
     await tester.tap(find.byKey(const ValueKey('catalog-create')));
     await flush(tester);
@@ -176,7 +179,10 @@ void main(){
         grants:rights,session:IdentitySession(actorId:actor,token:'test-token',
           expiresAt:DateTime.now().add(const Duration(hours:1)),grants:rights),
         client:client))));
-    await tester.tap(find.byKey(const ValueKey('company-CompanySection.products')));
+    await tester.ensureVisible(find.byKey(const ValueKey('company-CompanyGroup.catalog')));
+    await tester.tap(find.byKey(const ValueKey('company-CompanyGroup.catalog')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('company-sub-CompanySection.products')));
     await flush(tester);
     await tester.tap(find.byKey(const ValueKey('catalog-create')));
     await flush(tester);

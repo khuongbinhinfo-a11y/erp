@@ -17,6 +17,17 @@ final grants=<IdentityGrant>[
 IdentitySession activeSession()=>IdentitySession(actorId:actor,token:'test-local-session',
   expiresAt:DateTime.now().add(const Duration(hours:1)),grants:grants);
 
+Future<void> openCompanyCatalog(WidgetTester tester,String destination)async{
+ final business=find.byKey(const ValueKey('company-CompanyGroup.catalog'));
+ await tester.ensureVisible(business);
+ await tester.tap(business);
+ await tester.pumpAndSettle();
+ final leaf=find.byKey(ValueKey('company-sub-CompanySection.$destination'));
+ await tester.ensureVisible(leaf);
+ await tester.tap(leaf);
+ await tester.pumpAndSettle();
+}
+
 void main(){
   test('login 503 is a backend problem, never shown as user network or bad password', () async {
     final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
@@ -82,7 +93,7 @@ void main(){
       await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),home:Scaffold(
         body:CompanyWorkspace(previewOnly:false,grants:grants,
           session:activeSession(),client:client))));
-      await tester.tap(find.byKey(const ValueKey('company-CompanySection.customers')));
+      await openCompanyCatalog(tester,'customers');
       await tester.pumpAndSettle();
       // MockClient streamed responses can resolve outside the initial frame pump.
       await tester.runAsync(() async =>
@@ -124,7 +135,7 @@ void main(){
       await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
         home:Scaffold(body:CompanyWorkspace(previewOnly:false,grants:grants,
           session:activeSession(),client:client))));
-      await tester.tap(find.byKey(const ValueKey('company-CompanySection.products')));
+      await openCompanyCatalog(tester,'products');
       await tester.pumpAndSettle();
       await tester.runAsync(()async=>
         Future<void>.delayed(const Duration(milliseconds:120)));
@@ -176,11 +187,13 @@ void main(){
         body:CompanyWorkspace(previewOnly:false,grants:grants,
           session:activeSession(),client:client))));
       final header=find.byKey(const ValueKey('erp-page-header'));
-      final mainTab=find.byKey(const ValueKey('company-CompanySection.products'));
+      final mainTab=find.byKey(const ValueKey('company-CompanyGroup.catalog'));
       expect(tester.getRect(mainTab).center.dy,greaterThan(tester.getRect(header).top));
       expect(tester.getRect(mainTab).center.dy,lessThan(tester.getRect(header).bottom));
       expect(tester.getRect(mainTab).left,greaterThan(tester.getRect(header).left+200));
       await tester.tap(mainTab);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('company-sub-CompanySection.products')));
       await tester.pumpAndSettle();
       await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:120)));
       await tester.pumpAndSettle();
@@ -200,7 +213,7 @@ void main(){
       await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),home:Scaffold(
         body:CompanyWorkspace(previewOnly:false,grants:grants,
           session:activeSession(),client:client))));
-      await tester.tap(find.byKey(const ValueKey('company-CompanySection.customers')));
+      await openCompanyCatalog(tester,'customers');
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('catalog-error')),findsOneWidget);
       expect(find.textContaining('tạm gián đoạn'),findsOneWidget);
@@ -236,7 +249,7 @@ void main(){
     await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),home:Scaffold(
       body:CompanyWorkspace(previewOnly:false,grants:grants,
         session:activeSession(),client:client))));
-    await tester.tap(find.byKey(const ValueKey('company-CompanySection.customers')));
+    await openCompanyCatalog(tester,'customers');
     await tester.pumpAndSettle();
     await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:120)));
     await tester.pumpAndSettle();
@@ -298,7 +311,7 @@ void main(){
           session:activeSession(),client:client))));
       await tester.pumpAndSettle();
       expect(tester.takeException(),isNull,reason:'overview narrow initial overflow');
-      await tester.tap(find.byKey(const ValueKey('company-CompanySection.customers')));
+      await openCompanyCatalog(tester,'customers');
       await tester.pumpAndSettle();
       await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:150)));
       await tester.pumpAndSettle();
@@ -375,7 +388,7 @@ void main(){
       await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
         home:Scaffold(body:CompanyWorkspace(previewOnly:false,grants:grants,
           session:activeSession(),client:client))));
-      await tester.tap(find.byKey(const ValueKey('company-CompanySection.customers')));
+      await openCompanyCatalog(tester,'customers');
       await tester.pumpAndSettle();
       await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:150)));
       await tester.pumpAndSettle();
