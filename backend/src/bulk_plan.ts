@@ -32,6 +32,20 @@ const DEC=/^(?:0\.[0-9]{0,5}[1-9]|[1-9][0-9]{0,11}(?:\.[0-9]{1,6})?)$/;
 const MONEY=/^(?:0|[1-9][0-9]{0,12})(?:\.[0-9]{1,4})?$/;
 const DISCOUNT=/^(?:100(?:\.0{1,2})?|(?:[0-9]|[1-9][0-9])(?:\.[0-9]{1,2})?)$/;
 const ISO=/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)$/;
+/** Reject non-existent calendar dates before PostgreSQL sees ::timestamptz. */
+export function validEffectiveAt(value:string|undefined):boolean{
+ if(!value||!ISO.test(value))return false;
+ const m=/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-](\d{2}):(\d{2}))$/.exec(value);
+ if(!m)return false;
+ const y=Number(m[1]),month=Number(m[2]),day=Number(m[3]);
+ const hour=Number(m[4]),minute=Number(m[5]),second=Number(m[6]);
+ const offsetHour=Number(m[8]??0),offsetMinute=Number(m[9]??0);
+ const leap=y%4===0&&(y%100!==0||y%400===0);
+ const maxDay=[31,leap?29:28,31,30,31,30,31,31,30,31,30,31][month-1];
+ return y>=1&&month>=1&&month<=12&&day>=1&&day<=maxDay&&
+  hour<=23&&minute<=59&&second<=59&&offsetHour<=23&&offsetMinute<=59&&
+  Number.isFinite(Date.parse(value));
+}
 const DEFINITIONS:Record<BulkResource,Record<string,string[]>>={
  customers:{
   code:["Mã khách hàng","Mã KH","Customer Code","CustomerCode","code"],
@@ -275,7 +289,7 @@ function normalizeRow(
   const amount=exactDecimal(raw.amount,MONEY,"PRICE")!;
   const discount=exactDecimal(raw.discountRate,DISCOUNT,"DISCOUNT",true)??"0";
   const at=required("effectiveAt",64);
-  if(!ISO.test(at)||!Number.isFinite(Date.parse(at)))throw new BulkFault("INVALID_EFFECTIVE_AT");
+  if(!validEffectiveAt(at))throw new BulkFault("INVALID_EFFECTIVE_AT");
   assign("priceListId",l.id);assign("productId",p.id);
   assign("amount",amount);assign("discountRate",discount);assign("effectiveAt",at);
   after.priceListCode=raw.priceListCode;after.productCode=raw.productCode;
@@ -305,6 +319,16 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
   'payment_terms_days AS "paymentTermsDays",active,revision::int'+
   ' FROM catalog_customer WHERE installation_id=$1 AND branch_id=$2 AND code=ANY($3::text[])',
   [tenant,branch,all("code")]):{rows:[]};
+ // Check globally occupied active phones, including customers whose code is
+ // not in this import. After rows are normalized we validate the FINAL batch
+ // state, so changing/retiring an owner and reassigning its phone works.
+ const requestedPhones=res==="customers"?[...new Set(data.map(r=>
+  (r.phone??"").startsWith("'+")?r.phone.slice(1):r.phone)
+  .filter((v):v is string=>Boolean(v&&/^\+?[0-9]{9,15}$/.test(v))))]:[];
+ const phoneOwners=res==="customers"?await db.query<{code:string;phone:string}>(
+  'SELECT code,phone FROM catalog_customer WHERE installation_id=$1 AND branch_id=$2 '+
+  'AND active AND phone=ANY($3::text[])',
+  [tenant,branch,requestedPhones]):{rows:[]};
  const sku=res==="skus"?await db.query<Record<string,any>>(
   'SELECT s.id,s.sku AS code,s.product_id AS "productId",p.sku AS "productCode",'+
   's.unit_code AS "unitCode",s.conversion_to_base::text AS "toBase",s.active,s.is_base AS "isBase",'+
@@ -354,8 +378,7 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
  const requested=res==="prices"?data.map((r,index)=>({
   rowIndex:index,priceListCode:r.priceListCode??"",
   productCode:r.productCode??"",
-  effectiveAt:ISO.test(r.effectiveAt??"")&&
-    Number.isFinite(Date.parse(r.effectiveAt??""))?r.effectiveAt:"",
+  effectiveAt:validEffectiveAt(r.effectiveAt)?r.effectiveAt:"",
  })):[];
  const occupied=res==="prices"?await db.query<Record<string,any>>(`
   SELECT x."rowIndex",e.id,e.amount::text,
@@ -434,6 +457,38 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
   }catch(e){
    rows.push({line,key,action:"ERROR",before:null,after:null,revision:null,
     error:e instanceof BulkFault?e.code:"INVALID_ROW"});
+  }
+ }
+ if(res==="customers"){
+  // Treat an invalid imported row as unchanged in the database. All valid
+  // imported rows instead contribute their proposed active/phone end state.
+  const valid=rows.filter(r=>r.action!=="ERROR");
+  const imported=new Set(valid.map(r=>r.key));
+  const owners=new Map<string,Set<string>>();
+  const add=(phone:string,owner:string)=>{
+   if(!owners.has(phone))owners.set(phone,new Set());
+   owners.get(phone)!.add(owner);
+  };
+  for(const old of phoneOwners.rows)
+   if(!imported.has(old.code))add(old.phone,old.code);
+  const finalPhones=new Map<number,string>();
+  for(const row of valid){
+   const current=known.get(row.key);
+   const futureActive=typeof row.after?.active==="boolean"?row.after.active:
+    current?current.active:true;
+   const phone=row.after&&Object.hasOwn(row.after,"phone")?
+    row.after.phone:current?.phone;
+   if(futureActive===true&&typeof phone==="string"&&phone!==""){
+    add(phone,row.key);finalPhones.set(row.line,phone);
+   }
+  }
+  for(const row of valid){
+   const phone=finalPhones.get(row.line);
+   if(phone&&(owners.get(phone)?.size??0)>1){
+    row.action="ERROR";row.before=null;row.after=null;
+    row.revision=null;row.error="DUPLICATE_CUSTOMER_PHONE";
+    delete row.internal;
+   }
   }
  }
  const summary={create:rows.filter(x=>x.action==="CREATE").length,
