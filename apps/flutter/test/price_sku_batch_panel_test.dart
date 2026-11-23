@@ -75,7 +75,7 @@ void main(){
       expect(row['effectiveFrom'],isNotNull);
     }
     expect(keys.length,2);
-    expect(keys.every((x)=>x!=null&&x!.isNotEmpty),isTrue);
+    expect(keys.every((x)=>x?.isNotEmpty==true),isTrue);
     expect(keys[0],isNot(keys[1]));
     expect(find.text('Đã chọn 0 SKU'),findsOneWidget);
   });
