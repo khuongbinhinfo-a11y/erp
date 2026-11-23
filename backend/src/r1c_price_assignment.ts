@@ -4,7 +4,11 @@ import { requireRevision } from "./mutation.ts";
 /** R1-C list selection is a scoped overlay on the existing price engine.
  * Assignment changes never rewrite immutable SKU rules or posted order prices. */
 export class PriceAssignmentFault extends Error {
-  constructor(readonly status:number,readonly code:string){super(code);}
+  readonly status:number;
+  readonly code:string;
+  constructor(status:number,code:string){
+    super(code);this.status=status;this.code=code;
+  }
 }
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 function uuid(v:unknown):string {
