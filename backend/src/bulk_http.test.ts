@@ -167,9 +167,26 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
   const priceReimport=await preview(laterPrice);
   assert.equal(priceReimport.body.summary.unchanged,1,
     "same amount and effective timestamp is unchanged, not a duplicate ledger entry");
+  const historicalUnchanged=await preview(firstPrice);
+  assert.equal(historicalUnchanged.body.summary.unchanged,1,
+    "historical exact timestamp is matched, not only most recent price");
+  const historicalConflict=await preview(pricing("15555.0000","2026-11-23T00:00:00Z"));
+  assert.equal(historicalConflict.body.summary.error,1,
+    "a conflicting historical timestamp is rejected during preview");
   const conflict=await preview(pricing("99999.0000","2026-11-24T00:00:00Z"));
   assert.equal(conflict.body.summary.error,1);
   assert.equal(conflict.body.rows[0].error,"PRICE_EFFECTIVE_TIME_CONFLICT");
+  const concurrentPreview=await preview(pricing("18000.0000","2026-11-25T00:00:00Z"));
+  assert.equal(concurrentPreview.body.summary.update,1);
+  const concurrentPrice=await create("prices",{
+    priceListId:priceList.body.id,productId,
+    amount:"19000.0000",discountRate:"0",
+    effectiveAt:"2026-11-26T00:00:00Z"});
+  assert.equal(concurrentPrice.status,201,JSON.stringify(concurrentPrice.body));
+  const stalePrice=await apply(pricing("18000.0000","2026-11-25T00:00:00Z"),
+    concurrentPreview.body.hash);
+  assert.equal(stalePrice.status,409,
+    "single-price append after preview must conflict before bulk COMMIT");
   assert.equal((await db.query<{n:string}>(
     'SELECT count(*)::text AS n FROM catalog_price_entry '+
     'WHERE installation_id=$1 AND branch_id=$2 AND product_id=$3',
@@ -199,6 +216,34 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
   assert.equal((await db.query<{active:boolean}>(
     'SELECT active FROM catalog_product WHERE id=$1',[productId])).rows[0]!.active,true,
     "base sellable SKU remains active after retiring mistaken pack SKU");
+  const enabled=await request("/v1/catalog/r1/skus/"+skuId,"PATCH",
+    {branchId,active:true},token,{
+      "idempotency-key":"reenable-"+randomUUID(),"if-match":"1",
+    });
+  assert.equal(enabled.status,200,JSON.stringify(enabled.body));
+  assert.equal((await create("unit-definitions",{code:"HOP",name:"Hộp"})).status,201);
+  const replacement={
+    branchId,resource:"skus",mode:"UPSERT",fileName:"replacement.csv",
+    contentBase64:Buffer.from(
+      "Mã SKU,Mã SP,Đơn vị,Quy đổi,Trạng thái,Lý do\n"+
+      "SP01-T,SP01,THUNG,24.000000,Ngừng,Nhập nhầm mã đóng gói\n"+
+      "SP01-H,SP01,HOP,12.000000,1,\n").toString("base64"),
+    hasHeader:true,mapping:{code:"Mã SKU",productCode:"Mã SP",
+      unitCode:"Đơn vị",toBase:"Quy đổi",active:"Trạng thái",reason:"Lý do"},
+  };
+  const previewReplace=await preview(replacement);
+  assert.equal(previewReplace.body.summary.update,1,JSON.stringify(previewReplace.body));
+  assert.equal(previewReplace.body.summary.create,1);
+  const appliedReplace=await apply(replacement,previewReplace.body.hash);
+  assert.equal(appliedReplace.status,200,JSON.stringify(appliedReplace.body));
+  assert.equal((await db.query<{active:boolean}>(
+    "SELECT active FROM catalog_product WHERE id=$1",[productId])).rows[0]!.active,true,
+    "replacing the last variant must not inadvertently retire its parent");
+  assert.equal((await db.query<{n:string}>(`SELECT count(*)::text AS n
+    FROM catalog_sell_sku WHERE installation_id=$1 AND branch_id=$2
+    AND product_id=$3 AND active`,
+    [root.installationId,branchId,productId])).rows[0]!.n,"2",
+    "base and replacement pack SKU active; original pack is stopped");
   const otherBranch=(await db.query<{id:string}>(
    "INSERT INTO branch(installation_id,code,name) VALUES($1,'OTHER','Other') RETURNING id",
    [root.installationId])).rows[0]!.id;
