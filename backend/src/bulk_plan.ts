@@ -343,7 +343,7 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
  const prices=res==="prices"?await db.query<Record<string,any>>(
   'SELECT DISTINCT ON (e.price_list_id,e.product_id) e.id,'+
   'e.price_list_id AS "priceListId",e.product_id AS "productId",'+
-  'e.amount::text,e.discount_rate::text AS "discountRate",e.effective_at AS "effectiveAt" '+
+  `e.amount::text,e.discount_rate::text AS "discountRate",${fmt} AS "effectiveAt" `+
   'FROM catalog_price_entry e WHERE e.installation_id=$1 AND e.branch_id=$2 '+
   'AND e.price_list_id=ANY($3::uuid[]) AND e.product_id=ANY($4::uuid[]) '+
   'ORDER BY e.price_list_id,e.product_id,e.effective_at DESC,e.id DESC',
@@ -360,7 +360,7 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
  const occupied=res==="prices"?await db.query<Record<string,any>>(`
   SELECT x."rowIndex",e.id,e.amount::text,
    e.discount_rate::text AS "discountRate",
-   e.effective_at AS "effectiveAt",e.price_list_id AS "priceListId",
+   ${fmt} AS "effectiveAt",e.price_list_id AS "priceListId",
    e.product_id AS "productId"
   FROM jsonb_to_recordset($3::jsonb) AS x(
    "rowIndex" integer,"priceListCode" text,"productCode" text,"effectiveAt" text)
