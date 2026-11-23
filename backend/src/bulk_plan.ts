@@ -198,9 +198,15 @@ function normalizeRow(
     assign("customerRegionId",r?.id??null);after.customerRegionCode=value;
    }
    if(raw.phone!==undefined){
-    if(raw.phone!==""&&!/^\+?[0-9]{9,15}$/.test(raw.phone))
-     throw new BulkFault("INVALID_PHONE");
-    assign("phone",raw.phone||null);
+    // CSV-exported international numbers carry a leading apostrophe to
+    // neutralize spreadsheet formula evaluation. Reverse ONLY this exact
+    // protection for validated phone fields during import.
+    {
+      const value=raw.phone.startsWith("'+")?raw.phone.slice(1):raw.phone;
+      if(value!==""&&!/^\+?[0-9]{9,15}$/.test(value))
+       throw new BulkFault("INVALID_PHONE");
+      assign("phone",value||null);
+    }
    }
    if(raw.deliveryAddress!==undefined)
     assign("deliveryAddress",raw.deliveryAddress===""?null:
@@ -306,6 +312,13 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
   'p.installation_id=s.installation_id AND p.branch_id=s.branch_id AND p.id=s.product_id '+
   'WHERE s.installation_id=$1 AND s.branch_id=$2 AND s.sku=ANY($3::text[])',
   [tenant,branch,all("code")]):{rows:[]};
+ // Identity is immutable, including inactive SKU occupancy. A different
+ // code cannot take over the same product+unit even if the old SKU is stopped.
+ const skuUnitOccupancy=res==="skus"?await db.query<Record<string,any>>(
+  'SELECT s.id,s.sku AS code,s.product_id AS "productId",s.unit_code AS "unitCode" '+
+  'FROM catalog_sell_sku s WHERE s.installation_id=$1 AND s.branch_id=$2 '+
+  'AND s.product_id=ANY($3::uuid[])',
+  [tenant,branch,products.rows.map(x=>x.id)]):{rows:[]};
  const priceLists=res==="prices"?await db.query<Record<string,any>>(
   'SELECT id,code,name,active FROM catalog_price_list '+
   'WHERE installation_id=$1 AND branch_id=$2 AND code=ANY($3::text[])',
@@ -372,6 +385,9 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
   res==="products"?mapBy(products.rows,x=>x.code):
   res==="skus"?mapBy(sku.rows,x=>x.code):
   mapBy(prices.rows,x=>x.priceListId+"|"+x.productId);
+ const occupiedSkuPairs=mapBy(skuUnitOccupancy.rows,
+  x=>x.productId+"|"+x.unitCode);
+ const selectedSkuPairs=new Set<string>();
  const rows:BulkRow[]=[],seen=new Set<string>();
  for(let i=0;i<data.length;i++){
   const raw=data[i]!,line=file.firstLine+i;
@@ -386,6 +402,16 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
    if(current&&input.mode==="CREATE")throw new BulkFault("ALREADY_EXISTS_USE_UPDATE");
    if(!current&&input.mode==="UPDATE")throw new BulkFault("NOT_FOUND_USE_CREATE");
    const converted=normalizeRow(res,input.mode,raw,current,refs,branch);
+   if(res==="skus"){
+    const productId=converted.operation.productId??current?.productId;
+    const unitCode=converted.operation.unitCode??current?.unitCode;
+    const occupancyKey=String(productId)+"|"+String(unitCode);
+    if(!current&&occupiedSkuPairs.has(occupancyKey))
+     throw new BulkFault("PRODUCT_UNIT_ALREADY_ASSIGNED_TO_SKU");
+    if(selectedSkuPairs.has(occupancyKey))
+     throw new BulkFault("DUPLICATE_FILE_PRODUCT_UNIT");
+    selectedSkuPairs.add(occupancyKey);
+   }
    const after=clean(converted.after);
 
    const revision=current?(typeof current.revision==="number"?current.revision:0):null;
