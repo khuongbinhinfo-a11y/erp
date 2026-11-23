@@ -172,12 +172,22 @@ async function hasSchema(pool:Pool){
     return r.rows[0]?.ok===true;
   }catch{return false;}
 }
+async function r1cListWindowEnabled(db:PoolClient):Promise<boolean>{
+  const state=await db.query<{ready:boolean}>(`SELECT EXISTS(
+    SELECT 1 FROM public.schema_migrations
+    WHERE version='0018_r1c_price_list_assignment.sql') AS ready`);
+  return state.rows[0]?.ready===true;
+}
 async function eligibility(db:PoolClient,t:string,b:string,c:string,l:string){
   const customer=await db.query<{code:string;name:string}>(
     "SELECT code,name FROM catalog_customer WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active=true FOR SHARE",
     [t,b,c]);
+  const windowEnabled=await r1cListWindowEnabled(db);
   const list=await db.query<{code:string;currency:string}>(
-    "SELECT code,currency FROM catalog_price_list WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active=true FOR SHARE",
+    "SELECT code,currency FROM catalog_price_list WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active=true"+
+      (windowEnabled?" AND (effective_from IS NULL OR effective_from<=now())"+
+       " AND (effective_to IS NULL OR effective_to>now())":"")+
+      " FOR SHARE",
     [t,b,l]);
   if(customer.rowCount!==1||list.rowCount!==1||list.rows[0]?.currency!=="VND")
     throw new SalesError(409,"CUSTOMER_OR_PRICE_LIST_UNAVAILABLE");
@@ -186,13 +196,17 @@ async function eligibility(db:PoolClient,t:string,b:string,c:string,l:string){
 type Quote={productId:string;sku:string;name:string;unitCode:string;
   priceEntryId:string;amount:string;discountRate:string};
 async function priceAt(db:PoolClient,t:string,b:string,listId:string,productId:string):Promise<Quote>{
+  const windowEnabled=await r1cListWindowEnabled(db);
+  const listWindow=windowEnabled?
+    " AND (l.effective_from IS NULL OR l.effective_from<=now())"+
+    " AND (l.effective_to IS NULL OR l.effective_to>now())":"";
   const r=await db.query<{
     sku:string;name:string;unitCode:string;priceEntryId:string;amount:string;discountRate:string;
   }>(`SELECT p.sku,p.name,p.base_unit AS "unitCode",
       e.id AS "priceEntryId",e.amount::text,e.discount_rate::text AS "discountRate"
     FROM catalog_product p
     JOIN catalog_price_list l ON l.installation_id=p.installation_id
-      AND l.branch_id=p.branch_id AND l.id=$3 AND l.active
+      AND l.branch_id=p.branch_id AND l.id=$3 AND l.active ${listWindow}
     JOIN LATERAL (
       SELECT ep.id,ep.amount,ep.discount_rate FROM catalog_price_entry ep
       WHERE ep.installation_id=p.installation_id AND ep.branch_id=p.branch_id
