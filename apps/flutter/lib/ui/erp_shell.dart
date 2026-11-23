@@ -216,42 +216,132 @@ class _IntroToast extends StatelessWidget {
   );
 }
 
-class _RrpMarkPainter extends CustomPainter {
-  const _RrpMarkPainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    // Draw an original geometric route/box mark at device-native resolution.
-    // Paths stay sharp in the expanded and collapsed sidebar on Retina.
-    canvas.save();
-    canvas.scale(size.width / 32, size.height / 32);
-    final paint = Paint()
-      ..color = ErpTokens.sidebar
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.8
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
-    final path = Path()
-      ..moveTo(5, 25)
-      ..lineTo(5, 7)
-      ..lineTo(12, 7)
-      ..quadraticBezierTo(19, 7, 19, 13)
-      ..quadraticBezierTo(19, 19, 12, 19)
-      ..lineTo(5, 19)
-      ..moveTo(13, 19)
-      ..lineTo(19, 26)
-      ..moveTo(23, 7)
-      ..lineTo(28, 7)
-      ..lineTo(28, 19)
-      ..lineTo(23, 19)
-      ..moveTo(23, 19)
-      ..lineTo(23, 26);
-    canvas.drawPath(path, paint);
-    canvas.restore();
+/// Concave-right selection outline inspired by the supplied navigation
+/// reference. The color stays inside ERP's green palette.
+class _SidebarWavePainter extends CustomPainter {
+  final double progress;
+  const _SidebarWavePainter(this.progress);
+  @override void paint(Canvas canvas,Size size){
+    if(progress<=0.001)return;
+    final w=size.width,h=size.height;
+    final shape=Path()
+      ..moveTo(15,1)
+      ..quadraticBezierTo(1,1,1,13)
+      ..lineTo(1,h-13)
+      ..quadraticBezierTo(1,h-1,15,h-1)
+      ..lineTo(w-27,h-1)
+      ..cubicTo(w-17,h-1,w-14,h-10,w-10,h-16)
+      ..cubicTo(w-5,h-21,w-2,h-23,w-2,h/2)
+      ..cubicTo(w-2,h-23,w-5,21,w-10,16)
+      ..cubicTo(w-14,10,w-17,1,w-27,1)
+      ..close();
+    final shader=const LinearGradient(
+      begin:Alignment.centerLeft,end:Alignment.centerRight,
+      colors:[Color(0xFFF1FFF2),Color(0xFFD7F2E0)],
+    ).createShader(Offset.zero & size);
+    canvas.drawPath(shape,Paint()
+      ..shader=shader..colorFilter=ColorFilter.mode(
+        Color.fromRGBO(255,255,255,progress),BlendMode.modulate));
+    canvas.drawPath(shape,Paint()
+      ..color=Color.fromRGBO(110,205,151,progress*.55)
+      ..style=PaintingStyle.stroke..strokeWidth=1);
   }
+  @override bool shouldRepaint(covariant _SidebarWavePainter old)=>
+    old.progress!=progress;
+}
 
-  @override
-  bool shouldRepaint(covariant _RrpMarkPainter oldDelegate) => false;
+/// Real pointer hover and active-tab transitions share a single entry.
+class _SidebarNavTile extends StatefulWidget {
+  final int index;
+  final ErpFeature feature;
+  final bool compact;
+  final bool active;
+  final ValueChanged<int> onSelect;
+  const _SidebarNavTile({required this.index,required this.feature,
+    required this.compact,required this.active,required this.onSelect});
+  @override State<_SidebarNavTile> createState()=>_SidebarNavTileState();
+}
+class _SidebarNavTileState extends State<_SidebarNavTile>{
+  bool hovered=false;
+  @override Widget build(BuildContext context){
+    final noMotion=MediaQuery.of(context).disableAnimations;
+    final duration=noMotion?Duration.zero:ErpTokens.menuMotion;
+    final active=widget.active;
+    final compact=widget.compact;
+    final index=widget.index;
+    return Padding(
+      padding:const EdgeInsets.symmetric(vertical:3),
+      child:Tooltip(message:compact?widget.feature.title:'',
+        child:Semantics(selected:active,button:true,
+          child:AnimatedSlide(
+            key:ValueKey('erp-nav-motion-$index'),
+            duration:duration,curve:Curves.easeOutCubic,
+            offset:hovered&&!active?const Offset(.035,0):Offset.zero,
+            child:AnimatedContainer(
+              key:ValueKey('erp-nav-surface-$index'),
+              duration:duration,curve:Curves.easeOutCubic,
+              decoration:BoxDecoration(
+                color:!active&&hovered?const Color(0xFF24563E):Colors.transparent,
+                borderRadius:BorderRadius.circular(12)),
+              child:TweenAnimationBuilder<double>(
+                key:ValueKey('erp-nav-selection-$index'),
+                tween:Tween<double>(begin:0,end:active?1:0),
+                duration:duration,curve:Curves.easeOutCubic,
+                builder:(context,amount,child)=>CustomPaint(
+                  painter:_SidebarWavePainter(amount),
+                  child:child),
+                child:Material(
+                  color:Colors.transparent,
+                  child:InkWell(
+                    key:ValueKey('nav-$index'),
+                    onTap:()=>widget.onSelect(index),
+                    onHover:(v){if(mounted&&v!=hovered)setState(()=>hovered=v);},
+                    borderRadius:BorderRadius.circular(12),
+                    child:Row(children:[
+                      SizedBox(height:54,width:compact?3:7),
+                      AnimatedScale(
+                        duration:duration,curve:Curves.easeOutBack,
+                        scale:active?1.10:(hovered?1.08:1),
+                        child:AnimatedContainer(
+                          duration:duration,curve:Curves.easeOutCubic,
+                          width:39,height:39,
+                          alignment:Alignment.center,
+                          decoration:BoxDecoration(
+                            color:active?ErpTokens.primary
+                              :(hovered?const Color(0xFF2D8860):Colors.transparent),
+                            shape:BoxShape.circle,
+                            boxShadow:active?[
+                              BoxShadow(color:const Color(0x8825B97B),
+                                blurRadius:11,spreadRadius:1),
+                            ]:const []),
+                          child:Icon(widget.feature.icon,
+                            color:active||hovered
+                              ?Colors.white:ErpTokens.sidebarText,size:20),
+                        ),
+                      ),
+                      if(!compact)...[
+                        const SizedBox(width:10),
+                        Expanded(child:Text(widget.feature.title,
+                          maxLines:1,overflow:TextOverflow.ellipsis,
+                          style:TextStyle(
+                            color:active?ErpTokens.primary
+                              :(hovered?ErpTokens.lime:Colors.white),
+                            fontSize:14,
+                            fontWeight:active?FontWeight.w800:FontWeight.w500))),
+                        if(active)const Icon(Icons.chevron_right,
+                          size:19,color:ErpTokens.primary),
+                        const SizedBox(width:12),
+                      ],
+                    ]),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _Navigation extends StatelessWidget {
@@ -278,19 +368,17 @@ class _Navigation extends StatelessWidget {
       Padding(
         padding: EdgeInsets.fromLTRB(compact?2:16,16,compact?2:10,18),
         child: Row(children: [
-          Container(
+          SizedBox(
             key:const ValueKey('erp-sidebar-logo'),
-            height:compact?32:39,width:compact?32:39,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(color: ErpTokens.lime,
-              borderRadius: BorderRadius.circular(5)),
-            child: const CustomPaint(size: Size(26, 26),
-              painter: _RrpMarkPainter()),
+            height:compact?36:45,width:compact?36:45,
+            child:Image.asset('assets/images/erp_sidebar_logo.webp',
+              fit:BoxFit.contain,semanticLabel:'Biểu tượng ERP',
+              filterQuality:FilterQuality.medium),
           ),
           if (!compact) ...[
             const SizedBox(width: 10),
             const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('RRP', style: TextStyle(color: Colors.white, fontSize: 21,
+              Text('ERP', style: TextStyle(color: Colors.white, fontSize: 21,
                 fontWeight: FontWeight.w800)),
               Text('product by KB', style: TextStyle(color: ErpTokens.sidebarText,
                 fontSize: 10, letterSpacing: 1.35)),
@@ -320,59 +408,10 @@ class _Navigation extends StatelessWidget {
         itemBuilder: (context, position) {
           final index=visibleModules[position];
           final feature = erpFeatures[index];
-          final active = selected == index;
-          return Padding(
-            padding: const EdgeInsets.symmetric(vertical: 3),
-            child: Tooltip(message: compact ? feature.title : '',
-              child: Semantics(
-                selected: active,
-                button: true,
-                child: AnimatedContainer(
-                  key:ValueKey('erp-nav-surface-$index'),
-                  duration:MediaQuery.of(context).disableAnimations
-                    ?Duration.zero:ErpTokens.menuMotion,
-                  curve:Curves.easeOutCubic,
-                  decoration:BoxDecoration(
-                    color:active?const Color(0xFF285C42):Colors.transparent,
-                    borderRadius:BorderRadius.circular(13),
-                    border:Border.all(color:active
-                      ?const Color(0x667CCB9D):Colors.transparent)),
-                  child:Material(
-                    color:Colors.transparent,
-                    child:InkWell(
-                      key: ValueKey('nav-$index'),
-                      borderRadius: BorderRadius.circular(13),
-                      onTap: () => onSelect(index),
-                      child: Row(children: [
-                        SizedBox(height:46,width:compact?3:7),
-                        AnimatedContainer(
-                          duration:MediaQuery.of(context).disableAnimations
-                            ?Duration.zero:ErpTokens.menuMotion,
-                          curve:Curves.easeOutBack,
-                          width:compact?37:35,height:35,
-                          alignment:Alignment.center,
-                          decoration:BoxDecoration(
-                            color:active?ErpTokens.fresh:Colors.transparent,
-                            shape:BoxShape.circle),
-                          child:Icon(feature.icon,color:active
-                            ?Colors.white:ErpTokens.sidebarText,size:20)),
-                        if (!compact) ...[
-                          const SizedBox(width: 10),
-                          Expanded(child: Text(feature.title,
-                            maxLines:1,overflow:TextOverflow.ellipsis,
-                            style: TextStyle(color: Colors.white, fontSize: 14,
-                              fontWeight: active ? FontWeight.w800 : FontWeight.w500))),
-                          if (active)const Icon(Icons.chevron_right,
-                            color: ErpTokens.lime, size: 18),
-                          const SizedBox(width: 8),
-                        ],
-                      ]),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          );
+          return _SidebarNavTile(
+            key:ValueKey('erp-nav-tile-$index'),
+            index:index,feature:feature,active:selected==index,
+            compact:compact,onSelect:onSelect);
         },
       )),
       const Divider(color: Color(0xFF4F7860), height: 1),
@@ -401,7 +440,7 @@ class _Navigation extends StatelessWidget {
         )
       else
         const Padding(padding: EdgeInsets.all(18),
-          child: Text('RRP · product by KB',
+          child: Text('ERP · product by KB',
             style: TextStyle(color: ErpTokens.sidebarText,
               letterSpacing: 1.3, fontSize: 10))),
     ])),
