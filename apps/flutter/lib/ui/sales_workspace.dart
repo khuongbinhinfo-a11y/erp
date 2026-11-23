@@ -1146,7 +1146,10 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       final remove=IconButton(
                         key:ValueKey('sales-remove-$i'),
                         tooltip:'Bỏ dòng hàng',
-                        onPressed:(){lines.removeAt(i).dispose();invalidate(refresh);},
+                        onPressed:(){
+                          lines.removeAt(i).dispose();
+                          pricingChanged(ctx,refresh);
+                        },
                         icon:const Icon(Icons.close,size:18,color:ErpTokens.muted));
                       return Container(
                         key:ValueKey('sales-line-$i'),
