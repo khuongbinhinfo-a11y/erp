@@ -85,22 +85,30 @@ class _PriceListAssignmentsPanelState extends State<PriceListAssignmentsPanel>{
   };
   String dateLabel(DateTime? date,String empty){
     if(date==null)return empty;
-    return '${date.day.toString().padLeft(2,'0')}/'
-      '${date.month.toString().padLeft(2,'0')}/${date.year}';
+    final local=date.toLocal();
+    return '${local.day.toString().padLeft(2,'0')}/'
+      '${local.month.toString().padLeft(2,'0')}/${local.year}';
+  }
+  DateTime? endExclusive(DateTime? day){
+    if(day==null)return null;
+    final local=day.toLocal();
+    return DateTime(local.year,local.month,local.day+1).toUtc();
   }
   String effectiveLabel(dynamic value,{bool exclusiveEnd=false}){
     final parsed=DateTime.tryParse(value?.toString()??'');
     if(parsed==null)return 'Không giới hạn';
-    final day=exclusiveEnd?parsed.toUtc().subtract(const Duration(days:1)):parsed.toUtc();
+    final day=exclusiveEnd
+      ?parsed.subtract(const Duration(microseconds:1)).toLocal()
+      :parsed.toLocal();
     return dateLabel(day,'Không giới hạn');
   }
   Future<void> selectDay(bool end)async{
     final today=DateTime.now(),current=end?until:from;
     final picked=await showDatePicker(context:context,
-      initialDate:current??today,firstDate:DateTime(2020),
+      initialDate:current?.toLocal()??today,firstDate:DateTime(2020),
       lastDate:DateTime(2100),helpText:end?'Đến hết ngày':'Có hiệu lực từ ngày');
     if(picked!=null&&mounted)setState((){
-      final normalized=DateTime.utc(picked.year,picked.month,picked.day);
+      final normalized=DateTime(picked.year,picked.month,picked.day).toUtc();
       if(end)until=normalized;else from=normalized;
     });
   }
@@ -132,7 +140,7 @@ class _PriceListAssignmentsPanelState extends State<PriceListAssignmentsPanel>{
       if(scope=='CHANNEL')'channelId':target,
       'effectiveFrom':from?.toIso8601String(),
       // API windows are [from, to). UI end day is inclusive.
-      'effectiveTo':until?.add(const Duration(days:1)).toIso8601String(),
+      'effectiveTo':endExclusive(until)?.toIso8601String(),
     };
     final key=current?.key??'r1c-list-assign-${DateTime.now().microsecondsSinceEpoch}';
     if(current==null)widget.client.retainR1(widget.session.actorId,
@@ -146,7 +154,9 @@ class _PriceListAssignmentsPanelState extends State<PriceListAssignmentsPanel>{
       ErpToast.show(context,'Đã gán bảng giá trên máy chủ.');
       await load();
     }on ErpApiError catch(e){
-      if(e.status==400||e.status==404||e.code=='PRICE_LIST_ASSIGNMENT_OVERLAP')
+      if(e.status==400||e.status==404||
+          ['PRICE_LIST_ASSIGNMENT_OVERLAP','ASSIGNMENT_TARGET_UNAVAILABLE',
+           'PRICE_LIST_UNAVAILABLE'].contains(e.code))
         widget.client.clearR1(widget.session.actorId,
           branch,'catalog.assign.price-list.$listId');
       if(mounted)ErpToast.show(context,e.message,isError:true);
@@ -175,8 +185,9 @@ class _PriceListAssignmentsPanelState extends State<PriceListAssignmentsPanel>{
       ErpToast.show(context,'Đã cập nhật trạng thái phân bổ.');
       await load();
     }on ErpApiError catch(e){
-      if(e.status==400||e.status==404||e.code=='REVISION_CONFLICT'||
-          e.code=='PRICE_LIST_ASSIGNMENT_OVERLAP')
+      if(e.status==400||e.status==404||
+          ['REVISION_CONFLICT','PRICE_LIST_ASSIGNMENT_OVERLAP',
+           'ASSIGNMENT_TARGET_UNAVAILABLE','PRICE_LIST_UNAVAILABLE'].contains(e.code))
         widget.client.clearR1(widget.session.actorId,branch,kind);
       if(mounted)ErpToast.show(context,e.message,isError:true);
     }catch(_){
