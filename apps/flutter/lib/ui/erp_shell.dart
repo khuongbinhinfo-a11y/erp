@@ -257,7 +257,7 @@ class _SidebarNavTile extends StatefulWidget {
   final bool compact;
   final bool active;
   final ValueChanged<int> onSelect;
-  const _SidebarNavTile({required this.index,required this.feature,
+  const _SidebarNavTile({super.key,required this.index,required this.feature,
     required this.compact,required this.active,required this.onSelect});
   @override State<_SidebarNavTile> createState()=>_SidebarNavTileState();
 }
