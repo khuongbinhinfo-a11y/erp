@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:erp_distribution/main.dart';
 import 'package:erp_distribution/ui/erp_shell.dart';
+import 'package:erp_distribution/ui/company_workspace.dart';
 import 'package:erp_distribution/ui/identity_client.dart';
 
 void main() {
@@ -172,7 +173,7 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
     tester.view.physicalSize = const Size(1280, 800);
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    await tester.pumpWidget(const ErpApp(previewMode: true));
+    await tester.pumpWidget(const MaterialApp(home:Scaffold(body:CompanyWorkspace(previewOnly:true))));
     final header = find.byKey(const ValueKey('erp-page-header'));
     final y = tester.getTopLeft(header).dy;
     expect(find.byType(ChoiceChip), findsNothing);
