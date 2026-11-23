@@ -674,14 +674,24 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
       ('active','Đang dùng')],
     'channels'=>const [('code','Mã'),('name','Kênh bán'),
       ('active','Đang dùng')],
-    'rules'=>const [('sku','SKU'),('scopeKind','Áp dụng'),
-      ('adjustment','Cách tính'),('amount','Giá / tỷ lệ'),('priority','Ưu tiên')],
+    'rules'=>const [
+      ('priceListCode','Bảng giá'),('sku','SKU'),('scopeKind','Áp dụng'),
+      ('channelCode','Kênh'),('customerCode','Khách'),('customerGroup','Nhóm khách'),
+      ('minQuantity','Từ số lượng'),('adjustment','Cách tính'),
+      ('amount','Giá / tỷ lệ'),('priority','Ưu tiên'),
+      ('effectiveFrom','Bắt đầu'),('effectiveTo','Kết thúc')],
     _=>const [],
   };
   String cell(Map<String,dynamic> item,String key){
     final value=item[key];if(value==null)return '—';
     if(value is bool)return value?'Có':'Không';
-    if(key=='toBase'||key=='amount')return erpDecimalText(value);
+    if(key=='toBase'||key=='amount'||key=='minQuantity')
+      return erpDecimalText(value);
+    if((key=='effectiveFrom'||key=='effectiveTo')&&value is String){
+      final date=DateTime.tryParse(value)?.toLocal();
+      if(date!=null)return '${date.day.toString().padLeft(2,'0')}/'
+        '${date.month.toString().padLeft(2,'0')}/${date.year}';
+    }
     if(key=='scopeKind'||key=='adjustment')return erpPriceRuleLabel(value);
     return value.toString();
   }
@@ -692,8 +702,8 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
       child:Center(child:Text('Chưa có dữ liệu. Hãy thêm thông tin để bắt đầu.',
         style:TextStyle(color:ErpTokens.muted))));
     return LayoutBuilder(builder:(ctx,box){
-      if(box.maxWidth<680)return Column(children:items.map((x)=>Card(
-        child:Padding(padding:const EdgeInsets.all(12),
+      if(box.maxWidth<680)return Column(children:items.map((x)=>Column(children:[
+        Padding(padding:const EdgeInsets.symmetric(horizontal:8,vertical:12),
           child:Column(crossAxisAlignment:CrossAxisAlignment.start,
             children:[
               ...columns.map((c)=>Padding(padding:const EdgeInsets.only(bottom:5),
@@ -708,7 +718,8 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
                   label:const Text('Kết thúc chính sách')),
               if(x['retiredAt']!=null)const Text('Đã kết thúc'),
             ])),
-      )).toList());
+        const Divider(height:1),
+      ])).toList());
       return SingleChildScrollView(scrollDirection:Axis.horizontal,
         child:DataTable(headingRowColor:const WidgetStatePropertyAll(ErpTokens.mint),
           headingTextStyle:const TextStyle(color:ErpTokens.ink,fontWeight:FontWeight.w700),
