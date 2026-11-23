@@ -7,6 +7,7 @@ import { Pool } from "pg";
 import { applyMigrations } from "./migrate.ts";
 import { bootstrapInstallation } from "./bootstrap.ts";
 import { buildApp } from "./server.ts";
+import { create as createR1, parse as parseR1 } from "./r1_catalog_http.ts";
 import { isDatabaseReady } from "./db.ts";
 
 const source=process.env.DATABASE_URL;
@@ -261,6 +262,41 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
   assert.deepEqual(fileBarcodeConflict.body.rows.map((row:{error:string})=>row.error),
    ["DUPLICATE_FILE_BARCODE","DUPLICATE_FILE_BARCODE"]);
 
+
+  // Concurrent retirement of the last sell SKU and creation of its
+  // replacement must not leave an active child under an inactive parent.
+  await db.query(`INSERT INTO catalog_unit
+   (installation_id,branch_id,product_id,unit_code,to_base)
+   VALUES ($1,$2,$3,'THUNG',24)`,
+   [root.installationId,branchId,barcodeOwner.body.id]);
+  const retireTx=await db.connect(),createTx=await db.connect();
+  try{
+   await retireTx.query("BEGIN");
+   await retireTx.query('SELECT id FROM catalog_product WHERE installation_id=$1 '+
+    'AND branch_id=$2 AND id=$3 FOR UPDATE',
+    [root.installationId,branchId,barcodeOwner.body.id]);
+   const concurrentCreation=createR1(createTx,root.installationId,"skus",
+    parseR1("skus",{branchId,productId:barcodeOwner.body.id,
+     sku:"SPBC-THUNG",unitCode:"THUNG",toBase:"24"}));
+   await new Promise<void>(resolve=>setTimeout(resolve,40));
+   await retireTx.query('UPDATE catalog_sell_sku SET active=false '+
+    'WHERE installation_id=$1 AND branch_id=$2 AND product_id=$3',
+    [root.installationId,branchId,barcodeOwner.body.id]);
+   await retireTx.query('UPDATE catalog_product SET active=false '+
+    'WHERE installation_id=$1 AND branch_id=$2 AND id=$3',
+    [root.installationId,branchId,barcodeOwner.body.id]);
+   await retireTx.query("COMMIT");
+   await assert.rejects(concurrentCreation,/PRODUCT_UNAVAILABLE/,
+    "creation must recheck active after waiting for retiring parent lock");
+   const impossibleChild=await db.query('SELECT 1 FROM catalog_sell_sku '+
+    "WHERE installation_id=$1 AND branch_id=$2 AND sku='SPBC-THUNG'",
+    [root.installationId,branchId]);
+   assert.equal(impossibleChild.rowCount,0,
+    "no active SKU may be created after parent retirement");
+  }finally{
+   await retireTx.query("ROLLBACK").catch(()=>{});
+   retireTx.release();createTx.release();
+  }
 
   const priceList=await create("price-lists",{code:"BANLE",name:"Giá bán lẻ"});
   assert.equal(priceList.status,201);
