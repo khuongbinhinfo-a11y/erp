@@ -401,8 +401,10 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
                   maxLines:2,onChanged:(v)=>refresh(()=>reason=v.trim())),
               ],
               if(isBase)const Text(
-                'Nếu ngừng SKU gốc và không còn SKU bán nào hoạt động, '
-                'sản phẩm cũng tự chuyển sang ngừng. Lịch sử vẫn giữ nguyên.',
+                'SKU gốc gắn cố định với mã sản phẩm và đơn vị tồn kho. '
+                'Nếu nhập sai SKU gốc, hãy ngừng SKU/sản phẩm cũ, '
+                'tạo sản phẩm mới với mã đúng. Không tái sử dụng mã/đơn vị '
+                'trên cùng sản phẩm; chứng từ và lịch sử cũ vẫn giữ nguyên.',
                 style:TextStyle(color:ErpTokens.muted,fontSize:12)),
               if(widget.kind=='barcodes')SwitchListTile(
                 contentPadding:EdgeInsets.zero,
