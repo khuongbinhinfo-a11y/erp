@@ -103,9 +103,13 @@ void main(){
    await tester.pumpAndSettle();
    expect(paths,['/v1/catalog/bulk/template','/v1/catalog/bulk/export']);
    expect(downloads.map((d)=>d.name),['mau-khach-hang.csv','khach-hang.csv']);
-   expect(utf8.decode(downloads[0].bytes),'\uFEFFMã KH,Tên khách\n');
+   expect(downloads[0].bytes.take(3).toList(),[0xEF,0xBB,0xBF]);
+   expect(downloads[1].bytes.take(3).toList(),[0xEF,0xBB,0xBF]);
+   // Dart's UTF-8 decoder intentionally strips the leading BOM; assert it
+   // in raw bytes separately and ensure there is no duplicate BOM.
+   expect(utf8.decode(downloads[0].bytes),'Mã KH,Tên khách\n');
    expect(utf8.decode(downloads[1].bytes),
-    '\uFEFFMã KH,Tên khách\nKH01,Nguyễn Văn A\n',
+    'Mã KH,Tên khách\nKH01,Nguyễn Văn A\n',
     reason:'CSV already containing a BOM must never get a second BOM');
    expect(find.byKey(const ValueKey('catalog-bulk-error')),findsNothing);
    expect(tester.takeException(),isNull);
