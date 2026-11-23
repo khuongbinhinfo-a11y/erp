@@ -88,11 +88,11 @@ void main(){
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('sales-create')));
     await tester.pumpAndSettle();
-    await tester.runAsync(() async=>Future<void>.delayed(const Duration(milliseconds:120)));
+    await tester.runAsync(() async=>Future<void>.delayed(const Duration(milliseconds:800)));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('sales-sku-search')),findsOneWidget,
       reason:'Requested endpoints: ${requested.join(", ")}; '
-        'visible: ${tester.widgetList<Text>(find.byType(Text)).map((t)=>t.data).whereType<String>().take(30).join(" / ")}');
+        'visible: ${tester.widgetList<Text>(find.byType(Text)).map((t)=>t.data).whereType<String>().take(100).join(" / ")}');
     await tester.enterText(find.byKey(const ValueKey('sales-sku-search')),'SP-01');
     await tester.testTextInput.receiveAction(TextInputAction.search);
     await tester.pumpAndSettle();
