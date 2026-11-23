@@ -185,6 +185,8 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
     expect(firstTabRect.center.dy,lessThan(headerRect.bottom));
     expect(firstTabRect.left,greaterThan(headerRect.left+180),
       reason:'Cấp 1 phải nằm về bên phải của tiêu đề xanh');
+    await tester.ensureVisible(find.byKey(const ValueKey('company-CompanyGroup.catalog')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('company-CompanyGroup.catalog')));
     await tester.pumpAndSettle();
     expect(tester.getTopLeft(header).dy, y);
