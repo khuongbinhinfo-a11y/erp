@@ -295,7 +295,7 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
     String details(dynamic v){
       if(v==null)return '—';
       if(v is Map){
-        final entries=v.entries.map((e)=>e.key.toString()+': '+
+        final entries=v.entries.map((e)=>(columns[kind]?[e.key.toString()]??e.key.toString())+': '+
           (e.value??'∅').toString()).toList();
         return entries.join(' | ');
       }
@@ -318,10 +318,15 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
           separatorBuilder:(_,__)=>const Divider(height:1),
           itemBuilder:(context,index){
             final x=data[index],bad=x['action']=='ERROR';
+            final actionLabel=switch(x['action']){
+              'CREATE'=>'Thêm mới','UPDATE'=>'Cập nhật',
+              'UNCHANGED'=>'Giữ nguyên','ERROR'=>'Có lỗi',
+              _=>'Cần kiểm tra',
+            };
             return Padding(padding:const EdgeInsets.all(10),
               child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
                 Text('Dòng '+x['line'].toString()+' · '+x['key'].toString()+
-                  ' · '+x['action'].toString(),
+                  ' · '+actionLabel,
                   style:TextStyle(fontWeight:FontWeight.w700,
                     color:bad?ErpTokens.danger:ErpTokens.ink)),
                 if(bad)Text('Lỗi: '+x['error'].toString(),
