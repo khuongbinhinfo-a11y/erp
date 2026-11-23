@@ -10,7 +10,7 @@ test("R1-B: Vietnamese headers and CSV round-trip preserve key fields and formul
   const template=bulkExport(kind,[],"csv",true);
   assert.deepEqual(template.headers,columns);
   assert.equal(template.columns.length,columns.length);
-  assert.ok(template.content.startsWith("\uFEFF"));
+  assert.ok(String(template.content).startsWith("\uFEFF"));
   assert.ok(template.fileName.endsWith(".csv"));
   assert.deepEqual(suggestBulkMapping(kind,columns),
    Object.fromEntries(template.columns.map((field,i)=>[field,columns[i]])));
@@ -18,9 +18,9 @@ test("R1-B: Vietnamese headers and CSV round-trip preserve key fields and formul
  const sample=[["KH0001","Nguyễn Văn A","N1","K01","+84901234567",
   "=Địa chỉ mới","30","1"]];
  const csv=bulkExport("customers",sample,"csv");
- assert.match(csv.content,/'\+84901234567/);
+ assert.match(String(csv.content),/'\+84901234567/);
  assert.match(csv.content,/'=Địa chỉ mới/);
- const parsed=parseBulkFile(csv.fileName,Buffer.from(csv.content).toString("base64"));
+ const parsed=parseBulkFile(csv.fileName,Buffer.from(String(csv.content)).toString("base64"));
  assert.equal(parsed.rows[0]![0],"KH0001");
  assert.equal(restoreCsvGuard(parsed.rows[0]![4]!),"+84901234567");
  assert.equal(restoreCsvGuard(parsed.rows[0]![5]!),"=Địa chỉ mới");
@@ -41,7 +41,7 @@ test("R1-B: formatted Excel has 1-row import header, safe codes, decimal & Unico
  const priceFile=bulkExport("prices",money,"xlsx");
  assert.equal(priceFile.format,"xlsx");
  assert.ok(priceFile.fileName.endsWith(".xlsx"));
- assert.deepEqual(parseBulkFile(priceFile.fileName,priceFile.contentBase64).rows,money);
+ assert.deepEqual(parseBulkFile(priceFile.fileName,priceFile.contentBase64??"").rows,money);
  assert.equal(bulkExport("skus",[],"xlsx",true).total,0);
 });
 test("R1-B: XLSX ZIP/XML contains freeze/header style/filter and no executable formula",()=>{
