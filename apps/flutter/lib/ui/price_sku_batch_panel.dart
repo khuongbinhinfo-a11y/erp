@@ -119,6 +119,20 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
         return;
       }
     }
+    final confirmed=await showDialog<bool>(context:context,
+      builder:(dialog)=>AlertDialog(
+        title:const Text('Xác nhận cập nhật giá SKU'),
+        content:Text('Ghi ${selected.length} phiên bản giá mới. '
+          'Giá đang áp dụng được thay bằng phiên bản mới, '
+          'lịch sử đơn hàng đã xác nhận vẫn được giữ.'),
+        actions:[
+          TextButton(onPressed:()=>Navigator.pop(dialog,false),
+            child:const Text('Quay lại')),
+          FilledButton(key:const ValueKey('price-sku-confirm'),
+            onPressed:()=>Navigator.pop(dialog,true),
+            child:const Text('Xác nhận lưu giá')),
+        ]));
+    if(confirmed!=true||!mounted)return;
     setState((){saving=true;error=null;});
     final ids=selected.keys.toList();
     var done=0;
@@ -130,7 +144,7 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
         final body=pending?.payload??<String,dynamic>{
           'branchId':widget.branchId,'priceListId':listId,
           'sellSkuId':id,'scopeKind':'BASE','adjustment':'FIXED_PRICE',
-          'amount':inputs[id]!.text.trim(),'priority':0,
+          'amount':inputs[id]!.text.trim(),'priority':100000,
           'stacking':'EXCLUSIVE','stopProcessing':false,
           'minQuantity':'1','effectiveFrom':DateTime.now().toUtc().toIso8601String(),
         };
@@ -237,10 +251,14 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
                         maxLines:1,overflow:TextOverflow.ellipsis,
                         style:const TextStyle(fontWeight:FontWeight.w700,fontSize:13)),
                       Text('${sku['code']??sku['sku']} · ${sku['unitCode']??''} '
-                        '· Giá hiện tại: ${current[id]??(checked?'Đang tra…':'Chọn để tra')}',
+                        '· Giá hiện tại: ${current[id]??(checked?'Bấm tra giá':'Chọn để tra')}',
                         maxLines:2,overflow:TextOverflow.ellipsis,
                         style:const TextStyle(fontSize:11,color:ErpTokens.muted)),
                     ])),
+                  if(checked)IconButton(
+                    tooltip:'Tra giá hiện tại',
+                    onPressed:()=>loadCurrent(id),
+                    icon:const Icon(Icons.refresh,size:18)),
                   if(checked)SizedBox(width:130,
                     child:TextField(
                       key:ValueKey('price-sku-new-$id'),
