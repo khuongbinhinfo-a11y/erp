@@ -1104,6 +1104,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     }finally{if(mounted)setState(()=>saving=false);}
   }
 
+  bool get canEdit => canWrite && resource!='prices' && resource!='warehouses';
   Future<void> _edit(Map<String,dynamic> row)async{
     if(!canEdit||saving||branchId==null)return;
     final id=row['id'],revision=row['revision'];
