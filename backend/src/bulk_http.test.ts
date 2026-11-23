@@ -110,6 +110,27 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
     "KH04,Dup A,KH_SI,KV_MT,+84900000004,0\n"+
     "KH04,Dup B,KH_SI,KV_MT,+84900000005,0\n");
   assert.equal((await preview(duplicate)).body.summary.error,1);
+  const duplicatePhone=file("Mã KH,Tên khách,Mã nhóm,Mã khu vực,Điện thoại,Hạn nợ\n"+
+    "KH05,Khách E,KH_SI,KV_MT,+84900000006,0\n"+
+    "KH06,Khách F,KH_SI,KV_MT,+84900000006,0\n");
+  const duplicatePhonePreview=await preview(duplicatePhone);
+  assert.equal(duplicatePhonePreview.status,200);
+  assert.equal(duplicatePhonePreview.body.summary.error,2,
+    "duplicate active phones within the CSV must be identified before apply");
+  assert.equal(duplicatePhonePreview.body.rows[0].error,"DUPLICATE_CUSTOMER_PHONE");
+  assert.equal((await apply(duplicatePhone,duplicatePhonePreview.body.hash)).status,409);
+  const occupiedPhone=file("Mã KH,Tên khách,Mã nhóm,Mã khu vực,Điện thoại,Hạn nợ\n"+
+    "KH07,Khách G,KH_SI,KV_MT,+84900000001,0\n");
+  const occupiedPhonePreview=await preview(occupiedPhone);
+  assert.equal(occupiedPhonePreview.body.summary.error,1,
+    "phone owned by an existing active code outside the file is an error");
+  assert.equal(occupiedPhonePreview.body.rows[0].error,"DUPLICATE_CUSTOMER_PHONE");
+  const phoneHandoff=file("Mã KH,Tên khách,Mã nhóm,Mã khu vực,Điện thoại,Hạn nợ\n"+
+    "KH01,Khách A,KH_SI,KV_MT,+84900000007,15\n"+
+    "KH08,Khách H,KH_SI,KV_MT,+84900000001,0\n");
+  const handoffPreview=await preview(phoneHandoff);
+  assert.equal(handoffPreview.body.summary.error,0,
+    "changing an existing phone and assigning its old number in one batch is valid");
   const changed=file("Mã KH,Tên khách,Mã nhóm,Mã khu vực,Điện thoại,Hạn nợ\n"+
     "KH01,Khách A mới,KH_SI,KV_MT,+84900000001,15\n");
   const oldPreview=await preview(changed);
@@ -175,6 +196,14 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
   const firstPricePreview=await preview(firstPrice);
   assert.equal(firstPricePreview.status,200,JSON.stringify(firstPricePreview.body));
   assert.equal((await apply(firstPrice,firstPricePreview.body.hash)).status,200);
+  const impossibleDate=await preview(pricing("15000.0000","2026-02-30T00:00:00Z"));
+  assert.equal(impossibleDate.status,200,"invalid date is a row error, not HTTP 503");
+  assert.equal(impossibleDate.body.summary.error,1);
+  assert.equal(impossibleDate.body.rows[0].error,"INVALID_EFFECTIVE_AT");
+  const impossibleLeap=await preview(pricing("15000.0000","2025-02-29T00:00:00Z"));
+  assert.equal(impossibleLeap.status,200);
+  assert.equal(impossibleLeap.body.rows[0].error,"INVALID_EFFECTIVE_AT");
+  assert.equal((await preview(pricing("15000.0000","2028-02-29T00:00:00Z"))).body.summary.error,0);
   // An immutable timestamp with microseconds must round-trip via exported
   // CSV without generating another price entry.
   const laterPrice=pricing("17000.0000","2026-11-24T00:00:00Z");
