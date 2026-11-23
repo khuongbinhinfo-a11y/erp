@@ -194,6 +194,7 @@ void main(){
     var saved=false,confirmed=false,confirmCount=0,quoteCount=0,skuSearchCount=0;
     var useLongQuotedPrice=false;
     const warehouse='00000000-0000-4000-8000-000000000009';
+    const precedingSku='00000000-0000-4000-8000-00000000000a';
     final traces=<String>[];
     final skuQuoteQuantities=<String>[];
     http.Response reply(Object data,int status)=>http.Response(jsonEncode(data),status,
@@ -220,8 +221,15 @@ void main(){
             'name':'Khách A','active':true,'deliveryAddress':'Địa chỉ A'}]},200);
         }
         if(path=='/v1/catalog/r1/skus'){
-          if(request.url.queryParameters['q']!=null)skuSearchCount++;
-          return reply({'items':[{'id':sellSku,
+          final term=request.url.queryParameters['q'];
+          if(term!=null)skuSearchCount++;
+          final ambiguous=term=='BARCODE-A1'
+            ?<Map<String,dynamic>>[{'id':precedingSku,
+              'productId':'00000000-0000-4000-8000-00000000000b',
+              'code':'SKU-00','productName':'BARCODE-A1 tương tự',
+              'barcode':'OTHER','unitCode':'cái','active':true}]
+            :<Map<String,dynamic>>[];
+          return reply({'items':[...ambiguous,{'id':sellSku,
             'productId':product,'code':'SKU-01','productName':'Sản phẩm A',
             'barcode':'BARCODE-A1','unitCode':'thùng','active':true}]},200);
         }
@@ -236,6 +244,9 @@ void main(){
         }
         if(path=='/v1/catalog/r1/resolve'){
           final body=jsonDecode(request.body) as Map<String,dynamic>;
+          if(body['sellSkuId']==precedingSku){
+            return reply({'quote':{'unitPrice':'12000','priceSignature':'other'}},200);
+          }
           expect(body['sellSkuId'],sellSku);
           expect(body['customerId'],customer);
           expect(body['priceListId'],priceList);
@@ -348,13 +359,24 @@ void main(){
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('sales-sku-dropdown')),findsNothing);
+    // Wait until the substring match is cached ahead of the exact barcode.
+    // Enter must still pick SKU-01, not the initially highlighted SKU-00.
     await tester.enterText(find.byKey(const ValueKey('sales-sku-search')),'BARCODE-A1');
+    await tester.pump(const Duration(milliseconds:280));
+    await tester.runAsync(() async=>
+      Future<void>.delayed(const Duration(milliseconds:120)));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('sales-sku-result-0')),findsOneWidget);
+    expect(find.textContaining('SKU SKU-00'),findsWidgets);
     await tester.testTextInput.receiveAction(TextInputAction.search);
     await tester.pumpAndSettle();
     await tester.runAsync(() async=>Future<void>.delayed(const Duration(milliseconds:120)));
     await tester.pumpAndSettle();
     expect(skuSearchCount,greaterThanOrEqualTo(1));
     expect(find.byKey(const ValueKey('sales-line-0')),findsOneWidget);
+    expect(find.textContaining('SKU SKU-01'),findsWidgets,
+      reason:'Exact barcode match must beat the first substring result');
+    expect(find.textContaining('SKU SKU-00'),findsNothing);
     expect(tester.widget<TextField>(find.byKey(const ValueKey('sales-qty-0')))
       .focusNode?.hasFocus,isTrue,reason:'Selecting a SKU must focus its quantity');
     // Set a tiered quantity first, then open the picker and remove that line.
