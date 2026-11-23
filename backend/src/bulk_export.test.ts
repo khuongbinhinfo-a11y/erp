@@ -19,7 +19,7 @@ test("R1-B: Vietnamese headers and CSV round-trip preserve key fields and formul
   "=Địa chỉ mới","30","1"]];
  const csv=bulkExport("customers",sample,"csv");
  assert.match(String(csv.content),/'\+84901234567/);
- assert.match(csv.content,/'=Địa chỉ mới/);
+ assert.match(String(csv.content),/'=Địa chỉ mới/);
  const parsed=parseBulkFile(csv.fileName,Buffer.from(String(csv.content)).toString("base64"));
  assert.equal(parsed.rows[0]![0],"KH0001");
  assert.equal(restoreCsvGuard(parsed.rows[0]![4]!),"+84901234567");
