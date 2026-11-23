@@ -408,12 +408,15 @@ export async function handleR1Http(req:IncomingMessage,res:ServerResponse,
       throw new R1Error(503,"R1A_MIGRATION_REQUIRED");
     const targetId=id(patchPath[2]),raw=await body(req);
     const branchId=id(raw.branchId);
-    if(targetKind==="skus")keys(raw,["branchId","active"]);
+    if(targetKind==="skus")keys(raw,["branchId","active","reason"]);
     if(targetKind==="barcodes")keys(raw,["branchId","active","isPrimary"]);
     if(targetKind==="channels")keys(raw,["branchId","name","active"]);
     const activeFlag=raw.active===undefined?undefined:bool(raw.active);
     const primaryFlag=raw.isPrimary===undefined?undefined:bool(raw.isPrimary);
     const name=raw.name===undefined?undefined:label(raw.name);
+    const reason=raw.reason===undefined?undefined:label(raw.reason,500);
+    if(targetKind==="skus"&&activeFlag===false&&(!reason||reason.length<3))
+      throw new R1Error(400,"SKU_DISABLE_REASON_REQUIRED");
     if(activeFlag===undefined&&primaryFlag===undefined&&name===undefined)
       throw new R1Error(400,"EMPTY_UPDATE");
     const ctx=patchMutation(req,{installationId:t,actorId,requestId,
@@ -421,29 +424,54 @@ export async function handleR1Http(req:IncomingMessage,res:ServerResponse,
       payload:{branchId,targetId,targetKind,
         ...(activeFlag!==undefined?{active:activeFlag}:{}),
         ...(primaryFlag!==undefined?{isPrimary:primaryFlag}:{}),
-        ...(name!==undefined?{name}:{})}});
+        ...(name!==undefined?{name}:{}),
+        ...(reason!==undefined?{reason}:{})}});
     const outcome=await executeMutation(pool,ctx,{
       authorize:(db,c)=>hasPermission(db,{installationId:c.installationId,
         actorId:c.actorId,branchId,permission:"catalog.write"}),
       execute:async(db,c)=>{
         const table=targetKind==="skus"?"catalog_sell_sku":
           targetKind==="barcodes"?"catalog_sku_barcode":"catalog_sales_channel";
+        if(targetKind==="skus"){
+          // Lock the parent before variant locks so concurrent deactivations
+          // cannot leave an enabled product with zero sellable variants.
+          await db.query(`SELECT id FROM catalog_product WHERE installation_id=$1
+            AND branch_id=$2 AND id=(SELECT product_id FROM catalog_sell_sku
+              WHERE installation_id=$1 AND branch_id=$2 AND id=$3) FOR UPDATE`,
+            [t,branchId,targetId]);
+        }
         const current=await db.query<{revision:string;active:boolean;
-           isBase?:boolean;sellSkuId?:string;isPrimary?:boolean}>(
+           isBase?:boolean;productId?:string;sellSkuId?:string;isPrimary?:boolean}>(
           `SELECT revision::text,active${targetKind==="skus"?
-            ',is_base AS "isBase"':targetKind==="barcodes"?
+            ',is_base AS "isBase",product_id AS "productId"':targetKind==="barcodes"?
             ',sell_sku_id AS "sellSkuId",is_primary AS "isPrimary"':''}
            FROM ${table} WHERE installation_id=$1 AND branch_id=$2 AND id=$3 FOR UPDATE`,
           [t,branchId,targetId]);
         if(!current.rows[0])throw new R1Error(404,"NOT_FOUND");
         requireRevision(c.expectedRevision,Number(current.rows[0].revision));
         if(targetKind==="skus"){
-          if(current.rows[0].isBase&&activeFlag===false)
-            throw new R1Error(409,"BASE_SKU_CANNOT_BE_DISABLED");
+          if(activeFlag===true){
+            const product=await db.query<{active:boolean}>(`SELECT active FROM catalog_product
+              WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,
+              [t,branchId,current.rows[0].productId]);
+            if(product.rows[0]?.active!==true)
+              throw new R1Error(409,"PRODUCT_DISABLED_ENABLE_FIRST");
+          }
           await db.query(`UPDATE catalog_sell_sku
             SET active=$4,revision=revision+1
             WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,
             [t,branchId,targetId,activeFlag]);
+          if(activeFlag===false){
+            const other=await db.query(`SELECT 1 FROM catalog_sell_sku
+              WHERE installation_id=$1 AND branch_id=$2 AND product_id=$3
+                AND active LIMIT 1`,
+              [t,branchId,current.rows[0].productId]);
+            if(other.rowCount===0)
+              await db.query(`UPDATE catalog_product
+                SET active=false,revision=revision+1
+                WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active`,
+                [t,branchId,current.rows[0].productId]);
+          }
         }else if(targetKind==="channels"){
           await db.query(`UPDATE catalog_sales_channel
             SET name=COALESCE($4,name),active=COALESCE($5,active),
