@@ -193,11 +193,15 @@ void main(){
   testWidgets('R2: scan barcode, quote and recover lost confirm ACK without double posting', (tester)async{
     var saved=false,confirmed=false,confirmCount=0,quoteCount=0,skuSearchCount=0;
     var useLongQuotedPrice=false;
+    const warehouse='00000000-0000-4000-8000-000000000009';
     final traces=<String>[];
+    final skuQuoteQuantities=<String>[];
     http.Response reply(Object data,int status)=>http.Response(jsonEncode(data),status,
       headers:const {'content-type':'application/json; charset=utf-8'});
     final grants=[...rights,
-      IdentityGrant(roleId:'confirm',permission:'orders.confirm',branchId:branch)];
+      IdentityGrant(roleId:'confirm',permission:'orders.confirm',branchId:branch),
+      IdentityGrant(roleId:'stock',permission:'inventory.read',
+        branchId:branch,warehouseId:warehouse)];
     final session=IdentitySession(actorId:user,token:'local-r2-session',
       expiresAt:DateTime.now().add(const Duration(hours:1)),grants:grants);
     final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
@@ -220,6 +224,24 @@ void main(){
           return reply({'items':[{'id':sellSku,
             'productId':product,'code':'SKU-01','productName':'Sản phẩm A',
             'barcode':'BARCODE-A1','unitCode':'thùng','active':true}]},200);
+        }
+        if(path=='/v1/catalog/warehouses'){
+          return reply({'items':[{'id':warehouse,'code':'MAIN',
+            'name':'Kho chính','branchId':branch}]},200);
+        }
+        if(path=='/v1/inventory/balances'){
+          expect(request.url.queryParameters['warehouseId'],warehouse);
+          return reply({'items':[{'productId':product,'available':'8',
+            'baseUnit':'cái'}],'hasMore':false},200);
+        }
+        if(path=='/v1/catalog/r1/resolve'){
+          final body=jsonDecode(request.body) as Map<String,dynamic>;
+          expect(body['sellSkuId'],sellSku);
+          expect(body['customerId'],customer);
+          expect(body['priceListId'],priceList);
+          skuQuoteQuantities.add(body['quantity'].toString());
+          final amount=body['quantity']=='2'?'45000':'35000';
+          return reply({'quote':{'unitPrice':amount,'priceSignature':'source'}},200);
         }
         if(path=='/v1/catalog/price-lists'){
           return reply({'items':[{'id':priceList,
@@ -309,6 +331,23 @@ void main(){
     await tester.pump();
     expect(tester.widget<TextField>(find.byKey(const ValueKey('sales-customer-search')))
       .focusNode?.hasFocus,isTrue);
+    // Results show R1-C resolved prices and stock from an explicitly scoped warehouse.
+    await tester.enterText(find.byKey(const ValueKey('sales-sku-search')),'Sản phẩm');
+    await tester.pump(const Duration(milliseconds:250));
+    await tester.runAsync(() async=>
+      Future<void>.delayed(const Duration(milliseconds:120)));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('sales-sku-dropdown')),findsOneWidget);
+    expect(find.text('35.000 ₫'),findsWidgets);
+    expect(find.text('8 cái'),findsOneWidget);
+    expect(find.textContaining('SKU SKU-01'),findsWidgets);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('sales-sku-dropdown')),findsNothing);
     await tester.enterText(find.byKey(const ValueKey('sales-sku-search')),'BARCODE-A1');
     await tester.testTextInput.receiveAction(TextInputAction.search);
     await tester.pumpAndSettle();
@@ -318,6 +357,34 @@ void main(){
     expect(find.byKey(const ValueKey('sales-line-0')),findsOneWidget);
     expect(tester.widget<TextField>(find.byKey(const ValueKey('sales-qty-0')))
       .focusNode?.hasFocus,isTrue,reason:'Selecting a SKU must focus its quantity');
+    // Set a tiered quantity first, then open the picker and remove that line.
+    await tester.enterText(find.byKey(const ValueKey('sales-qty-0')),'2');
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const ValueKey('sales-sku-search')));
+    await tester.enterText(find.byKey(const ValueKey('sales-sku-search')),'SKU-01');
+    await tester.pump(const Duration(milliseconds:280));
+    await tester.runAsync(() async=>
+      Future<void>.delayed(const Duration(milliseconds:120)));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('sales-sku-dropdown')),findsOneWidget);
+    expect(skuQuoteQuantities,contains('2'),
+      reason:'R1-C must receive the edited selling quantity');
+    await tester.ensureVisible(find.byKey(const ValueKey('sales-sku-dropdown')));
+    await tester.pumpAndSettle();
+    expect(find.text('45.000 ₫'),findsWidgets,
+      reason:'Server quotes $skuQuoteQuantities; visible: ${tester.widgetList<Text>(find.byType(Text)).map((t)=>t.data).whereType<String>().where((t)=>t.contains('giá')||t.contains('₫')).toList()}');
+    await tester.ensureVisible(find.byKey(const ValueKey('sales-remove-0')));
+    await tester.tap(find.byKey(const ValueKey('sales-remove-0')));
+    await tester.runAsync(() async=>
+      Future<void>.delayed(const Duration(milliseconds:120)));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const ValueKey('sales-sku-dropdown')));
+    await tester.pumpAndSettle();
+    expect(find.text('35.000 ₫'),findsWidgets,
+      reason:'Removed quantity tier must not remain in picker; $skuQuoteQuantities');
+    await tester.ensureVisible(find.byKey(const ValueKey('sales-sku-result-0')));
+    await tester.tap(find.byKey(const ValueKey('sales-sku-result-0')));
+    await tester.pumpAndSettle();
     // Escape cannot silently discard a composed sale.
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
