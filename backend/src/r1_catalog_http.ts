@@ -133,7 +133,7 @@ function kind(value:string):Kind{
   throw new R1Error(404,"UNKNOWN_RESOURCE");
  return value as Kind;
 }
-function parse(kind:Kind,raw:Record<string,unknown>){
+export function parse(kind:Kind,raw:Record<string,unknown>){
  const branchId=id(raw.branchId);
  if(kind==="units"){
   keys(raw,["branchId","productId","unitCode","toBase"]);
@@ -189,7 +189,7 @@ function parse(kind:Kind,raw:Record<string,unknown>){
   effectiveFrom:start,effectiveTo:end};
 }
 type Parsed=ReturnType<typeof parse>;
-async function create(db:PoolClient,tenant:string,kind:Kind,parsed:Parsed){
+export async function create(db:PoolClient,tenant:string,kind:Kind,parsed:Parsed){
  const b=parsed.branchId;
  if(kind==="units"&&"productId" in parsed){
   const r=await db.query<{product_id:string}>(`INSERT INTO catalog_unit
