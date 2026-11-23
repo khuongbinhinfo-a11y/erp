@@ -18,12 +18,14 @@ void main(){
     await tester.pump();
     final notice=find.byKey(const ValueKey('erp-active-toast'));
     expect(notice,findsOneWidget);
-    final startX=tester.getTopLeft(notice).dx;
+    final slide=find.descendant(of:notice,
+      matching:find.byType(SlideTransition)).first;
+    final startX=tester.widget<SlideTransition>(slide).position.value.dx;
     final progress=find.byKey(const ValueKey('erp-toast-time-progress'));
     expect(tester.widget<LinearProgressIndicator>(progress).color,ErpTokens.fresh);
     await tester.pump(const Duration(milliseconds:350));
-    expect(tester.getTopLeft(notice).dx,lessThan(startX),
-      reason:'Thông báo phải trượt từ bên phải vào');
+    expect(tester.widget<SlideTransition>(slide).position.value.dx,
+      lessThan(startX),reason:'Thông báo phải trượt từ bên phải vào');
     await tester.pump(const Duration(seconds:2));
     final remaining=tester.widget<LinearProgressIndicator>(progress).value!;
     expect(remaining,greaterThan(0));
