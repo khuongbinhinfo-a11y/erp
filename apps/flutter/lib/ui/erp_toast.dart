@@ -47,8 +47,10 @@ class _ErpToastNoticeState extends State<ErpToastNotice>
   late final AnimationController _entry=AnimationController(
     vsync:this,duration:const Duration(milliseconds:290),
     reverseDuration:const Duration(milliseconds:210));
+  // Preserve reading time even when the OS disables decorative animations.
   late final AnimationController _lifetime=AnimationController(
-    vsync:this,duration:ErpTokens.toastDuration);
+    vsync:this,duration:ErpTokens.toastDuration,
+    animationBehavior:AnimationBehavior.preserve);
   late final Animation<double> _fade=CurvedAnimation(
     parent:_entry,curve:Curves.easeOutCubic,reverseCurve:Curves.easeInCubic);
   late final Animation<Offset> _slide=Tween<Offset>(
