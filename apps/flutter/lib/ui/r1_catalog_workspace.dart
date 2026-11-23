@@ -592,7 +592,8 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
             const SizedBox(height:12),
             const Text('Quy tắc áp dụng:',style:TextStyle(fontWeight:FontWeight.w700)),
             for(final t in quote!['trace'] as List<dynamic>)
-              Text('• '+erpPriceRuleLabel((t as Map)['scope'])+' – '+
+              Text('• '+((t as Map)['reason']?.toString()??
+                  erpPriceRuleLabel(t['scope']))+' · '+
                 erpPriceRuleLabel(t['adjustment'])+' → '+money(t['result'])),
             const SizedBox(height:8),
             const Text('Giá do máy chủ tính; chưa xác minh tồn khả dụng.',
