@@ -91,8 +91,11 @@ function excelCell(field:string,value:string,address:string,header=false):string
  if(header)return '<c r="'+address+'" s="1" t="inlineStr"><is><t>'+escapeXml(value)+'</t></is></c>';
  // Numeric literals are validated by the import preview before any database write.
  // Never convert identifiers/phone/barcodes to numbers, even if all digits.
+ // Excel numbers are limited to 15 significant decimal digits. Store high-
+ // precision monetary and conversion values as text so save/reimport is lossless.
+ const significantDigits=value.replace(/\D/g,"").replace(/^0+/,"").length;
  const numeric=["amount","discountRate","toBase","paymentTermsDays"].includes(field)&&
-  /^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/.test(value);
+  /^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/.test(value)&&significantDigits<=15;
  if(numeric)return '<c r="'+address+'" s="'+(field==="amount"?"3":"2")+'"><v>'+value+'</v></c>';
  return '<c r="'+address+'" t="inlineStr"><is><t xml:space="preserve">'+
    escapeXml(value)+'</t></is></c>';
