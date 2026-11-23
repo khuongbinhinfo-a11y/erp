@@ -120,16 +120,22 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
   }
   String _dateLabel(DateTime? day,String none){
     if(day==null)return none;
-    return '${day.day.toString().padLeft(2,'0')}/'
-      '${day.month.toString().padLeft(2,'0')}/${day.year}';
+    final local=day.toLocal();
+    return '${local.day.toString().padLeft(2,'0')}/'
+      '${local.month.toString().padLeft(2,'0')}/${local.year}';
+  }
+  DateTime? _priceListEndExclusive(DateTime? endDay){
+    if(endDay==null)return null;
+    final local=endDay.toLocal();
+    return DateTime(local.year,local.month,local.day+1).toUtc();
   }
   Future<DateTime?> _pickPriceDay(BuildContext context,DateTime? old,
       String label)async{
     final d=await showDatePicker(context:context,
-      initialDate:old??DateTime.now(),
+      initialDate:old?.toLocal()??DateTime.now(),
       firstDate:DateTime(2020),lastDate:DateTime(2100),
       helpText:label);
-    return d==null?null:DateTime.utc(d.year,d.month,d.day);
+    return d==null?null:DateTime(d.year,d.month,d.day).toUtc();
   }
   String _errorMessage(ErpApiError e) => e.status==503
     ? 'Danh mục đang tạm gián đoạn. Vui lòng thử lại.'
@@ -837,7 +843,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                   if(resource=='price-lists'){
                     body.addAll({
                       'effectiveFrom':listStart?.toIso8601String(),
-                      'effectiveTo':listEnd?.add(const Duration(days:1)).toIso8601String(),
+                      'effectiveTo':_priceListEndExclusive(listEnd)?.toIso8601String(),
                       'priority':int.parse(listPriority.text.trim()),
                     });
                   }
@@ -1178,7 +1184,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     var listPriority=(row['priority']??0).toString();
     DateTime? listStart=DateTime.tryParse(row['effectiveFrom']?.toString()??'');
     DateTime? listEnd=DateTime.tryParse(row['effectiveTo']?.toString()??'')
-      ?.toUtc().subtract(const Duration(days:1));
+      ?.toLocal().subtract(const Duration(microseconds:1));
     final oldGroupId=row['customerGroupId'] as String?;
     final oldRegionId=row['customerRegionId'] as String?;
     final oldProductGroupId=row['groupId'] as String?;
@@ -1358,7 +1364,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
               'branchId':branchId,'name':name.trim(),'active':active,
               if(resource=='price-lists')...{
                 'effectiveFrom':listStart?.toIso8601String(),
-                'effectiveTo':listEnd?.add(const Duration(days:1)).toIso8601String(),
+                'effectiveTo':_priceListEndExclusive(listEnd)?.toIso8601String(),
                 'priority':int.parse(listPriority.trim()),
               },
               if(resource=='products'&&productGroupId!=oldProductGroupId)
@@ -1461,9 +1467,9 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     if(value==null)return '—';
     if(value is bool)return value?'Hoạt động':'Ngừng';
     if(key=='effectiveFrom'||key=='effectiveTo'){
-      final day=DateTime.tryParse(value.toString())?.toUtc();
+      final day=DateTime.tryParse(value.toString())?.toLocal();
       if(day==null)return '—';
-      final display=key=='effectiveTo'?day.subtract(const Duration(days:1)):day;
+      final display=key=='effectiveTo'?day.subtract(const Duration(microseconds:1)):day;
       return '${display.day.toString().padLeft(2,'0')}/'
         '${display.month.toString().padLeft(2,'0')}/${display.year}';
     }
