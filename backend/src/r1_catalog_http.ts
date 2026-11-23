@@ -263,6 +263,10 @@ export async function create(db:PoolClient,tenant:string,kind:Kind,parsed:Parsed
       AND r.customer_id IS NOT DISTINCT FROM $7::uuid
       AND r.customer_group IS NOT DISTINCT FROM $8::text
       AND r.priority=$11 AND r.min_quantity=$14::numeric
+      -- BASE is an append-only timeline: later effective dates supersede
+      -- earlier open-ended prices without rewriting historical rules.
+      -- Same-time contradictory BASE policies are still rejected.
+      AND (r.scope_kind<>'BASE' OR r.effective_from=$15::timestamptz)
       AND r.effective_from<coalesce($16::timestamptz,'infinity'::timestamptz)
       AND coalesce(r.effective_to,'infinity'::timestamptz)>$15::timestamptz
       AND (r.adjustment<>$9 OR r.amount<>$10::numeric
