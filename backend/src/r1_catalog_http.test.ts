@@ -200,6 +200,51 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
   assert.equal(tooLate.status,409);
   assert.equal((await r1("rules",{...basic,sellSkuId:skuId,
    scopeKind:"BASE",adjustment:"PERCENT_DISCOUNT",amount:"10"})).status,400);
+  // R1-C: a list copy is a new independent identity, copying only current
+  // effective prices and unretired current/future SKU rules.
+  const originalPrice=await legacy("prices",{
+   priceListId:list.body.id,productId:product.body.id,
+   amount:"9999.0000",discountRate:"0",
+   effectiveAt:"2026-11-21T00:00:00Z",
+  });
+  assert.equal(originalPrice.status,201,JSON.stringify(originalPrice.body));
+  const cloneKey="r1c-clone-"+randomUUID();
+  const clonePayload={code:"SELL-COPY",name:"Giá bán sao chép",sourceRevision:0};
+  const clone=await write("/v1/catalog/price-lists/"+list.body.id+"/clone",
+    clonePayload,cloneKey);
+  assert.equal(clone.status,201,JSON.stringify(clone.body));
+  assert.equal(clone.body.sourceId,list.body.id);
+  assert.equal(clone.body.copiedPrices,1);
+  assert.equal(clone.body.copiedRules,6,"base, channel, group, duplicate group and customer");
+  const replayClone=await Promise.all([
+   write("/v1/catalog/price-lists/"+list.body.id+"/clone",clonePayload,cloneKey),
+   write("/v1/catalog/price-lists/"+list.body.id+"/clone",clonePayload,cloneKey),
+  ]);
+  assert.deepEqual(replayClone[0]!.body,clone.body);
+  assert.deepEqual(replayClone[1]!.body,clone.body);
+  assert.equal((await write("/v1/catalog/price-lists/"+list.body.id+"/clone",
+   {...clonePayload,name:"Khác"},cloneKey)).status,409);
+  assert.equal((await write("/v1/catalog/price-lists/"+list.body.id+"/clone",
+   {...clonePayload,code:"SELL-COPY-2",sourceRevision:1})).status,409,
+   "stale source revision must fail without copying anything");
+  const cloneQuote=await resolvePrice({
+    priceListId:clone.body.id,sellSkuId:skuId,quantity:"2",
+    customerId:c1.body.id,channelId:channel.body.id,
+    priceAt:new Date(Date.now()+5000).toISOString(),
+  });
+  assert.equal(cloneQuote.status,200,JSON.stringify(cloneQuote.body));
+  assert.equal(cloneQuote.body.quote.unitPrice,"111150");
+  assert.match(cloneQuote.body.quote.trace[1].reason,/ưu tiên/);
+  const copiedHistory=await request(
+   "/v1/catalog/prices?branchId="+b+"&q=SP-01","GET",undefined,token);
+  assert.equal(copiedHistory.status,200);
+  assert.ok(copiedHistory.body.items.some((x:any)=>
+    x.priceListId===clone.body.id&&x.productCode==="SP-01"));
+  const readOriginalList=await request(
+    "/v1/catalog/price-lists?branchId="+b,"GET",undefined,token);
+  assert.equal(readOriginalList.body.items.find((x:any)=>
+    x.id===list.body.id)?.code,"SELL","cloning must not edit source identity");
+
   // Order API must use the same R1 resolver as the visible customer/channel quote.
   // Two distinct sell units of one product are permitted on the same commercial order.
   const orderPayload={
