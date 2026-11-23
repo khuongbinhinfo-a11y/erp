@@ -206,7 +206,11 @@ export function r1QuoteSignature(quote:Awaited<ReturnType<typeof resolveR1Price>
     normalizedBaseQuantity:quote.normalizedBaseQuantity,
     customerId:quote.customerId,channelId:quote.channelId,priceListId:quote.priceListId,
     basePrice:quote.basePrice,unitPrice:quote.unitPrice,lineTotal:quote.lineTotal,
-    trace:quote.trace,
+    // Keep the pre-R1-C receipt fingerprint byte-for-byte compatible.
+    // Presentation-only reason, dates and priorities must never stale an
+    // already accepted order when monetary terms are unchanged.
+    trace:quote.trace.map(t=>({ruleId:t.ruleId,scope:t.scope,
+      adjustment:t.adjustment,amount:t.amount,result:t.result})),
   };
   return createHash("sha256").update(JSON.stringify(fingerprint)).digest("hex");
 }
