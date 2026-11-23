@@ -3,7 +3,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:erp_distribution/ui/company_workspace.dart';
+import 'package:erp_distribution/ui/sales_workspace.dart';
 import 'package:erp_distribution/ui/erp_tokens.dart';
 import 'package:erp_distribution/ui/identity_client.dart';
 
@@ -79,10 +79,7 @@ void main(){
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
-      home:Scaffold(body:CompanyWorkspace(previewOnly:false,grants:grants,
-        session:session,client:client))));
-    await tester.ensureVisible(find.byKey(const ValueKey('company-CompanyGroup.sales')));
-    await tester.tap(find.byKey(const ValueKey('company-CompanyGroup.sales')));
+      home:Scaffold(body:SalesWorkspace(session:session,client:client))));
     await tester.pumpAndSettle();
     await tester.runAsync(() async=>Future<void>.delayed(const Duration(milliseconds:120)));
     await tester.pumpAndSettle();
