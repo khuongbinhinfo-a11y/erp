@@ -163,6 +163,23 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
   };
   const roundtrip=await preview(exportedCustomerReimport);
   assert.equal(roundtrip.body.summary.unchanged,2,JSON.stringify(roundtrip.body));
+  const inactiveCustomer=await create("customers",{
+   code:"KH_IN",name:"Khách đã ngừng",customerGroupId:group.body.id,
+   customerRegionId:region.body.id,phone:"+84900000031"});
+  assert.equal(inactiveCustomer.status,201,JSON.stringify(inactiveCustomer.body));
+  await db.query('UPDATE catalog_customer SET active=false,phone=$4 '+
+    'WHERE installation_id=$1 AND branch_id=$2 AND id=$3',
+    [root.installationId,branchId,inactiveCustomer.body.id,"+84900000001"]);
+  const reactivateOnly={
+   ...customerInput,fileName:"reactivate.csv",
+   contentBase64:Buffer.from("Mã KH,Trạng thái\nKH_IN,1\n").toString("base64"),
+   mapping:{code:"Mã KH",active:"Trạng thái"},
+  };
+  const reactivatePreview=await preview(reactivateOnly);
+  assert.equal(reactivatePreview.status,200);
+  assert.equal(reactivatePreview.body.rows[0].error,"DUPLICATE_CUSTOMER_PHONE",
+    "reactivating a customer retaining a phone owned by another active code is invalid");
+
 
   for(const unit of ["CHAI","THUNG"]){
    assert.equal((await create("unit-definitions",{code:unit,name:unit})).status,201);
@@ -261,6 +278,31 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
   };
   assert.equal((await preview(priceRoundtrip)).body.summary.unchanged,1,
     "reimporting a microsecond timestamp must not append a rounded version");
+  const microBatch=pricing("25000.0000","2026-11-28T00:00:00.123456Z");
+  const microPreview=await preview(microBatch);
+  assert.equal(microPreview.status,200,JSON.stringify(microPreview.body));
+  assert.equal(microPreview.body.summary.error,0);
+  assert.equal((await apply(microBatch,microPreview.body.hash)).status,200,
+    "bulk apply must preserve a newly entered microsecond timestamp");
+  assert.equal((await preview(microBatch)).body.summary.unchanged,1,
+    "microsecond bulk price reimport must be unchanged");
+  const microStored=await db.query<{at:string}>(`
+   SELECT to_char(effective_at AT TIME ZONE 'UTC',
+    'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS at
+   FROM catalog_price_entry WHERE installation_id=$1 AND branch_id=$2
+   AND price_list_id=$3 AND product_id=$4
+   AND effective_at='2026-11-28T00:00:00.123456Z'::timestamptz`,
+   [root.installationId,branchId,priceList.body.id,productId]);
+  assert.equal(microStored.rows[0]?.at,"2026-11-28T00:00:00.123456Z");
+  const offsetBatch=pricing("26000.0000","2026-11-29T07:00:00+07:00");
+  const offsetPreview=await preview(offsetBatch);
+  assert.equal(offsetPreview.status,200);
+  assert.equal(offsetPreview.body.summary.error,0);
+  assert.equal((await apply(offsetBatch,offsetPreview.body.hash)).status,200,
+    "bulk apply must accept timezone offsets approved by preview");
+  assert.equal((await preview(offsetBatch)).body.summary.unchanged,1,
+    "offset must resolve to the same immutable PostgreSQL instant");
+
 
   const skuFile=(code:string,active:string,reason:string)=>({
    branchId,resource:"skus",mode:"UPSERT",fileName:"skus.csv",
