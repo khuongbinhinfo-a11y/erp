@@ -172,7 +172,7 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
         unitDefinitions=uoms.where((x)=>x['active']!=false).toList();
         productId=products.isEmpty?null:products.first['id'] as String;
         skuId=skus.isEmpty?null:skus.first['id'] as String;
-        listId=isQuote?null:(lists.isEmpty?null:lists.first['id'] as String);
+        listId=lists.isEmpty?null:lists.first['id'] as String;
         customerId=null;channelId=null;
         for(final c in fields.values){c.clear();}
         // Never guess carton units or conversions from a sample value.
