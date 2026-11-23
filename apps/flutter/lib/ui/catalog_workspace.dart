@@ -1277,7 +1277,9 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
       ('sellSkuCount','SKU bán'),('barcode','Mã vạch gốc'),
       ('active','Trạng thái')],
     'price-lists'=>const [('code','Mã bảng giá'),('name','Bảng giá'),('currency','Tiền tệ'),('active','Trạng thái')],
-    'prices'=>const [('productId','Mã sản phẩm (ID)'),('amount','Đơn giá'),('discountRate','CK %'),('effectiveAt','Hiệu lực')],
+    'prices'=>const [('priceListCode','Bảng giá'),('productCode','Mã hàng'),
+      ('productName','Sản phẩm'),('amount','Đơn giá'),('discountRate','CK %'),
+      ('effectiveAt','Hiệu lực')],
     _=>const [('code','Mã kho'),('name','Kho hàng'),('branchId','Chi nhánh (ID)')],
   };
   @override Widget build(BuildContext context){
