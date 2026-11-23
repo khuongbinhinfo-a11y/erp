@@ -1,11 +1,11 @@
 /**
- * ERP R1-C customer master dictionaries, Codespaces-only production migration operator.
+ * ERP R1-C price-list assignment, Codespaces-only production migration operator.
  * Run from backend with: node --experimental-strip-types scripts/r1c-codespaces-migration.mjs --check|--apply
  *
  * Production writes are gated by observed Compute maintenance mode.
  * A private, encrypted durable backup and its isolated read-back/restore are
  * mandatory before applying versioned migrations 0018.
- * NEVER print credentials, SQL driver errors, dump contents, or customer rows.
+ * NEVER print credentials, SQL driver errors, dump contents, or commercial rows.
  */
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { spawnSync, execFileSync } from "node:child_process";
@@ -412,8 +412,9 @@ async function main(mode){
     console.log("ERP_R1C_ALREADY_MIGRATED_18");return;}
   await validateSchema(pool,"before");
   await validateLegacyInputs(pool);
-  const excluded=["schema_migrations","catalog_customer","catalog_sku_barcode",
-    "catalog_price_list"];
+  // 0018 modifies only catalog_price_list; all 0017 customer and barcode columns
+  // must match the baseline byte-for-byte after restore and migration.
+  const excluded=["schema_migrations","catalog_price_list"];
   const initial=await signature(pool,excluded);
   const oldColumns=await legacySignature(pool);
   console.log("ERP_R1C_BASE_0017_CHECKSUM_AND_DATA_PREFLIGHT_PASS "+sha.slice(0,12));
