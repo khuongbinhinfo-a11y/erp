@@ -498,7 +498,11 @@ export async function handleR1Http(req:IncomingMessage,res:ServerResponse,
         const saved=await db.query<{revision:string}>(`SELECT revision::text FROM ${table}
           WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,
           [t,branchId,targetId]);
-        return {status:200,body:{id:targetId,revision:Number(saved.rows[0]!.revision)}};
+        // Receipt stores the corrective reason (in addition to fingerprint),
+        // so the SKU lifecycle decision remains reviewable after ACK/replay.
+        return {status:200,body:{id:targetId,revision:Number(saved.rows[0]!.revision),
+          ...(targetKind==="skus"&&activeFlag===false?{reason}:{}),
+        }};
       },
     });
     send(res,outcome.status,outcome.body,requestId,cors);return;
