@@ -340,7 +340,9 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
  // preserving microseconds and timezone offsets without JavaScript rounding.
  const requested=res==="prices"?data.map((r,index)=>({
   rowIndex:index,priceListCode:r.priceListCode??"",
-  productCode:r.productCode??"",effectiveAt:r.effectiveAt??"",
+  productCode:r.productCode??"",
+  effectiveAt:ISO.test(r.effectiveAt??"")&&
+    Number.isFinite(Date.parse(r.effectiveAt??""))?r.effectiveAt:"",
  })):[];
  const occupied=res==="prices"?await db.query<Record<string,any>>(`
   SELECT x."rowIndex",e.id,e.amount::text,
@@ -355,9 +357,7 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
    AND p.sku=x."productCode"
   JOIN catalog_price_entry e ON e.installation_id=$1 AND e.branch_id=$2
    AND e.price_list_id=l.id AND e.product_id=p.id
-   AND e.effective_at=CASE
-     WHEN x."effectiveAt" ~ '^\\d{4}-\\d\\d-\\d\\dT' THEN x."effectiveAt"::timestamptz
-     ELSE NULL END`,
+   AND e.effective_at=NULLIF(x."effectiveAt",'')::timestamptz`,
   [tenant,branch,JSON.stringify(requested)]):{rows:[]};
  const occupiedByRow=mapBy(occupied.rows,x=>String(x.rowIndex));
  const refs={
