@@ -422,6 +422,14 @@ class ErpIdentityClient {
     Map<String,dynamic> fields,{required String key})=>
       _request('POST','/v1/catalog/$resource',token:token,
         body:fields,revision:0,idempotencyKey:key);
+  Future<List<Map<String,dynamic>>> r1CatalogItems(String token,String kind,{
+      required String branchId,String query=''})async{
+    final q=Uri(queryParameters:{'branchId':branchId,
+      if(query.trim().isNotEmpty)'q':query.trim()}).query;
+    final raw=await _request('GET','/v1/catalog/r1/$kind?$q',token:token);
+    return (raw['items'] as List<dynamic>).map(
+      (x)=>Map<String,dynamic>.from(x as Map)).toList();
+  }
   /// R1 writes retain the same key and body after a lost server acknowledgment.
   Future<Map<String,dynamic>> createR1Catalog(String token,String kind,
     Map<String,dynamic> fields,{required String key})=>
