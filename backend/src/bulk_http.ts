@@ -77,7 +77,7 @@ async function exportRows(db:PoolClient,tenant:string,branch:string,kind:BulkRes
    '(SELECT b.barcode FROM catalog_sku_barcode b JOIN catalog_sell_sku s '+
    'ON s.installation_id=b.installation_id AND s.branch_id=b.branch_id AND s.id=b.sell_sku_id '+
    'WHERE s.installation_id=p.installation_id AND s.branch_id=p.branch_id '+
-   'AND s.product_id=p.id AND s.is_base AND b.active ORDER BY b.is_primary DESC LIMIT 1) '+
+   'AND s.product_id=p.id AND s.is_base AND b.active ORDER BY b.is_primary DESC,b.barcode LIMIT 1) '+
    'AS barcode,p.active FROM catalog_product p LEFT JOIN catalog_product_group g ON '+
    'g.installation_id=p.installation_id AND g.branch_id=p.branch_id AND g.id=p.group_id '+
    'WHERE p.installation_id=$1 AND p.branch_id=$2 ORDER BY p.sku LIMIT 5001';
