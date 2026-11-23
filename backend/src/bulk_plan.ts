@@ -322,9 +322,13 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
  // Check globally occupied active phones, including customers whose code is
  // not in this import. After rows are normalized we validate the FINAL batch
  // state, so changing/retiring an owner and reassigning its phone works.
- const requestedPhones=res==="customers"?[...new Set(data.map(r=>
-  (r.phone??"").startsWith("'+")?(r.phone??"").slice(1):r.phone)
-  .filter((v):v is string=>Boolean(v&&/^\+?[0-9]{9,15}$/.test(v))))]:[];
+ const requestedPhones=res==="customers"?[...new Set([
+  ...data.map(r=>(r.phone??"").startsWith("'+")?(r.phone??"").slice(1):r.phone),
+  // Inactive customers being reactivated can retain an existing phone even
+  // when the file maps only code+active. Check these as well against active
+  // external owners before marking preview error-free.
+  ...customers.rows.map(r=>r.phone),
+ ].filter((v):v is string=>typeof v==="string"&&/^\+?[0-9]{9,15}$/.test(v)))]:[];
  const phoneOwners=res==="customers"?await db.query<{code:string;phone:string}>(
   'SELECT code,phone FROM catalog_customer WHERE installation_id=$1 AND branch_id=$2 '+
   'AND active AND phone=ANY($3::text[])',
@@ -639,10 +643,18 @@ export async function applyBulkPlan(db:PoolClient,ctx:MutationContext,
     if(data.active===false)skuProductsToCheck.add(old.rows[0].productId);
     return {status:200,body:{id:data.id}};
    }
-   return executeCreate(db,ctx,"prices",checkCreate("prices",{
-    branchId:input.branchId,priceListId:data.priceListId,
-    productId:data.productId,amount:data.amount,
-    discountRate:data.discountRate,effectiveAt:data.effectiveAt}));
+   // The bulk plan already validates price decimals, references, exact
+   // timestamps and the owner's preview hash under per-stream advisory locks.
+   // Avoid the single-entry checkCreate() API's Date conversion: it truncates
+   // microseconds and rejects ISO timezone offsets accepted by bulk preview.
+   // PostgreSQL stores the original instant with exact microsecond precision.
+   const inserted=await db.query<{id:string}>(`
+     INSERT INTO catalog_price_entry
+      (installation_id,branch_id,price_list_id,product_id,amount,discount_rate,effective_at)
+     VALUES ($1,$2,$3,$4,$5::numeric,$6::numeric,$7::timestamptz)
+     RETURNING id`,[ctx.installationId,input.branchId,
+       data.priceListId,data.productId,data.amount,data.discountRate,data.effectiveAt]);
+   return {status:201,body:{id:inserted.rows[0]!.id}};
   };
   const response=await result();
   const body=response.body as Record<string,unknown>;
