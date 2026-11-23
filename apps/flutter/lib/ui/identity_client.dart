@@ -442,6 +442,13 @@ class ErpIdentityClient {
   Future<Map<String,dynamic>> r1PriceQuote(String token,
     Map<String,dynamic> context)=>_request(
       'POST','/v1/catalog/r1/resolve',token:token,body:context);
+  /// Snapshot-copy a price list together with its current/future rules.
+  /// Keep the same key and body when a COMMIT acknowledgment is lost.
+  Future<Map<String,dynamic>> clonePriceList(
+      String token,String sourceId,Map<String,dynamic> payload,{
+        required String key,
+      })=>_request('POST','/v1/catalog/price-lists/$sourceId/clone',
+        token:token,body:payload,revision:0,idempotencyKey:key);
   /// Optimistic catalog edit: the server checks the exact row revision inside its transaction.
   Future<Map<String,dynamic>> updateCatalog(String token,String resource,
     String id,int expectedRevision,Map<String,dynamic> fields)async{

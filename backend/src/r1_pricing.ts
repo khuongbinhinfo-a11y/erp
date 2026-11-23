@@ -127,8 +127,16 @@ export async function resolveR1Price(db:PoolClient,input:Query){
   if(basePrice===null)throw new R1QuoteError(409,"SKU_HAS_NO_EFFECTIVE_BASE_PRICE");
   let price=basePrice,usedExclusive=false,stopped=false;
   const equivalentPolicies=new Set<string>();
-  const trace:{ruleId:string|null;scope:string;adjustment:string;amount:string;result:string}[]=[
-    {ruleId:sourceId,scope:origin,adjustment:"FIXED_PRICE",amount:basePrice,result:price},
+  const trace:{
+    ruleId:string|null;scope:string;adjustment:string;amount:string;result:string;
+    reason:string;priority:number|null;minQuantity:string|null;
+    effectiveFrom:string|null;stacking:string|null;
+  }[]=[
+    {ruleId:sourceId,scope:origin,adjustment:"FIXED_PRICE",amount:basePrice,
+     result:price,reason:origin==="BASE_RULE"?"Giá cơ sở của SKU":
+      "Giá hiệu lực từ lịch sử sản phẩm",
+     priority:base?.priority??null,minQuantity:base?.min_quantity??null,
+     effectiveFrom:base?.effective_from?.toISOString()??null,stacking:null},
   ];
   for(const rule of rules.rows){
     if(rule.scope_kind==="BASE")continue;
@@ -158,8 +166,16 @@ export async function resolveR1Price(db:PoolClient,input:Query){
       usedExclusive=true;
     }
     price=await exact(db,price,rule);
+    const ruleName=rule.scope_kind==="CUSTOMER"?"Giá riêng theo khách hàng":
+      rule.scope_kind==="CUSTOMER_GROUP"?"Theo nhóm khách "+rule.customer_group:
+      rule.scope_kind==="CHANNEL"?"Theo kênh bán":
+      rule.scope_kind==="PROMOTION"?"Khuyến mãi":"Chính sách giá";
     trace.push({ruleId:rule.id,scope:rule.scope_kind,
-      adjustment:rule.adjustment,amount:rule.amount,result:price});
+      adjustment:rule.adjustment,amount:rule.amount,result:price,
+      reason:ruleName+" · từ "+rule.min_quantity+" đơn vị · ưu tiên "+rule.priority+
+        (rule.stacking==="STACKABLE"?" · cộng dồn":" · độc lập"),
+      priority:rule.priority,minQuantity:rule.min_quantity,
+      effectiveFrom:rule.effective_from.toISOString(),stacking:rule.stacking});
     if(rule.stop_processing)stopped=true;
   }
   const total=await db.query<{total:string;normalized:string}>(
@@ -190,7 +206,11 @@ export function r1QuoteSignature(quote:Awaited<ReturnType<typeof resolveR1Price>
     normalizedBaseQuantity:quote.normalizedBaseQuantity,
     customerId:quote.customerId,channelId:quote.channelId,priceListId:quote.priceListId,
     basePrice:quote.basePrice,unitPrice:quote.unitPrice,lineTotal:quote.lineTotal,
-    trace:quote.trace,
+    // Keep the pre-R1-C receipt fingerprint byte-for-byte compatible.
+    // Presentation-only reason, dates and priorities must never stale an
+    // already accepted order when monetary terms are unchanged.
+    trace:quote.trace.map(t=>({ruleId:t.ruleId,scope:t.scope,
+      adjustment:t.adjustment,amount:t.amount,result:t.result})),
   };
   return createHash("sha256").update(JSON.stringify(fingerprint)).digest("hex");
 }

@@ -6,6 +6,7 @@ import { hasPermission } from "./rbac.ts";
 import { executeMutation, MutationFault, requireRevision, type MutationContext } from "./mutation.ts";
 import { validIdempotencyKey } from "./contracts.ts";
 import type { IdentityOptions } from "./identity_http.ts";
+import { clonePriceList } from "./r1c_price_list.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CODE = /^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$/;
@@ -256,8 +257,7 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
       [tenant,branchId,"%"+search+"%",afterCode]);
     return rows.rows;
   }
-  const values=resource==="prices"?[tenant,branchId]:
-    [tenant,branchId,"%"+search+"%"];
+  const values=[tenant,branchId,"%"+search+"%"];
   // Installations staged on catalog 0006/0007 must still list products
   // even before the separate R1 SKU/barcode migration 0009 is applied.
   const r1Ready=resource==="products"&&await hasR1CatalogSchema(db);
@@ -278,8 +278,18 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
     'payment_terms_days AS "paymentTermsDays",active,revision::integer FROM catalog_customer';
   const r=await db.query(
     resource==="prices"
-      ?`${selections.prices} WHERE installation_id=$1 AND branch_id=$2
-          ORDER BY effective_at DESC,id LIMIT 100`
+      ?`SELECT e.id,e.price_list_id AS "priceListId",l.code AS "priceListCode",
+          e.product_id AS "productId",p.sku AS "productCode",p.name AS "productName",
+          e.amount::text,e.discount_rate::text AS "discountRate",
+          e.effective_at AS "effectiveAt"
+          FROM catalog_price_entry e
+          JOIN catalog_product p ON p.installation_id=e.installation_id
+            AND p.branch_id=e.branch_id AND p.id=e.product_id
+          JOIN catalog_price_list l ON l.installation_id=e.installation_id
+            AND l.branch_id=e.branch_id AND l.id=e.price_list_id
+          WHERE e.installation_id=$1 AND e.branch_id=$2
+            AND (p.sku ILIKE $3 OR p.name ILIKE $3 OR l.code ILIKE $3)
+          ORDER BY e.effective_at DESC,e.id DESC LIMIT 100`
       :`${resource==="products"?productSelection:resource==="customers"?customerSelection:selections[resource]} WHERE installation_id=$1 AND branch_id=$2
           AND (${resource==="products"?"sku":"code"} ILIKE $3 OR name ILIKE $3
           ${resource==="customers"?"OR phone ILIKE $3 OR customer_group ILIKE $3":""})
@@ -657,6 +667,34 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
           confirmationAllowed:false,requestId},requestId,corsOrigin);
       }finally{db.release();}
       return;
+    }
+    // A separate idempotent creation: source revision protects against
+    // cloning an edited list without a deliberate user refresh.
+    const clonePath=/^\/v1\/catalog\/price-lists\/([0-9a-f-]{36})\/clone$/i.exec(url.pathname);
+    if(clonePath&&req.method==="POST"){
+      if(!await hasR1CatalogSchema(pool))
+        throw new CatalogError(503,"R1_PRICE_SCHEMA_REQUIRED");
+      const raw=await payloadFrom(req);
+      if(Object.keys(raw).some(k=>!["branchId","code","name","sourceRevision"].includes(k)))
+        throw new CatalogError(400,"UNKNOWN_FIELD");
+      const branchId=requireUuid(raw.branchId),sourceId=requireUuid(clonePath[1]);
+      const code=requireCode(raw.code),name=requireName(raw.name);
+      const sourceRevision=raw.sourceRevision;
+      if(typeof sourceRevision!=="number"||!Number.isSafeInteger(sourceRevision)||
+         sourceRevision<0)throw new CatalogError(400,"INVALID_REVISION");
+      const input={branchId,sourceId,sourceRevision,code,name};
+      const context=requestMutation(req,requestId,actorId,tenant,
+        "catalog.price_lists.clone",input);
+      const outcome=await executeMutation(pool,context,{
+        authorize:(db,ctx)=>hasPermission(db,{installationId:ctx.installationId,
+          actorId:ctx.actorId,permission:"catalog.write",branchId}),
+        execute:async(db,ctx)=>{
+          const result=await clonePriceList(db,{...input,installationId:ctx.installationId});
+          if(!result)throw new CatalogError(404,"PRICE_LIST_NOT_FOUND");
+          return result;
+        },
+      });
+      send(res,outcome.status,outcome.body,requestId,corsOrigin);return;
     }
     const updatePath=/^\/v1\/catalog\/(customers|customer-groups|customer-regions|suppliers|groups|products|price-lists|unit-definitions)\/([0-9a-f-]{36})$/.exec(url.pathname);
     if(updatePath&&req.method==="PATCH"){

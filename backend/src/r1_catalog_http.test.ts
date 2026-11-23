@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash,randomUUID } from "node:crypto";
+import { r1QuoteSignature } from "./r1_pricing.ts";
 import { spawnSync } from "node:child_process";
 import type { AddressInfo } from "node:net";
 import { resolve } from "node:path";
@@ -15,6 +16,32 @@ const local=(()=>{
  try{const u=new URL(url??"");return ["localhost","127.0.0.1"].includes(u.hostname)&&u.pathname==="/erp_ci";}
  catch{return false;}
 })();
+
+test("R1-C: presentation-only explanation does not change historical price receipt",()=>{
+ const historical={
+  sellSkuId:"s",productId:"p",sku:"SP",unitCode:"CAI",
+  conversionToBase:"1.000000",quantity:"1.000",
+  normalizedBaseQuantity:"1.000000",
+  customerId:null,channelId:null,priceListId:"l",
+  basePrice:"12000.0000",unitPrice:"12000.0000",lineTotal:"12000",
+  trace:[{ruleId:"r",scope:"BASE_RULE",adjustment:"FIXED_PRICE",
+    amount:"12000.0000",result:"12000.0000"}],
+ };
+ const oldFingerprint={
+  sellSkuId:"s",productId:"p",sku:"SP",unitCode:"CAI",
+  conversionToBase:"1.000000",quantity:"1",
+  normalizedBaseQuantity:"1.000000",customerId:null,channelId:null,
+  priceListId:"l",basePrice:"12000.0000",
+  unitPrice:"12000.0000",lineTotal:"12000",trace:historical.trace,
+ };
+ const expected=createHash("sha256").update(JSON.stringify(oldFingerprint)).digest("hex");
+ type Quote=Parameters<typeof r1QuoteSignature>[0];
+ assert.equal(r1QuoteSignature(historical as unknown as Quote),expected);
+ const decorated={...historical,trace:[{...historical.trace[0]!,
+  reason:"Giá cơ sở của SKU",priority:100,minQuantity:"1",
+  effectiveFrom:"2026-11-23T00:00:00Z",stacking:"STACKABLE"}]};
+ assert.equal(r1QuoteSignature(decorated as unknown as Quote),expected);
+});
 
 test("R1 never allows a retired B1 operator to run a newer migration",()=>{
  for(const script of ["scripts/b1-production-migration.mjs","scripts/b1-resume-preflight.mjs"]){
@@ -160,6 +187,12 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
    adjustment:"PERCENT_DISCOUNT",amount:"5.0000",
    priority:20,stacking:"STACKABLE"});
   assert.equal(identicalVip.status,201);
+  const overlap=await r1("rules",{...basic,sellSkuId:skuId,
+   scopeKind:"CUSTOMER_GROUP",customerGroup:"VIP",
+   adjustment:"PERCENT_DISCOUNT",amount:"7.0000",
+   priority:20,stacking:"STACKABLE"});
+  assert.equal(overlap.status,409,"overlapping conflicting policy must be rejected");
+  assert.equal(overlap.body.error?.code,"PRICE_RULE_OVERLAP");
   const customerRule=await r1("rules",{...basic,sellSkuId:skuId,
    scopeKind:"CUSTOMER",customerId:c2.body.id,
    adjustment:"FIXED_PRICE",amount:"100000.0000",
@@ -200,6 +233,116 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
   assert.equal(tooLate.status,409);
   assert.equal((await r1("rules",{...basic,sellSkuId:skuId,
    scopeKind:"BASE",adjustment:"PERCENT_DISCOUNT",amount:"10"})).status,400);
+  // R1-C: a list copy is a new independent identity, copying only current
+  // effective prices and unretired current/future SKU rules.
+  const originalPrice=await legacy("prices",{
+   priceListId:list.body.id,productId:product.body.id,
+   amount:"9999.0000",discountRate:"0",
+   effectiveAt:"2026-11-21T00:00:00Z",
+  });
+  assert.equal(originalPrice.status,201,JSON.stringify(originalPrice.body));
+  const cloneKey="r1c-clone-"+randomUUID();
+  const clonePayload={code:"SELL-COPY",name:"Giá bán sao chép",sourceRevision:0};
+  const clone=await write("/v1/catalog/price-lists/"+list.body.id+"/clone",
+    clonePayload,cloneKey);
+  assert.equal(clone.status,201,JSON.stringify(clone.body));
+  assert.equal(clone.body.sourceId,list.body.id);
+  assert.equal(clone.body.copiedPrices,1);
+  assert.equal(clone.body.copiedRules,6,"base, channel, group, duplicate group and customer");
+  const replayClone=await Promise.all([
+   write("/v1/catalog/price-lists/"+list.body.id+"/clone",clonePayload,cloneKey),
+   write("/v1/catalog/price-lists/"+list.body.id+"/clone",clonePayload,cloneKey),
+  ]);
+  assert.deepEqual(replayClone[0]!.body,clone.body);
+  assert.deepEqual(replayClone[1]!.body,clone.body);
+  assert.equal((await write("/v1/catalog/price-lists/"+list.body.id+"/clone",
+   {...clonePayload,name:"Khác"},cloneKey)).status,409);
+  assert.equal((await write("/v1/catalog/price-lists/"+list.body.id+"/clone",
+   {...clonePayload,code:"SELL-COPY-2",sourceRevision:1})).status,409,
+   "stale source revision must fail without copying anything");
+  const cloneQuote=await resolvePrice({
+    priceListId:clone.body.id,sellSkuId:skuId,quantity:"2",
+    customerId:c1.body.id,channelId:channel.body.id,
+    priceAt:new Date(Date.now()+5000).toISOString(),
+  });
+  assert.equal(cloneQuote.status,200,JSON.stringify(cloneQuote.body));
+  assert.equal(cloneQuote.body.quote.unitPrice,"111150");
+  assert.match(cloneQuote.body.quote.trace[1].reason,/ưu tiên/);
+  const copiedHistory=await request(
+   "/v1/catalog/prices?branchId="+b+"&q=SP-01","GET",undefined,token);
+  assert.equal(copiedHistory.status,200);
+  assert.ok(copiedHistory.body.items.some((x:any)=>
+    x.priceListId===clone.body.id&&x.productCode==="SP-01"));
+  const readOriginalList=await request(
+    "/v1/catalog/price-lists?branchId="+b,"GET",undefined,token);
+  assert.equal(readOriginalList.body.items.find((x:any)=>
+    x.id===list.body.id)?.code,"SELL","cloning must not edit source identity");
+
+  // Regression: two active BASE policies of equal priority and a shared
+  // effective timestamp must resolve in the same order after cloning.
+  // Direct inserts represent legitimate pre-R1-C immutable legacy history.
+  const precedenceList=await legacy("price-lists",{
+   code:"PRIO",name:"Nguồn kiểm thử thứ tự chính sách"});
+  assert.equal(precedenceList.status,201);
+  await pool.query(`INSERT INTO catalog_sku_price_rule
+   (installation_id,branch_id,price_list_id,sell_sku_id,scope_kind,
+    adjustment,amount,priority,effective_from)
+   VALUES ($1,$2,$3,$4,'BASE','FIXED_PRICE',21000,90,
+     transaction_timestamp()-interval '2 days'),
+    ($1,$2,$3,$4,'BASE','FIXED_PRICE',22000,90,
+     transaction_timestamp()-interval '1 day'),
+    ($1,$2,$3,$4,'BASE','FIXED_PRICE',23000,90,
+     transaction_timestamp()-interval '1 day')`,
+   [root.installationId,b,precedenceList.body.id,baseSku]);
+  const sameClock=new Date().toISOString();
+  const priorityBefore=await resolvePrice({
+   priceListId:precedenceList.body.id,sellSkuId:baseSku,quantity:"1",
+   priceAt:sameClock});
+  assert.equal(priorityBefore.status,200,JSON.stringify(priorityBefore.body));
+  const copiedPriority=await write("/v1/catalog/price-lists/"+
+   precedenceList.body.id+"/clone",{
+    code:"PRIO-COPY",name:"Bản sao thứ tự",sourceRevision:0,
+   });
+  assert.equal(copiedPriority.status,201,JSON.stringify(copiedPriority.body));
+  assert.equal(copiedPriority.body.copiedRules,3);
+  const priorityAfter=await resolvePrice({
+   priceListId:copiedPriority.body.id,sellSkuId:baseSku,quantity:"1",
+   priceAt:sameClock});
+  assert.equal(priorityAfter.status,200,JSON.stringify(priorityAfter.body));
+  assert.equal(priorityAfter.body.quote.unitPrice,
+    priorityBefore.body.quote.unitPrice,
+    "cloned equal-priority rule order must match source");
+  // Distinct spelling of the SAME decimal quantity must take a single
+  // advisory lock; concurrent conflicting prices cannot both commit.
+  const decimalLockList=await legacy("price-lists",{
+   code:"LOCK-TEST",name:"Kiểm thử khóa chính sách"});
+  assert.equal(decimalLockList.status,201);
+  const lockBase={
+   priceListId:decimalLockList.body.id,sellSkuId:baseSku,
+   scopeKind:"BASE",adjustment:"FIXED_PRICE",priority:51,
+   effectiveFrom:"2026-11-21T00:00:00Z",
+  };
+  const decimalRace=await Promise.all([
+   r1("rules",{...lockBase,amount:"23000.0000",minQuantity:"1"}),
+   r1("rules",{...lockBase,amount:"24000.0000",minQuantity:"1.000"}),
+  ]);
+  assert.deepEqual(decimalRace.map(x=>x.status).sort((a,b)=>a-b),[201,409],
+   "same numeric threshold with different strings must serialize");
+  assert.equal(decimalRace.find(x=>x.status===409)?.body.error?.code,
+    "PRICE_RULE_OVERLAP");
+  const laterBase=await r1("rules",{...lockBase,
+   amount:"25000.0000",minQuantity:"1.000",
+   effectiveFrom:"2026-11-22T00:00:00Z"});
+  assert.equal(laterBase.status,201,JSON.stringify(laterBase.body));
+  const latestBase=await resolvePrice({
+   priceListId:decimalLockList.body.id,sellSkuId:baseSku,
+   quantity:"1",priceAt:new Date().toISOString(),
+  });
+  assert.equal(latestBase.status,200,JSON.stringify(latestBase.body));
+  assert.equal(latestBase.body.quote.unitPrice,"25000.0000",
+   "later immutable BASE rule supersedes older price without retirement");
+
+
   // Order API must use the same R1 resolver as the visible customer/channel quote.
   // Two distinct sell units of one product are permitted on the same commercial order.
   const orderPayload={

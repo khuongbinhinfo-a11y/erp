@@ -28,6 +28,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
   String? error;
   int requestSerial=0;
   final search=TextEditingController();
+  final inlineAmount=TextEditingController(),inlineDiscount=TextEditingController();
+  String? inlinePriceId;
 
   static const tabs=<String,List<ErpSectionTab<String>>>{
     'customers':[
@@ -80,13 +82,14 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     super.didUpdateWidget(oldWidget);
     if(oldWidget.session.token!=widget.session.token ||
       oldWidget.client!=widget.client || oldWidget.area!=widget.area){
-      requestSerial++;items=[];branches=[];branchId=null;
+      requestSerial++;items=[];branches=[];branchId=null;inlinePriceId=null;
       productWriteReady=false;resource=widget.area;search.clear();
       _loadBranches();
     }
   }
   @override void dispose(){
-    requestSerial++;search.dispose();super.dispose();
+    requestSerial++;search.dispose();inlineAmount.dispose();inlineDiscount.dispose();
+    super.dispose();
   }
   Future<void> _loadBranches() async {
     final stamp=++requestSerial;
@@ -152,7 +155,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
   void _changeResource(String next){
     if(next==resource)return;
     setState((){
-      resource=next;search.clear();items=[];productWriteReady=false;
+      resource=next;search.clear();items=[];productWriteReady=false;inlinePriceId=null;
     });
     _loadRecords();
   }
@@ -980,6 +983,127 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
       )));
   }
 
+  void _beginInlinePrice(Map<String,dynamic> row){
+    if(resource!='prices'||!canWrite||saving||branchId==null)return;
+    final listId=row['priceListId'],productId=row['productId'],id=row['id'];
+    if(listId is! String||productId is! String||id is! String)return;
+    final pending=widget.client.pendingR1(widget.session.actorId,branchId!,
+      'catalog.create.prices.'+listId+'.'+productId);
+    setState((){
+      inlinePriceId=id;
+      inlineAmount.text=(pending?.payload['amount']??row['amount']).toString();
+      inlineDiscount.text=(pending?.payload['discountRate']??row['discountRate']).toString();
+    });
+  }
+  Future<void> _saveInlinePrice(Map<String,dynamic> row)async{
+    if(resource!='prices'||!canWrite||saving||branchId==null||
+       inlinePriceId!=row['id'])return;
+    final listId=row['priceListId'],productId=row['productId'];
+    if(listId is! String||productId is! String)return;
+    final branch=branchId!,actor=widget.session.actorId;
+    final kind='catalog.create.prices.'+listId+'.'+productId;
+    final pending=widget.client.pendingR1(actor,branch,kind);
+    final payload=pending?.payload??<String,dynamic>{
+      'branchId':branch,'priceListId':listId,'productId':productId,
+      'amount':inlineAmount.text.trim(),'discountRate':inlineDiscount.text.trim(),
+      'effectiveAt':DateTime.now().toUtc().toIso8601String(),
+    };
+    final key=pending?.key??('r1c-inline-price-'+
+      DateTime.now().microsecondsSinceEpoch.toString());
+    if(pending==null)widget.client.retainR1(actor,branch,kind,payload,key);
+    setState(()=>saving=true);
+    try{
+      await widget.client.createCatalogWithKey(
+        widget.session.token,'prices',payload,key:key);
+      widget.client.clearR1(actor,branch,kind);
+      if(!mounted)return;
+      setState(()=>inlinePriceId=null);
+      ErpToast.show(context,'Đã ghi giá hiệu lực mới, lịch sử cũ được giữ nguyên.');
+      await _loadRecords();
+    }on ErpApiError catch(e){
+      if(e.status==400||e.status==404||e.code=='EFFECTIVE_PRICE_EXISTS'||
+          e.code=='INVALID_DECIMAL_STRING')
+        widget.client.clearR1(actor,branch,kind);
+      if(mounted)ErpToast.show(context,_errorMessage(e),isError:true);
+    }catch(_){
+      if(mounted)ErpToast.show(context,
+        'Chưa có xác nhận server. Bấm Lưu lại để kiểm tra đúng yêu cầu trước.',
+        isError:true);
+    }finally{if(mounted)setState(()=>saving=false);}
+  }
+
+  Future<void> _cloneList(Map<String,dynamic> row)async{
+    if(resource!='price-lists'||!canWrite||saving||branchId==null)return;
+    final sourceId=row['id'],revision=row['revision'];
+    if(sourceId is! String||revision is! int)return;
+    final branch=branchId!,actor=widget.session.actorId;
+    final kind='catalog.clone.price-lists.'+sourceId;
+    final pending=widget.client.pendingR1(actor,branch,kind);
+    Map<String,dynamic>? payload=pending?.payload;
+    if(payload==null){
+      var code=row['code'].toString()+'-COPY';
+      var name='Bản sao '+row['name'].toString();
+      payload=await showDialog<Map<String,dynamic>>(context:context,
+        builder:(dialog)=>StatefulBuilder(builder:(ctx,refresh)=>AlertDialog(
+          key:const ValueKey('catalog-price-list-clone-dialog'),
+          title:const Text('Sao chép bảng giá'),
+          content:SizedBox(
+            width:(MediaQuery.sizeOf(ctx).width-70).clamp(220.0,460.0).toDouble(),
+            child:Column(mainAxisSize:MainAxisSize.min,
+              crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+                const Text('Sao chép giá hiệu lực và chính sách chưa hết hạn. '
+                  'Bảng giá mới độc lập; lịch sử bảng nguồn không đổi.',
+                  style:TextStyle(fontSize:12,color:ErpTokens.muted)),
+                const SizedBox(height:12),
+                TextFormField(key:const ValueKey('catalog-clone-code'),
+                  initialValue:code,onChanged:(v)=>refresh(()=>code=v.trim()),
+                  decoration:const InputDecoration(labelText:'Mã bảng giá mới')),
+                const SizedBox(height:12),
+                TextFormField(key:const ValueKey('catalog-clone-name'),
+                  initialValue:name,onChanged:(v)=>refresh(()=>name=v.trim()),
+                  decoration:const InputDecoration(labelText:'Tên bảng giá mới')),
+              ])),
+          actions:[
+            TextButton(onPressed:()=>Navigator.pop(dialog),
+              child:const Text('Hủy')),
+            FilledButton(
+              key:const ValueKey('catalog-clone-confirm'),
+              onPressed:code.length>=2&&code.length<=64&&
+                RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]*').stringMatch(code)==code&&
+                name.isNotEmpty&&name.length<=160
+                ?()=>Navigator.pop(dialog,<String,dynamic>{
+                  'branchId':branch,'sourceRevision':revision,
+                  'code':code,'name':name,
+                }):null,
+              child:const Text('Sao chép')),
+          ],
+        )));
+    }
+    if(payload==null||!mounted)return;
+    final key=pending?.key??('catalog-clone-'+sourceId+'-'+
+      DateTime.now().microsecondsSinceEpoch.toString());
+    if(pending==null)widget.client.retainR1(actor,branch,kind,payload,key);
+    setState(()=>saving=true);
+    try{
+      final result=await widget.client.clonePriceList(
+        widget.session.token,sourceId,payload,key:key);
+      widget.client.clearR1(actor,branch,kind);
+      if(!mounted)return;
+      ErpToast.show(context,'Đã sao chép '+result['copiedPrices'].toString()+
+        ' giá và '+result['copiedRules'].toString()+' chính sách.');
+      await _loadRecords();
+    }on ErpApiError catch(e){
+      if(e.status==400||e.status==404||e.code=='DUPLICATE'||
+          e.code=='REVISION_CONFLICT')
+        widget.client.clearR1(actor,branch,kind);
+      if(mounted)ErpToast.show(context,_errorMessage(e),isError:true);
+    }catch(_){
+      if(mounted)ErpToast.show(context,
+        'Chưa có xác nhận server. Chọn sao chép lần nữa để kiểm tra đúng yêu cầu.',
+        isError:true);
+    }finally{if(mounted)setState(()=>saving=false);}
+  }
+
   bool get canEdit => canWrite && resource!='prices' && resource!='warehouses';
   Future<void> _edit(Map<String,dynamic> row)async{
     if(!canEdit||saving||branchId==null)return;
@@ -1242,7 +1366,9 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
       ('sellSkuCount','SKU bán'),('barcode','Mã vạch gốc'),
       ('active','Trạng thái')],
     'price-lists'=>const [('code','Mã bảng giá'),('name','Bảng giá'),('currency','Tiền tệ'),('active','Trạng thái')],
-    'prices'=>const [('productId','Mã sản phẩm (ID)'),('amount','Đơn giá'),('discountRate','CK %'),('effectiveAt','Hiệu lực')],
+    'prices'=>const [('priceListCode','Bảng giá'),('productCode','Mã hàng'),
+      ('productName','Sản phẩm'),('amount','Đơn giá'),('discountRate','CK %'),
+      ('effectiveAt','Hiệu lực')],
     _=>const [('code','Mã kho'),('name','Kho hàng'),('branchId','Chi nhánh (ID)')],
   };
   @override Widget build(BuildContext context){
@@ -1298,7 +1424,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                         maxLines:1,overflow:TextOverflow.ellipsis))).toList(),
                     onChanged:(next){
                       if(next==null||next==branchId)return;
-                      setState(()=>branchId=next);_loadRecords();
+                      setState((){branchId=next;inlinePriceId=null;});_loadRecords();
                     })),
               IconButton(
                 key:const ValueKey('catalog-refresh'),
@@ -1351,10 +1477,27 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                 key:const ValueKey('catalog-live-table'),
                 headingRowColor:const WidgetStatePropertyAll(ErpTokens.mint),
                 columns:columns.map((entry)=>DataColumn(
-                  label:Text(entry.$2))).toList(),
+                  label:Text(entry.$2))).toList()+
+                  [if(resource=='prices')const DataColumn(label:Text('Điều chỉnh'))],
                 rows:items.map((entry)=>DataRow(cells:[
                   for(final c in columns)DataCell(
-                    c.$1=='code'&&canEdit
+                    resource=='prices'&&inlinePriceId==entry['id']&&
+                      c.$1=='amount'
+                      ? SizedBox(width:132,child:TextField(
+                          key:const ValueKey('r1c-inline-price-amount'),
+                          controller:inlineAmount,
+                          keyboardType:const TextInputType.numberWithOptions(decimal:true),
+                          decoration:const InputDecoration(
+                            labelText:'Giá mới',isDense:true)))
+                    : resource=='prices'&&inlinePriceId==entry['id']&&
+                      c.$1=='discountRate'
+                      ? SizedBox(width:102,child:TextField(
+                          key:const ValueKey('r1c-inline-price-discount'),
+                          controller:inlineDiscount,
+                          keyboardType:const TextInputType.numberWithOptions(decimal:true),
+                          decoration:const InputDecoration(
+                            labelText:'CK %',isDense:true)))
+                    : c.$1=='code'&&canEdit
                       ? Row(mainAxisSize:MainAxisSize.min,children:[
                           Text(_cell(entry,c.$1)),
                           IconButton(
@@ -1362,6 +1505,11 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                             icon:const Icon(Icons.edit_outlined,size:18),
                             tooltip:'Sửa/ngừng sử dụng',
                             onPressed:saving?null:()=>_edit(entry)),
+                          if(resource=='price-lists')IconButton(
+                            key:ValueKey('catalog-price-list-clone-' + entry['id'].toString()),
+                            icon:const Icon(Icons.content_copy_outlined,size:18),
+                            tooltip:'Sao chép bảng giá cùng chính sách',
+                            onPressed:saving?null:()=>_cloneList(entry)),
                           if(resource=='products')IconButton(
                             key:ValueKey('catalog-product-images-'+entry['id'].toString()),
                             icon:const Icon(Icons.photo_library_outlined,size:18),
@@ -1369,6 +1517,24 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                             onPressed:saving?null:()=>_productImages(entry)),
                         ])
                       : Text(_cell(entry,c.$1))),
+                  if(resource=='prices')DataCell(
+                    !canWrite?const Text('—'):
+                    inlinePriceId==entry['id']
+                      ? Row(mainAxisSize:MainAxisSize.min,children:[
+                        IconButton(key:const ValueKey('r1c-inline-price-save'),
+                          tooltip:'Lưu giá mới',icon:const Icon(Icons.check),
+                          onPressed:saving?null:()=>_saveInlinePrice(entry)),
+                        IconButton(tooltip:'Hủy sửa giá',icon:const Icon(Icons.close),
+                          onPressed:saving?null:()=>setState(()=>inlinePriceId=null)),
+                      ])
+                      : TextButton.icon(
+                        key:ValueKey('r1c-inline-price-edit-'+entry['id'].toString()),
+                        onPressed:saving?null:()=>_beginInlinePrice(entry),
+                        icon:const Icon(Icons.edit_outlined,size:16),
+                        label:Text(widget.client.pendingR1(widget.session.actorId,
+                          branchId!,'catalog.create.prices.'+
+                          entry['priceListId'].toString()+'.'+entry['productId'].toString())!=null
+                          ?'Kiểm tra yêu cầu':'Giá mới'))),
                 ])).toList())),
             if(resource=='products'&&!productWriteReady&&!loading)
               const Padding(padding:EdgeInsets.only(top:12),
