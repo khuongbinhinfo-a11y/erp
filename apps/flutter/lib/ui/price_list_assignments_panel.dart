@@ -43,10 +43,12 @@ class _PriceListAssignmentsPanelState extends State<PriceListAssignmentsPanel>{
     setState((){loading=true;error=null;});
     try{
       final all=await Future.wait<List<Map<String,dynamic>>>([
-        widget.client.priceListAssignments(token,branch),
-        widget.client.catalogItems(token,'customers',branchId:branch),
+        widget.client.priceListAssignments(token,branch,priceListId:listId),
+        widget.client.catalogItems(token,'customers',branchId:branch,
+          query:search.text.trim()),
         widget.client.catalogDirectoryAll(token,'customer-groups',branchId:branch),
-        widget.client.r1CatalogItems(token,'channels',branchId:branch),
+        widget.client.r1CatalogItems(token,'channels',branchId:branch,
+          query:search.text.trim()),
       ]);
       if(!mounted)return;
       setState((){
@@ -208,6 +210,27 @@ class _PriceListAssignmentsPanelState extends State<PriceListAssignmentsPanel>{
         if(error!=null)Padding(padding:const EdgeInsets.symmetric(vertical:8),
           child:Text(error!,style:const TextStyle(color:ErpTokens.danger))),
         if(!loading&&error==null)...[
+          if(widget.canWrite)...[
+            Wrap(spacing:8,runSpacing:8,
+              crossAxisAlignment:WrapCrossAlignment.center,children:[
+              SizedBox(width:wide?310:240,child:TextField(
+                key:const ValueKey('r1c-assignment-target-search'),
+                controller:search,
+                decoration:const InputDecoration(
+                  labelText:'Tìm khách hàng / kênh bán',
+                  hintText:'Nhập mã hoặc tên chính xác',
+                  isDense:true,prefixIcon:Icon(Icons.search)),
+                onSubmitted:(_)=>load())),
+              OutlinedButton.icon(
+                key:const ValueKey('r1c-assignment-target-find'),
+                onPressed:busy?null:load,
+                icon:const Icon(Icons.search,size:17),
+                label:const Text('Tìm trên máy chủ')),
+              const Text('Kết quả khớp tìm kiếm từ máy chủ.',
+                style:TextStyle(fontSize:12,color:ErpTokens.muted)),
+            ]),
+            const SizedBox(height:12),
+          ],
           if(widget.canWrite)Wrap(spacing:10,runSpacing:10,
             crossAxisAlignment:WrapCrossAlignment.end,children:[
               SizedBox(width:wide?192:260,child:DropdownButtonFormField<String>(
