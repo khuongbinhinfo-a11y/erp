@@ -271,7 +271,9 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
  const branch=input.branchId,res=input.resource;
  const products=await db.query<Record<string,any>>(
   'SELECT id,sku AS code,name,base_unit AS "baseUnit",group_id AS "groupId",active,revision::int'+
-  ' FROM catalog_product WHERE installation_id=$1 AND branch_id=$2 AND sku=ANY($3::text[])',
+  ' FROM catalog_product WHERE installation_id=$1 AND branch_id=$2 AND ('+
+  'sku=ANY($3::text[]) OR id IN (SELECT product_id FROM catalog_sell_sku '+
+  'WHERE installation_id=$1 AND branch_id=$2 AND sku=ANY($3::text[])))',
   [tenant,branch,[...new Set([...all("code"),...all("productCode")])]]);
  const customers=res==="customers"?await db.query<Record<string,any>>(
   'SELECT id,code,name,customer_group_id AS "customerGroupId",'+
@@ -342,7 +344,8 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
    if(!current&&input.mode==="UPDATE")throw new BulkFault("NOT_FOUND_USE_CREATE");
    const converted=normalizeRow(res,input.mode,raw,current,refs,branch);
    const after=clean(converted.after);
-   const before=current?clean(current):null;
+   const before=current?clean(Object.fromEntries(Object.entries(current)
+    .map(([k,v])=>[k,v instanceof Date?v.toISOString():v]))):null;
    const revision=current?(typeof current.revision==="number"?current.revision:0):null;
    const isSame=current&&res!=="prices"&&Object.entries(converted.operation)
     .filter(([k])=>k!=="branchId"&&k!=="reason")
@@ -409,6 +412,15 @@ export async function applyBulkPlan(db:PoolClient,ctx:MutationContext,
       sku:row.key,unitCode:data.unitCode,toBase:data.toBase}));
     }
     // SKU lifecycle must use the same update invariants as the single editor.
+    // Parent lock precedes variant lock for consistent bulk/single SKU edits.
+    const pid=(await db.query<{product_id:string}>(
+      'SELECT product_id FROM catalog_sell_sku WHERE installation_id=$1 '+
+      'AND branch_id=$2 AND id=$3',
+      [ctx.installationId,input.branchId,data.id])).rows[0]?.product_id;
+    if(!pid)throw new BulkFault("SKU_NOT_FOUND",409);
+    await db.query('SELECT id FROM catalog_product WHERE installation_id=$1 '+
+      'AND branch_id=$2 AND id=$3 FOR UPDATE',
+      [ctx.installationId,input.branchId,pid]);
     const old=await db.query<{revision:number;active:boolean;productId:string}>(
      'SELECT revision::int,active,product_id AS "productId" FROM catalog_sell_sku '+
      'WHERE installation_id=$1 AND branch_id=$2 AND id=$3 FOR UPDATE',
