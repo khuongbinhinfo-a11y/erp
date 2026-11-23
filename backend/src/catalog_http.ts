@@ -288,7 +288,7 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
   return r.rows;
 }
 
-function checkCreate(resource:Resource,raw:Record<string,unknown>){
+export function checkCreate(resource:Resource,raw:Record<string,unknown>){
   if(resource==="warehouses")throw new CatalogError(405,"READ_ONLY_WAREHOUSE");
   const branchId=requireUuid(raw.branchId);
   if(resource==="prices"){
@@ -354,7 +354,7 @@ function checkCreate(resource:Resource,raw:Record<string,unknown>){
   return {branchId,code,name};
 }
 type CreateInput=ReturnType<typeof checkCreate>;
-async function executeCreate(db:PoolClient,context:MutationContext,
+export async function executeCreate(db:PoolClient,context:MutationContext,
   resource:Exclude<Resource,"warehouses">,value:CreateInput){
   const {installationId,actorId}=context;
   const branchId=value.branchId;
@@ -475,7 +475,7 @@ const editTables:Record<Editable,string>={
   "unit-definitions":"catalog_unit_definition",
   "price-lists":"catalog_price_list",
 };
-function parseEdit(resource:Editable,raw:Record<string,unknown>){
+export function parseEdit(resource:Editable,raw:Record<string,unknown>){
   const branchId=requireUuid(raw.branchId);
   const columns:Record<string,unknown>={};
   const allow=new Set(["branchId","name","active",
@@ -510,7 +510,7 @@ function parseEdit(resource:Editable,raw:Record<string,unknown>){
   if(Object.keys(columns).length===0)throw new CatalogError(400,"EMPTY_UPDATE");
   return {branchId,columns};
 }
-async function applyEdit(db:PoolClient,context:MutationContext,
+export async function applyEdit(db:PoolClient,context:MutationContext,
   resource:Editable,targetId:string,value:ReturnType<typeof parseEdit>){
   const {installationId,actorId,expectedRevision}=context;
   if(!await hasPermission(db,{installationId,actorId,
