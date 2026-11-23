@@ -129,6 +129,30 @@ class _PriceListAssignmentsPanelState extends State<PriceListAssignmentsPanel>{
         isError:true);
       return;
     }
+    final retained=<String,Map<String,dynamic>>{};
+    for(final id in targets){
+      final kind='catalog.assign.price-list.$listId.$scope.${id.isEmpty?'default':id}';
+      final previous=widget.client.pendingR1(widget.session.actorId,branch,kind);
+      if(previous!=null)retained[id]=previous.payload;
+    }
+    if(retained.isNotEmpty){
+      final first=retained.values.first;
+      final confirmed=await showDialog<bool>(context:context,
+        builder:(dialog)=>AlertDialog(
+          title:const Text('Kiểm tra phân bổ chưa xác nhận'),
+          content:Text('Có ${retained.length} đối tượng cần kiểm tra yêu cầu trước. '
+            'Hệ thống sẽ gửi lại đúng nội dung đã xác nhận trước đó '
+            '(ưu tiên ${first['priority']}, hiệu lực ${first['effectiveFrom']??'không giới hạn'} '
+            'đến ${first['effectiveTo']??'không giới hạn'}). '
+            'Các thay đổi mới về ưu tiên hoặc ngày phải thực hiện ở lượt sau.'),
+          actions:[
+            TextButton(onPressed:()=>Navigator.pop(dialog,false),
+              child:const Text('Quay lại')),
+            FilledButton(onPressed:()=>Navigator.pop(dialog,true),
+              child:const Text('Kiểm tra yêu cầu cũ')),
+          ]));
+      if(confirmed!=true||!mounted)return;
+    }
     setState(()=>busy=true);
     var completed=0;
     try{
