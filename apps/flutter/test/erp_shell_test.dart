@@ -167,7 +167,7 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
     expect(find.text('Đăng nhập hệ thống'), findsOneWidget);
   });
 
-  testWidgets('company tabs are flat and the compact header is pinned', (tester) async {
+  testWidgets('company workflow tiers keep header pinned and expose typed destinations', (tester) async {
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = const Size(1280, 800);
     addTearDown(tester.view.resetPhysicalSize);
@@ -180,16 +180,21 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
     expect(find.byKey(const ValueKey('erp-section-tabs')), findsNothing);
     final headerRect=tester.getRect(header);
     final firstTabRect=tester.getRect(
-      find.byKey(const ValueKey('company-CompanySection.customers')));
+      find.byKey(const ValueKey('company-CompanyGroup.catalog')));
     expect(firstTabRect.center.dy,greaterThan(headerRect.top));
     expect(firstTabRect.center.dy,lessThan(headerRect.bottom));
     expect(firstTabRect.left,greaterThan(headerRect.left+180),
       reason:'Cấp 1 phải nằm về bên phải của tiêu đề xanh');
-    await tester.tap(find.byKey(const ValueKey('company-CompanySection.customers')));
+    await tester.tap(find.byKey(const ValueKey('company-CompanyGroup.catalog')));
     await tester.pumpAndSettle();
     expect(tester.getTopLeft(header).dy, y);
+    expect(find.byKey(const ValueKey('company-sub-CompanySection.customers')), findsOneWidget);
+    expect(find.byKey(const ValueKey('company-sub-CompanySection.products')), findsOneWidget);
     expect(find.text('Danh mục khách hàng'), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('company-CompanySection.overview')));
+    await tester.tap(find.byKey(const ValueKey('company-sub-CompanySection.products')));
+    await tester.pumpAndSettle();
+    expect(find.text('Danh mục sản phẩm'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('company-CompanyGroup.overview')));
     await tester.pumpAndSettle();
     expect(tester.getTopLeft(header).dy, y);
     expect(find.text('Tổng quan điều hành'), findsOneWidget);
