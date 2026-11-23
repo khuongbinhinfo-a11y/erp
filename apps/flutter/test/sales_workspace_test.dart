@@ -357,18 +357,16 @@ void main(){
     expect(find.byKey(const ValueKey('sales-line-0')),findsOneWidget);
     expect(tester.widget<TextField>(find.byKey(const ValueKey('sales-qty-0')))
       .focusNode?.hasFocus,isTrue,reason:'Selecting a SKU must focus its quantity');
-    // Removing a line must invalidate the quantity-tier price in an open picker.
+    // Set a tiered quantity first, then open the picker and remove that line.
+    await tester.enterText(find.byKey(const ValueKey('sales-qty-0')),'2');
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const ValueKey('sales-sku-search')));
     await tester.enterText(find.byKey(const ValueKey('sales-sku-search')),'SKU-01');
     await tester.pump(const Duration(milliseconds:280));
     await tester.runAsync(() async=>
       Future<void>.delayed(const Duration(milliseconds:120)));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('sales-sku-dropdown')),findsOneWidget);
-    await tester.ensureVisible(find.byKey(const ValueKey('sales-qty-0')));
-    await tester.enterText(find.byKey(const ValueKey('sales-qty-0')),'2');
-    await tester.runAsync(() async=>
-      Future<void>.delayed(const Duration(milliseconds:120)));
-    await tester.pumpAndSettle();
     expect(skuQuoteQuantities,contains('2'),
       reason:'R1-C must receive the edited selling quantity');
     await tester.ensureVisible(find.byKey(const ValueKey('sales-sku-dropdown')));
