@@ -369,11 +369,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         });
       }on ErpApiError catch(e){
         if(ctx.mounted&&run==stockGeneration)refresh((){
-          stockBusy=false;stockLoaded=true;stockError=e.message;
+          stockBusy=false;stockLoaded=false;stockError=e.message;
         });
       }catch(_){
         if(ctx.mounted&&run==stockGeneration)refresh((){
-          stockBusy=false;stockLoaded=true;stockError='Không tải được tồn kho.';
+          stockBusy=false;stockLoaded=false;stockError='Không tải được tồn kho.';
         });
       }
     }
