@@ -143,6 +143,9 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
   const createdProduct=await apply(productInput,productPreview.body.hash);
   assert.equal(createdProduct.status,200,JSON.stringify(createdProduct.body));
   const productId=createdProduct.body.applied[0].id;
+  const productReimport=await preview(productInput);
+  assert.equal(productReimport.body.summary.unchanged,1,
+    "exported unchanged product base UOM must not be rewritten");
   const priceList=await create("price-lists",{code:"BANLE",name:"Giá bán lẻ"});
   assert.equal(priceList.status,201);
   const pricing=(amount:string,date:string)=>({
@@ -161,6 +164,12 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
   const laterPricePreview=await preview(laterPrice);
   assert.equal(laterPricePreview.body.summary.update,1);
   assert.equal((await apply(laterPrice,laterPricePreview.body.hash)).status,200);
+  const priceReimport=await preview(laterPrice);
+  assert.equal(priceReimport.body.summary.unchanged,1,
+    "same amount and effective timestamp is unchanged, not a duplicate ledger entry");
+  const conflict=await preview(pricing("99999.0000","2026-11-24T00:00:00Z"));
+  assert.equal(conflict.body.summary.error,1);
+  assert.equal(conflict.body.rows[0].error,"PRICE_EFFECTIVE_TIME_CONFLICT");
   assert.equal((await db.query<{n:string}>(
     'SELECT count(*)::text AS n FROM catalog_price_entry '+
     'WHERE installation_id=$1 AND branch_id=$2 AND product_id=$3',
