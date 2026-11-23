@@ -211,7 +211,9 @@ function normalizeRow(
    }else{
     if(raw.baseUnit!==undefined&&raw.baseUnit!==""&&raw.baseUnit!==current.baseUnit)
      throw new BulkFault("IMMUTABLE_BASE_UNIT");
-    if(raw.barcode!==undefined&&raw.barcode!=="")
+    // Re-importing the exact base barcode exported from ERP is unchanged.
+    // Changing or removing a used barcode requires its own audited lifecycle.
+    if(raw.barcode!==undefined&&raw.barcode!==(current.barcode??""))
      throw new BulkFault("BARCODE_UPDATE_USE_LIFECYCLE");
    }
   }
@@ -271,7 +273,12 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
  const all=(f:string)=>[...new Set(data.map(r=>r[f]).filter(Boolean) as string[])];
  const branch=input.branchId,res=input.resource;
  const products=await db.query<Record<string,any>>(
-  'SELECT id,sku AS code,name,base_unit AS "baseUnit",group_id AS "groupId",active,revision::int'+
+  'SELECT id,sku AS code,name,base_unit AS "baseUnit",group_id AS "groupId",active,revision::int,'+
+  '(SELECT b.barcode FROM catalog_sku_barcode b JOIN catalog_sell_sku s ON '+
+  's.installation_id=b.installation_id AND s.branch_id=b.branch_id AND s.id=b.sell_sku_id '+
+  'WHERE s.installation_id=catalog_product.installation_id AND '+
+  's.branch_id=catalog_product.branch_id AND s.product_id=catalog_product.id '+
+  'AND s.is_base AND b.active ORDER BY b.is_primary DESC,b.barcode LIMIT 1) AS barcode'+
   ' FROM catalog_product WHERE installation_id=$1 AND branch_id=$2 AND ('+
   'sku=ANY($3::text[]) OR id IN (SELECT product_id FROM catalog_sell_sku '+
   'WHERE installation_id=$1 AND branch_id=$2 AND sku=ANY($3::text[])))',
@@ -348,15 +355,17 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
    const before=current?clean(Object.fromEntries(Object.entries(current)
     .map(([k,v])=>[k,v instanceof Date?v.toISOString():v]))):null;
    const revision=current?(typeof current.revision==="number"?current.revision:0):null;
-   const isSame=current&&res!=="prices"&&Object.entries(converted.operation)
+   const samePrice=current&&res==="prices"&&
+    Number(current.amount)===Number(after.amount)&&
+    Number(current.discountRate)===Number(after.discountRate)&&
+    new Date(current.effectiveAt).toISOString()===new Date(String(after.effectiveAt)).toISOString();
+   const isSame=current&&(res==="prices"?samePrice:Object.entries(converted.operation)
     .filter(([k])=>k!=="branchId"&&k!=="reason")
-    .every(([k,v])=>equal((current as Record<string,unknown>)[k],v));
+    .every(([k,v])=>equal((current as Record<string,unknown>)[k],v)));
    const action:BulkAction=!current?"CREATE":isSame?"UNCHANGED":"UPDATE";
    if(current&&res==="prices"&&action==="UPDATE"&&
-    String(current.amount)===String(after.amount)&&
-    Number(current.discountRate)===Number(after.discountRate)&&
     new Date(current.effectiveAt).toISOString()===new Date(String(after.effectiveAt)).toISOString())
-    throw new BulkFault("PRICE_EFFECTIVE_VERSION_ALREADY_EXISTS");
+    throw new BulkFault("PRICE_EFFECTIVE_TIME_CONFLICT");
    rows.push({line,key:idKey,action,before,after,revision,error:null,
     internal:{...converted.operation,id:current?.id??null}});
   }catch(e){
