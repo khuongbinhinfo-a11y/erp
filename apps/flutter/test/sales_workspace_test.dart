@@ -193,11 +193,14 @@ void main(){
   testWidgets('R2: scan barcode, quote and recover lost confirm ACK without double posting', (tester)async{
     var saved=false,confirmed=false,confirmCount=0,quoteCount=0,skuSearchCount=0;
     var useLongQuotedPrice=false;
+    const warehouse='00000000-0000-4000-8000-000000000009';
     final traces=<String>[];
     http.Response reply(Object data,int status)=>http.Response(jsonEncode(data),status,
       headers:const {'content-type':'application/json; charset=utf-8'});
     final grants=[...rights,
-      IdentityGrant(roleId:'confirm',permission:'orders.confirm',branchId:branch)];
+      IdentityGrant(roleId:'confirm',permission:'orders.confirm',branchId:branch),
+      IdentityGrant(roleId:'stock',permission:'inventory.read',
+        branchId:branch,warehouseId:warehouse)];
     final session=IdentitySession(actorId:user,token:'local-r2-session',
       expiresAt:DateTime.now().add(const Duration(hours:1)),grants:grants);
     final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
@@ -220,6 +223,22 @@ void main(){
           return reply({'items':[{'id':sellSku,
             'productId':product,'code':'SKU-01','productName':'Sản phẩm A',
             'barcode':'BARCODE-A1','unitCode':'thùng','active':true}]},200);
+        }
+        if(path=='/v1/catalog/warehouses'){
+          return reply({'items':[{'id':warehouse,'code':'MAIN',
+            'name':'Kho chính','branchId':branch}]},200);
+        }
+        if(path=='/v1/inventory/balances'){
+          expect(request.url.queryParameters['warehouseId'],warehouse);
+          return reply({'items':[{'productId':product,'available':'8',
+            'baseUnit':'cái'}],'hasMore':false},200);
+        }
+        if(path=='/v1/catalog/r1/resolve'){
+          final body=jsonDecode(request.body) as Map<String,dynamic>;
+          expect(body['sellSkuId'],sellSku);
+          expect(body['customerId'],customer);
+          expect(body['priceListId'],priceList);
+          return reply({'quote':{'unitPrice':'35000','priceSignature':'source'}},200);
         }
         if(path=='/v1/catalog/price-lists'){
           return reply({'items':[{'id':priceList,
@@ -309,6 +328,23 @@ void main(){
     await tester.pump();
     expect(tester.widget<TextField>(find.byKey(const ValueKey('sales-customer-search')))
       .focusNode?.hasFocus,isTrue);
+    // Results show R1-C resolved prices and stock from an explicitly scoped warehouse.
+    await tester.enterText(find.byKey(const ValueKey('sales-sku-search')),'Sản phẩm');
+    await tester.pump(const Duration(milliseconds:250));
+    await tester.runAsync(() async=>
+      Future<void>.delayed(const Duration(milliseconds:120)));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('sales-sku-dropdown')),findsOneWidget);
+    expect(find.text('35.000 ₫'),findsWidgets);
+    expect(find.text('8 cái'),findsOneWidget);
+    expect(find.textContaining('SKU SKU-01'),findsWidgets);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('sales-sku-dropdown')),findsNothing);
     await tester.enterText(find.byKey(const ValueKey('sales-sku-search')),'BARCODE-A1');
     await tester.testTextInput.receiveAction(TextInputAction.search);
     await tester.pumpAndSettle();
