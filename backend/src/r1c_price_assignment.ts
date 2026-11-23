@@ -103,7 +103,8 @@ export async function createPriceAssignment(db:PoolClient,t:string,i:PriceAssign
       i.customerGroupId,i.channelId,i.priority,i.effectiveFrom,i.effectiveTo]);
   return {status:201,body:{id:r.rows[0]!.id,...i,revision:0,active:true}};
 }
-export async function listPriceAssignments(db:PoolClient,t:string,b:string,q:string){
+export async function listPriceAssignments(db:PoolClient,t:string,b:string,q:string,
+  priceListId:string|null,offset:number){
   const r=await db.query(`SELECT a.id,a.price_list_id AS "priceListId",l.code AS "priceListCode",
     a.scope_kind AS "scopeKind",a.customer_id AS "customerId",
     c.code AS "customerCode",a.customer_group_id AS "customerGroupId",
@@ -120,11 +121,12 @@ export async function listPriceAssignments(db:PoolClient,t:string,b:string,q:str
     LEFT JOIN catalog_sales_channel ch ON ch.installation_id=a.installation_id
       AND ch.branch_id=a.branch_id AND ch.id=a.channel_id
     WHERE a.installation_id=$1 AND a.branch_id=$2
+      AND ($4::uuid IS NULL OR a.price_list_id=$4::uuid)
       AND (l.code ILIKE $3 OR c.code ILIKE $3 OR g.code ILIKE $3
         OR ch.code ILIKE $3 OR a.scope_kind ILIKE $3)
     ORDER BY a.active DESC,a.priority DESC,a.created_at DESC,a.id DESC
-    LIMIT 100`,[t,b,"%"+q+"%"]);
-  return r.rows;
+    LIMIT 101 OFFSET $5`,[t,b,"%"+q+"%",priceListId,offset]);
+  return {items:r.rows.slice(0,100),hasMore:r.rows.length>100};
 }
 export async function togglePriceAssignment(db:PoolClient,t:string,
   branchId:string,id:string,expectedRevision:number,active:boolean){
