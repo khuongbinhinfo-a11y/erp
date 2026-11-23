@@ -362,6 +362,16 @@ export async function executeCreate(db:PoolClient,context:MutationContext,
     throw new MutationFault("FORBIDDEN",403);
   if(resource==="prices"){
     if(!("priceListId" in value))throw new CatalogError(400,"INVALID_PRICE");
+    // Applies to BOTH single-price editing and bulk import: serialize same
+    // effective-time insertions, without touching posted historical prices.
+    const scope=[installationId,branchId,value.priceListId,value.productId,
+      value.effectiveAt].join("|");
+    await db.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",[scope]);
+    const duplicate=await db.query(
+      "SELECT id FROM catalog_price_entry WHERE installation_id=$1 AND branch_id=$2 "+
+      "AND price_list_id=$3 AND product_id=$4 AND effective_at=$5::timestamptz LIMIT 1",
+      [installationId,branchId,value.priceListId,value.productId,value.effectiveAt]);
+    if(duplicate.rowCount)throw new CatalogError(409,"EFFECTIVE_PRICE_EXISTS");
     const r=await db.query<{id:string;amount:string;discountRate:string;effectiveAt:Date}>(
       `INSERT INTO catalog_price_entry
        (installation_id,branch_id,price_list_id,product_id,amount,discount_rate,effective_at)
