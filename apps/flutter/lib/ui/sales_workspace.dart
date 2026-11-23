@@ -301,7 +301,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     int priceGeneration=0,stockGeneration=0;
     Map<String,Map<String,dynamic>> skuQuotes={},stockByProduct={};
     final skuResultScroll=ScrollController();
-    String priceContext()=>[customer??'',list??'',channel??''].join('|');
+    String priceContext()=>[customer??'',list??'',channel??'',
+      ...lines.map((line)=>line.sellSkuId+':'+line.quantity.text.trim())].join('|');
     String skuQuantity(String id){
       for(final line in lines){
         if(line.sellSkuId==id&&quantityPattern.hasMatch(line.quantity.text.trim())&&
@@ -1132,7 +1133,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           controller:entry.quantity,focusNode:entry.quantityFocus,
                           onTap:()=>entry.quantity.selection=TextSelection(
                             baseOffset:0,extentOffset:entry.quantity.text.length),
-                          onChanged:(_)=>invalidate(refresh),
+                          onChanged:(_)=>pricingChanged(ctx,refresh),
                           onSubmitted:(_)=>skuFocus.requestFocus(),
                           keyboardType:const TextInputType.numberWithOptions(decimal:true),
                           textInputAction:TextInputAction.next,
