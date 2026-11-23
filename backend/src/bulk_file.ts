@@ -120,9 +120,10 @@ function xmlRows(file:Buffer):string[][]{
  const relationship=[...rels.matchAll(/<Relationship\b[^>]*\/?>/g)]
   .map(m=>m[0]).find(s=>/\bId="([^"]+)"/.exec(s)?.[1]===first);
  const target=relationship?/\bTarget="([^"]+)"/.exec(relationship)?.[1]:undefined;
- if(!target||target.startsWith("/")||target.includes(".."))
+ if(!target||target.includes("..")||target.includes("\\"))
   throw new BulkFileFault("INVALID_XLSX_SHEET_LINK");
- const sheet=target.startsWith("xl/")?target:"xl/"+target.replace(/^\//,"");
+ const relative=target.replace(/^\//,"");
+ const sheet=relative.startsWith("xl/")?relative:"xl/"+relative;
  const entry=dir.get(sheet);
  if(!entry)throw new BulkFileFault("XLSX_SHEET_MISSING");
  const xml=zipRead(file,entry);
