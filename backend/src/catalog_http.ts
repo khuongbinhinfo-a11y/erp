@@ -194,6 +194,13 @@ async function hasR1CatalogSchema(db:Pool|PoolClient):Promise<boolean>{
     return result.rows[0]?.ok===true;
   }catch{return false;}
 }
+async function hasPriceRetirementSchema(db:Pool|PoolClient):Promise<boolean>{
+  try{
+    const result=await db.query<{ok:boolean}>(
+      "SELECT EXISTS(SELECT 1 FROM public.schema_migrations WHERE version='0010_r1_sales_price_snapshot.sql') AS ok");
+    return result.rows[0]?.ok===true;
+  }catch{return false;}
+}
 async function hasUnitDictionary(db:Pool|PoolClient):Promise<boolean>{
   try{
     const result=await db.query<{ok:boolean}>(
@@ -672,7 +679,8 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
     // cloning an edited list without a deliberate user refresh.
     const clonePath=/^\/v1\/catalog\/price-lists\/([0-9a-f-]{36})\/clone$/i.exec(url.pathname);
     if(clonePath&&req.method==="POST"){
-      if(!await hasR1CatalogSchema(pool))
+      if(!await hasR1CatalogSchema(pool)||
+         !await hasPriceRetirementSchema(pool))
         throw new CatalogError(503,"R1_PRICE_SCHEMA_REQUIRED");
       const raw=await payloadFrom(req);
       if(Object.keys(raw).some(k=>!["branchId","code","name","sourceRevision"].includes(k)))
