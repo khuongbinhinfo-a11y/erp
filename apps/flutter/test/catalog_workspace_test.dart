@@ -254,6 +254,12 @@ void main(){
     await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:120)));
     await tester.pumpAndSettle();
     expect(find.text('Khách ban đầu'),findsOneWidget);
+    final catalogTable=tester.widget<DataTable>(
+      find.byKey(const ValueKey('catalog-live-table')));
+    expect((catalogTable.columns.last.label as Text).data,'Thao tác');
+    expect(catalogTable.rows.single.cells.length,catalogTable.columns.length);
+    expect(catalogTable.rows.single.cells.first.child,isA<Text>(),
+      reason:'Ô Mã chỉ chứa mã, không có nút thao tác');
     await tester.tap(find.byKey(const ValueKey('catalog-edit-row-1')));
     await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const ValueKey('catalog-edit-name')),'Khách đã sửa');
