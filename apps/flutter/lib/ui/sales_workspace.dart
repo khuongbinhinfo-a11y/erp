@@ -289,9 +289,10 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     final skuFocus=FocusNode();
     final customerFocus=FocusNode();
     Timer? skuDebounce,customerDebounce;
-    List<Map<String,dynamic>> skuMatches=[];
+    List<Map<String,dynamic>> skuMatches=[],skuAllMatches=[];
     List<Map<String,dynamic>> customerMatches=[];
     int selectedSkuIndex=0,skuSearchGeneration=0;
+    bool skuExplicitSelection=false;
     int selectedCustomerIndex=0,customerSearchGeneration=0;
     String? skuResultsFor,skuSearchError;
     bool skuBusy=false,customerBusy=false,starterUntouched=order==null;
@@ -412,7 +413,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       starterUntouched=false;
       skuSearch.clear();
       skuSearchGeneration++;priceGeneration++;
-      skuResultsFor=null;skuSearchError=null;skuMatches=[];skuQuotes={};
+      skuResultsFor=null;skuSearchError=null;
+      skuMatches=[];skuAllMatches=[];skuExplicitSelection=false;skuQuotes={};
       invalidate(refresh);
       // Fast entry: select the new row's quantity, not the search field.
       final selectedLine=lines.last;
@@ -423,13 +425,32 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           baseOffset:0,extentOffset:selectedLine.quantity.text.length);
       });
     }
+    // An exact scanned SKU/barcode wins over a substring match unless the
+    // operator deliberately moved the highlighted row by keyboard or mouse.
+    // Inspect the complete returned page, not only the 12 visible suggestions.
+    void chooseEnteredSku(StateSetter refresh){
+      if(skuMatches.isEmpty||skuResultsFor!=skuSearch.text.trim())return;
+      final term=skuSearch.text.trim().toLowerCase();
+      if(!skuExplicitSelection){
+        final exact=skuAllMatches.where((item)=>
+          (item['code']??item['sku']??'').toString().toLowerCase()==term||
+          (item['barcode']??'').toString().toLowerCase()==term).toList();
+        if(exact.length==1){chooseSku(exact.single,refresh);return;}
+        if(exact.length>1){
+          refresh(()=>formError='Mã hàng không duy nhất. Hãy chọn đúng SKU.');
+          return;
+        }
+      }
+      chooseSku(skuMatches[selectedSkuIndex],refresh);
+    }
     Future<void> findSkus(BuildContext ctx,StateSetter refresh,{bool addOnEnter=false})async{
       final term=skuSearch.text.trim();
       if(term.isEmpty)return;
       final request=++skuSearchGeneration;
       priceGeneration++;
       refresh((){
-        skuBusy=true;skuSearchError=null;skuMatches=[];skuQuotes={};
+        skuBusy=true;skuSearchError=null;skuMatches=[];skuAllMatches=[];
+        skuExplicitSelection=false;skuQuotes={};
         skuPriceBusy=false;skuResultsFor=null;selectedSkuIndex=0;
       });
       try{
@@ -440,7 +461,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         final available=found.where((sku)=>sku['active']==true).toList();
         final visible=available.take(12).toList();
         refresh((){
-          skuBusy=false;skuMatches=visible;skuResultsFor=term;
+          skuBusy=false;skuMatches=visible;skuAllMatches=available;
+          skuResultsFor=term;
           if(visible.isEmpty)skuSearchError='Không tìm thấy SKU đang bán.';
         });
         if(addOnEnter&&available.isNotEmpty){
@@ -654,8 +676,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                    customerMatches.isNotEmpty){
                 skuSearchGeneration++;priceGeneration++;
                 refresh((){
-                  skuMatches=[];customerMatches=[];
-                  skuBusy=false;skuSearchError=null;
+                  skuMatches=[];skuAllMatches=[];skuExplicitSelection=false;
+                  customerMatches=[];skuBusy=false;skuSearchError=null;
                 });
               }else{requestClose(ctx);}
               return KeyEventResult.handled;
@@ -925,17 +947,23 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         if(event is! KeyDownEvent||skuMatches.isEmpty||
           skuResultsFor!=skuSearch.text.trim())return KeyEventResult.ignored;
                         if(event.logicalKey==LogicalKeyboardKey.arrowDown){
-                          refresh(()=>selectedSkuIndex=(selectedSkuIndex+1)%skuMatches.length);
+                          refresh((){
+                            selectedSkuIndex=(selectedSkuIndex+1)%skuMatches.length;
+                            skuExplicitSelection=true;
+                          });
                           keepSkuVisible();
                           return KeyEventResult.handled;
                         }
                         if(event.logicalKey==LogicalKeyboardKey.arrowUp){
-                          refresh(()=>selectedSkuIndex=(selectedSkuIndex-1+skuMatches.length)%skuMatches.length);
+                          refresh((){
+                            selectedSkuIndex=(selectedSkuIndex-1+skuMatches.length)%skuMatches.length;
+                            skuExplicitSelection=true;
+                          });
                           keepSkuVisible();
                           return KeyEventResult.handled;
                         }
                         if(event.logicalKey==LogicalKeyboardKey.enter){
-                          chooseSku(skuMatches[selectedSkuIndex],refresh);
+                          chooseEnteredSku(refresh);
                           return KeyEventResult.handled;
                         }
                         return KeyEventResult.ignored;
@@ -947,7 +975,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           skuDebounce?.cancel();
                           skuSearchGeneration++;priceGeneration++;
                           refresh((){
-                            skuMatches=[];skuQuotes={};skuResultsFor=null;
+                            skuMatches=[];skuAllMatches=[];skuExplicitSelection=false;
+                            skuQuotes={};skuResultsFor=null;
                             skuSearchError=null;selectedSkuIndex=0;
                             skuBusy=false;skuPriceBusy=false;
                           });
@@ -960,7 +989,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         onSubmitted:(_){
                           skuDebounce?.cancel();
                           if(skuMatches.isNotEmpty&&skuResultsFor==skuSearch.text.trim()){
-                            chooseSku(skuMatches[selectedSkuIndex],refresh);
+                            chooseEnteredSku(refresh);
                           }else{findSkus(ctx,refresh,addOnEnter:true);}
                         },
                         decoration:InputDecoration(labelText:'Tìm sản phẩm theo tên, SKU, barcode · F3',
@@ -1050,6 +1079,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                                     onTap:()=>chooseSku(sku,refresh),
                                     onHover:(hover){
                                       if(hover&&selectedSkuIndex!=i){
+                                        // Hover updates the visual row; only arrow keys signal an
+                                        // intentional keyboard override of a scanned exact ID.
                                         refresh(()=>selectedSkuIndex=i);
                                       }
                                     },
