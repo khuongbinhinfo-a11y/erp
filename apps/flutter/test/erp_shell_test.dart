@@ -64,8 +64,12 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
     await tester.pumpWidget(const ErpApp(previewMode:true));
     expect(find.byKey(const ValueKey('erp-startup-toast')), findsOneWidget);
     expect(find.text('Đang xem giao diện'), findsOneWidget);
+    // The notice starts off-canvas; wait for the entrance before tapping.
+    await tester.pump(const Duration(milliseconds:16));
+    await tester.pump(const Duration(milliseconds:320));
     await tester.tap(find.byKey(const ValueKey('erp-toast-close')));
     await tester.pump();
+    await tester.pump(const Duration(milliseconds:260));
     expect(find.byKey(const ValueKey('erp-startup-toast')), findsNothing);
     expect(find.text('Tổng quan điều hành'), findsOneWidget);
   });
@@ -127,6 +131,7 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
     expect(tester.widget<Material>(menu).elevation,greaterThan(0));
     final expandedWidth=tester.getSize(frame).width;
     await tester.tap(find.byKey(const ValueKey('erp-sidebar-toggle')));
+    await tester.pump();
     await tester.pump(const Duration(milliseconds:340));
     expect(tester.getSize(frame).width,lessThan(expandedWidth));
     expect(find.byKey(const ValueKey('erp-nav-surface-0')),findsOneWidget);
