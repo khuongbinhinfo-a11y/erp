@@ -127,6 +127,21 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
   assert.equal(exportCsv.status,200);
   assert.match(exportCsv.body.content,/KH01/);
   assert.equal(exportCsv.body.content.includes("customer_group_id"),false);
+  assert.match(exportCsv.body.content,/\'\+84900000001/,
+    "international phone values are CSV formula-neutralized");
+  const exportedCustomerReimport={
+    ...customerInput,
+    fileName:"export-customers.csv",
+    contentBase64:Buffer.from(exportCsv.body.content).toString("base64"),
+    mapping:{
+      code:"code",name:"name",customerGroupCode:"customerGroupCode",
+      customerRegionCode:"customerRegionCode",phone:"phone",
+      deliveryAddress:"deliveryAddress",paymentTermsDays:"paymentTermsDays",
+      active:"active",
+    },
+  };
+  const roundtrip=await preview(exportedCustomerReimport);
+  assert.equal(roundtrip.body.summary.unchanged,2,JSON.stringify(roundtrip.body));
 
   for(const unit of ["CHAI","THUNG"]){
    assert.equal((await create("unit-definitions",{code:unit,name:unit})).status,201);
@@ -160,6 +175,8 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
   const firstPricePreview=await preview(firstPrice);
   assert.equal(firstPricePreview.status,200,JSON.stringify(firstPricePreview.body));
   assert.equal((await apply(firstPrice,firstPricePreview.body.hash)).status,200);
+  // An immutable timestamp with microseconds must round-trip via exported
+  // CSV without generating another price entry.
   const laterPrice=pricing("17000.0000","2026-11-24T00:00:00Z");
   const laterPricePreview=await preview(laterPrice);
   assert.equal(laterPricePreview.body.summary.update,1);
@@ -193,6 +210,25 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
     [root.installationId,branchId,productId])).rows[0]!.n,"3",
     "two bulk versions plus one concurrent single-price version are all preserved");
 
+  const microPrice=await create("prices",{
+    priceListId:priceList.body.id,productId,amount:"21000.0000",
+    discountRate:"5.00",effectiveAt:"2026-11-27T00:00:00.123456Z",
+  });
+  assert.equal(microPrice.status,201,JSON.stringify(microPrice.body));
+  const pricesExport=await request("/v1/catalog/bulk/export?branchId="+branchId+
+    "&resource=prices","GET",undefined,token);
+  assert.equal(pricesExport.status,200,JSON.stringify(pricesExport.body));
+  assert.match(pricesExport.body.content,/2026-11-27T00:00:00\.123456Z/,
+    "price CSV must preserve all six fractional digits");
+  const priceRoundtrip={
+    branchId,resource:"prices",mode:"UPSERT",fileName:"export-prices.csv",
+    contentBase64:Buffer.from(pricesExport.body.content).toString("base64"),
+    hasHeader:true,mapping:{priceListCode:"priceListCode",productCode:"productCode",
+      amount:"amount",discountRate:"discountRate",effectiveAt:"effectiveAt"},
+  };
+  assert.equal((await preview(priceRoundtrip)).body.summary.unchanged,1,
+    "reimporting a microsecond timestamp must not append a rounded version");
+
   const skuFile=(code:string,active:string,reason:string)=>({
    branchId,resource:"skus",mode:"UPSERT",fileName:"skus.csv",
    contentBase64:Buffer.from("Mã SKU,Mã SP,Đơn vị,Quy đổi,Trạng thái,Lý do\n"+
@@ -206,6 +242,11 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
   const skuAdded=await apply(skuCreate,skuPreview.body.hash);
   assert.equal(skuAdded.status,200,JSON.stringify(skuAdded.body));
   const skuId=skuAdded.body.applied[0].id;
+  const occupiedSku=await preview(skuFile("SP01-OTHER","1",""));
+  assert.equal(occupiedSku.body.summary.error,1,
+    "a different code cannot take over an existing product/unit pair");
+  assert.equal(occupiedSku.body.rows[0].error,
+    "PRODUCT_UNIT_ALREADY_ASSIGNED_TO_SKU");
   const skuStop=skuFile("SP01-T","Ngừng","Sai mã SKU");
   const skuStopPreview=await preview(skuStop);
   assert.equal(skuStopPreview.body.summary.update,1,JSON.stringify(skuStopPreview.body));
