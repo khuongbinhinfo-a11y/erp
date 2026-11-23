@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { deflateRawSync } from "node:zlib";
-import { csvRows,parseBulkFile,bulkCsv,BulkFileFault } from "./bulk_file.ts";
-import { bulkColumns,suggestBulkMapping,checkBulkInput } from "./bulk_plan.ts";
+import { csvRows,parseBulkFile,bulkCsv,restoreCsvGuard,BulkFileFault } from "./bulk_file.ts";
+import { bulkColumns,suggestBulkMapping,checkBulkInput,mappedRows } from "./bulk_plan.ts";
 
 function workbook(sheet:string,shared:string,relTarget="worksheets/sheet1.xml"):Buffer{
  const entries=[
@@ -84,6 +84,21 @@ test("R1-B: invalid encoding, duplicate headers, formula-injection-safe CSV expo
  assert.match(bulkCsv(["code","name"],[["=1+2",'a"b'],["@HYPERLINK","text"]]),
   /'=1\+2/);
  assert.match(bulkCsv(["code","name"],[["=1+2",'a"b']]),/"a""b"/);
+});
+test("R1-B: CSV formula-safe fields round-trip without altering names, addresses or apostrophes",()=>{
+ const texts=["@Home","-Địa chỉ","+84900000001","=SUM(1,2)","'@Home","''@Home","An toàn"];
+ const exported=bulkCsv(["value"],texts.map(value=>[value]));
+ const parsed=parseBulkFile("formula.csv",Buffer.from(exported).toString("base64"));
+ assert.deepEqual(parsed.rows.map(row=>restoreCsvGuard(row[0]!)),texts);
+ const detailed=bulkCsv(["code","name","deliveryAddress"],[
+  ["KH_FORM","@Home","-Kho 1"],["KH_QUOTE","'@Home","''@Địa chỉ"]]);
+ const input={branchId:"00000000-0000-4000-8000-000000000001",
+  resource:"customers" as const,mode:"UPSERT" as const,fileName:"formula.csv",
+  contentBase64:Buffer.from(detailed).toString("base64"),
+  hasHeader:true,mapping:{code:"code",name:"name",deliveryAddress:"deliveryAddress"}};
+ const rows=mappedRows(input,parseBulkFile(input.fileName,input.contentBase64));
+ assert.deepEqual(rows,[{code:"KH_FORM",name:"@Home",deliveryAddress:"-Kho 1"},
+  {code:"KH_QUOTE",name:"'@Home",deliveryAddress:"''@Địa chỉ"}]);
 });
 test("R1-B: aliases and key-based mapping reject unmapped/ambiguous lookups",()=>{
  assert.deepEqual(suggestBulkMapping("customers",["Mã KH","Tên khách","Mã khu vực"]),{
