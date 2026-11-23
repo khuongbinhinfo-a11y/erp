@@ -210,11 +210,15 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
     [root.installationId,branchId,productId])).rows[0]!.n,"3",
     "two bulk versions plus one concurrent single-price version are all preserved");
 
-  const microPrice=await create("prices",{
-    priceListId:priceList.body.id,productId,amount:"21000.0000",
-    discountRate:"5.00",effectiveAt:"2026-11-27T00:00:00.123456Z",
-  });
-  assert.equal(microPrice.status,201,JSON.stringify(microPrice.body));
+  // Existing historical PostgreSQL prices can have microsecond precision.
+  // The classic catalog single-entry API intentionally canonicalizes new
+  // timestamps to milliseconds; verify export NEVER drops stored precision.
+  await db.query(`INSERT INTO catalog_price_entry
+    (installation_id,branch_id,price_list_id,product_id,amount,
+     discount_rate,effective_at)
+    VALUES ($1,$2,$3,$4,21000.0000,5.00,$5::timestamptz)`,
+    [root.installationId,branchId,priceList.body.id,productId,
+      "2026-11-27T00:00:00.123456Z"]);
   const pricesExport=await request("/v1/catalog/bulk/export?branchId="+branchId+
     "&resource=prices","GET",undefined,token);
   assert.equal(pricesExport.status,200,JSON.stringify(pricesExport.body));
