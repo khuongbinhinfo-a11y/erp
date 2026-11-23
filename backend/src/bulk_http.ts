@@ -6,7 +6,8 @@ import { hasPermission } from "./rbac.ts";
 import { executeMutation,MutationFault } from "./mutation.ts";
 import { validIdempotencyKey } from "./contracts.ts";
 import type { IdentityOptions } from "./identity_http.ts";
-import { parseBulkFile,bulkCsv,BulkFileFault } from "./bulk_file.ts";
+import { parseBulkFile,BulkFileFault } from "./bulk_file.ts";
+import { bulkExport } from "./bulk_export.ts";
 import { BulkFault,bulkColumns,suggestBulkMapping,checkBulkInput,
   buildBulkPlan,publicBulkPlan,applyBulkPlan,type BulkResource } from "./bulk_plan.ts";
 
@@ -107,7 +108,7 @@ async function exportRows(db:PoolClient,tenant:string,branch:string,kind:BulkRes
   return v==null?"":v instanceof Date?v.toISOString():
    typeof v==="boolean"?v?"1":"0":String(v);
  }));
- return {content:bulkCsv(fields,result),total:result.length};
+ return {rows:result,total:result.length};
 }
 export async function handleBulkHttp(req:IncomingMessage,res:ServerResponse,
  requestId:string,url:URL,opts:IdentityOptions,ready:()=>Promise<boolean>):Promise<void>{
@@ -133,17 +134,18 @@ export async function handleBulkHttp(req:IncomingMessage,res:ServerResponse,
   if(req.method==="GET"&&(action==="template"||action==="export")){
    const branch=url.searchParams.get("branchId"),kind=resource(url.searchParams.get("resource"));
    if(!branch||!UUID.test(branch))throw new BulkFault("INVALID_BRANCH");
+   const format=url.searchParams.get("format")??"csv";
+   if(format!=="csv"&&format!=="xlsx")throw new BulkFault("INVALID_EXPORT_FORMAT");
    const db=await pool.connect();
    try{
     if(!await hasPermission(db,{installationId:tenant,actorId:actor,branchId:branch,
       permission:"catalog.read"}))throw new BulkFault("DENIED",403);
     if(action==="template"){
-     const columns=bulkColumns(kind);
-     send(res,200,{fileName:"mau-"+kind+".csv",content:bulkCsv(columns,[]),
-       columns,requestId},requestId,cors);
+     const file=bulkExport(kind,[],format,true);
+     send(res,200,{...file,requestId},requestId,cors);
     }else{
      const result=await exportRows(db,tenant,branch,kind);
-     send(res,200,{fileName:"xuat-"+kind+".csv",...result,requestId},requestId,cors);
+     send(res,200,{...bulkExport(kind,result.rows,format),requestId},requestId,cors);
     }
    }finally{db.release();}
    return;

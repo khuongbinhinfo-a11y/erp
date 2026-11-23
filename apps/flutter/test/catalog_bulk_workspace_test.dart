@@ -133,7 +133,7 @@ void main(){
       saveCsvForTest:(_,__)async{throw UnsupportedError('download blocked');})))));
    await tester.tap(find.byKey(const ValueKey('catalog-bulk-template')));
    await tester.pumpAndSettle();
-   expect(find.textContaining('Trình duyệt không hỗ trợ tải CSV'),findsOneWidget);
+   expect(find.textContaining('Trình duyệt không hỗ trợ tải tệp'),findsOneWidget);
    expect(tester.takeException(),isNull);
   });
 
@@ -157,6 +157,40 @@ void main(){
    expect(find.byKey(const ValueKey('catalog-bulk-export')),findsOneWidget);
    expect(find.byKey(const ValueKey('catalog-bulk-apply')),findsNothing,
     reason:'cannot COMMIT without server preview/confirmation');
+   expect(tester.takeException(),isNull);
+ });
+
+ testWidgets('R1-B: download XLSX template and formatted workbook as binary, no UTF-8 BOM',
+  (tester)async{
+   final requests=<String>[],downloads=<({String name,Uint8List bytes})>[];
+   final sample=Uint8List.fromList([0x50,0x4b,0x03,0x04,0x00,0xff]);
+   final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+     httpClient:MockClient((request)async{
+       requests.add(request.url.path+'?'+request.url.queryParameters['format'].toString());
+       expect(request.url.queryParameters['format'],'xlsx');
+       expect(request.url.queryParameters['resource'],'customers');
+       return http.Response(jsonEncode({
+         'fileName':request.url.path.endsWith('template')?'mau-khach-hang.xlsx':'xuat-khach-hang.xlsx',
+         'contentBase64':base64Encode(sample),
+       }),200);
+     }));
+   addTearDown(client.dispose);
+   tester.view.devicePixelRatio=1;
+   tester.view.physicalSize=const Size(1280,900);
+   addTearDown(tester.view.resetPhysicalSize);
+   addTearDown(tester.view.resetDevicePixelRatio);
+   await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
+    home:Scaffold(body:SingleChildScrollView(
+     child:CatalogBulkWorkspace(client:client,session:session(),
+      branchId:branch,canWrite:true,initialArea:'customers',
+      saveCsvForTest:(name,bytes)async{downloads.add((name:name,bytes:bytes));})))));
+   await tester.tap(find.byKey(const ValueKey('catalog-bulk-template-xlsx')));
+   await tester.pumpAndSettle();
+   await tester.tap(find.byKey(const ValueKey('catalog-bulk-export-xlsx')));
+   await tester.pumpAndSettle();
+   expect(requests,['/v1/catalog/bulk/template?xlsx','/v1/catalog/bulk/export?xlsx']);
+   expect(downloads.map((x)=>x.name),['mau-khach-hang.xlsx','xuat-khach-hang.xlsx']);
+   expect(downloads.every((x)=>x.bytes.length==sample.length&&x.bytes[0]==0x50&&x.bytes[1]==0x4b),true);
    expect(tester.takeException(),isNull);
  });
 }

@@ -155,12 +155,8 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
     ...customerInput,
     fileName:"export-customers.csv",
     contentBase64:Buffer.from(exportCsv.body.content).toString("base64"),
-    mapping:{
-      code:"code",name:"name",customerGroupCode:"customerGroupCode",
-      customerRegionCode:"customerRegionCode",phone:"phone",
-      deliveryAddress:"deliveryAddress",paymentTermsDays:"paymentTermsDays",
-      active:"active",
-    },
+    mapping:Object.fromEntries(exportCsv.body.columns.map((field:string,i:number)=>
+      [field,exportCsv.body.headers[i]])),
   };
   const roundtrip=await preview(exportedCustomerReimport);
   assert.equal(roundtrip.body.summary.unchanged,2,JSON.stringify(roundtrip.body));
@@ -233,8 +229,8 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
   const importedProduct=await preview({
    ...productInput,fileName:"export-products.csv",
    contentBase64:Buffer.from(exportedProduct.body.content).toString("base64"),
-   mapping:{code:"code",name:"name",baseUnit:"baseUnit",
-    groupCode:"groupCode",barcode:"barcode",active:"active"},
+   mapping:Object.fromEntries(exportedProduct.body.columns.map((field:string,i:number)=>
+      [field,exportedProduct.body.headers[i]])),
   });
   assert.equal(importedProduct.body.rows[0].action,"UNCHANGED",
     "formula-safe product names must round-trip unchanged");
@@ -316,8 +312,8 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
   const sortedReimport=await preview({
    ...productInput,fileName:"same-barcode.csv",
    contentBase64:Buffer.from(sortedCSV).toString("base64"),
-   mapping:{code:"code",name:"name",baseUnit:"baseUnit",
-    groupCode:"groupCode",barcode:"barcode",active:"active"},
+   mapping:Object.fromEntries(sortedExport.body.columns.map((field:string,i:number)=>
+      [field,sortedExport.body.headers[i]])),
   });
   assert.equal(sortedReimport.body.summary.error,0,JSON.stringify(sortedReimport.body));
   assert.equal(sortedReimport.body.rows.find((row:{key:string})=>row.key==="SP01")?.action,
@@ -397,8 +393,8 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
   const priceRoundtrip={
     branchId,resource:"prices",mode:"UPSERT",fileName:"export-prices.csv",
     contentBase64:Buffer.from(pricesExport.body.content).toString("base64"),
-    hasHeader:true,mapping:{priceListCode:"priceListCode",productCode:"productCode",
-      amount:"amount",discountRate:"discountRate",effectiveAt:"effectiveAt"},
+    hasHeader:true,mapping:Object.fromEntries(pricesExport.body.columns.map((field:string,i:number)=>
+       [field,pricesExport.body.headers[i]])),
   };
   assert.equal((await preview(priceRoundtrip)).body.summary.unchanged,1,
     "reimporting a microsecond timestamp must not append a rounded version");
