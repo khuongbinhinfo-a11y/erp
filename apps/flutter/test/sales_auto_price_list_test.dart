@@ -19,6 +19,7 @@ void main(){
     (tester)async{
     final selectedLists=<String>[];
     var autoLookups=0;
+    final requested=<String>[];
     final grants=[
       IdentityGrant(roleId:'a',permission:'orders.read',branchId:branch),
       IdentityGrant(roleId:'b',permission:'orders.create',branchId:branch),
@@ -28,6 +29,7 @@ void main(){
       expiresAt:DateTime.now().add(const Duration(hours:1)),grants:grants);
     final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
       httpClient:MockClient((request)async{
+        requested.add(request.url.path);
         switch(request.url.path){
           case '/v1/catalog/branches':
             return http.Response(jsonEncode({'items':[
@@ -88,6 +90,9 @@ void main(){
     await tester.pumpAndSettle();
     await tester.runAsync(() async=>Future<void>.delayed(const Duration(milliseconds:120)));
     await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('sales-sku-search')),findsOneWidget,
+      reason:'Requested endpoints: ${requested.join(", ")}; '
+        'visible: ${tester.widgetList<Text>(find.byType(Text)).map((t)=>t.data).whereType<String>().take(30).join(" / ")}');
     await tester.enterText(find.byKey(const ValueKey('sales-sku-search')),'SP-01');
     await tester.testTextInput.receiveAction(TextInputAction.search);
     await tester.pumpAndSettle();
