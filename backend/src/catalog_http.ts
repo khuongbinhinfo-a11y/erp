@@ -644,6 +644,9 @@ export async function applyEdit(db:PoolClient,context:MutationContext,
 /** Read-model pricing is advisory only; inventory stock and order posting remain blocked. */
 async function livePrice(db:PoolClient,installationId:string,branchId:string,
   priceListId:string,productId:string){
+  const listWindow=await hasR1CPriceSchema(db)?
+    " AND (l.effective_from IS NULL OR l.effective_from<=now())"+
+    " AND (l.effective_to IS NULL OR l.effective_to>now())":"";
   const r=await db.query<{
     id:string;amount:string;discountRate:string;effectiveAt:Date;
     currency:string;productRevision:string;priceListRevision:string;
@@ -655,7 +658,7 @@ async function livePrice(db:PoolClient,installationId:string,branchId:string,
     JOIN catalog_product p ON p.installation_id=e.installation_id
       AND p.branch_id=e.branch_id AND p.id=e.product_id AND p.active
     JOIN catalog_price_list l ON l.installation_id=e.installation_id
-      AND l.branch_id=e.branch_id AND l.id=e.price_list_id AND l.active
+      AND l.branch_id=e.branch_id AND l.id=e.price_list_id AND l.active ${listWindow}
     WHERE e.installation_id=$1 AND e.branch_id=$2 AND e.price_list_id=$3
       AND e.product_id=$4 AND e.effective_at <= now()
     ORDER BY e.effective_at DESC,e.id DESC LIMIT 1`,
