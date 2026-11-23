@@ -122,11 +122,15 @@ void main(){
     await tester.runAsync(() async=>
       Future<void>.delayed(const Duration(milliseconds:120)));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('sales-quote')));
-    await tester.pumpAndSettle();
+    // Price must arrive automatically after selecting SKU; no Tra giá click.
+    await tester.pump(const Duration(milliseconds:400));
     await tester.runAsync(() async =>
       Future<void>.delayed(const Duration(milliseconds:120)));
     await tester.pumpAndSettle();
+    expect(calls,contains('/v1/sales/quote'));
+    final save= tester.widget<FilledButton>(
+      find.byKey(const ValueKey('sales-save')));
+    expect(save.onPressed,isNotNull);
     await tester.tap(find.byKey(const ValueKey('sales-save')));
     await tester.pumpAndSettle();
     await tester.runAsync(() async => Future<void>.delayed(const Duration(milliseconds:120)));
