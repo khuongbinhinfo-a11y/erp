@@ -37,7 +37,7 @@ const BASE_TABLES=["installation","branch","warehouse","app_user","app_role",
  "catalog_customer","catalog_sku_barcode","catalog_unit_definition","catalog_product_media",
  "catalog_customer_group","catalog_customer_region","catalog_price_list"];
 const REQUIRED_NEW=["catalog_price_list_assignment","catalog_price_list"];
-const APPROVAL="OWNER_APPROVED_R1C_0017_ERP_DB";
+const APPROVAL="OWNER_APPROVED_R1C_0018_ERP_DB";
 const CLEAN_EXCEPT=new Set(["backend/package-lock.json","backend/deploy/package-lock.json"]);
 
 function fail(code){throw new Error(code);}
