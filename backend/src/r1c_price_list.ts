@@ -1,10 +1,11 @@
 import type { PoolClient } from "pg";
 import { requireRevision } from "./mutation.ts";
 
-/** A copy is a new, independent price list. Its starting ledger is a
- * point-in-time snapshot: one latest effective product price per product,
- * plus unretired current/future SKU rules. Historical source rows are never
- * changed, and clone never carries expired/retired promotions forward. */
+/** A copy creates a distinct price-list identity and copies the latest
+ * effective product-price entries plus all unexpired/unretired SKU policies.
+ * Policy effective times are preserved; synthetic UUIDs encode source ID
+ * ordering within ties, keeping BASE/EXCLUSIVE/STOP rule precedence stable.
+ * Original immutable rows are never changed. */
 export async function clonePriceList(db:PoolClient,input:{
   installationId:string;branchId:string;sourceId:string;
   sourceRevision:number;code:string;name:string;
@@ -38,13 +39,18 @@ export async function clonePriceList(db:PoolClient,input:{
     [t,b,sourceId,targetId]);
   const skuRules=await db.query(
     `INSERT INTO catalog_sku_price_rule
-      (installation_id,branch_id,price_list_id,sell_sku_id,scope_kind,
+      (id,installation_id,branch_id,price_list_id,sell_sku_id,scope_kind,
        channel_id,customer_id,customer_group,adjustment,amount,priority,
        stacking,stop_processing,min_quantity,effective_from,effective_to)
-     SELECT r.installation_id,r.branch_id,$4::uuid,r.sell_sku_id,r.scope_kind,
+     SELECT (
+       substr(md5($4::text),1,8)||'-'||substr(md5($4::text),9,4)||
+       '-4'||substr(md5($4::text),14,3)||'-a'||substr(md5($4::text),18,3)||
+       '-'||lpad(to_hex(row_number() OVER (
+         ORDER BY r.effective_from ASC,r.id ASC)::bigint),12,'0')
+     )::uuid,r.installation_id,r.branch_id,$4::uuid,r.sell_sku_id,r.scope_kind,
        r.channel_id,r.customer_id,r.customer_group,r.adjustment,r.amount,
        r.priority,r.stacking,r.stop_processing,r.min_quantity,
-       GREATEST(r.effective_from,transaction_timestamp()),r.effective_to
+       r.effective_from,r.effective_to
      FROM catalog_sku_price_rule r
      JOIN catalog_sell_sku s ON s.installation_id=r.installation_id
        AND s.branch_id=r.branch_id AND s.id=r.sell_sku_id AND s.active
