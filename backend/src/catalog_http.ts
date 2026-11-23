@@ -775,13 +775,20 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
         const branchId=requireUuid(url.searchParams.get("branchId"));
         const q=(url.searchParams.get("q")??"").trim();
         if(q.length>64)throw new CatalogError(400,"SEARCH_TOO_LONG");
+        const listIdParam=url.searchParams.get("priceListId");
+        const selectedListId=listIdParam?requireUuid(listIdParam):null;
+        const offsetRaw=url.searchParams.get("offset")??"0";
+        if(!/^(0|[1-9][0-9]{0,6})$/.test(offsetRaw)||
+          Number(offsetRaw)>1000000||Number(offsetRaw)%100!==0)
+          throw new CatalogError(400,"INVALID_ASSIGNMENT_PAGE");
         const db=await pool.connect();
         try{
           if(!await hasPermission(db,{installationId:tenant,actorId,
             permission:"catalog.read",branchId}))
             throw new CatalogError(403,"CATALOG_READ_DENIED");
-          const items=await listPriceAssignments(db,tenant,branchId,q);
-          send(res,200,{items,requestId},requestId,corsOrigin);
+          const page=await listPriceAssignments(db,tenant,branchId,q,
+            selectedListId,Number(offsetRaw));
+          send(res,200,{...page,requestId},requestId,corsOrigin);
         }finally{db.release();}
         return;
       }
