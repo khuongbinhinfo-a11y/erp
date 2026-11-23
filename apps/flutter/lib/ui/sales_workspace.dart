@@ -208,6 +208,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       previewDiscountTotal,previewTaxTotal;
     List<Map<String,dynamic>>? quotes;
     bool quoteBusy=false;
+    Timer? quoteDebounce;
+    int quoteGeneration=0;
     final quantityPattern=RegExp(r'^(?:0|[1-9]\d{0,8})(?:\.\d{1,3})?$');
     bool validLines()=>lines.isNotEmpty&&
       lines.every((x)=>quantityPattern.hasMatch(x.quantity.text.trim())&&
@@ -218,16 +220,21 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       ...lines.map((x)=>x.sellSkuId+':'+x.quantity.text.trim()),
     ].join('|');
     final originalStamp=stamp(),originalNote=note.text.trim();
-    void invalidate(StateSetter refresh)=>refresh((){
+    void invalidate(StateSetter refresh){
+      quoteDebounce?.cancel();
+      quoteGeneration++;
+      refresh((){
       quotes=null;quotedStamp=null;previewGrandTotal=null;previewSubtotal=null;
       previewDiscountTotal=null;previewTaxTotal=null;formError=null;
-    });
+      });
+    }
     Future<void> preview(BuildContext context,StateSetter refresh)async{
       if(customer==null||list==null||!validLines()){
         refresh(()=>formError='Hãy chọn khách hàng, SKU và nhập số lượng hợp lệ.');
         return;
       }
       final before=stamp();
+      final request=++quoteGeneration;
       refresh((){quoteBusy=true;formError=null;quotes=null;quotedStamp=null;
         previewGrandTotal=null;});
       try{
@@ -237,7 +244,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           'lines':lines.map((line)=>{'sellSkuId':line.sellSkuId,
             'quantity':line.quantity.text.trim()}).toList(),
         });
-        if(!context.mounted)return;
+        if(!context.mounted||request!=quoteGeneration)return;
         final quoted=(basket['lines'] as List<dynamic>)
           .map((x)=>Map<String,dynamic>.from(x as Map)).toList();
         if(quoted.length!=lines.length)throw const FormatException('QUOTE_LINES');
@@ -253,14 +260,23 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           quoteBusy=false;
         });
       }on ErpApiError catch(e){
-        if(context.mounted)refresh((){
+        if(context.mounted&&request==quoteGeneration)refresh((){
           quoteBusy=false;formError=e.message;
         });
       }catch(_){
-        if(context.mounted)refresh((){
+        if(context.mounted&&request==quoteGeneration)refresh((){
           quoteBusy=false;formError='Không tra được giá. Vui lòng thử lại.';
         });
       }
+    }
+
+    void scheduleQuote(BuildContext ctx,StateSetter refresh){
+      quoteDebounce?.cancel();
+      if(customer==null||list==null||!validLines())return;
+      final expected=quoteGeneration;
+      quoteDebounce=Timer(const Duration(milliseconds:260),(){
+        if(ctx.mounted&&expected==quoteGeneration)preview(ctx,refresh);
+      });
     }
 
     final skuSearch=TextEditingController();
@@ -379,6 +395,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     }
     void pricingChanged(BuildContext ctx,StateSetter refresh){
       invalidate(refresh);priceGeneration++;
+      scheduleQuote(ctx,refresh);
       if(skuMatches.isNotEmpty){
         loadPrices(ctx,refresh,skuMatches);
       }else{refresh((){skuQuotes={};skuPriceBusy=false;});}
@@ -386,7 +403,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     void keepSkuVisible(){
       WidgetsBinding.instance.addPostFrameCallback((_){
         if(!skuResultScroll.hasClients)return;
-        final y=(selectedSkuIndex*76.0).clamp(
+        final y=(selectedSkuIndex*58.0).clamp(
           0.0,skuResultScroll.position.maxScrollExtent);
         skuResultScroll.animateTo(y.toDouble(),
           duration:const Duration(milliseconds:130),curve:Curves.easeOut);
@@ -397,7 +414,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     String selectedCustomer()=>customers.where((x)=>x['id']==customer).isEmpty
       ? 'Chọn khách hàng'
       :customerLabel(customers.firstWhere((x)=>x['id']==customer));
-    void chooseSku(Map<String,dynamic> item,StateSetter refresh){
+    void chooseSku(BuildContext ctx,Map<String,dynamic> item,StateSetter refresh){
       final id=item['id'] as String;
       if(lines.length>=30){refresh(()=>formError='Tối đa 30 dòng hàng.');return;}
       if(!skus.any((x)=>x['id']==id))skus.add(item);
@@ -416,6 +433,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       skuResultsFor=null;skuSearchError=null;
       skuMatches=[];skuAllMatches=[];skuExplicitSelection=false;skuQuotes={};
       invalidate(refresh);
+      scheduleQuote(ctx,refresh);
       // Fast entry: select the new row's quantity, not the search field.
       final selectedLine=lines.last;
       WidgetsBinding.instance.addPostFrameCallback((_){
@@ -428,20 +446,20 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     // An exact scanned SKU/barcode wins over a substring match unless the
     // operator deliberately moved the highlighted row by keyboard or mouse.
     // Inspect the complete returned page, not only the 12 visible suggestions.
-    void chooseEnteredSku(StateSetter refresh){
+    void chooseEnteredSku(BuildContext ctx,StateSetter refresh){
       if(skuMatches.isEmpty||skuResultsFor!=skuSearch.text.trim())return;
       final term=skuSearch.text.trim().toLowerCase();
       if(!skuExplicitSelection){
         final exact=skuAllMatches.where((item)=>
           (item['code']??item['sku']??'').toString().toLowerCase()==term||
           (item['barcode']??'').toString().toLowerCase()==term).toList();
-        if(exact.length==1){chooseSku(exact.single,refresh);return;}
+        if(exact.length==1){chooseSku(ctx,exact.single,refresh);return;}
         if(exact.length>1){
           refresh(()=>formError='Mã hàng không duy nhất. Hãy chọn đúng SKU.');
           return;
         }
       }
-      chooseSku(skuMatches[selectedSkuIndex],refresh);
+      chooseSku(ctx,skuMatches[selectedSkuIndex],refresh);
     }
     Future<void> findSkus(BuildContext ctx,StateSetter refresh,{bool addOnEnter=false})async{
       final term=skuSearch.text.trim();
@@ -469,8 +487,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           final exact=available.where((sku)=>
             (sku['code']??sku['sku']??'').toString().toLowerCase()==term.toLowerCase()||
             (sku['barcode']??'').toString().toLowerCase()==term.toLowerCase()).toList();
-          if(exact.length==1){chooseSku(exact.single,refresh);return;}
-          if(available.length==1){chooseSku(available.single,refresh);return;}
+          if(exact.length==1){chooseSku(ctx,exact.single,refresh);return;}
+          if(available.length==1){chooseSku(ctx,available.single,refresh);return;}
         }
         if(visible.isNotEmpty){
           loadPrices(ctx,refresh,visible);
@@ -606,7 +624,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         return;
       }
       if(quotes==null||quotedStamp!=stamp()){
-        refresh(()=>formError='Hãy tra lại giá hiện hành trước khi lưu đơn.');
+        refresh(()=>formError='Giá chưa cập nhật xong. Kiểm tra kết nối hoặc bấm Làm mới giá.');
         return;
       }
       Navigator.pop(ctx,{
@@ -649,6 +667,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         ));
       if(discard==true&&ctx.mounted)Navigator.pop(ctx);
     }
+    var firstQuoteScheduled=false;
     try{
       return await showDialog<Map<String,dynamic>>(
         context:context,barrierDismissible:false,
@@ -657,6 +676,12 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           final narrow=media.width<720;
           final width=media.width*0.96>1440?1440.0:media.width*0.96;
           final ready=quotes!=null&&quotedStamp==stamp();
+          if(!firstQuoteScheduled){
+            firstQuoteScheduled=true;
+            WidgetsBinding.instance.addPostFrameCallback((_){
+              if(ctx.mounted)scheduleQuote(ctx,refresh);
+            });
+          }
           return Focus(autofocus:true,onKeyEvent:(node,event){
             if(event is! KeyDownEvent)return KeyEventResult.ignored;
             if(event.logicalKey==LogicalKeyboardKey.f3){
@@ -711,6 +736,30 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                     const Text('Người mua và chính sách giá',
                       style:TextStyle(color:ErpTokens.ink,fontSize:16,fontWeight:FontWeight.w700)),
                     const SizedBox(height:9),
+                    if(stockWarehouses.isNotEmpty)...[
+                      const SizedBox(height:8),
+                      DropdownButtonFormField<String>(
+                        key:ValueKey('sales-stock-warehouse-'+warehouseId.toString()),
+                        initialValue:warehouseId,isExpanded:true,
+                        decoration:const InputDecoration(labelText:'Kho tra tồn (chưa phải xuất kho)',
+                          border:UnderlineInputBorder()),
+                        items:[
+                          const DropdownMenuItem<String>(value:null,
+                            child:Text('Chọn kho để xem khả dụng')),
+                          ...stockWarehouses.map((w)=>DropdownMenuItem<String>(
+                            value:w['id'] as String,
+                            child:Text((w['name']??w['code']??'Kho').toString(),
+                              overflow:TextOverflow.ellipsis))),
+                        ],
+                        onChanged:(id){
+                          warehouseId=id;stockGeneration++;
+                          refresh((){
+                            stockByProduct={};stockBusy=false;
+                            stockLoaded=false;stockComplete=false;stockError=null;
+                          });
+                          if(id!=null&&skuMatches.isNotEmpty)loadStock(ctx,refresh);
+                        }),
+                    ],
                     Focus(onKeyEvent:(node,event){
                       if(event is! KeyDownEvent||customerMatches.isEmpty)
                         return KeyEventResult.ignored;
@@ -963,7 +1012,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           return KeyEventResult.handled;
                         }
                         if(event.logicalKey==LogicalKeyboardKey.enter){
-                          chooseEnteredSku(refresh);
+                          chooseEnteredSku(ctx,refresh);
                           return KeyEventResult.handled;
                         }
                         return KeyEventResult.ignored;
@@ -989,7 +1038,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         onSubmitted:(_){
                           skuDebounce?.cancel();
                           if(skuMatches.isNotEmpty&&skuResultsFor==skuSearch.text.trim()){
-                            chooseEnteredSku(refresh);
+                            chooseEnteredSku(ctx,refresh);
                           }else{findSkus(ctx,refresh,addOnEnter:true);}
                         },
                         decoration:InputDecoration(labelText:'Tìm sản phẩm theo tên, SKU, barcode · F3',
@@ -1002,30 +1051,6 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                     const Padding(padding:EdgeInsets.only(top:4,bottom:2),
                       child:Text('F3 tìm hàng · F4 tìm khách · ↑↓ chọn · Enter thêm',
                         style:TextStyle(color:ErpTokens.muted,fontSize:11))),
-                    if(stockWarehouses.isNotEmpty)...[
-                      const SizedBox(height:8),
-                      DropdownButtonFormField<String>(
-                        key:ValueKey('sales-stock-warehouse-'+warehouseId.toString()),
-                        initialValue:warehouseId,isExpanded:true,
-                        decoration:const InputDecoration(labelText:'Kho tra khả dụng (tham khảo)',
-                          border:UnderlineInputBorder()),
-                        items:[
-                          const DropdownMenuItem<String>(value:null,
-                            child:Text('Chọn kho để xem khả dụng')),
-                          ...stockWarehouses.map((w)=>DropdownMenuItem<String>(
-                            value:w['id'] as String,
-                            child:Text((w['name']??w['code']??'Kho').toString(),
-                              overflow:TextOverflow.ellipsis))),
-                        ],
-                        onChanged:(id){
-                          warehouseId=id;stockGeneration++;
-                          refresh((){
-                            stockByProduct={};stockBusy=false;
-                            stockLoaded=false;stockComplete=false;stockError=null;
-                          });
-                          if(id!=null&&skuMatches.isNotEmpty)loadStock(ctx,refresh);
-                        }),
-                    ],
                     if(skuBusy)const LinearProgressIndicator(minHeight:3),
                     if(skuSearchError!=null)
                       Padding(padding:const EdgeInsets.symmetric(vertical:8),
@@ -1052,10 +1077,10 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                                   color:ErpTokens.primary)),
                             ])),
                           ConstrainedBox(
-                            constraints:const BoxConstraints(maxHeight:304),
+                            constraints:const BoxConstraints(maxHeight:220),
                             child:ListView.builder(
                               controller:skuResultScroll,shrinkWrap:true,
-                              itemExtent:76,itemCount:skuMatches.length,
+                              itemExtent:58,itemCount:skuMatches.length,
                               itemBuilder:(context,i){
                                 final sku=skuMatches[i];
                                 final id=sku['id'].toString();
@@ -1076,7 +1101,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                                     ?const Color(0xE0E8F3EB):Colors.transparent,
                                   child:InkWell(
                                     key:ValueKey('sales-sku-result-'+i.toString()),
-                                    onTap:()=>chooseSku(sku,refresh),
+                                    onTap:()=>chooseSku(ctx,sku,refresh),
                                     onHover:(hover){
                                       if(hover&&selectedSkuIndex!=i){
                                         // Hover updates the visual row; only arrow keys signal an
@@ -1112,7 +1137,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                                                 overflow:TextOverflow.ellipsis,
                                                 style:TextStyle(fontSize:narrow?11:13,
                                                   fontWeight:FontWeight.w800,
-                                                  color:unitPrice!=null?ErpTokens.primary:ErpTokens.muted)),
+                                                  color:unitPrice!=null?const Color(0xFF087E52):ErpTokens.muted)),
                                               const SizedBox(height:3),
                                               Text(available,maxLines:1,overflow:TextOverflow.ellipsis,
                                                 style:const TextStyle(fontSize:11,color:ErpTokens.muted)),
@@ -1274,7 +1299,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           key:const ValueKey('sales-quote'),
                           onPressed:quoteBusy?null:()=>preview(ctx,refresh),
                           icon:const Icon(Icons.calculate_outlined),
-                          label:Text(quoteBusy?'Đang tra giá…':'Tra giá')),
+                          label:Text(quoteBusy?'Đang cập nhật…':'Làm mới giá')),
                         FilledButton(
                           key:const ValueKey('sales-save'),
                           onPressed:quoteBusy||!ready?null:()=>submitForm(ctx,refresh,confirm:false),
@@ -1292,6 +1317,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         }),
       );
     }finally{
+      quoteDebounce?.cancel();
+      quoteGeneration++;
       skuDebounce?.cancel();customerDebounce?.cancel();
       priceGeneration++;stockGeneration++;skuResultScroll.dispose();
       note.dispose();skuSearch.dispose();customerSearch.dispose();
