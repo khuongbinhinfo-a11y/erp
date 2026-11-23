@@ -319,16 +319,16 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
     [root.installationId,branchId,productId])).rows[0]!.n,"2",
     "base and replacement pack SKU active; original pack is stopped");
   const makePhoneTransfer=(csv:string)=>file(
-   "Mã KH,Tên khách,Mã nhóm,Mã khu vực,Điện thoại,Hạn nợ\\n"+csv);
+   "Mã KH,Tên khách,Mã nhóm,Mã khu vực,Điện thoại,Hạn nợ\n"+csv);
   const phoneSeed=makePhoneTransfer(
-   "KH09,Khách I,KH_SI,KV_MT,+84900000021,0\\n"+
-   "KH10,Khách J,KH_SI,KV_MT,+84900000022,0\\n");
+   "KH09,Khách I,KH_SI,KV_MT,+84900000021,0\n"+
+   "KH10,Khách J,KH_SI,KV_MT,+84900000022,0\n");
   const seedPreview=await preview(phoneSeed);
   assert.equal(seedPreview.body.summary.error,0,JSON.stringify(seedPreview.body));
   assert.equal((await apply(phoneSeed,seedPreview.body.hash)).status,200);
   const phoneSwap=makePhoneTransfer(
-   "KH09,Khách I,KH_SI,KV_MT,+84900000022,0\\n"+
-   "KH10,Khách J,KH_SI,KV_MT,+84900000021,0\\n");
+   "KH09,Khách I,KH_SI,KV_MT,+84900000022,0\n"+
+   "KH10,Khách J,KH_SI,KV_MT,+84900000021,0\n");
   const swapPreview=await preview(phoneSwap);
   assert.equal(swapPreview.body.summary.error,0,JSON.stringify(swapPreview.body));
   const swapApplied=await apply(phoneSwap,swapPreview.body.hash);
@@ -338,8 +338,8 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
    "AND code IN ('KH09','KH10') ORDER BY code",[root.installationId,branchId])).rows;
   assert.deepEqual(swapped.map(x=>x.phone),["+84900000022","+84900000021"]);
   const oneWay=makePhoneTransfer(
-   "KH11,Khách K,KH_SI,KV_MT,+84900000022,0\\n"+
-   "KH09,Khách I,KH_SI,KV_MT,+84900000023,0\\n");
+   "KH11,Khách K,KH_SI,KV_MT,+84900000022,0\n"+
+   "KH09,Khách I,KH_SI,KV_MT,+84900000023,0\n");
   const oneWayPreview=await preview(oneWay);
   assert.equal(oneWayPreview.body.summary.error,0,JSON.stringify(oneWayPreview.body));
   assert.equal((await apply(oneWay,oneWayPreview.body.hash)).status,200,
