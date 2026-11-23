@@ -155,12 +155,8 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
     ...customerInput,
     fileName:"export-customers.csv",
     contentBase64:Buffer.from(exportCsv.body.content).toString("base64"),
-    mapping:{
-      code:"code",name:"name",customerGroupCode:"customerGroupCode",
-      customerRegionCode:"customerRegionCode",phone:"phone",
-      deliveryAddress:"deliveryAddress",paymentTermsDays:"paymentTermsDays",
-      active:"active",
-    },
+    mapping:Object.fromEntries(exportCsv.body.columns.map((field:string,i:number)=>
+      [field,exportCsv.body.headers[i]])),
   };
   const roundtrip=await preview(exportedCustomerReimport);
   assert.equal(roundtrip.body.summary.unchanged,2,JSON.stringify(roundtrip.body));
