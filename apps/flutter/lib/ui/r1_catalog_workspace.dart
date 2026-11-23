@@ -296,7 +296,8 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
       final definite=e.status==400||e.status==404||
         e.code=='DUPLICATE'||e.code=='INVALID_REFERENCE'||
         e.code=='IMMUTABLE_OR_UNIT_MISMATCH'||e.code=='PRODUCT_UNAVAILABLE'||
-        e.code=='PRICE_TARGET_UNAVAILABLE';
+        e.code=='PRICE_TARGET_UNAVAILABLE'||
+        e.code=='PRICE_RULE_OVERLAP';
       if(definite){
         widget.client.clearR1(widget.session.actorId,widget.branchId!,widget.kind);
         pending=null;pendingKey=null;
