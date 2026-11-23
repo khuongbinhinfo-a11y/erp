@@ -459,13 +459,20 @@ class ErpIdentityClient {
         token:token,body:payload,revision:0,idempotencyKey:key);
   /// Scoped price lists are a selection layer on the existing R1 price engine.
   Future<List<Map<String,dynamic>>> priceListAssignments(
-      String token,String branchId,{String query=''})async{
-    final suffix=Uri(queryParameters:{'branchId':branchId,
-      if(query.trim().isNotEmpty)'q':query.trim()}).query;
-    final raw=await _request('GET','/v1/catalog/price-lists/assignments?$suffix',
-      token:token);
-    return (raw['items'] as List<dynamic>).map(
-      (x)=>Map<String,dynamic>.from(x as Map)).toList();
+      String token,String branchId,{required String priceListId,
+      String query=''})async{
+    final rows=<Map<String,dynamic>>[];
+    for(var offset=0;offset<=100000;offset+=100){
+      final suffix=Uri(queryParameters:{'branchId':branchId,
+        'priceListId':priceListId,'offset':'$offset',
+        if(query.trim().isNotEmpty)'q':query.trim()}).query;
+      final raw=await _request('GET','/v1/catalog/price-lists/assignments?$suffix',
+        token:token);
+      rows.addAll((raw['items'] as List<dynamic>).map(
+        (x)=>Map<String,dynamic>.from(x as Map)));
+      if(raw['hasMore']!=true)return rows;
+    }
+    throw const FormatException('ASSIGNMENT_PAGE_LIMIT_EXCEEDED');
   }
   /// Retain the exact payload/key on connection loss, like all R1 commands.
   Future<Map<String,dynamic>> assignPriceList(String token,
