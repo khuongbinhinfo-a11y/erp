@@ -367,6 +367,7 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
     var primary=row['isPrimary']==true;
     var name=(row['name']??'').toString();
     final isBase=widget.kind=='skus'&&row['isBase']==true;
+    var reason='';
     final originalName=name,originalActive=active,originalPrimary=primary;
     final fields=await showDialog<Map<String,dynamic>>(context:context,
       builder:(dialog)=>StatefulBuilder(builder:(ctx,refresh)=>AlertDialog(
@@ -390,10 +391,20 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
               SwitchListTile(contentPadding:EdgeInsets.zero,
                 key:const ValueKey('r1-lifecycle-active'),
                 title:const Text('Đang sử dụng'),value:active,
-                onChanged:isBase?null:(v)=>refresh(()=>active=v)),
+                onChanged:(v)=>refresh(()=>active=v)),
+              if(widget.kind=='skus'&&!active)...[
+                const SizedBox(height:12),
+                TextFormField(
+                  key:const ValueKey('r1-sku-disable-reason'),
+                  decoration:const InputDecoration(labelText:'Lý do ngừng SKU',
+                    hintText:'Ví dụ: Nhập sai mã SKU'),
+                  maxLines:2,onChanged:(v)=>refresh(()=>reason=v.trim())),
+              ],
               if(isBase)const Text(
-                'SKU tồn kho gốc không thể ngừng riêng lẻ. '
-                'Ngừng sản phẩm theo đúng quy trình thay thế.',
+                'SKU gốc gắn cố định với mã sản phẩm và đơn vị tồn kho. '
+                'Nếu nhập sai SKU gốc, hãy ngừng SKU/sản phẩm cũ, '
+                'tạo sản phẩm mới với mã đúng. Không tái sử dụng mã/đơn vị '
+                'trên cùng sản phẩm; chứng từ và lịch sử cũ vẫn giữ nguyên.',
                 style:TextStyle(color:ErpTokens.muted,fontSize:12)),
               if(widget.kind=='barcodes')SwitchListTile(
                 contentPadding:EdgeInsets.zero,
@@ -407,10 +418,12 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
         actions:[
           TextButton(onPressed:()=>Navigator.pop(dialog),child:const Text('Hủy')),
           FilledButton(key:const ValueKey('r1-lifecycle-save'),
-            onPressed:()=>Navigator.pop(dialog,{
+            onPressed:widget.kind=='skus'&&originalActive&&!active&&reason.length<3
+              ?null:()=>Navigator.pop(dialog,{
               'branchId':branch,
               if(widget.kind=='channels'&&name!=originalName)'name':name.trim(),
               if(active!=originalActive)'active':active,
+              if(widget.kind=='skus'&&originalActive&&!active)'reason':reason,
               if(widget.kind=='barcodes'&&(primary!=originalPrimary||
                 !active&&originalPrimary))
                 'isPrimary':active&&primary,

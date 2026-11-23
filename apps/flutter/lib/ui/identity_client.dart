@@ -102,7 +102,9 @@ class ErpIdentityClient {
     try{
       final req=http.Request(method,url)..headers.addAll(headers);
       if(body!=null)req.body=jsonEncode(body);
-      final timeout=path.endsWith('/media/complete')?const Duration(seconds:30):
+      final timeout=path.startsWith('/v1/catalog/bulk/')
+        ?const Duration(seconds:150):
+        path.endsWith('/media/complete')?const Duration(seconds:30):
         path=='/v1/auth/login'?const Duration(seconds:18):const Duration(seconds:10);
       final response=await http.Response.fromStream(await _http.send(req).timeout(timeout));
       dynamic decoded;
@@ -296,6 +298,28 @@ class ErpIdentityClient {
     }
     return found;
   }
+  /// R1-B: server parses CSV/XLSX and resolves codes before any write.
+  Future<Map<String,dynamic>> bulkInspect(
+      String token,Map<String,dynamic> payload)=>
+    _request('POST','/v1/catalog/bulk/inspect',token:token,body:payload);
+
+  Future<Map<String,dynamic>> bulkPreview(
+      String token,Map<String,dynamic> payload)=>
+    _request('POST','/v1/catalog/bulk/preview',token:token,body:payload);
+
+  /// Same key+body after timeout: server replays committed receipt.
+  Future<Map<String,dynamic>> bulkApply(
+      String token,Map<String,dynamic> payload,{required String key})=>
+    _request('POST','/v1/catalog/bulk/apply',token:token,
+      body:payload,revision:0,idempotencyKey:key);
+
+  Future<Map<String,dynamic>> bulkCsvFile(
+      String token,String resource,String branchId,{bool template=false})async{
+    final query=Uri(queryParameters:{'resource':resource,'branchId':branchId}).query;
+    return _request('GET',
+      '/v1/catalog/bulk/${template?'template':'export'}?$query',token:token);
+  }
+
   /// Product write readiness is explicit: catalog 0006/0007 can still be
   /// viewed, but SKU/barcode creation requires the separately migrated R1 schema.
   Future<({List<Map<String,dynamic>> items,bool writeReady})> catalogProducts(

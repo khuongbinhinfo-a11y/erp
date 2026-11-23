@@ -231,4 +231,68 @@ void main(){
     await tester.pump(const Duration(seconds:5));
   });
 
+  testWidgets('R1-B base SKU can be stopped after entering mandatory reason',
+    (tester)async{
+    var patched=false;
+    final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+      httpClient:MockClient((req)async{
+        const headers={'content-type':'application/json; charset=utf-8'};
+        if(req.url.path=='/v1/catalog/r1/skus'&&req.method=='GET'){
+          return http.Response(jsonEncode({'items':[{
+            'id':sku,'code':'SP01','productName':'Sản phẩm thử',
+            'unitCode':'cai','toBase':'1.000000','isBase':true,
+            'active':true,'revision':0,
+          }]}),200,headers:headers);
+        }
+        if(req.method=='GET')return http.Response(
+          jsonEncode({'items':sample(req.url.path.replaceFirst('/v1/catalog/',''))}),
+          200,headers:headers);
+        if(req.url.path=='/v1/catalog/r1/skus/$sku'&&req.method=='PATCH'){
+          final payload=jsonDecode(req.body) as Map<String,dynamic>;
+          expect(payload['active'],false);
+          expect(payload['reason'],'SKU gốc nhập sai mã');
+          expect(req.headers['if-match'],'0');
+          expect(req.headers['idempotency-key'],isNotNull);
+          patched=true;
+          return http.Response(jsonEncode({'id':sku,'revision':1}),200,
+            headers:headers);
+        }
+        return http.Response(jsonEncode({'error':{'code':'NOT_FOUND'}}),404);
+      }));
+    addTearDown(client.dispose);
+    tester.view.devicePixelRatio=1;
+    tester.view.physicalSize=const Size(390,850);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:true),home:
+      Scaffold(body:SingleChildScrollView(child:R1CatalogWorkspace(
+        kind:'skus',branchId:branch,branches:branches,
+        client:client,session:session(),changeBranch:(_){},
+      )))));
+    await tester.pumpAndSettle();
+    await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:120)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(ValueKey('r1-edit-$sku')));
+    await tester.pumpAndSettle();
+    final toggle=find.byKey(const ValueKey('r1-lifecycle-active'));
+    expect(toggle,findsOneWidget);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    final save=find.byKey(const ValueKey('r1-lifecycle-save'));
+    expect(tester.widget<FilledButton>(save).onPressed,isNull,
+      reason:'No SKU may stop without an auditable reason');
+    await tester.enterText(find.byKey(const ValueKey('r1-sku-disable-reason')),
+      'SKU gốc nhập sai mã');
+    await tester.pumpAndSettle();
+    expect(tester.widget<FilledButton>(save).onPressed,isNotNull,
+      reason:'Entering 3+ chars must enable save');
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:150)));
+    await tester.pumpAndSettle();
+    expect(patched,true);
+    expect(tester.takeException(),isNull);
+    await tester.pump(const Duration(seconds:5));
+  });
+
 }
