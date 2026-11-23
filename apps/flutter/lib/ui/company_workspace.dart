@@ -30,6 +30,34 @@ enum CompanySection {
   final IconData icon;
 }
 
+/// Company navigation is grouped by workflows, never a flat catalog of pages.
+/// A page remains the typed, RBAC-checked destination for deep links.
+enum CompanyGroup {
+  overview('Tổng quan'),
+  sales('Bán hàng'),
+  purchasing('Mua hàng'),
+  warehouse('Kho'),
+  finance('Tài chính'),
+  catalog('Danh mục'),
+  reports('Báo cáo');
+  const CompanyGroup(this.label);
+  final String label;
+}
+
+extension CompanySectionGroup on CompanySection {
+  CompanyGroup get group=>switch(this){
+    CompanySection.overview=>CompanyGroup.overview,
+    CompanySection.orders=>CompanyGroup.sales,
+    CompanySection.purchases=>CompanyGroup.purchasing,
+    CompanySection.warehouses||CompanySection.transfers||CompanySection.stocktakes
+      =>CompanyGroup.warehouse,
+    CompanySection.receivables=>CompanyGroup.finance,
+    CompanySection.customers||CompanySection.products||CompanySection.prices
+      =>CompanyGroup.catalog,
+    CompanySection.reports=>CompanyGroup.reports,
+  };
+}
+
 class CompanyWorkspace extends StatefulWidget {
   final bool previewOnly;
   final List<IdentityGrant> grants;
@@ -63,6 +91,12 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
     };
   }
   List<CompanySection> get visibleSections=>CompanySection.values.where(canView).toList();
+  List<CompanyGroup> get visibleGroups=>CompanyGroup.values.where((group)=>
+    visibleSections.any((section)=>section.group==group)).toList();
+  void selectGroup(CompanyGroup group){
+    final destinations=visibleSections.where((section)=>section.group==group);
+    if(destinations.isNotEmpty)select(destinations.first);
+  }
   String filter = '';
   final TextEditingController search = TextEditingController();
 
@@ -87,7 +121,10 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
   @override Widget build(BuildContext context) {
     final narrow = MediaQuery.sizeOf(context).width < 760;
     final sections = visibleSections;
+    final groups = visibleGroups;
     final active = sections.contains(section) ? section : CompanySection.overview;
+    final activeGroup=active.group;
+    final groupSections=sections.where((item)=>item.group==activeGroup).toList();
     final margin = narrow ? 16.0 : 26.0;
     return Column(children: [
       Padding(padding: EdgeInsets.fromLTRB(margin, 16, margin, 0),
@@ -95,11 +132,20 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
           heading: 'Công Ty',
           subtitle: 'Điều hành phân phối · quản lý tập trung',
           icon: Icons.domain_outlined,
-          trailing: ErpHeaderTabs<CompanySection>(
+          trailing: ErpHeaderTabs<CompanyGroup>(
             keyPrefix: 'company',
-            selected: active,
-            items: sections.map((s) => ErpSectionTab(s, s.label)).toList(),
-            onSelected: select))),
+            selected: activeGroup,
+            items: groups.map((g) => ErpSectionTab(g, g.label)).toList(),
+            onSelected: selectGroup))),
+      // Tier 2 stays left below the green heading; tier 3 belongs to the
+      // selected workspace (for example CatalogWorkspace product/price tabs).
+      if(activeGroup!=CompanyGroup.overview)
+        Padding(
+          padding:EdgeInsets.fromLTRB(margin,10,margin,0),
+          child:ErpSectionTabs<CompanySection>(
+            keyPrefix:'company-sub',selected:active,
+            items:groupSections.map((item)=>ErpSectionTab(item,item.label)).toList(),
+            onSelected:select)),
       Expanded(child: AnimatedSwitcher(
         duration: MediaQuery.of(context).disableAnimations
           ? Duration.zero : ErpTokens.pageMotion,
