@@ -121,7 +121,10 @@ jobs:
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM public.schema_migrations WHERE version='0017_r1a_customer_directories.sql'" | grep -qx 1
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('catalog_customer_group','catalog_customer_region')" | grep -qx 2
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='catalog_customer' AND column_name IN ('customer_group_id','customer_region_id')" | grep -qx 2
-          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM public.schema_migrations" | grep -qx 17
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM public.schema_migrations WHERE version='0018_r1c_price_list_assignment.sql'" | grep -qx 1
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='catalog_price_list_assignment'" | grep -qx 1
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='catalog_price_list' AND column_name IN ('effective_from','effective_to','priority')" | grep -qx 3
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM public.schema_migrations" | grep -qx 18
       - name: Rehearse pg_dump + pg_restore and reconcile fresh CI PostgreSQL only
         env:
           ERP_DB_MIGRATION_TARGET: ci

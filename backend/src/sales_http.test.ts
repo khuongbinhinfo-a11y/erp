@@ -28,8 +28,8 @@ test("B1: real PostgreSQL order lifecycle, immutable versions, RBAC, replay and 
     pool=new Pool({connectionString:u.toString(),max:8,query_timeout:12000});
     pool.on("error",()=>{});
     const installed=await applyMigrations(pool,resolve(process.cwd(),"db/migrations"));
-    assert.equal(installed.applied.length,17);
-    assert.equal((await applyMigrations(pool,resolve(process.cwd(),"db/migrations"))).skipped.length,17);
+    assert.equal(installed.applied.length,18);
+    assert.equal((await applyMigrations(pool,resolve(process.cwd(),"db/migrations"))).skipped.length,18);
     const password="Sales-Testing-"+randomUUID();
     const root=await bootstrapInstallation(pool,{
       code:"sales-test",displayName:"Order integration test",
@@ -226,6 +226,27 @@ test("B1: real PostgreSQL order lifecycle, immutable versions, RBAC, replay and 
       "SELECT count(*)::text AS count FROM audit_event WHERE installation_id=$1 AND action_code LIKE 'sales.order.%'",
       [root.installationId]);
     assert.equal(audit.rows[0]?.count,"7");
+    // R1-C: the legacy productId path must enforce the same list window
+    // at both create and confirmation; existing posted documents stay intact.
+    const pendingExpiry=await write("/v1/sales/orders",payload,0,
+      "r1c-expiry-pending-"+randomUUID());
+    assert.equal(pendingExpiry.status,201,JSON.stringify(pendingExpiry.body));
+    await pool.query(`UPDATE catalog_price_list SET effective_to=now()-interval '1 second',
+      revision=revision+1 WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,
+      [root.installationId,b,list.body.id]);
+    const blockedConfirm=await write(
+      "/v1/sales/orders/"+pendingExpiry.body.id+"/confirm",{branchId:b},
+      0,"r1c-expired-confirm-"+randomUUID());
+    assert.equal(blockedConfirm.status,409,
+      "legacy order cannot confirm after price-list expiry");
+    assert.equal((await write("/v1/sales/orders",payload,0,
+      "r1c-expired-create-"+randomUUID())).status,409);
+    assert.equal((await call("/v1/sales/quote","POST",r2QuotePayload,
+      token)).status,409,"SKU quote rejects the same expired list");
+    const oldConfirmed=await call("/v1/sales/orders/"+id+"?branchId="+b,
+      "GET",undefined,token);
+    assert.equal(oldConfirmed.status,200);
+    assert.equal(oldConfirmed.body.order.status,"CANCELLED");
   }finally{
     if(server)await new Promise<void>(ok=>server!.close(()=>ok()));
     if(pool)await pool.end();

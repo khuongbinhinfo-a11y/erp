@@ -8,6 +8,7 @@ import 'erp_toast.dart';
 import 'identity_client.dart';
 import 'r1_catalog_workspace.dart';
 import 'catalog_bulk_workspace.dart';
+import 'price_list_assignments_panel.dart';
 
 /// Live, branch-scoped catalog. No offline confirmation and no fabricated rows.
 class CatalogWorkspace extends StatefulWidget {
@@ -29,7 +30,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
   int requestSerial=0;
   final search=TextEditingController();
   final inlineAmount=TextEditingController(),inlineDiscount=TextEditingController();
-  String? inlinePriceId;
+  String? inlinePriceId,assignmentListId;
 
   static const tabs=<String,List<ErpSectionTab<String>>>{
     'customers':[
@@ -82,7 +83,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     super.didUpdateWidget(oldWidget);
     if(oldWidget.session.token!=widget.session.token ||
       oldWidget.client!=widget.client || oldWidget.area!=widget.area){
-      requestSerial++;items=[];branches=[];branchId=null;inlinePriceId=null;
+      requestSerial++;items=[];branches=[];branchId=null;inlinePriceId=null;assignmentListId=null;
       productWriteReady=false;resource=widget.area;search.clear();
       _loadBranches();
     }
@@ -116,6 +117,19 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
         loading=false;error='Không tải được chi nhánh.';
       });
     }
+  }
+  String _dateLabel(DateTime? day,String none){
+    if(day==null)return none;
+    return '${day.day.toString().padLeft(2,'0')}/'
+      '${day.month.toString().padLeft(2,'0')}/${day.year}';
+  }
+  Future<DateTime?> _pickPriceDay(BuildContext context,DateTime? old,
+      String label)async{
+    final d=await showDatePicker(context:context,
+      initialDate:old??DateTime.now(),
+      firstDate:DateTime(2020),lastDate:DateTime(2100),
+      helpText:label);
+    return d==null?null:DateTime.utc(d.year,d.month,d.day);
   }
   String _errorMessage(ErpApiError e) => e.status==503
     ? 'Danh mục đang tạm gián đoạn. Vui lòng thử lại.'
@@ -155,7 +169,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
   void _changeResource(String next){
     if(next==resource)return;
     setState((){
-      resource=next;search.clear();items=[];productWriteReady=false;inlinePriceId=null;
+      resource=next;search.clear();items=[];productWriteReady=false;inlinePriceId=null;assignmentListId=null;
     });
     _loadRecords();
   }
@@ -169,6 +183,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     final unit=TextEditingController();
     final phone=TextEditingController(),deliveryAddress=TextEditingController();
     final paymentTerms=TextEditingController(text:'0');
+    final listPriority=TextEditingController(text:'0');
+    DateTime? listStart,listEnd;
     final altUnit=TextEditingController(),conversion=TextEditingController();
     final baseBarcode=TextEditingController(),altSku=TextEditingController(),
       altBarcode=TextEditingController();
@@ -332,6 +348,40 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                 TextField(key:const ValueKey('catalog-create-name'),
                   controller:name,maxLength:resource=='unit-definitions'?80:160,
                   decoration:const InputDecoration(labelText:'Tên')),
+                if(resource=='price-lists')...[
+                  const SizedBox(height:12),
+                  TextField(controller:listPriority,
+                    key:const ValueKey('r1c-create-list-priority'),
+                    keyboardType:TextInputType.number,
+                    onChanged:(_)=>refresh((){}),
+                    decoration:const InputDecoration(labelText:'Mức ưu tiên bảng giá',
+                      helperText:'Số lớn được ưu tiên trong cùng phạm vi')),
+                  const SizedBox(height:8),
+                  Wrap(spacing:8,runSpacing:6,children:[
+                    OutlinedButton.icon(
+                      key:const ValueKey('r1c-create-list-from'),
+                      onPressed:()async{
+                        final picked=await _pickPriceDay(ctx,listStart,'Có hiệu lực từ');
+                        if(picked!=null&&ctx.mounted)refresh(()=>listStart=picked);
+                      },icon:const Icon(Icons.event,size:16),
+                      label:Text(_dateLabel(listStart,'Bắt đầu ngay'))),
+                    if(listStart!=null)IconButton(
+                      tooltip:'Không đặt ngày bắt đầu',
+                      onPressed:()=>refresh(()=>listStart=null),
+                      icon:const Icon(Icons.close,size:16)),
+                    OutlinedButton.icon(
+                      key:const ValueKey('r1c-create-list-to'),
+                      onPressed:()async{
+                        final picked=await _pickPriceDay(ctx,listEnd,'Đến hết ngày');
+                        if(picked!=null&&ctx.mounted)refresh(()=>listEnd=picked);
+                      },icon:const Icon(Icons.event_busy,size:16),
+                      label:Text(_dateLabel(listEnd,'Không giới hạn'))),
+                    if(listEnd!=null)IconButton(
+                      tooltip:'Không đặt ngày kết thúc',
+                      onPressed:()=>refresh(()=>listEnd=null),
+                      icon:const Icon(Icons.close,size:16)),
+                  ]),
+                ],
                 if(resource=='customers')...[
                   const SizedBox(height:12),
                   DropdownButtonFormField<String?>(
@@ -767,7 +817,11 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                   widget.client.pendingR1(actor,branch,'catalog.create.customer-regions')!=null)||
                 resource=='products'&&(
                   widget.client.pendingR1(actor,branch,'catalog.create.groups')!=null||
-                  widget.client.pendingR1(actor,branch,'catalog.create.unit-definitions')!=null)
+                  widget.client.pendingR1(actor,branch,'catalog.create.unit-definitions')!=null)||
+                resource=='price-lists'&&(
+                  int.tryParse(listPriority.text.trim())==null||
+                  (int.tryParse(listPriority.text.trim())??0).abs()>100000||
+                  (listStart!=null&&listEnd!=null&&listEnd!.isBefore(listStart!)))
                 ?null:(){
                 final body=<String,dynamic>{'branchId':branchId};
                 if(resource=='prices'){
@@ -780,6 +834,13 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                   });
                 }else{
                   body.addAll({'code':code.text.trim(),'name':name.text.trim()});
+                  if(resource=='price-lists'){
+                    body.addAll({
+                      'effectiveFrom':listStart?.toIso8601String(),
+                      'effectiveTo':listEnd?.add(const Duration(days:1)).toIso8601String(),
+                      'priority':int.parse(listPriority.text.trim()),
+                    });
+                  }
                   if(resource=='customers'){
                     body.addAll({
                       'customerGroupId':customerGroupId,
@@ -1114,6 +1175,10 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     var phone=(row['phone']??'').toString();
     var deliveryAddress=(row['deliveryAddress']??'').toString();
     var paymentTermsDays=(row['paymentTermsDays']??0).toString();
+    var listPriority=(row['priority']??0).toString();
+    DateTime? listStart=DateTime.tryParse(row['effectiveFrom']?.toString()??'');
+    DateTime? listEnd=DateTime.tryParse(row['effectiveTo']?.toString()??'')
+      ?.toUtc().subtract(const Duration(days:1));
     final oldGroupId=row['customerGroupId'] as String?;
     final oldRegionId=row['customerRegionId'] as String?;
     final oldProductGroupId=row['groupId'] as String?;
@@ -1166,6 +1231,44 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                     initialValue:name,onChanged:(value)=>name=value,
                     maxLength:resource=='unit-definitions'?80:160,
                     decoration:const InputDecoration(labelText:'Tên')),
+                  if(resource=='price-lists')...[
+                    const SizedBox(height:12),
+                    TextFormField(
+                      key:const ValueKey('r1c-edit-list-priority'),
+                      initialValue:listPriority,
+                      keyboardType:TextInputType.number,
+                      decoration:const InputDecoration(labelText:'Ưu tiên bảng giá'),
+                      onChanged:(v)=>refresh(()=>listPriority=v)),
+                    const SizedBox(height:8),
+                    Wrap(spacing:8,runSpacing:6,children:[
+                      OutlinedButton.icon(
+                        key:const ValueKey('r1c-edit-list-from'),
+                        onPressed:()async{
+                          final picked=await _pickPriceDay(context,listStart,
+                            'Có hiệu lực từ');
+                          if(picked!=null&&context.mounted)
+                            refresh(()=>listStart=picked);
+                        },icon:const Icon(Icons.event,size:16),
+                        label:Text(_dateLabel(listStart,'Bắt đầu ngay'))),
+                      if(listStart!=null)IconButton(
+                        tooltip:'Bỏ ngày bắt đầu',
+                        onPressed:()=>refresh(()=>listStart=null),
+                        icon:const Icon(Icons.close,size:16)),
+                      OutlinedButton.icon(
+                        key:const ValueKey('r1c-edit-list-to'),
+                        onPressed:()async{
+                          final picked=await _pickPriceDay(context,listEnd,
+                            'Đến hết ngày');
+                          if(picked!=null&&context.mounted)
+                            refresh(()=>listEnd=picked);
+                        },icon:const Icon(Icons.event_busy,size:16),
+                        label:Text(_dateLabel(listEnd,'Không giới hạn'))),
+                      if(listEnd!=null)IconButton(
+                        tooltip:'Bỏ ngày kết thúc',
+                        onPressed:()=>refresh(()=>listEnd=null),
+                        icon:const Icon(Icons.close,size:16)),
+                    ]),
+                  ],
                   if(resource=='products')...[
                     const SizedBox(height:12),
                     DropdownButtonFormField<String?>(
@@ -1247,8 +1350,17 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
         actions:[
           TextButton(onPressed:()=>Navigator.pop(dialog),child:const Text('Hủy')),
           FilledButton(key:const ValueKey('catalog-edit-save'),
-            onPressed:()=>Navigator.pop(dialog,{
+            onPressed:resource=='price-lists'&&(
+              int.tryParse(listPriority.trim())==null||
+              (int.tryParse(listPriority.trim())??0).abs()>100000||
+              (listStart!=null&&listEnd!=null&&listEnd!.isBefore(listStart!)))
+              ?null:()=>Navigator.pop(dialog,{
               'branchId':branchId,'name':name.trim(),'active':active,
+              if(resource=='price-lists')...{
+                'effectiveFrom':listStart?.toIso8601String(),
+                'effectiveTo':listEnd?.add(const Duration(days:1)).toIso8601String(),
+                'priority':int.parse(listPriority.trim()),
+              },
               if(resource=='products'&&productGroupId!=oldProductGroupId)
                 'groupId':productGroupId,
               if(resource=='customers')...{
@@ -1348,6 +1460,13 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     final value=item[key];
     if(value==null)return '—';
     if(value is bool)return value?'Hoạt động':'Ngừng';
+    if(key=='effectiveFrom'||key=='effectiveTo'){
+      final day=DateTime.tryParse(value.toString())?.toUtc();
+      if(day==null)return '—';
+      final display=key=='effectiveTo'?day.subtract(const Duration(days:1)):day;
+      return '${display.day.toString().padLeft(2,'0')}/'
+        '${display.month.toString().padLeft(2,'0')}/${display.year}';
+    }
     return value.toString();
   }
   List<(String,String)> get columns=>switch(resource){
@@ -1365,7 +1484,9 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
       ('groupName','Nhóm hàng'),('baseUnit','Đơn vị tồn kho'),
       ('sellSkuCount','SKU bán'),('barcode','Mã vạch gốc'),
       ('active','Trạng thái')],
-    'price-lists'=>const [('code','Mã bảng giá'),('name','Bảng giá'),('currency','Tiền tệ'),('active','Trạng thái')],
+    'price-lists'=>const [('code','Mã bảng giá'),('name','Bảng giá'),
+      ('effectiveFrom','Từ ngày'),('effectiveTo','Đến hết ngày'),
+      ('priority','Ưu tiên'),('active','Trạng thái')],
     'prices'=>const [('priceListCode','Bảng giá'),('productCode','Mã hàng'),
       ('productName','Sản phẩm'),('amount','Đơn giá'),('discountRate','CK %'),
       ('effectiveAt','Hiệu lực')],
@@ -1424,7 +1545,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                         maxLines:1,overflow:TextOverflow.ellipsis))).toList(),
                     onChanged:(next){
                       if(next==null||next==branchId)return;
-                      setState((){branchId=next;inlinePriceId=null;});_loadRecords();
+                      setState((){branchId=next;inlinePriceId=null;assignmentListId=null;});_loadRecords();
                     })),
               IconButton(
                 key:const ValueKey('catalog-refresh'),
@@ -1506,6 +1627,14 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                             tooltip:'Sửa/ngừng sử dụng',
                             onPressed:saving?null:()=>_edit(entry)),
                           if(resource=='price-lists')IconButton(
+                            key:ValueKey('catalog-price-list-assignment-'+entry['id'].toString()),
+                            icon:const Icon(Icons.groups_outlined,size:18),
+                            tooltip:'Phân bổ bảng giá theo khách, nhóm, kênh',
+                            onPressed:()=>setState((){
+                              assignmentListId=assignmentListId==entry['id']
+                                ?null:entry['id'] as String;
+                            })),
+                          if(resource=='price-lists')IconButton(
                             key:ValueKey('catalog-price-list-clone-' + entry['id'].toString()),
                             icon:const Icon(Icons.content_copy_outlined,size:18),
                             tooltip:'Sao chép bảng giá cùng chính sách',
@@ -1536,6 +1665,14 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                           entry['priceListId'].toString()+'.'+entry['productId'].toString())!=null
                           ?'Kiểm tra yêu cầu':'Giá mới'))),
                 ])).toList())),
+            if(resource=='price-lists'&&assignmentListId!=null&&
+              branchId!=null&&items.any((e)=>e['id']==assignmentListId))
+              PriceListAssignmentsPanel(
+                key:ValueKey('assign-'+branchId!+'-'+assignmentListId!),
+                client:widget.client,session:widget.session,branchId:branchId!,
+                priceList:items.firstWhere((e)=>e['id']==assignmentListId),
+                canWrite:canWrite,
+                onClose:()=>setState(()=>assignmentListId=null)),
             if(resource=='products'&&!productWriteReady&&!loading)
               const Padding(padding:EdgeInsets.only(top:12),
                 child:Text('Đã xem được danh mục, nhưng chưa cập nhật đủ cấu trúc SKU để thêm sản phẩm.',

@@ -65,8 +65,8 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
   pool=new Pool({connectionString:target.toString(),max:7,query_timeout:15000});
   pool.on("error",()=>{});
   const applied=await applyMigrations(pool,resolve(process.cwd(),"db/migrations"));
-  assert.equal(applied.applied.length,17);
-  assert.equal((await applyMigrations(pool,resolve(process.cwd(),"db/migrations"))).skipped.length,17);
+  assert.equal(applied.applied.length,18);
+  assert.equal((await applyMigrations(pool,resolve(process.cwd(),"db/migrations"))).skipped.length,18);
   const password="R1-test-"+randomUUID();
   const root=await bootstrapInstallation(pool,{
    code:"r1-test",displayName:"Synthetic R1 integration",
@@ -233,6 +233,100 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
   assert.equal(tooLate.status,409);
   assert.equal((await r1("rules",{...basic,sellSkuId:skuId,
    scopeKind:"BASE",adjustment:"PERCENT_DISCOUNT",amount:"10"})).status,400);
+  // R1-C.1: selection stays on the existing SKU pricing engine, with
+  // strict list windows, scoped priority, concurrency, RBAC, and replay.
+  assert.equal((await legacy("price-lists",{code:"BAD-WINDOW",name:"Sai thời hạn",
+    effectiveFrom:"2026-11-24T00:00:00Z",
+    effectiveTo:"2026-11-23T00:00:00Z"})).status,400);
+  const periods=[
+    {code:"DEF",amount:"10000.0000",priority:4},
+    {code:"K-MCP",amount:"20000.0000",priority:8},
+    {code:"G-VIP",amount:"30000.0000",priority:2},
+    {code:"C-01",amount:"40000.0000",priority:1},
+  ];
+  const scopedLists=[] as string[];
+  for(const p of periods){
+    const created=await legacy("price-lists",{
+      code:p.code,name:"Bảng "+p.code,priority:p.priority,
+      effectiveFrom:"2026-11-20T00:00:00Z",
+      effectiveTo:"2026-11-25T00:00:00Z",
+    });
+    assert.equal(created.status,201,JSON.stringify(created.body));
+    scopedLists.push(created.body.id as string);
+    const rule=await r1("rules",{
+      priceListId:created.body.id,sellSkuId:baseSku,
+      effectiveFrom:now,scopeKind:"BASE",adjustment:"FIXED_PRICE",
+      amount:p.amount,minQuantity:"1",
+    });
+    assert.equal(rule.status,201,JSON.stringify(rule.body));
+  }
+  const assignments=[
+    {scopeKind:"DEFAULT",priceListId:scopedLists[0]},
+    {scopeKind:"CHANNEL",priceListId:scopedLists[1],channelId:channel.body.id},
+    {scopeKind:"CUSTOMER_GROUP",priceListId:scopedLists[2],customerGroupId:vipGroup.body.id},
+    {scopeKind:"CUSTOMER",priceListId:scopedLists[3],customerId:c1.body.id},
+  ];
+  const assigned=[] as Array<Record<string,any>>;
+  for(const input of assignments){
+    const saved=await write("/v1/catalog/price-lists/assignments",input);
+    assert.equal(saved.status,201,JSON.stringify(saved.body));
+    assigned.push(saved.body);
+  }
+  const auto=(context:Record<string,unknown>)=>resolvePrice({
+    sellSkuId:baseSku,quantity:"2",priceAt,...context,
+  });
+  const effectiveDefault=await auto({});
+  assert.equal(effectiveDefault.status,200,JSON.stringify(effectiveDefault.body));
+  assert.equal(effectiveDefault.body.quote.unitPrice,"10000.0000");
+  assert.equal(effectiveDefault.body.quote.priceListId,scopedLists[0]);
+  assert.match(effectiveDefault.body.quote.priceListSelectionReason,/mặc định/);
+  assert.equal((await auto({channelId:channel.body.id})).body.quote.unitPrice,"20000.0000");
+  assert.equal((await auto({customerId:c1.body.id})).body.quote.unitPrice,"40000.0000");
+  assert.equal((await auto({customerId:c2.body.id,channelId:channel.body.id})).body.quote.unitPrice,
+    "20000.0000","standard group falls back to channel");
+  const grouped=await auto({customerId:c1.body.id,channelId:channel.body.id});
+  assert.equal(grouped.body.quote.unitPrice,"40000.0000",
+    "specific customer takes precedence over group/channel irrespective of numeric priority");
+  const disable=await request("/v1/catalog/price-lists/assignments/"+assigned[3]!.id,
+    "PATCH",{branchId:b,active:false},token,
+    {"if-match":"0","idempotency-key":"disable-"+randomUUID()});
+  assert.equal(disable.status,200,JSON.stringify(disable.body));
+  assert.equal((await auto({customerId:c1.body.id,channelId:channel.body.id}))
+    .body.quote.unitPrice,"30000.0000","customer group now wins");
+  assert.equal((await auto({customerId:c1.body.id}))
+    .body.quote.unitPrice,"30000.0000");
+  assert.equal((await auto({customerId:c2.body.id}))
+    .body.quote.unitPrice,"10000.0000");
+  const assignmentHistory=await request("/v1/catalog/price-lists/assignments?branchId="+b,
+    "GET",undefined,token);
+  assert.equal(assignmentHistory.status,200);
+  assert.ok(assignmentHistory.body.items.some((x:any)=>x.id===assigned[3]!.id&&x.active===false));
+  assert.equal((await request("/v1/catalog/price-lists/assignments?branchId="+b))
+    .status,401,"assignments are never public");
+  const overlapPayload={scopeKind:"DEFAULT",priceListId:scopedLists[1],priority:0};
+  assert.equal((await write("/v1/catalog/price-lists/assignments",overlapPayload)).status,409);
+  const colliding=await Promise.all([1,2].map(()=>write(
+    "/v1/catalog/price-lists/assignments",
+    {...overlapPayload,priority:5},"r1c-concurrent-"+randomUUID())));
+  assert.deepEqual(colliding.map(x=>x.status).sort(),[201,409],
+    "two concurrent matching assignments cannot both win");
+  const explicitExpired=await resolvePrice({priceListId:scopedLists[0],
+    sellSkuId:baseSku,quantity:"1",priceAt:"2026-11-26T00:00:00Z"});
+  assert.equal(explicitExpired.status,409,"explicit list expiry must be enforced");
+  const noActive=await auto({priceAt:"2026-11-26T00:00:00Z"});
+  assert.equal(noActive.status,409,"no automatic list survives its end day");
+  assert.equal((await resolvePrice({sellSkuId:baseSku,quantity:"1",
+    priceAt:"2026-11-26T00:00:00Z"})).status,409);
+  const inherit=await write("/v1/catalog/price-lists/"+scopedLists[0]+"/clone",
+    {code:"DEF-COPY",name:"Bảng sao chép thời hạn",sourceRevision:0});
+  assert.equal(inherit.status,201,JSON.stringify(inherit.body));
+  const withWindows=await request("/v1/catalog/price-lists?branchId="+b,"GET",undefined,token);
+  const cloned=withWindows.body.items.find((x:any)=>x.id===inherit.body.id);
+  assert.equal(cloned.priority,4);
+  assert.equal(cloned.effectiveFrom,"2026-11-20T00:00:00.000Z");
+  assert.equal(cloned.effectiveTo,"2026-11-25T00:00:00.000Z");
+  assert.equal((await resolvePrice({priceListId:inherit.body.id,sellSkuId:baseSku,
+    quantity:"1",priceAt})).status,200);
   // R1-C: a list copy is a new independent identity, copying only current
   // effective prices and unretired current/future SKU rules.
   const originalPrice=await legacy("prices",{

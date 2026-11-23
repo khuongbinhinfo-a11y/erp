@@ -422,6 +422,14 @@ class ErpIdentityClient {
     Map<String,dynamic> fields,{required String key})=>
       _request('POST','/v1/catalog/$resource',token:token,
         body:fields,revision:0,idempotencyKey:key);
+  Future<List<Map<String,dynamic>>> r1CatalogItems(String token,String kind,{
+      required String branchId,String query=''})async{
+    final q=Uri(queryParameters:{'branchId':branchId,
+      if(query.trim().isNotEmpty)'q':query.trim()}).query;
+    final raw=await _request('GET','/v1/catalog/r1/$kind?$q',token:token);
+    return (raw['items'] as List<dynamic>).map(
+      (x)=>Map<String,dynamic>.from(x as Map)).toList();
+  }
   /// R1 writes retain the same key and body after a lost server acknowledgment.
   Future<Map<String,dynamic>> createR1Catalog(String token,String kind,
     Map<String,dynamic> fields,{required String key})=>
@@ -449,6 +457,33 @@ class ErpIdentityClient {
         required String key,
       })=>_request('POST','/v1/catalog/price-lists/$sourceId/clone',
         token:token,body:payload,revision:0,idempotencyKey:key);
+  /// Scoped price lists are a selection layer on the existing R1 price engine.
+  Future<List<Map<String,dynamic>>> priceListAssignments(
+      String token,String branchId,{required String priceListId,
+      String query=''})async{
+    final rows=<Map<String,dynamic>>[];
+    for(var offset=0;offset<=100000;offset+=100){
+      final suffix=Uri(queryParameters:{'branchId':branchId,
+        'priceListId':priceListId,'offset':'$offset',
+        if(query.trim().isNotEmpty)'q':query.trim()}).query;
+      final raw=await _request('GET','/v1/catalog/price-lists/assignments?$suffix',
+        token:token);
+      rows.addAll((raw['items'] as List<dynamic>).map(
+        (x)=>Map<String,dynamic>.from(x as Map)));
+      if(raw['hasMore']!=true)return rows;
+    }
+    throw const FormatException('ASSIGNMENT_PAGE_LIMIT_EXCEEDED');
+  }
+  /// Retain the exact payload/key on connection loss, like all R1 commands.
+  Future<Map<String,dynamic>> assignPriceList(String token,
+      Map<String,dynamic> body,{required String key})=>
+    _request('POST','/v1/catalog/price-lists/assignments',
+      token:token,body:body,revision:0,idempotencyKey:key);
+  Future<Map<String,dynamic>> togglePriceListAssignment(String token,
+      String id,String branchId,int revision,bool active,{required String key})=>
+    _request('PATCH','/v1/catalog/price-lists/assignments/$id',
+      token:token,body:{'branchId':branchId,'active':active},
+      revision:revision,idempotencyKey:key);
   /// Optimistic catalog edit: the server checks the exact row revision inside its transaction.
   Future<Map<String,dynamic>> updateCatalog(String token,String resource,
     String id,int expectedRevision,Map<String,dynamic> fields)async{
