@@ -118,6 +118,19 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
       });
     }
   }
+  String _dateLabel(DateTime? day,String none){
+    if(day==null)return none;
+    return '${day.day.toString().padLeft(2,'0')}/'
+      '${day.month.toString().padLeft(2,'0')}/${day.year}';
+  }
+  Future<DateTime?> _pickPriceDay(BuildContext context,DateTime? old,
+      String label)async{
+    final d=await showDatePicker(context:context,
+      initialDate:old??DateTime.now(),
+      firstDate:DateTime(2020),lastDate:DateTime(2100),
+      helpText:label);
+    return d==null?null:DateTime.utc(d.year,d.month,d.day);
+  }
   String _errorMessage(ErpApiError e) => e.status==503
     ? 'Danh mục đang tạm gián đoạn. Vui lòng thử lại.'
     : e.message;
@@ -170,6 +183,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     final unit=TextEditingController();
     final phone=TextEditingController(),deliveryAddress=TextEditingController();
     final paymentTerms=TextEditingController(text:'0');
+    final listPriority=TextEditingController(text:'0');
+    DateTime? listStart,listEnd;
     final altUnit=TextEditingController(),conversion=TextEditingController();
     final baseBarcode=TextEditingController(),altSku=TextEditingController(),
       altBarcode=TextEditingController();
@@ -333,6 +348,39 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                 TextField(key:const ValueKey('catalog-create-name'),
                   controller:name,maxLength:resource=='unit-definitions'?80:160,
                   decoration:const InputDecoration(labelText:'Tên')),
+                if(resource=='price-lists')...[
+                  const SizedBox(height:12),
+                  TextField(controller:listPriority,
+                    key:const ValueKey('r1c-create-list-priority'),
+                    keyboardType:TextInputType.number,
+                    decoration:const InputDecoration(labelText:'Mức ưu tiên bảng giá',
+                      helperText:'Số lớn được ưu tiên trong cùng phạm vi')),
+                  const SizedBox(height:8),
+                  Wrap(spacing:8,runSpacing:6,children:[
+                    OutlinedButton.icon(
+                      key:const ValueKey('r1c-create-list-from'),
+                      onPressed:()async{
+                        final picked=await _pickPriceDay(ctx,listStart,'Có hiệu lực từ');
+                        if(picked!=null&&ctx.mounted)refresh(()=>listStart=picked);
+                      },icon:const Icon(Icons.event,size:16),
+                      label:Text(_dateLabel(listStart,'Bắt đầu ngay'))),
+                    if(listStart!=null)IconButton(
+                      tooltip:'Không đặt ngày bắt đầu',
+                      onPressed:()=>refresh(()=>listStart=null),
+                      icon:const Icon(Icons.close,size:16)),
+                    OutlinedButton.icon(
+                      key:const ValueKey('r1c-create-list-to'),
+                      onPressed:()async{
+                        final picked=await _pickPriceDay(ctx,listEnd,'Đến hết ngày');
+                        if(picked!=null&&ctx.mounted)refresh(()=>listEnd=picked);
+                      },icon:const Icon(Icons.event_busy,size:16),
+                      label:Text(_dateLabel(listEnd,'Không giới hạn'))),
+                    if(listEnd!=null)IconButton(
+                      tooltip:'Không đặt ngày kết thúc',
+                      onPressed:()=>refresh(()=>listEnd=null),
+                      icon:const Icon(Icons.close,size:16)),
+                  ]),
+                ],
                 if(resource=='customers')...[
                   const SizedBox(height:12),
                   DropdownButtonFormField<String?>(
@@ -768,7 +816,11 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                   widget.client.pendingR1(actor,branch,'catalog.create.customer-regions')!=null)||
                 resource=='products'&&(
                   widget.client.pendingR1(actor,branch,'catalog.create.groups')!=null||
-                  widget.client.pendingR1(actor,branch,'catalog.create.unit-definitions')!=null)
+                  widget.client.pendingR1(actor,branch,'catalog.create.unit-definitions')!=null)||
+                resource=='price-lists'&&(
+                  int.tryParse(listPriority.text.trim())==null||
+                  (int.tryParse(listPriority.text.trim())??0).abs()>100000||
+                  (listStart!=null&&listEnd!=null&&listEnd!.isBefore(listStart!)))
                 ?null:(){
                 final body=<String,dynamic>{'branchId':branchId};
                 if(resource=='prices'){
@@ -781,6 +833,13 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                   });
                 }else{
                   body.addAll({'code':code.text.trim(),'name':name.text.trim()});
+                  if(resource=='price-lists'){
+                    body.addAll({
+                      'effectiveFrom':listStart?.toIso8601String(),
+                      'effectiveTo':listEnd?.add(const Duration(days:1)).toIso8601String(),
+                      'priority':int.parse(listPriority.text.trim()),
+                    });
+                  }
                   if(resource=='customers'){
                     body.addAll({
                       'customerGroupId':customerGroupId,
