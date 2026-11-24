@@ -24,7 +24,7 @@ export const BASE = ["0001_identity.sql","0002_mutation_control.sql","0003_wareh
  "0012_r3_purchase_receipt.sql","0013_r3_transfer_in_transit.sql",
  "0014_r3_stocktake.sql","0015_r1_unit_dictionary.sql","0016_r1_product_media.sql",
  "0017_r1a_customer_directories.sql","0018_r1c_price_list_assignment.sql",
- "0019_p0_price_order_parity.sql","0020_catalog_hierarchy_locations.sql","0021_t1_partial_reservation_policy.sql"];
+ "0019_p0_price_order_parity.sql","0020_catalog_hierarchy_locations.sql","0021_t0_partial_reservation_policy.sql"];
 export const RELEASE = ["0022_t1_sales_order_context.sql"];
 const PROJECT="proj_ud3b1s5yn03vh0zp9cbs2upa";
 const DATABASE="db_jg2bl98hzi1jm06lwo0i4rqx";
