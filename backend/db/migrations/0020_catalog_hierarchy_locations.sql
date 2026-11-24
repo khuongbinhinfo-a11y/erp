@@ -85,7 +85,7 @@ CREATE TABLE catalog_customer_location (
   code text NOT NULL CHECK (code ~ '^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$'),
   name text NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 160),
   address text NOT NULL CHECK (length(trim(address)) BETWEEN 1 AND 500),
-  phone text CHECK (phone IS NULL OR phone ~ '^\\+?[0-9]{9,15}$'),
+  phone text CHECK (phone IS NULL OR phone ~ '^\+?[0-9]{9,15}$'),
   is_default boolean NOT NULL DEFAULT false,
   active boolean NOT NULL DEFAULT true,
   revision bigint NOT NULL DEFAULT 0 CHECK (revision >= 0),
