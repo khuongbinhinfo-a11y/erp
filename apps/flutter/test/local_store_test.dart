@@ -23,6 +23,16 @@ void main(){
     await restored.clearAcknowledgedIntent(a,'key');
     expect(await restored.loadIntent(a,'key'),isNull);
   });
+  test('queued snapshots cannot resurrect a discarded cart',()async{
+    final store=ErpLocalStore(Memory()),writer=LocalCartWriter(store,a);
+    final mutable={'quantity':'1'};
+    final first=writer.save(mutable);mutable['quantity']='2';
+    final second=writer.save(mutable);
+    await Future.wait([first,second,writer.clear()]);
+    expect(await store.loadCart(a),isNull);
+    await writer.save(mutable);
+    expect((await store.loadCart(a))?['quantity'],'2');
+  });
   test('cache expiry is explicit, never proof of a current price',()async{
     final store=ErpLocalStore(Memory());
     final time=DateTime.utc(2026,11,24);

@@ -61,3 +61,20 @@ class ErpLocalStore {
   }
   Future<void> clearAcknowledgedIntent(LocalScope scope,String id)=>driver.remove(_key(scope,'intent',id));
 }
+
+/// Serialize snapshot writes and discard, so a slow autosave cannot resurrect a deleted cart.
+class LocalCartWriter {
+  final ErpLocalStore store;
+  final LocalScope scope;
+  Future<void> _tail=Future<void>.value();
+  LocalCartWriter(this.store,this.scope);
+  Future<void> save(Map<String,dynamic> snapshot){
+    final frozen=Map<String,dynamic>.from(jsonDecode(jsonEncode(snapshot)) as Map);
+    _tail=_tail.catchError((Object _){}).then((_)=>store.saveCart(scope,frozen));
+    return _tail;
+  }
+  Future<void> clear(){
+    _tail=_tail.catchError((Object _){}).then((_)=>store.clearCart(scope));
+    return _tail;
+  }
+}

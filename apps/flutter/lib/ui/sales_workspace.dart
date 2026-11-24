@@ -254,7 +254,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     var deliveryDate=(savedShipping['requestedDeliveryDate']??'').toString();
     var walkInName=(savedShipping['walkInName']??'').toString();
     var walkInPhone=(savedShipping['walkInPhone']??'').toString();
-    var rememberDelivery=false,walkInBusy=false,locationBusy=false;
+    var rememberDelivery=savedShipping['rememberDeliveryChoice']==true,walkInBusy=false,locationBusy=false;
     int locationGeneration=0,addressGeneration=0,addressEditGeneration=0,customerChoiceGeneration=0;
     List<Map<String,dynamic>> locations=[];
     Map<String,dynamic>? walkInCustomer=entrySettings['walkInCustomer'] is Map
@@ -271,7 +271,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     int listResolveGeneration=0;
     final note=TextEditingController(text:order?['note'] as String? ?? '');
     final lines=<_OrderLine>[];
-    var documentDiscountMode='NONE',documentDiscountValue='0',documentDiscountReason='',overrideReason='';
+    final localDiscount=localDraft&&order?['localDocumentDiscount'] is Map?order!['localDocumentDiscount'] as Map:const {};
+    var documentDiscountMode=(localDiscount['mode']??'NONE').toString(),documentDiscountValue=(localDiscount['value']??'0').toString(),documentDiscountReason=(localDiscount['reason']??'').toString(),overrideReason=localDraft?(order?['localOverrideReason']??'').toString():'';
     if(localDraft&&((customer!=null&&!customers.any((x)=>x['id']==customer))||(list!=null&&!lists.any((x)=>x['id']==list)))){
       note.dispose();inform('Khách hàng hoặc bảng giá trong giỏ không còn khả dụng. Hãy kiểm tra danh mục.',error:true);return null;
     }
@@ -289,7 +290,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         if(matching.length!=1){
           // The initial page contains only 100 SKUs. Resolve a historical
           // line by its exact persisted SKU instead of silently replacing it.
-          final found=await catalog('r1/skus',query:(row['sku']??'').toString());
+          List<Map<String,dynamic>> found;
+          try{found=await catalog('r1/skus',query:(row['sku']??'').toString());}catch(_){found=[];}
           matching=found.where((x)=>priorSku!=null
             ? x['id']==priorSku
             : x['productId']==legacyProduct&&x['isBase']==true&&
@@ -318,10 +320,10 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           line.taxMode=(snapshot['taxMode']??'EXCLUSIVE').toString();
           line.discountRate.text=erpGroupedDecimalText(line.discountMode=='PERCENT'?row['discountRate']:snapshot['discountValue']);
           line.taxRate.text=erpGroupedDecimalText(row['taxRate']);
-          line.discountEdited=snapshot['discountOverride']==true&&
-            (line.discountMode!='PERCENT'||RegExp('[1-9]').hasMatch(line.discountRate.text));
-          line.taxEdited=snapshot['taxOverride']==true&&
-            (line.taxMode!='EXCLUSIVE'||RegExp('[1-9]').hasMatch(line.taxRate.text));
+          line.discountEdited=snapshot['discountOverride']==true&&(localDraft||
+            (line.discountMode!='PERCENT'||RegExp('[1-9]').hasMatch(line.discountRate.text)));
+          line.taxEdited=snapshot['taxOverride']==true&&(localDraft||
+            (line.taxMode!='EXCLUSIVE'||RegExp('[1-9]').hasMatch(line.taxRate.text)));
           if(snapshot['discountOverride']==null)line.discountEdited=RegExp('[1-9]').hasMatch(line.discountRate.text);
           if(snapshot['taxOverride']==null)line.taxEdited=RegExp('[1-9]').hasMatch(line.taxRate.text);
           line.overrideReason=(snapshot['overrideReason']??'').toString();
@@ -942,20 +944,17 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       }
     }
     String totalQuoted()=>previewGrandTotal??'0';
-    bool draftSaving=false;
-    Future<void> saveLocalDraft(BuildContext ctx,StateSetter refresh)async{
-      if(formScope==null||draftSaving||!_sameScope(formToken,branch))return;
-      if(quickCustomerBusy||walkInBusy||pendingQuickCustomer!=null){
-        refresh(()=>formError='Hãy đối chiếu yêu cầu tạo khách trước khi lưu trên máy.');return;
-      }
-      refresh(()=>draftSaving=true);
-      try{
-        final body=<String,dynamic>{
+    bool draftSaving=false,finishDraft=false,draftWriteFailed=false;
+    final autoDraft=formScope!=null&&(order==null||copying||localDraft);
+    Map<String,dynamic> draftSnapshot(){
+      return <String,dynamic>{
           'customerId':customer,'priceListId':list,'channelId':channel,'note':note.text,
+          'localDocumentDiscount':{'mode':documentDiscountMode,'value':documentDiscountValue,'reason':documentDiscountReason},
+          'localOverrideReason':overrideReason,
           'shipping':{'warehouseId':warehouseId,'deliveryChoice':deliveryChoice,
             'collectionPolicy':collectionPolicy,'customerMode':customerMode,'customerLocationId':locationId,
             'deliveryAddress':deliveryAddress,'requestedDeliveryDate':deliveryDate,
-            'walkInName':walkInName,'walkInPhone':walkInPhone},
+            'walkInName':walkInName,'walkInPhone':walkInPhone,'rememberDeliveryChoice':rememberDelivery},
           'lines':lines.map((line){
             final sku=skus.where((x)=>x['id']==line.sellSkuId).firstOrNull;
             return <String,dynamic>{'sellSkuId':line.sellSkuId,'sku':sku?['sku'],
@@ -969,15 +968,42 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                 if(documentDiscountActive())'documentDiscount':documentDiscount()}};
           }).toList(),
         };
-        await widget.client.localStore!.saveCart(formScope,body);
+    }
+    final writer=autoDraft?LocalCartWriter(widget.client.localStore!,formScope!):null;
+    String? lastSnapshot=autoDraft?jsonEncode(draftSnapshot()):null;
+    Future<void> persistDraft({bool force=false})async{
+      if(writer==null||finishDraft||!_sameScope(formToken,branch)||
+        quickCustomerBusy||walkInBusy||pendingQuickCustomer!=null)return;
+      final snapshot=draftSnapshot(),encoded=jsonEncode(snapshot);
+      if(!force&&encoded==lastSnapshot&&!draftWriteFailed)return;
+      lastSnapshot=encoded;
+      try{await writer.save(snapshot);draftWriteFailed=false;}
+      catch(_){draftWriteFailed=true;}
+    }
+    final autoTimer=writer==null?null:Timer.periodic(const Duration(milliseconds:600),(_){
+      if(!draftSaving)unawaited(persistDraft());
+    });
+    final lifecycle=writer==null?null:AppLifecycleListener(onStateChange:(_){
+      if(!draftSaving)unawaited(persistDraft());
+    });
+    Future<void> saveLocalDraft(BuildContext ctx,StateSetter refresh)async{
+      if(writer==null||draftSaving||!_sameScope(formToken,branch))return;
+      if(quickCustomerBusy||walkInBusy||pendingQuickCustomer!=null){
+        refresh(()=>formError='Hãy đối chiếu yêu cầu tạo khách trước khi lưu trên máy.');return;
+      }
+      refresh(()=>draftSaving=true);
+      try{
+        await persistDraft(force:true);
+        if(draftWriteFailed)throw StateError('Không lưu được giỏ');
         if(ctx.mounted&&_sameScope(formToken,branch)){
+          finishDraft=true;
           inform('Đã lưu giỏ trên máy; chưa tạo đơn, chưa xuất kho.');
           Navigator.pop(ctx);
         }
       }catch(_){if(ctx.mounted)refresh(()=>formError='Không lưu được giỏ trên máy. Hãy giữ màn hình và thử lại.');}
       finally{if(ctx.mounted)refresh(()=>draftSaving=false);}
     }
-    void submitForm(BuildContext ctx,StateSetter refresh,{required bool confirm}){
+    Future<void> submitForm(BuildContext ctx,StateSetter refresh,{required bool confirm})async{
       if(!_sameScope(formToken,branch)||draftSaving)return;
       if(customer==null||list==null||!validLines()){
         refresh(()=>formError='Kiểm tra khách hàng, SKU và số lượng từng dòng.');
@@ -994,6 +1020,14 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         (customerMode=='WALK_IN'&&walkInPhone.trim().isNotEmpty&&
           !RegExp(r'^\+?[0-9]{9,15}$').hasMatch(walkInPhone.trim())))){
         refresh(()=>formError='Chọn kho xuất và kiểm tra số điện thoại khách lẻ.');return;
+      }
+      if(writer!=null){
+        refresh(()=>draftSaving=true);
+        await persistDraft(force:true);
+        if(!ctx.mounted||!_sameScope(formToken,branch))return;
+        refresh(()=>draftSaving=false);
+        if(draftWriteFailed){refresh(()=>formError='Không lưu được giỏ trước khi gửi. Vui lòng thử lại.');return;}
+        finishDraft=true;
       }
       Navigator.pop(ctx,{
         'branchId':branch,'customerId':customer,'priceListId':list,
@@ -1022,6 +1056,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       });
     }
     Future<void> requestClose(BuildContext ctx)async{
+      if(draftSaving)return;
       if(quickCustomerBusy||walkInBusy){
         inform('Đang gửi yêu cầu tạo khách. Hãy kiểm tra kết quả trước khi đóng.',error:true);
         return;
@@ -1034,20 +1069,27 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         return;
       }
       if(stamp()==originalStamp&&note.text.trim()==originalNote&&shippingStamp()==originalShippingStamp&&overrideReason.isEmpty){
-        Navigator.pop(ctx);return;
+        if(writer!=null)await persistDraft();
+        if(ctx.mounted)Navigator.pop(ctx);return;
       }
       final discard=await showDialog<bool>(context:ctx,builder:(confirmCtx)=>
         AlertDialog(
           title:const Text('Bỏ thay đổi đơn hàng?'),
-          content:const Text('Thông tin vừa nhập chưa được lưu.'),
+          content:Text(writer!=null?'Giỏ được lưu trên máy. Anh/chị muốn giữ hay bỏ giỏ?':'Thông tin vừa nhập chưa được lưu.'),
           actions:[
             TextButton(onPressed:()=>Navigator.pop(confirmCtx,false),
               child:const Text('Tiếp tục nhập')),
+            if(writer!=null)TextButton(onPressed:()=>Navigator.pop(confirmCtx,null),child:const Text('Giữ giỏ trên máy')),
             FilledButton(onPressed:()=>Navigator.pop(confirmCtx,true),
               child:const Text('Bỏ thay đổi')),
           ],
         ));
-      if(discard==true&&ctx.mounted)Navigator.pop(ctx);
+      if(!ctx.mounted)return;
+      if(writer!=null&&discard==null){await persistDraft(force:true);if(!ctx.mounted)return;if(draftWriteFailed){inform('Không lưu được giỏ.',error:true);return;}finishDraft=true;Navigator.pop(ctx);return;}
+      if(discard==true){
+        if(writer!=null){finishDraft=true;try{await writer.clear();}catch(_){finishDraft=false;inform('Không xóa được giỏ.',error:true);return;}}
+        if(ctx.mounted)Navigator.pop(ctx);
+      }
     }
     var firstQuoteScheduled=false;
     try{
@@ -1932,11 +1974,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           label:Text(quoteBusy?'Đang cập nhật…':'Làm mới giá')),
                         FilledButton(
                           key:const ValueKey('sales-save'),
-                          onPressed:quoteBusy||!ready?null:()=>submitForm(ctx,refresh,confirm:false),
+                          onPressed:draftSaving||quoteBusy||!ready?null:()=>submitForm(ctx,refresh,confirm:false),
                           child:const Text('Lưu đơn hàng')),
                         if(can('orders.confirm'))FilledButton.icon(
                           key:const ValueKey('sales-save-confirm'),
-                          onPressed:quoteBusy||!ready?null:()=>submitForm(ctx,refresh,confirm:true),
+                          onPressed:draftSaving||quoteBusy||!ready?null:()=>submitForm(ctx,refresh,confirm:true),
                           icon:const Icon(Icons.verified_outlined),
                           label:const Text('Lưu và xác nhận')),
                       ]),
@@ -1947,6 +1989,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         }),
       );
     }finally{
+      autoTimer?.cancel();lifecycle?.dispose();
+      await persistDraft();
       quoteDebounce?.cancel();
       quoteGeneration++;
       skuDebounce?.cancel();customerDebounce?.cancel();
@@ -1965,11 +2009,12 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     if(pendingCreate==null){
       Map<String,dynamic>? draft;
       final scope=_localScope,token=widget.session.token;
-      if(source==null&&scope!=null){
+      if(scope!=null){
         try{draft=await widget.client.localStore!.loadCart(scope);}catch(_){inform('Không đọc được giỏ trên máy.',error:true);return;}
         if(!_sameScope(token,scope.branch))return;
         if(draft!=null){
           if(!mounted)return;
+          if(source!=null){inform('Có giỏ chưa hoàn tất. Hãy xử lý giỏ trước khi sao chép đơn.',error:true);return;}
           final decision=await showDialog<String>(context:context,builder:(ctx)=>AlertDialog(
             title:const Text('Giỏ hàng trên máy'),
             content:const Text('Có đơn đang nhập được lưu trên máy. Tiếp tục nhập hoặc bỏ giỏ cũ? Chưa có chứng từ máy chủ.'),
