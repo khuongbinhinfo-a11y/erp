@@ -946,6 +946,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                             if(!availableGroups.any((g)=>g['id']==savedId)){
                               availableGroups.add({
                                 'id':savedId,'code':body['code'],'name':body['name'],
+                                'brandId':body['brandId'],'active':true,
                               });
                             }
                             groupId=savedId;
