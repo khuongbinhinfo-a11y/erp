@@ -85,13 +85,13 @@ jobs:
           flutter build appbundle --release --build-name "$VERSION_NAME" --build-number "$BUILD_NUMBER" --dart-define="ERP_API_BASE_URL=$ERP_PUBLIC_API_URL"
           apk=build/app/outputs/flutter-apk/app-release.apk
           tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
-          "$tools/apksigner" verify --verbose --print-certs "$apk" > /tmp/erp-cert
-          actual="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' /tmp/erp-cert)"
-          test "${actual,,}" = "${ERP_ANDROID_CERT_SHA256,,}"
-          "$tools/aapt" dump badging "$apk" > /tmp/erp-badging
-          grep -Fq "name='vn.erpdistribution.erp_distribution'" /tmp/erp-badging
-          grep -Fq "versionCode='$BUILD_NUMBER'" /tmp/erp-badging
-          grep -Fq "versionName='$VERSION_NAME'" /tmp/erp-badging
+          # Fail closed with actionable signed-APK diagnostics.
+          verified="$(bash platform/verify_android_signed.sh \
+            "$apk" "$tools" "vn.erpdistribution.erp_distribution" \
+            "$BUILD_NUMBER" "$VERSION_NAME" "$ERP_ANDROID_CERT_SHA256")"
+          printf '%s\n' "$verified"
+          actual="${verified##*signer=}"
+          [[ "$actual" =~ ^[a-f0-9]{64}$ ]]
           mkdir -p signed
           cp "$apk" signed/erp.apk
           cp build/app/outputs/bundle/release/app-release.aab signed/erp.aab
