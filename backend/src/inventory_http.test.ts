@@ -72,8 +72,8 @@ test("R3 real PostgreSQL: on-hand, hold, release, no oversell, exact replay, RBA
   pool=new Pool({connectionString:u.toString(),max:8,query_timeout:12000});
   pool.on("error",()=>{});
   const installed=await applyMigrations(pool,resolve(process.cwd(),"db/migrations"));
-  assert.equal(installed.applied.length,21);
-  assert.equal((await applyMigrations(pool,resolve(process.cwd(),"db/migrations"))).skipped.length,21);
+  assert.equal(installed.applied.length,22);
+  assert.equal((await applyMigrations(pool,resolve(process.cwd(),"db/migrations"))).skipped.length,22);
   const password="R3-PG-Synthetic-"+randomUUID();
   const root=await bootstrapInstallation(pool,{code:"r3-test",displayName:"R3 stock integration",
    adminLogin:"owner",adminPassword:password});
@@ -469,7 +469,7 @@ test("T0 populated 0020 -> 0021 preserves legacy reserve/read and owner grants",
  let pool:Pool|null=null,server:ReturnType<typeof buildApp>|null=null;
  try{
   const dir=resolve(process.cwd(),"db/migrations");
-  const sqlFiles=readdirSync(dir).filter(x=>/^\d{4}_[a-z0-9_]+\.sql$/.test(x));
+  const sqlFiles=readdirSync(dir).filter(x=>/^\d{4}_[a-z0-9_]+\.sql$/.test(x)&&x.slice(0,4)<="0021");
   assert.equal(sqlFiles.length,21);
   for(const file of sqlFiles.filter(x=>!x.startsWith("0021_")))
    copyFileSync(join(dir,file),join(tmp,file));
@@ -553,7 +553,8 @@ test("T0 populated 0020 -> 0021 preserves legacy reserve/read and owner grants",
   const beforeRows=await pool.query(`
    SELECT id::text,quantity_base::text,state FROM inventory_reservation
     WHERE installation_id=$1 ORDER BY id`,[t]);
-  const upgrade=await applyMigrations(pool,dir);
+  copyFileSync(join(dir,'0021_t0_partial_reservation_policy.sql'),join(tmp,'0021_t0_partial_reservation_policy.sql'));
+  const upgrade=await applyMigrations(pool,tmp);
   assert.deepEqual(upgrade.applied,["0021_t0_partial_reservation_policy.sql"]);
   assert.equal(upgrade.skipped.length,20);
   const after=await pool.query<{role_id:string;permission_code:string}>(`
