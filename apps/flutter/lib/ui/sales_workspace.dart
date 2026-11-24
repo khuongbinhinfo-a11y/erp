@@ -3,6 +3,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'erp_tokens.dart';
 import 'erp_display.dart';
+import 'erp_number_input.dart';
 import 'erp_toast.dart';
 import 'identity_client.dart';
 
@@ -19,7 +20,7 @@ class _OrderLine {
   String sellSkuId;
   final TextEditingController quantity;
   final FocusNode quantityFocus=FocusNode();
-  _OrderLine(this.sellSkuId,String value):quantity=TextEditingController(text:value);
+  _OrderLine(this.sellSkuId,String value):quantity=TextEditingController(text:erpGroupedDecimalText(value));
   void dispose(){quantity.dispose();quantityFocus.dispose();}
 }
 class _SalesWorkspaceState extends State<SalesWorkspace> {
@@ -50,7 +51,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   String newKey()=>'sales-'+DateTime.now().microsecondsSinceEpoch.toString()+'-'+(++sequence).toString();
   bool can(String permission)=>widget.session.grants.any(
     (g)=>g.permission==permission&&g.branchId==branchId);
-  String money(dynamic value)=>erpVndText(value);
+  String money(dynamic value)=>erpGroupedVndText(value);
   String stateOf(Map<String,dynamic> row){
     if(row['status']=='CANCELLED')return 'Đã hủy';
     if(row['versionStatus']=='DRAFT'&&row['status']=='CONFIRMED')return 'Đang điều chỉnh';
@@ -214,12 +215,12 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     int quoteGeneration=0;
     final quantityPattern=RegExp(r'^(?:0|[1-9]\d{0,8})(?:\.\d{1,3})?$');
     bool validLines()=>lines.isNotEmpty&&
-      lines.every((x)=>quantityPattern.hasMatch(x.quantity.text.trim())&&
+      lines.every((x)=>quantityPattern.hasMatch(erpNumberCanonical(x.quantity.text))&&
       RegExp('[1-9]').hasMatch(x.quantity.text))&&
       lines.map((x)=>x.sellSkuId).toSet().length==lines.length;
     String stamp()=>[
       customer??'',list??'',channel??'',
-      ...lines.map((x)=>x.sellSkuId+':'+x.quantity.text.trim()),
+      ...lines.map((x)=>x.sellSkuId+':'+erpNumberCanonical(x.quantity.text)),
     ].join('|');
     final originalStamp=stamp(),originalNote=note.text.trim();
     void invalidate(StateSetter refresh){
@@ -244,7 +245,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           'branchId':branch,'customerId':customer,'priceListId':list,
           if(channel!=null)'channelId':channel,
           'lines':lines.map((line)=>{'sellSkuId':line.sellSkuId,
-            'quantity':line.quantity.text.trim()}).toList(),
+            'quantity':erpNumberCanonical(line.quantity.text)}).toList(),
         });
         if(!context.mounted||request!=quoteGeneration)return;
         final quoted=(basket['lines'] as List<dynamic>)
@@ -321,12 +322,12 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     Map<String,Map<String,dynamic>> skuQuotes={},stockByProduct={};
     final skuResultScroll=ScrollController();
     String priceContext()=>[customer??'',list??'',channel??'',
-      ...lines.map((line)=>line.sellSkuId+':'+line.quantity.text.trim())].join('|');
+      ...lines.map((line)=>line.sellSkuId+':'+erpNumberCanonical(line.quantity.text))].join('|');
     String skuQuantity(String id){
       for(final line in lines){
-        if(line.sellSkuId==id&&quantityPattern.hasMatch(line.quantity.text.trim())&&
+        if(line.sellSkuId==id&&quantityPattern.hasMatch(erpNumberCanonical(line.quantity.text))&&
             RegExp('[1-9]').hasMatch(line.quantity.text)){
-          return line.quantity.text.trim();
+          return erpNumberCanonical(line.quantity.text);
         }
       }
       return '1';
@@ -658,7 +659,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     }
     Future<void> findCustomers(BuildContext ctx,StateSetter refresh)async{
       final term=customerSearch.text.trim();
-      if(term.isEmpty){refresh(()=>customerMatches=[]);return;}
+      if(term.isEmpty){refresh((){customerMatches=customers.take(12).toList();selectedCustomerIndex=0;});return;}
       final run=++customerSearchGeneration;
       refresh(()=>customerBusy=true);
       try{
@@ -696,7 +697,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         'note':note.text.trim(),
         'lines':lines.asMap().entries.map((entry)=>{
           'sellSkuId':entry.value.sellSkuId,
-          'quantity':entry.value.quantity.text.trim(),
+          'quantity':erpNumberCanonical(entry.value.quantity.text),
           'expectedPriceSignature':quotes![entry.key]['priceSignature'],
         }).toList(),
         '_confirmAfterSave':confirm,
@@ -839,7 +840,10 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         ],onChanged:(v){channel=v;customerPricingChanged(ctx,refresh);})),
                       ]),
                     const SizedBox(height:6),
-                    Focus(onKeyEvent:(node,event){
+                    Align(alignment:Alignment.centerLeft,child:ConstrainedBox(
+                      constraints:const BoxConstraints(maxWidth:760),
+                      child:Row(children:[
+                        Expanded(child:Focus(onKeyEvent:(node,event){
                       if(event is! KeyDownEvent||customerMatches.isEmpty)
                         return KeyEventResult.ignored;
                       if(event.logicalKey==LogicalKeyboardKey.arrowDown){
@@ -878,20 +882,20 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           chooseCustomer(ctx,customerMatches[selectedCustomerIndex],refresh);
                         }else{findCustomers(ctx,refresh);}
                       },
-                      decoration:InputDecoration(labelText:'Khách hàng · F4',isDense:true,contentPadding:const EdgeInsets.symmetric(horizontal:10,vertical:9),
-                        hintText:selectedCustomer(),
+                      decoration:InputDecoration(labelText:customer==null?'Khách hàng · F4':selectedCustomer()+' · F4',isDense:true,contentPadding:const EdgeInsets.symmetric(horizontal:10,vertical:9),
+                        floatingLabelBehavior:FloatingLabelBehavior.always,
+                        hintText:'Tìm mã hoặc tên',
                         prefixIcon:const Icon(Icons.person_search_outlined),
                         suffixIcon:IconButton(tooltip:'Tìm khách',onPressed:()=>findCustomers(ctx,refresh),
-                          icon:const Icon(Icons.search))))),
-                    if(can('catalog.write'))Align(
-                      alignment:Alignment.centerLeft,
-                      child:TextButton.icon(
+                          icon:const Icon(Icons.search)))))),
+                        if(can('catalog.write'))TextButton.icon(
                         key:const ValueKey('sales-quick-customer-toggle'),
                         onPressed:quickCustomerBusy?null:()=>refresh((){
                           quickCustomerVisible=!quickCustomerVisible;
                         }),
                         icon:const Icon(Icons.person_add_alt_1_outlined),
-                        label:const Text('Tạo khách nhanh'))),
+                        label:const Text('Tạo khách nhanh')),
+                      ]))),
                     if(quickCustomerVisible)Container(
                       key:const ValueKey('sales-quick-customer-panel'),
                       margin:const EdgeInsets.symmetric(vertical:8),
@@ -998,9 +1002,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         ),
                       ]),
                     ),
-                    const SizedBox(height:8),
-
-                    const SizedBox(height:8),
+                    const SizedBox(height:4),
                     if(customers.any((x)=>x['id']==customer))
                       Text('Địa chỉ giao: '+
                         (customers.firstWhere((x)=>x['id']==customer)['deliveryAddress']??'Chưa cập nhật').toString()+
@@ -1008,6 +1010,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         (customers.firstWhere((x)=>x['id']==customer)['paymentTermsDays']??0).toString()+' ngày',
                         style:const TextStyle(fontSize:12,color:ErpTokens.muted)),
                     const Divider(height:14),
+                    Align(alignment:Alignment.centerLeft,child:ConstrainedBox(
+                      constraints:const BoxConstraints(maxWidth:760),
+                      child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
                     Focus(
                       onKeyEvent:(node,event){
                         if(event is! KeyDownEvent||skuMatches.isEmpty||
@@ -1108,7 +1113,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                                   :stockBusy?'Đang tra tồn…'
                                   :stockError!=null?'Chưa xác định tồn'
                                   :stock!=null
-                                    ?stock['available'].toString()+' '+(stock['baseUnit']??'đv gốc').toString()
+                                    ?erpGroupedDecimalText(stock['available'])+' '+(stock['baseUnit']??'đv gốc').toString()
                                     :stockComplete?'0 đv gốc':'Chưa xác định tồn';
                                 return Material(
                                   color:i==selectedSkuIndex
@@ -1164,6 +1169,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           ),
                         ]),
                       ),
+                      ]))),
                     const SizedBox(height:12),
                     if(lines.isNotEmpty&&!narrow)Padding(
                       padding:const EdgeInsets.symmetric(horizontal:8,vertical:7),
@@ -1202,6 +1208,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           onChanged:(_)=>pricingChanged(ctx,refresh),
                           onSubmitted:(_)=>skuFocus.requestFocus(),
                           keyboardType:const TextInputType.numberWithOptions(decimal:true),
+                          inputFormatters:const [ErpGroupedNumberFormatter(maxIntegerDigits:9,maxFractionDigits:3)],
                           textInputAction:TextInputAction.next,
                           textAlign:TextAlign.center,
                           decoration:const InputDecoration(
@@ -1652,7 +1659,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
                       const SizedBox(height:6),
                       Wrap(spacing:16,runSpacing:6,children:[
-                        Text('Số lượng: '+erpDecimalText(line['quantity'])+' '+line['unitCode'].toString()),
+                        Text('Số lượng: '+erpGroupedDecimalText(line['quantity'])+' '+line['unitCode'].toString()),
                         Text('Đơn giá: '+money(line['unitPrice'])),
                         Text('Thành tiền: '+money(line['lineTotal']),
                           style:const TextStyle(fontWeight:FontWeight.w700)),
