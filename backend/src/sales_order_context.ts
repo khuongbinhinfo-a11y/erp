@@ -152,7 +152,7 @@ export async function saveOrderContext(db:PoolClient,ctx:MutationContext,b:strin
   throw new OrderContextFault(400,"DEFAULT_ONLY_ON_CREATE");
  await requireWarehouseAccess(db,t,b,ctx.actorId,input.warehouseId);
  const warehouse=await db.query<{code:string;name:string}>(
-  "SELECT code,name FROM warehouse WHERE installation_id=$1 AND branch_id=$2 AND id=$3 FOR SHARE",
+  "SELECT code,name FROM warehouse WHERE installation_id=$1 AND branch_id=$2 AND id=$3",
   [t,b,input.warehouseId]);
  if(!warehouse.rows[0])throw new OrderContextFault(409,"ORDER_WAREHOUSE_UNAVAILABLE");
  const customer=await db.query<{payment_terms_days:number;delivery_address:string|null}>(
@@ -208,4 +208,20 @@ export async function copyOrderContext(db:PoolClient,t:string,b:string,id:string
    warehouse_id,warehouse_code,warehouse_name,delivery_choice,customer_location_id,delivery_address,
    requested_delivery_date,collection_policy,payment_terms_days FROM sales_order_version_context
   WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3 AND version_no=$4`,[t,b,id,from,to]);
+}
+
+// Inventory holds a warehouse FOR UPDATE before touching the order.
+// Acquire FK-compatible locks before the parent lock on edit/amend so
+// an order version context INSERT cannot invert that ordering.
+export async function lockContextWarehouses(db:PoolClient,t:string,b:string,id:string,newWarehouse?:string){
+ if(!await hasOrderContextSchema(db))return;
+ const r=await db.query<{warehouse_id:string}>(`
+  SELECT c.warehouse_id FROM sales_order o JOIN sales_order_version_context c
+    ON c.installation_id=o.installation_id AND c.branch_id=o.branch_id
+    AND c.order_id=o.id AND c.version_no=o.current_version
+  WHERE o.installation_id=$1 AND o.branch_id=$2 AND o.id=$3`,[t,b,id]);
+ const ids=[...new Set([...(r.rows.map(x=>x.warehouse_id)),...(newWarehouse?[newWarehouse]:[])])];
+ if(ids.length)await db.query(`SELECT id FROM warehouse
+  WHERE installation_id=$1 AND branch_id=$2 AND id=ANY($3::uuid[])
+  ORDER BY id FOR KEY SHARE`,[t,b,ids]);
 }
