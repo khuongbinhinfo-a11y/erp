@@ -32,6 +32,53 @@ class ErpLocalStore {
     return raw==null?null:Map<String,dynamic>.from(jsonDecode(raw) as Map);
   }
   Future<void> clearCart(LocalScope scope)=>driver.remove(_key(scope,'cart','current'));
+  /// Distinct per-tab carts within one CAS record; no lost writes across tabs.
+  Future<List<({String id,Map<String,dynamic> draft})>> savedCarts(LocalScope scope)async{
+    final result=<({String id,Map<String,dynamic> draft})>[];
+    final legacy=await loadCart(scope);
+    if(legacy!=null)result.add((id:'legacy',draft:legacy));
+    final raw=await driver.read(_key(scope,'cart','multi'));
+    if(raw==null)return result;
+    try{
+      final content=Map<String,dynamic>.from(jsonDecode(raw) as Map);
+      for(final item in content.entries){
+        result.add((id:item.key,draft:Map<String,dynamic>.from(item.value as Map)));
+      }
+    }catch(_){throw const LocalRecoveryConflict();}
+    return result;
+  }
+  Future<void> saveScopedCart(LocalScope scope,String id,Map<String,dynamic> cart)async{
+    if(driver is! AtomicLocalDriver||id.isEmpty||id=='legacy')throw const LocalRecoveryConflict();
+    final location=_key(scope,'cart','multi');
+    final snapshot=Map<String,dynamic>.from(jsonDecode(jsonEncode(cart)) as Map);
+    for(var attempt=0;attempt<16;attempt++){
+      final old=await driver.read(location);
+      Map<String,dynamic> items;
+      try{items=old==null?<String,dynamic>{}:Map<String,dynamic>.from(jsonDecode(old) as Map);}
+      catch(_){throw const LocalRecoveryConflict();}
+      if(!items.containsKey(id)&&items.length>=40)throw const LocalRecoveryConflict();
+      items[id]=snapshot;
+      if(await (driver as AtomicLocalDriver).compareAndSwap(location,old,jsonEncode(items)))return;
+    }
+    throw const LocalRecoveryConflict();
+  }
+  Future<void> clearScopedCart(LocalScope scope,String id)async{
+    if(id=='legacy'){await clearCart(scope);return;}
+    if(driver is! AtomicLocalDriver||id.isEmpty)throw const LocalRecoveryConflict();
+    final location=_key(scope,'cart','multi');
+    for(var attempt=0;attempt<16;attempt++){
+      final old=await driver.read(location);
+      if(old==null)return;
+      Map<String,dynamic> items;
+      try{items=Map<String,dynamic>.from(jsonDecode(old) as Map);}
+      catch(_){throw const LocalRecoveryConflict();}
+      if(!items.containsKey(id))return;
+      items.remove(id);
+      if(await (driver as AtomicLocalDriver).compareAndSwap(location,old,
+        items.isEmpty?null:jsonEncode(items)))return;
+    }
+    throw const LocalRecoveryConflict();
+  }
   Future<void> saveCache(LocalScope scope,String resource,Object value,{required DateTime fetchedAt,required Duration ttl})=>
     driver.write(_key(scope,'cache',resource),jsonEncode({
       'fetchedAt':fetchedAt.toUtc().toIso8601String(),'ttlSeconds':ttl.inSeconds,'value':value}));
@@ -166,15 +213,16 @@ class ErpLocalStore {
 class LocalCartWriter {
   final ErpLocalStore store;
   final LocalScope scope;
+  final String? cartId;
   Future<void> _tail=Future<void>.value();
-  LocalCartWriter(this.store,this.scope);
+  LocalCartWriter(this.store,this.scope,[this.cartId]);
   Future<void> save(Map<String,dynamic> snapshot){
     final frozen=Map<String,dynamic>.from(jsonDecode(jsonEncode(snapshot)) as Map);
-    _tail=_tail.catchError((Object _){}).then((_)=>store.saveCart(scope,frozen));
+    _tail=_tail.catchError((Object _){}).then((_)=>cartId==null?store.saveCart(scope,frozen):store.saveScopedCart(scope,cartId!,frozen));
     return _tail;
   }
   Future<void> clear(){
-    _tail=_tail.catchError((Object _){}).then((_)=>store.clearCart(scope));
+    _tail=_tail.catchError((Object _){}).then((_)=>cartId==null?store.clearCart(scope):store.clearScopedCart(scope,cartId!));
     return _tail;
   }
 }

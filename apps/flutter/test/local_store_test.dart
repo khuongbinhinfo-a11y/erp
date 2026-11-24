@@ -95,6 +95,18 @@ void main(){
     await store.clearUnsentSalesUpdate(a,id,'k2',requiredStatus:'rejected');
     expect(await store.unsentSalesUpdates(a,id),isEmpty);
   });
+  test('two simultaneous tabs keep independent carts after one clears',()async{
+    final driver=Memory(),first=ErpLocalStore(driver),second=ErpLocalStore(driver);
+    await Future.wait([
+      first.saveScopedCart(a,'tab-one',{'lines':[{'quantity':'1'}]}),
+      second.saveScopedCart(a,'tab-two',{'lines':[{'quantity':'2'}]}),
+    ]);
+    expect((await first.savedCarts(a)).map((x)=>x.id).toSet(),{'tab-one','tab-two'});
+    await first.clearScopedCart(a,'tab-one');
+    final remaining=(await second.savedCarts(a)).single;
+    expect(remaining.id,'tab-two');
+    expect((remaining.draft['lines'] as List).single['quantity'],'2');
+  });
   test('cache expiry is explicit, never proof of a current price',()async{
     final store=ErpLocalStore(Memory());
     final time=DateTime.utc(2026,11,24);
