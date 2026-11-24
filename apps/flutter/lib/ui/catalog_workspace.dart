@@ -119,6 +119,29 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
       });
     }
   }
+  Widget _priceScopeChips(String title,String keyPrefix,
+      List<Map<String,dynamic>> options,Set<String> chosen,StateSetter refresh){
+    return Padding(padding:const EdgeInsets.only(top:10),child:Column(
+      crossAxisAlignment:CrossAxisAlignment.start,children:[
+        Text(title,style:const TextStyle(fontSize:12,
+          fontWeight:FontWeight.w700,color:ErpTokens.ink)),
+        const SizedBox(height:5),
+        if(options.isEmpty)const Text('Chưa có danh mục áp dụng.',
+          style:TextStyle(fontSize:12,color:ErpTokens.muted))
+        else Wrap(spacing:5,runSpacing:3,children:[
+          for(final option in options.where((x)=>x['active']!=false))
+            FilterChip(
+              key:ValueKey('$keyPrefix-${option['id']}'),
+              label:Text((option['name']??option['code']).toString(),
+                style:const TextStyle(fontSize:12)),
+              selected:chosen.contains(option['id'].toString()),
+              onSelected:(enabled)=>refresh((){
+                if(enabled){chosen.add(option['id'].toString());}
+                else{chosen.remove(option['id'].toString());}
+              })),
+        ]),
+      ]));
+  }
   String _dateLabel(DateTime? day,String none){
     if(day==null)return none;
     final local=day.toLocal();
@@ -196,6 +219,9 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     final paymentTerms=TextEditingController(text:'0');
     final listPriority=TextEditingController(text:'0');
     DateTime? listStart,listEnd;
+    final selectedChannels=<String>{},selectedGroups=<String>{},selectedCustomers=<String>{};
+    bool assignDefault=false,priceScopesLoaded=false;
+    List<Map<String,dynamic>> priceChannels=[],priceGroups=[],priceCustomers=[];
     final altUnit=TextEditingController(),conversion=TextEditingController();
     final baseBarcode=TextEditingController(),altSku=TextEditingController(),
       altBarcode=TextEditingController();
@@ -279,6 +305,23 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     }
 
     try{
+      if(resource=='price-lists'&&previous==null){
+        try{
+          final loaded=await Future.wait([
+            widget.client.r1CatalogItems(widget.session.token,'channels',branchId:branch),
+            widget.client.catalogDirectoryAll(widget.session.token,
+              'customer-groups',branchId:branch),
+            widget.client.catalogItems(widget.session.token,'customers',branchId:branch),
+          ]);
+          priceChannels=loaded[0];priceGroups=loaded[1];priceCustomers=loaded[2];
+          priceScopesLoaded=true;
+        }catch(_){
+          priceScopesLoaded=false;
+          if(mounted)ErpToast.show(context,
+            'Chưa tải được kênh và nhóm khách. Có thể tạo bảng giá trước rồi phân bổ sau.',
+            isError:true);
+        }
+      }
       if(resource=='prices'&&previous==null){
         availableProducts=await widget.client.catalogItems(widget.session.token,'products',branchId:branchId);
         availableLists=await widget.client.catalogItems(widget.session.token,'price-lists',branchId:branchId);
@@ -392,6 +435,24 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                       onPressed:()=>refresh(()=>listEnd=null),
                       icon:const Icon(Icons.close,size:16)),
                   ]),
+                  if(priceScopesLoaded)...[
+                    const SizedBox(height:10),
+                    SwitchListTile(
+                      key:const ValueKey('price-create-default'),
+                      contentPadding:EdgeInsets.zero,
+                      title:const Text('Áp dụng mặc định'),
+                      value:assignDefault,
+                      onChanged:(v)=>refresh(()=>assignDefault=v)),
+                    _priceScopeChips('Kênh bán','price-create-channel',
+                      priceChannels,selectedChannels,refresh),
+                    _priceScopeChips('Nhóm khách','price-create-group',
+                      priceGroups,selectedGroups,refresh),
+                    _priceScopeChips('Khách hàng riêng','price-create-customer',
+                      priceCustomers,selectedCustomers,refresh),
+                    const Padding(padding:EdgeInsets.only(top:8),
+                      child:Text('Khi chọn cả kênh bán và nhóm khách: áp dụng theo KÊNH VÀ NHÓM.',
+                        style:TextStyle(fontSize:12,color:ErpTokens.muted))),
+                  ],
                 ],
                 if(resource=='customers')...[
                   const SizedBox(height:12),
@@ -850,6 +911,12 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                       'effectiveFrom':listStart?.toIso8601String(),
                       'effectiveTo':_priceListEndExclusive(listEnd)?.toIso8601String(),
                       'priority':int.parse(listPriority.text.trim()),
+                      if(priceScopesLoaded)...{
+                        'channelIds':selectedChannels.toList(),
+                        'customerGroupIds':selectedGroups.toList(),
+                        'customerIds':selectedCustomers.toList(),
+                        'defaultAssignment':assignDefault,
+                      },
                     });
                   }
                   if(resource=='customers'){
