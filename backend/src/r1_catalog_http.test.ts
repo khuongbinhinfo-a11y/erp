@@ -261,6 +261,17 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
   const afterCorrection=await resolvePrice({...recoveryContext,priceAt:"2026-11-22T12:00:00Z"});
   assert.equal(afterCorrection.status,200,JSON.stringify(afterCorrection.body));
   assert.equal(Number(afterCorrection.body.quote.unitPrice),10500);
+  const clonedRecovery=await write(
+    "/v1/catalog/price-lists/"+recoveryListId+"/clone",
+    {code:"P0-PRICE-CLONE",name:"Sao chép nguyên giá hiệu lực",sourceRevision:0},
+    "p0-price-clone-"+randomUUID());
+  assert.equal(clonedRecovery.status,201,JSON.stringify(clonedRecovery.body));
+  const copiedRecovery=await resolvePrice({...recoveryContext,
+    priceListId:clonedRecovery.body.id,priceAt:"2026-11-24T12:00:00Z"});
+  assert.equal(copiedRecovery.status,200,JSON.stringify(copiedRecovery.body));
+  assert.equal(Number(copiedRecovery.body.quote.unitPrice),10500,
+    "clone cannot resurrect an older 9,800 product price over a newer 10,500 SKU rule");
+
   assert.equal((await resolvePrice({...recoveryContext,sellSkuId:skuId,
    priceAt:"2026-11-22T12:00:00Z"})).status,409,
    "product-level price history must not leak into a carton SKU");
@@ -313,10 +324,19 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
   const manualQuote=await request("/v1/sales/quote","POST",{
    branchId:b,...manualInput},token);
   assert.equal(manualQuote.status,200,JSON.stringify(manualQuote.body));
+  assert.equal(manualQuote.body.quote.lines[0].normalizedBaseQuantity,"1.000000",
+    "manual price must never become reserved stock quantity");
   assert.equal(manualQuote.body.quote.subtotal,"21000");
   assert.equal(manualQuote.body.quote.discountTotal,"2100");
   assert.equal(manualQuote.body.quote.taxTotal,"1512");
   assert.equal(manualQuote.body.quote.grandTotal,"20412");
+  const manualQtyQuote=await request("/v1/sales/quote","POST",{
+    branchId:b,customerId:c1.body.id,priceListId:manualList.body.id,
+    lines:[{sellSkuId:baseSku,quantity:"2.5",unitPrice:"9800",
+      discountRate:"0",taxRate:"0"}]},token);
+  assert.equal(manualQtyQuote.status,200,JSON.stringify(manualQtyQuote.body));
+  assert.equal(manualQtyQuote.body.quote.lines[0].normalizedBaseQuantity,"2.500000",
+    "stock normalization is sold quantity times conversion, not unit price");
   const manualOrder=await write("/v1/sales/orders",{
    ...manualInput,note:"Hai dòng cùng SKU",
    lines:manualInput.lines.map((line,i)=>({...line,
