@@ -1703,6 +1703,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                     if(brands.isEmpty)Text('Nhãn hàng: ${productGroups.where((g)=>g['id']==productGroupId).map((g)=>g['brandName']??'Chưa phân nhãn').firstOrNull??'Chưa phân nhãn'}',style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
                     const Divider(height:24),
                     const Text('3. SKU, đơn vị quy đổi và mã vạch',style:TextStyle(fontWeight:FontWeight.w700,color:ErpTokens.primary)),
+                    const Text('Mã và hệ số đã lưu được khóa. Quy cách và ảnh lưu theo từng thao tác.',style:TextStyle(fontSize:12,color:ErpTokens.muted)),
                     const SizedBox(height:8),
                     for(final kind in ['units','skus','barcodes'])
                       R1CatalogWorkspace(
@@ -2333,8 +2334,9 @@ class _ProductEditImagesState extends State<_ProductEditImages>{
     if(images.isEmpty&&!busy&&error==null)const Text('Chưa có ảnh sản phẩm.'),
     Wrap(spacing:8,runSpacing:8,children:[
       for(final image in images)
-        Image.network(image['downloadUrl'] as String,width:112,height:112,fit:BoxFit.cover,
+        Stack(children:[Image.network(image['downloadUrl'] as String,width:112,height:112,fit:BoxFit.cover,
           errorBuilder:(_,__,___)=>const SizedBox(width:112,height:112,child:Icon(Icons.broken_image_outlined))),
+          if(image['isPrimary']==true)const Positioned(left:2,top:2,child:Chip(label:Text('Ảnh chính'))),]),
     ]),
     Wrap(spacing:8,children:[
       if(widget.canWrite)TextButton.icon(key:const ValueKey('catalog-edit-upload-image'),

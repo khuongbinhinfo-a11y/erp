@@ -197,7 +197,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     final deliveryLabels={'TRIP':'Giao thường','MANUAL':'Giao thủ công','PICKUP':'Khách lấy tại kho'};
     final collectionLabels={'COLLECT_ON_DELIVERY':'Thu khi giao','PREPAID':'Trả trước',
       'COLLECT_AFTER_DELIVERY':'Thu sau giao','CREDIT_TERMS':'Công nợ theo hạn'};
-    var deliveryChoice=(savedShipping['deliveryChoice']??entrySettings?['deliveryChoice']??'TRIP').toString();
+    var deliveryChoice=(savedShipping['deliveryChoice']??entrySettings['deliveryChoice']??'TRIP').toString();
     var collectionPolicy=(savedShipping['collectionPolicy']??'COLLECT_ON_DELIVERY').toString();
     var customerMode=(savedShipping['customerMode']??'EXISTING').toString();
     String? locationId=savedShipping['customerLocationId'] as String?;
@@ -208,8 +208,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     var rememberDelivery=false,walkInBusy=false,locationBusy=false;
     int locationGeneration=0,addressGeneration=0,addressEditGeneration=0,customerChoiceGeneration=0;
     List<Map<String,dynamic>> locations=[];
-    Map<String,dynamic>? walkInCustomer=entrySettings?['walkInCustomer'] is Map
-      ?Map<String,dynamic>.from(entrySettings!['walkInCustomer'] as Map):null;
+    Map<String,dynamic>? walkInCustomer=entrySettings['walkInCustomer'] is Map
+      ?Map<String,dynamic>.from(entrySettings['walkInCustomer'] as Map):null;
     String? customer=order?['customerId'] as String? ??
       (customers.length==1?customers.single['id'] as String:null);
     if(savedShipping.isEmpty&&customer!=null){

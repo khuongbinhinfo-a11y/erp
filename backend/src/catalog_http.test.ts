@@ -301,7 +301,7 @@ test("Issue #7: catalog HTTP uses real PostgreSQL with tenant/branch RBAC, decim
       assert.equal((await update("customers",customer.body.id,1,
         {code:"CHANGED"},"immutable-code-"+randomUUID())).status,400,
         "canonical code immutable");
-      assert.equal((await call("/v1/catalog/customers?branchId="+b,"GET",undefined,token))
+      assert.equal((await call("/v1/catalog/customers?branchId="+b+"&id="+customer.body.id,"GET",undefined,token))
         .body.items[0].active,false);
       const productUpdate=await update("products",product.body.id,0,
         {name:"Renamed Product"},"product-update-"+randomUUID());
