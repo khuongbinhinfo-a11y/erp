@@ -1274,7 +1274,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         if(variants==null||
                             !variants.any((x)=>x['id']==entry.sellSkuId))sku,
                       ];
-                      final unitField=SizedBox(width:narrow?148:92,
+                      final unitField=SizedBox(width:narrow?128:92,
                         child:DropdownButtonFormField<String>(
                           key:ValueKey('sales-unit-$i-${entry.sellSkuId}'),
                           initialValue:entry.sellSkuId,
