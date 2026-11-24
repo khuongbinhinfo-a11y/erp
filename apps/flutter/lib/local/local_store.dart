@@ -59,7 +59,7 @@ class ErpLocalStore {
       final items=Map<String,dynamic>.from(jsonDecode(raw) as Map);
       for(final item in items.entries){
         final entry=_cartEntry(item.value);
-        if(!{'editing','released','submitted'}.contains(entry['status']))continue;
+        if(!{'editing','released','submitted','rejected'}.contains(entry['status']))continue;
         result.add((id:item.key,draft:Map<String,dynamic>.from(entry['draft'] as Map)));
       }
     }catch(_){throw const LocalRecoveryConflict();}
@@ -115,13 +115,15 @@ class ErpLocalStore {
       catch(_){throw const LocalRecoveryConflict();}
       if(!items.containsKey(sourceId)||items.containsKey(newId))throw const LocalRecoveryConflict();
       final from=_cartEntry(items[sourceId]);
-      if(!{'editing','released'}.contains(from['status'])||_cartActive(from)){
+      if(!{'editing','released','rejected'}.contains(from['status'])||_cartActive(from)){
         throw const LocalRecoveryConflict();
       }
       final cart=Map<String,dynamic>.from(from['draft'] as Map);
       // Retired tombstones prevent the previous live editor resurrecting an ID.
       items[sourceId]={'_kind':'erp-cart-lease-v1','draft':<String,dynamic>{},
-        'owner':from['owner'],'status':'retired','leaseUntil':0};
+        'owner':from['owner'],'status':'retired','leaseUntil':0,
+        if(from['status']=='rejected'&&from['commandKey'] is String)
+          'rejectedCommandKey':from['commandKey']};
       items[newId]={'_kind':'erp-cart-lease-v1','draft':cart,'status':'editing',
         'owner':owner,'leaseUntil':_cartDeadline()};
       if(await (driver as AtomicLocalDriver).compareAndSwap(key,old,jsonEncode(items)))return cart;
@@ -148,10 +150,25 @@ class ErpLocalStore {
       if(entry['owner']!=owner||entry['status']!='submitted'||entry['commandKey']!=commandKey){
         throw const LocalRecoveryConflict();
       }
-      final restored=Map<String,dynamic>.from(entry)..remove('commandKey');
-      restored['status']='released';restored['leaseUntil']=0;
-      return restored;
+      return {...entry,'status':'rejected','leaseUntil':0};
     });
+  }
+  /// Authenticated server receipt remains canonical. This local disposition is
+  /// only a deny-replay guard after the server definitively rejected a create.
+  Future<String> cartCreateDisposition(LocalScope scope,String id,
+      {required String owner,required String commandKey})async{
+    final raw=await driver.read(_key(scope,'cart','multi'));
+    if(raw==null)return 'unknown';
+    late Map<String,dynamic> items;
+    try{items=Map<String,dynamic>.from(jsonDecode(raw) as Map);}
+    catch(_){throw const LocalRecoveryConflict();}
+    if(!items.containsKey(id))return 'unknown';
+    final entry=_cartEntry(items[id]);
+    if(entry['owner']!=owner)return 'other-owner';
+    if(entry['status']=='submitted'&&entry['commandKey']==commandKey)return 'submitted';
+    if(entry['status']=='rejected'&&entry['commandKey']==commandKey)return 'rejected';
+    if(entry['status']=='retired'&&entry['rejectedCommandKey']==commandKey)return 'rejected';
+    return 'unknown';
   }
   Future<void> clearScopedCart(LocalScope scope,String id,{required String owner,String? commandKey})async{
     await _mutateScopedCart(scope,id,(entry){
