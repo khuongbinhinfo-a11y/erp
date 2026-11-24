@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
- BASE,RELEASE,checkVersions,checkOperator,checkPrimaryMainSha,
+ BASE,RELEASE,checkVersions,assertExactOperatorMigrationFiles,checkOperator,checkPrimaryMainSha,
  assertCAT20SchemaState,canonicalRemote,parsePrismaCredential,
  requirePg17Client,BUCKET_S3_NAME,assertNotInterrupted,
  restoreContainerCleanupArgs
@@ -40,6 +40,19 @@ test("CAT20 only permits exact 0019 -> 0020 lineage",()=>{
   [BASE.slice(0,18),"before"],
   [[...BASE,"0020_wrong.sql"],"after"]
  ])assert.throws(()=>checkVersions(history,stage),/ERP_DB_MIGRATION_DRIFT/);
+});
+
+test("CAT20 exact migration files fail closed on 0021 and missing baseline",()=>{
+ const valid=[...BASE,...RELEASE];
+ assert.doesNotThrow(()=>assertExactOperatorMigrationFiles(valid));
+ assert.doesNotThrow(()=>assertExactOperatorMigrationFiles([...valid,"README.md"]));
+ for(const wrong of [
+  [...valid,"0021_unapproved.sql"],
+  BASE,
+  [...BASE.slice(1),...RELEASE],
+  [...BASE,"0020_different.sql"]
+ ])assert.throws(()=>assertExactOperatorMigrationFiles(wrong),
+   /CAT20_OPERATOR_MIGRATION_FILES_MISMATCH/);
 });
 
 test("Reject wrong Codespace, SHA, remote, approval, or target",()=>{
