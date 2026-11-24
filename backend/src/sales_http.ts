@@ -183,7 +183,10 @@ async function previewOrder(db:PoolClient,t:string,input:QuoteInput){
   if(input.documentDiscount){
     const amounts=allocateDocumentDiscount(lines.map(line=>({subtotal:"subtotal" in line?line.subtotal:line.lineTotal,
       discountAmount:"discountAmount" in line?line.discountAmount:"0",taxRate:"taxRate" in line?line.taxRate:"0",
-      taxAmount:"taxAmount" in line?line.taxAmount:"0",lineTotal:line.lineTotal})),input.documentDiscount);
+      taxAmount:"taxAmount" in line?line.taxAmount:"0",lineTotal:line.lineTotal,
+      taxMode:"taxMode" in line?line.taxMode:undefined,
+      grossBeforeTaxMode:"grossBeforeTaxMode" in line?line.grossBeforeTaxMode:undefined,
+      rawDiscount:"rawDiscount" in line?line.rawDiscount:undefined})),input.documentDiscount);
     lines=lines.map((line,i)=>({...line,...amounts[i]!}));
   }
   // Single server-side NUMERIC aggregation, never a client JS/Flutter float.

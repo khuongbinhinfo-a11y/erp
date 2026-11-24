@@ -26,10 +26,11 @@ function bp(x:string):bigint{
 }
 const sum=(a:bigint[])=>a.reduce((s,x)=>s+x,0n);
 const halfUp=(n:bigint,d:bigint)=>(n+d/2n)/d;
-export type DiscountBase={subtotal:string;discountAmount:string;taxRate:string;taxAmount:string;lineTotal:string};
+export type DiscountBase={subtotal:string;discountAmount:string;taxRate:string;taxAmount:string;lineTotal:string;
+ taxMode?:string;grossBeforeTaxMode?:string;rawDiscount?:string};
 export function allocateDocumentDiscount(lines:DiscountBase[],input:DocumentDiscount){
- if(lines.some(l=>BigInt(l.discountAmount)>0n))throw new DiscountFault("MIXED_DISCOUNT_SCOPE");
- const gross=lines.map(l=>BigInt(l.subtotal)),total=sum(gross);
+ if(lines.some(l=>BigInt(l.rawDiscount??l.discountAmount)>0n))throw new DiscountFault("MIXED_DISCOUNT_SCOPE");
+ const gross=lines.map(l=>BigInt(l.taxMode==="INCLUSIVE"?(l.grossBeforeTaxMode??l.lineTotal):l.subtotal)),total=sum(gross);
  const target=input.mode==="PERCENT"?halfUp(total*bp(input.value),10000n):BigInt(input.value);
  if(target>total)throw new DiscountFault("DOCUMENT_DISCOUNT_EXCEEDS_TOTAL");
  const allocation=gross.map(v=>total===0n?0n:v*target/total);
@@ -39,15 +40,19 @@ export function allocateDocumentDiscount(lines:DiscountBase[],input:DocumentDisc
  for(const r of ranked){if(left===0n)break;if(allocation[r.i]!<gross[r.i]!){allocation[r.i]!++;left--;}}
  if(left!==0n)throw new DiscountFault("DOCUMENT_DISCOUNT_ALLOCATION_FAILED");
  return lines.map((l,i)=>{
-  const discount=allocation[i]!,net=gross[i]!-discount,tax=halfUp(net*bp(l.taxRate),10000n);
+  const rawDiscount=allocation[i]!,net=gross[i]!-rawDiscount,inclusive=l.taxMode==="INCLUSIVE";
+  const tax=halfUp(net*bp(l.taxRate),inclusive?10000n+bp(l.taxRate):10000n);
+  const discount=inclusive?BigInt(l.subtotal)-(net-tax):rawDiscount;
   return {subtotal:l.subtotal,discountAmount:discount.toString(),taxAmount:tax.toString(),
-   lineTotal:(net+tax).toString()};
+   allocatedAmount:rawDiscount.toString(),lineTotal:(inclusive?net:net+tax).toString()};
  });
 }
 export async function applyDocumentDiscount(db:PoolClient,t:string,b:string,id:string,version:number,input:DocumentDiscount,actor:string){
  const r=await db.query<DiscountBase&{lineNo:number}>(`SELECT line_no AS "lineNo",subtotal::text,
   discount_amount::text AS "discountAmount",tax_rate::text AS "taxRate",
-  tax_amount::text AS "taxAmount",line_total::text AS "lineTotal"
+  tax_amount::text AS "taxAmount",line_total::text AS "lineTotal",
+  price_snapshot->>'taxMode' AS "taxMode",price_snapshot->>'grossBeforeTaxMode' AS "grossBeforeTaxMode",
+  price_snapshot->>'rawDiscount' AS "rawDiscount"
   FROM sales_order_line WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3 AND version_no=$4
   ORDER BY line_no`,[t,b,id,version]);
  const computed=allocateDocumentDiscount(r.rows,input);
@@ -57,7 +62,7 @@ export async function applyDocumentDiscount(db:PoolClient,t:string,b:string,id:s
    line_total=$8::numeric,price_snapshot=price_snapshot||$9::jsonb
    WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3 AND version_no=$4 AND line_no=$5`,
    [t,b,id,version,base.lineNo,line.discountAmount,line.taxAmount,line.lineTotal,
-   JSON.stringify({documentDiscount:{...input,allocatedAmount:line.discountAmount,
+   JSON.stringify({documentDiscount:{...input,allocatedAmount:line.allocatedAmount,
     originalLineTotal:base.lineTotal,actorId:actor}})]);
  }
 }

@@ -121,5 +121,7 @@ export async function quoteManualSku(db:PoolClient,input:{
   subtotal:money.subtotal,discountAmount:money.discountAmount,
   taxAmount:money.taxAmount,lineTotal:money.lineTotal,
   normalizedBaseQuantity:money.normalizedBaseQuantity,
+  discountOverride:input.discountRate!==undefined||input.discountMode!==undefined,
+  taxOverride:input.taxRate!==undefined||input.taxMode!==undefined,
   manualOverride:true,priceSignature:signature,trace:standard?.trace??[]};
 }

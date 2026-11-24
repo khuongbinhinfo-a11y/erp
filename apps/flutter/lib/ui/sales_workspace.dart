@@ -21,7 +21,8 @@ class SalesWorkspace extends StatefulWidget {
 }
 class _OrderLine {
   String sellSkuId;
-  String overrideReason='';
+  String overrideReason='',discountMode='PERCENT',taxMode='EXCLUSIVE';
+  bool discountEdited=false,taxEdited=false;
   final TextEditingController quantity,unitPrice,discountRate,taxRate;
   final FocusNode quantityFocus=FocusNode();
   final FocusNode unitFocus=FocusNode();
@@ -142,6 +143,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       if(e.status!=404&&e.status!=405){inform(e.message,error:true);return null;}
     }catch(_){inform('Không tải được thiết lập lập đơn.',error:true);return null;}
     final modern=entrySettings!=null;
+    bool canPrice()=>can(modern?'orders.price.override':'orders.update');
+    bool canDiscount()=>can(modern?'orders.discount.override':'orders.update');
+    bool canTax()=>can(modern?'orders.tax.override':'orders.update');
     final savedShipping=order?['shipping'] is Map
       ?Map<String,dynamic>.from(order!['shipping'] as Map):<String,dynamic>{};
     if(!modern&&savedShipping.isNotEmpty){
@@ -255,9 +259,17 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           documentDiscountReason=(d['reason']??'').toString();
         }
         if(!copying&&snapshot is Map&&snapshot['manualOverride']==true){
-          line.unitPrice.text=erpGroupedDecimalText(row['unitPrice']);
-          line.discountRate.text=erpGroupedDecimalText(row['discountRate']);
+          if(snapshot['manualPriceOverride']!=false)line.unitPrice.text=erpGroupedDecimalText(row['unitPrice']);
+          line.discountMode=(snapshot['discountMode']??'PERCENT').toString();
+          line.taxMode=(snapshot['taxMode']??'EXCLUSIVE').toString();
+          line.discountRate.text=erpGroupedDecimalText(line.discountMode=='PERCENT'?row['discountRate']:snapshot['discountValue']);
           line.taxRate.text=erpGroupedDecimalText(row['taxRate']);
+          line.discountEdited=snapshot['discountOverride']==true&&
+            (line.discountMode!='PERCENT'||RegExp('[1-9]').hasMatch(line.discountRate.text));
+          line.taxEdited=snapshot['taxOverride']==true&&
+            (line.taxMode!='EXCLUSIVE'||RegExp('[1-9]').hasMatch(line.taxRate.text));
+          if(snapshot['discountOverride']==null)line.discountEdited=RegExp('[1-9]').hasMatch(line.discountRate.text);
+          if(snapshot['taxOverride']==null)line.taxEdited=RegExp('[1-9]').hasMatch(line.taxRate.text);
           line.overrideReason=(snapshot['overrideReason']??'').toString();
         }
         lines.add(line);
@@ -278,16 +290,31 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       RegExp('[1-9]').hasMatch(x.quantity.text)&&
       (x.unitPrice.text.trim().isEmpty||
         RegExp(r'^\d{1,13}(?:\.\d{1,4})?$').hasMatch(erpNumberCanonical(x.unitPrice.text)))&&
-      RegExp(r'^\d{1,3}(?:\.\d{1,2})?$').hasMatch(erpNumberCanonical(x.discountRate.text))&&
+      (x.discountMode=='PERCENT'?RegExp(r'^\d{1,3}(?:\.\d{1,2})?$'):RegExp(r'^\d{1,13}(?:\.\d{1,4})?$')).hasMatch(erpNumberCanonical(x.discountRate.text))&&
       RegExp(r'^\d{1,3}(?:\.\d{1,2})?$').hasMatch(erpNumberCanonical(x.taxRate.text)));
     bool documentDiscountActive()=>documentDiscountMode!='NONE'&&RegExp('[1-9]').hasMatch(documentDiscountValue);
     Map<String,dynamic> documentDiscount()=>{'mode':documentDiscountMode,'value':erpNumberCanonical(documentDiscountValue),'reason':documentDiscountReason.trim()};
-    bool hasManualPrice()=>lines.any((line)=>line.unitPrice.text.trim().isNotEmpty);
+    bool adjusted(_OrderLine line)=>line.unitPrice.text.trim().isNotEmpty||line.discountEdited||line.taxEdited;
+    bool hasManualPrice()=>lines.any(adjusted);
+    Map<String,dynamic> adjustments(_OrderLine line){
+      final price=line.unitPrice.text.trim().isNotEmpty;
+      return {
+        if(price)'unitPrice':erpNumberCanonical(line.unitPrice.text),
+        if((!modern&&price)||(modern&&line.discountEdited))...{
+          if(line.discountMode=='PERCENT')'discountRate':erpNumberCanonical(line.discountRate.text)
+          else ...{'discountMode':line.discountMode,'discountValue':erpNumberCanonical(line.discountRate.text)},
+        },
+        if((!modern&&price)||(modern&&line.taxEdited))...{
+          'taxRate':erpNumberCanonical(line.taxRate.text),
+          if(line.taxMode!='EXCLUSIVE')'taxMode':line.taxMode,
+        },
+      };
+    }
     String stamp()=>[
       customer??'',list??'',channel??'',documentDiscountMode,erpNumberCanonical(documentDiscountValue),
       ...lines.map((x)=>[x.sellSkuId,erpNumberCanonical(x.quantity.text),
         erpNumberCanonical(x.unitPrice.text),erpNumberCanonical(x.discountRate.text),
-        erpNumberCanonical(x.taxRate.text)].join(':')),
+        erpNumberCanonical(x.taxRate.text),x.discountMode,x.taxMode,x.discountEdited,x.taxEdited].join(':')),
     ].join('|');
     final originalStamp=stamp(),originalNote=note.text.trim();
     void invalidate(StateSetter refresh){
@@ -314,12 +341,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           if(modern&&documentDiscountActive())'documentDiscount':documentDiscount(),
           'lines':lines.map((line)=>{'sellSkuId':line.sellSkuId,
             'quantity':erpNumberCanonical(line.quantity.text),
-            if(line.unitPrice.text.trim().isNotEmpty)
-              'unitPrice':erpNumberCanonical(line.unitPrice.text),
-            if(line.unitPrice.text.trim().isNotEmpty)
-              'discountRate':erpNumberCanonical(line.discountRate.text),
-            if(line.unitPrice.text.trim().isNotEmpty)
-              'taxRate':erpNumberCanonical(line.taxRate.text)}).toList(),
+            ...adjustments(line)}).toList(),
         });
         if(!context.mounted||request!=quoteGeneration)return;
         final quoted=(basket['lines'] as List<dynamic>)
@@ -867,10 +889,6 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       if(modern&&documentDiscountActive()&&documentDiscountReason.trim().isEmpty){
         refresh(()=>formError='Nhập lý do chiết khấu toàn đơn.');return;
       }
-      if(modern&&lines.any((line)=>line.unitPrice.text.trim().isNotEmpty&&
-        line.overrideReason.trim().isEmpty)&&overrideReason.trim().isEmpty){
-        refresh(()=>formError='Nhập lý do điều chỉnh giá, chiết khấu hoặc thuế.');return;
-      }
       if(modern&&(warehouseId==null||walkInBusy||
         (customerMode=='WALK_IN'&&walkInPhone.trim().isNotEmpty&&
           !RegExp(r'^\+?[0-9]{9,15}$').hasMatch(walkInPhone.trim())))){
@@ -895,13 +913,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           'sellSkuId':entry.value.sellSkuId,
           'quantity':erpNumberCanonical(entry.value.quantity.text),
           'expectedPriceSignature':quotes![entry.key]['priceSignature'],
-          if(entry.value.unitPrice.text.trim().isNotEmpty)
-            'unitPrice':erpNumberCanonical(entry.value.unitPrice.text),
-          if(entry.value.unitPrice.text.trim().isNotEmpty)
-            'discountRate':erpNumberCanonical(entry.value.discountRate.text),
-          if(entry.value.unitPrice.text.trim().isNotEmpty)
-            'taxRate':erpNumberCanonical(entry.value.taxRate.text),
-          if(modern&&entry.value.unitPrice.text.trim().isNotEmpty)
+          ...adjustments(entry.value),
+          if(modern&&adjusted(entry.value)&&(overrideReason.trim().isNotEmpty||entry.value.overrideReason.trim().isNotEmpty))
             'overrideReason':overrideReason.trim().isNotEmpty?overrideReason.trim():entry.value.overrideReason,
         }).toList(),
         '_confirmAfterSave':confirm,
@@ -1512,6 +1525,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                             entry.unitPrice.clear();
                             entry.discountRate.text='0';
                             entry.taxRate.text='0';
+                            entry.discountMode='PERCENT';entry.taxMode='EXCLUSIVE';
+                            entry.discountEdited=false;entry.taxEdited=false;entry.overrideReason='';
                             if(!listManuallySelected&&lists.length>1){
                               listResolveGeneration++;list=null;
                               pricingChanged(ctx,refresh);
@@ -1548,7 +1563,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       final unitPriceField=SizedBox(width:112,child:TextField(
                         key:ValueKey('sales-price-$i'),
                         controller:entry.unitPrice,
-                        enabled:can('orders.update'),
+                        enabled:canPrice(),
                         keyboardType:const TextInputType.numberWithOptions(decimal:true),
                         inputFormatters:const [ErpGroupedNumberFormatter(maxIntegerDigits:13,maxFractionDigits:4)],
                         onChanged:(_)=>pricingChanged(ctx,refresh),
@@ -1561,21 +1576,52 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       Widget percentField(String title,TextEditingController controller,
                           String fieldKey)=>SizedBox(width:60,child:TextField(
                         key:ValueKey('sales-'+fieldKey+'-$i'),
-                        controller:controller,enabled:can('orders.update'),
+                        controller:controller,enabled:fieldKey=='discount'?canDiscount():canTax(),
                         keyboardType:const TextInputType.numberWithOptions(decimal:true),
-                        inputFormatters:const [ErpGroupedNumberFormatter(maxIntegerDigits:3,maxFractionDigits:2)],
+                        inputFormatters:[ErpGroupedNumberFormatter(
+                          maxIntegerDigits:fieldKey=='discount'&&entry.discountMode!='PERCENT'?13:3,
+                          maxFractionDigits:fieldKey=='discount'&&entry.discountMode!='PERCENT'?4:2)],
                         onChanged:(_){
-                          if(entry.unitPrice.text.isEmpty&&quote!=null){
+                          if(!modern&&entry.unitPrice.text.isEmpty&&quote!=null){
                             entry.unitPrice.text=erpGroupedDecimalText(quote['unitPrice']);
                           }
+                          if(fieldKey=='discount')entry.discountEdited=true;
+                          else entry.taxEdited=true;
                           pricingChanged(ctx,refresh);
                         },
                         textAlign:TextAlign.right,
                         decoration:InputDecoration(labelText:title,isDense:true,
                           border:const UnderlineInputBorder(),
                           contentPadding:const EdgeInsets.symmetric(horizontal:2,vertical:8))));
-                      final discountField=percentField('CK %',entry.discountRate,'discount');
+                      final discountField=percentField(entry.discountMode=='PERCENT'?'CK %':'CK ₫',entry.discountRate,'discount');
                       final taxField=percentField('Thuế %',entry.taxRate,'tax');
+                      final modes=Wrap(spacing:4,runSpacing:2,alignment:WrapAlignment.end,children:[
+                        if(canDiscount())PopupMenuButton<String>(tooltip:'Cách tính chiết khấu dòng',
+                          key:ValueKey('sales-discount-mode-$i'),
+                          onSelected:(v){entry.discountMode=v;entry.discountRate.text='0';entry.discountEdited=true;pricingChanged(ctx,refresh);},
+                          itemBuilder:(_)=>const [
+                            PopupMenuItem(value:'PERCENT',child:Text('Chiết khấu %')),
+                            PopupMenuItem(value:'PER_UNIT',child:Text('Chiết khấu mỗi đơn vị')),
+                            PopupMenuItem(value:'TOTAL_AMOUNT',child:Text('Chiết khấu cả dòng')),
+                          ],
+                          child:Text(switch(entry.discountMode){
+                            'PER_UNIT'=>'CK/ĐVT ▾','TOTAL_AMOUNT'=>'CK dòng ▾',_=>'CK % ▾',
+                          },style:const TextStyle(fontSize:11,color:ErpTokens.muted))),
+                        if(canTax())PopupMenuButton<String>(tooltip:'Giá đã gồm hay chưa gồm thuế',
+                          key:ValueKey('sales-tax-mode-$i'),
+                          onSelected:(v){entry.taxMode=v;entry.taxEdited=true;pricingChanged(ctx,refresh);},
+                          itemBuilder:(_)=>const [
+                            PopupMenuItem(value:'EXCLUSIVE',child:Text('Giá chưa gồm thuế')),
+                            PopupMenuItem(value:'INCLUSIVE',child:Text('Giá đã gồm thuế')),
+                          ],child:Text(entry.taxMode=='INCLUSIVE'?'Gồm thuế ▾':'Chưa thuế ▾',
+                            style:const TextStyle(fontSize:11,color:ErpTokens.muted))),
+                        if(adjusted(entry))InkWell(
+                          key:ValueKey('sales-reset-price-$i'),
+                          onTap:(){entry.unitPrice.clear();entry.discountRate.text='0';entry.taxRate.text='0';
+                            entry.discountEdited=false;entry.taxEdited=false;entry.discountMode='PERCENT';
+                            entry.taxMode='EXCLUSIVE';entry.overrideReason='';pricingChanged(ctx,refresh);},
+                          child:const Text('Giá hệ thống',style:TextStyle(fontSize:11,color:ErpTokens.muted))),
+                      ]);
                       final split=IconButton(
                         constraints:const BoxConstraints(minWidth:32,minHeight:32),
                         padding:EdgeInsets.zero,
@@ -1596,7 +1642,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         key:ValueKey('sales-last-price-$i'),
                         tooltip:'Giá lần mua trước của khách này',
                         icon:const Icon(Icons.history,size:18),
-                        onPressed:customer==null||customerMode=='WALK_IN'||!can('orders.update')?null:()async{
+                        onPressed:customer==null||customerMode=='WALK_IN'||!canPrice()?null:()async{
                           final selectedCustomer=customer!;
                           final requestedSku=entry.sellSkuId;
                           try{
@@ -1614,8 +1660,15 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                               return;
                             }
                             entry.unitPrice.text=erpGroupedDecimalText(data['unitPrice']);
-                            entry.discountRate.text=erpGroupedDecimalText(data['discountRate']);
-                            entry.taxRate.text=erpGroupedDecimalText(data['taxRate']);
+                            if(canDiscount()){
+                              entry.discountMode='PERCENT';
+                              entry.discountRate.text=erpGroupedDecimalText(data['discountRate']);
+                              entry.discountEdited=RegExp('[1-9]').hasMatch(entry.discountRate.text);
+                            }
+                            if(canTax()){
+                              entry.taxMode='EXCLUSIVE';entry.taxRate.text=erpGroupedDecimalText(data['taxRate']);
+                              entry.taxEdited=RegExp('[1-9]').hasMatch(entry.taxRate.text);
+                            }
                             pricingChanged(ctx,refresh);
                           }on ErpApiError catch(e){
                             if(ctx.mounted)refresh(()=>formError=e.message);
@@ -1655,6 +1708,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                             const SizedBox(height:6),
                             Wrap(alignment:WrapAlignment.end,spacing:8,runSpacing:4,
                               children:[unitPriceField,discountField,taxField]),
+                            if(modern)modes,
                             Column(crossAxisAlignment:CrossAxisAlignment.end,children:[
                               Text('Thành tiền: $lineTotal',
                                 textAlign:TextAlign.right,softWrap:true,
@@ -1662,6 +1716,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                                   fontWeight:FontWeight.w800)),
                             ]),
                           ]):
+                          Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
                           Row(children:[
                             Expanded(flex:5,child:productName),
                             unitField,
@@ -1672,6 +1727,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                             SizedBox(width:144,child:Row(mainAxisSize:MainAxisSize.min,
                               children:[previousPrice,split,remove])),
                           ]),
+                          if(modern)modes,
+                          ]),
                       );
                     }),
                     if(lines.isEmpty)const Padding(
@@ -1679,7 +1736,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       child:Text('Chưa có dòng hàng. Tìm theo mã, tên hoặc barcode rồi nhấn Enter để thêm.',
                         style:TextStyle(color:ErpTokens.muted))),
                     const Divider(height:12),
-                    if(modern&&can('orders.update'))...[
+                    if(modern&&canDiscount())...[
                       Wrap(spacing:8,runSpacing:8,crossAxisAlignment:WrapCrossAlignment.center,children:[
                         SizedBox(width:210,child:DropdownButtonFormField<String>(
                           key:ValueKey('sales-document-discount-$documentDiscountMode'),
@@ -1707,11 +1764,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         initialValue:documentDiscountReason,maxLength:500,
                         decoration:const InputDecoration(labelText:'Lý do chiết khấu toàn đơn',isDense:true),
                         onChanged:(v)=>documentDiscountReason=v),
-                      if(hasManualPrice())TextFormField(
-                        key:const ValueKey('sales-override-reason'),initialValue:overrideReason,maxLength:500,
-                        decoration:const InputDecoration(labelText:'Lý do điều chỉnh giá/CK/thuế',isDense:true),
-                        onChanged:(v)=>overrideReason=v),
                     ],
+                    if(modern&&hasManualPrice())TextFormField(
+                      key:const ValueKey('sales-override-reason'),initialValue:overrideReason,maxLength:500,
+                      decoration:const InputDecoration(labelText:'Lý do điều chỉnh (không bắt buộc)',isDense:true),
+                      onChanged:(v)=>overrideReason=v),
                     TextField(controller:note,minLines:1,maxLines:2,
                       decoration:const InputDecoration(labelText:'Ghi chú',isDense:true,border:UnderlineInputBorder())),
                     if(formError!=null)Padding(
