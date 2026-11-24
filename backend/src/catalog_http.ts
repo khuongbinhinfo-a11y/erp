@@ -309,6 +309,24 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
     throw new CatalogError(503,"CUSTOMER_DICTIONARY_MIGRATION_REQUIRED");
   if(resource==="unit-definitions"&&!await hasUnitDictionary(db))
     throw new CatalogError(503,"UNIT_DICTIONARY_MIGRATION_REQUIRED");
+  if(resource==="groups"||resource==="brands"||resource==="categories"){
+    const taxonomy=await hasCatalogHierarchySchema(db);
+    if(resource!=="groups"&&!taxonomy)
+      throw new CatalogError(503,"CATALOG_HIERARCHY_MIGRATION_REQUIRED");
+    const prefix=resource==="groups"&&taxonomy?"g.":"";
+    const selection=resource==="groups"&&taxonomy
+      ?'SELECT g.id,g.code,g.name,g.brand_id AS "brandId",b.name AS "brandName",g.active,g.revision::integer FROM catalog_product_group g LEFT JOIN catalog_brand b ON b.installation_id=g.installation_id AND b.branch_id=g.branch_id AND b.id=g.brand_id'
+      :selections[resource];
+    const r=await db.query(`${selection}
+      WHERE ${prefix}installation_id=$1 AND ${prefix}branch_id=$2
+      ${exactId?`AND ${prefix}id=$3`:
+        `AND (${prefix}code ILIKE $3 OR ${prefix}name ILIKE $3)
+          AND ${prefix}code>$4`}
+      ORDER BY ${prefix}code,${prefix}id LIMIT ${exactId?1:100}`,
+      exactId?[tenant,branchId,exactId]:
+        [tenant,branchId,"%"+search+"%",afterCode]);
+    return r.rows;
+  }
   if(resource==="unit-definitions"||resource==="customer-groups"||
      resource==="customer-regions"){
     // Keyset cursor ensures every UOM remains reachable, not just the first
@@ -1159,7 +1177,8 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
       const search=(url.searchParams.get("q")??"").trim();
       if(search.length>64)throw new CatalogError(400,"SEARCH_TOO_LONG");
       const paged=resource==="unit-definitions"||resource==="customer-groups"||
-        resource==="customer-regions";
+        resource==="customer-regions"||resource==="groups"||
+        resource==="brands"||resource==="categories";
       const afterCode=paged?(url.searchParams.get("after")??""):"";
       // Cursor comes from existing stored data, including legacy display
       // strings such as "Hộp 12". New-code validation must not reject it.
