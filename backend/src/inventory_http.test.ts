@@ -1,16 +1,56 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
+import { mkdtempSync, copyFileSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import type { AddressInfo } from "node:net";
 import { Pool } from "pg";
 import { applyMigrations } from "./migrate.ts";
 import { bootstrapInstallation } from "./bootstrap.ts";
 import { buildApp } from "./server.ts";
 import { isDatabaseReady } from "./db.ts";
-import { validBaseQty } from "./inventory.ts";
+import { validBaseQty, allocateWarehouseDemand, stockDecimalUnits, stockUnitsDecimal } from "./inventory.ts";
+
+// Characterization: legacy sales-order-fulfillment-demand.test.js, d39e8a87.
+// ERP uses six fractional digits, not the legacy twelve. No float conversion.
+test("T0 legacy demand: deterministic full, partial and zero hold",()=>{
+ const lines=[{lineNo:1,ordered:6000000n},{lineNo:2,ordered:6000000n}];
+ const partial=allocateWarehouseDemand(lines,8000000n,true);
+ assert.deepEqual(partial,{ok:true,allocations:[
+  {...lines[0],reserved:6000000n,backordered:0n},
+  {...lines[1],reserved:2000000n,backordered:4000000n},
+ ]});
+ assert.deepEqual(allocateWarehouseDemand(lines,8000000n,false),{
+  ok:false,code:"SALES_ORDER_INSUFFICIENT_STOCK",required:12000000n,available:8000000n,
+ });
+ assert.deepEqual(allocateWarehouseDemand(lines,12000000n,true),{
+  ok:true,allocations:lines.map(line=>({...line,reserved:line.ordered,backordered:0n})),
+ });
+ for(const available of [0n,-1000000n]){
+  assert.deepEqual(allocateWarehouseDemand(lines,available,true),{
+   ok:true,allocations:lines.map(line=>({...line,reserved:0n,backordered:line.ordered})),
+  });
+  assert.deepEqual(allocateWarehouseDemand(lines,available,false),{
+   ok:false,code:"SALES_ORDER_INSUFFICIENT_STOCK",required:12000000n,available:0n,
+  });
+ }
+ assert.deepEqual(lines,[{lineNo:1,ordered:6000000n},{lineNo:2,ordered:6000000n}]);
+});
+test("T0 legacy allocator rejects invalid demand, retains smallest exact unit",()=>{
+ for(const ordered of [0n,-1n])
+  assert.throws(()=>allocateWarehouseDemand([{ordered}],1n,true),/INVALID_QUANTITY/);
+ const ordered=999999999999999999n;
+ assert.deepEqual(allocateWarehouseDemand([{ordered}],ordered-1n,true),{
+  ok:true,allocations:[{ordered,reserved:ordered-1n,backordered:1n}],
+ });
+});
+
 
 test("R3 quantity contract accepts exact base-unit decimal strings only",()=>{
+ assert.equal(stockDecimalUnits("9800.00125"),9800001250n);
+ assert.equal(stockDecimalUnits("-0.000001"),-1n);
+ assert.equal(stockUnitsDecimal(9800001250n),"9800.001250");
  for(const v of ["1","0.000001","25.500000","100000000000.123456"])
   assert.equal(validBaseQty(v),true,v);
  for(const v of [null,1,"0","0.000000","-2","1e3","1.1234567","01","1."])
@@ -32,8 +72,8 @@ test("R3 real PostgreSQL: on-hand, hold, release, no oversell, exact replay, RBA
   pool=new Pool({connectionString:u.toString(),max:8,query_timeout:12000});
   pool.on("error",()=>{});
   const installed=await applyMigrations(pool,resolve(process.cwd(),"db/migrations"));
-  assert.equal(installed.applied.length,20);
-  assert.equal((await applyMigrations(pool,resolve(process.cwd(),"db/migrations"))).skipped.length,20);
+  assert.equal(installed.applied.length,21);
+  assert.equal((await applyMigrations(pool,resolve(process.cwd(),"db/migrations"))).skipped.length,21);
   const password="R3-PG-Synthetic-"+randomUUID();
   const root=await bootstrapInstallation(pool,{code:"r3-test",displayName:"R3 stock integration",
    adminLogin:"owner",adminPassword:password});
@@ -79,6 +119,23 @@ test("R3 real PostgreSQL: on-hand, hold, release, no oversell, exact replay, RBA
   const opened=await make("/v1/inventory/openings",opening,0,openKey);
   assert.equal(opened.status,201,JSON.stringify(opened.body));
   assert.equal(opened.body.deltaBase,"5.000000");
+  // Preserve the original strict R3 regression with explicit warehouse BLOCK.
+  const pScope={branchId:b,warehouseId:w};
+  const policy0=await call("/v1/inventory/guard-policy?branchId="+b+"&warehouseId="+w,
+    "GET",undefined,token);
+  assert.equal(policy0.status,200);
+  assert.equal(policy0.body.policy.reserveShortageMode,"WARN");
+  assert.equal(policy0.body.policy.negativeIssueMode,"BLOCK");
+  const policyKey="stock-policy-"+randomUUID();
+  const strict=await make("/v1/inventory/guard-policy",
+    {...pScope,reserveShortageMode:"BLOCK"},0,policyKey);
+  assert.equal(strict.status,200,JSON.stringify(strict.body));
+  assert.equal(strict.body.reserveShortageMode,"BLOCK");
+  assert.deepEqual((await make("/v1/inventory/guard-policy",
+    {...pScope,reserveShortageMode:"BLOCK"},0,policyKey)).body,strict.body);
+  assert.equal((await make("/v1/inventory/guard-policy",
+    {...pScope,reserveShortageMode:"ALLOW"},0,policyKey)).status,409);
+
   assert.deepEqual((await make("/v1/inventory/openings",opening,0,openKey)).body,opened.body);
   assert.equal((await make("/v1/inventory/openings",{...opening,quantity:"6"},0,openKey)).status,409);
   assert.equal((await make("/v1/inventory/openings",opening)).status,409);
@@ -128,10 +185,7 @@ test("R3 real PostgreSQL: on-hand, hold, release, no oversell, exact replay, RBA
      VALUES($1,$2,$3,$4,'ISSUE','FULFILLMENT',$5,1,-3,$6,'direct-issue-test')`,
    [t,b,w,productId,randomUUID(),root.actorId]),/insufficient available stock/i);
   const heldOrder=orders[winner]!;
-  assert.equal((await make("/v1/sales/orders/"+heldOrder+"/amend",
-   {branchId:b,reason:"Change planned order"},1)).status,409);
-  assert.equal((await make("/v1/sales/orders/"+heldOrder+"/cancel",
-   {branchId:b,reason:"Cancel test order"},1)).status,409);
+  // No mutation yet: late lifecycle regression checks safe hold release.
   const held=await call("/v1/inventory/reservations?branchId="+b+"&warehouseId="+w,
    "GET",undefined,token);
   assert.equal(held.status,200);assert.equal(held.body.items.length,1);
@@ -304,6 +358,87 @@ test("R3 real PostgreSQL: on-hand, hold, release, no oversell, exact replay, RBA
   assert.equal(lastMovements.body.hasMore,false);
   assert.equal((await call("/v1/inventory/balances?branchId="+b+
     "&warehouseId="+w+"&offset=-1","GET",undefined,token)).status,400);
+  // T0: switching policy affects future reservations, never rewrites old holds.
+  assert.equal((await make("/v1/inventory/guard-policy",
+   {...pScope,reserveShortageMode:"WARN"},0)).status,409);
+  const warnedPolicy=await make("/v1/inventory/guard-policy",
+   {...pScope,reserveShortageMode:"WARN"},1);
+  assert.equal(warnedPolicy.status,200,JSON.stringify(warnedPolicy.body));
+  assert.equal(warnedPolicy.body.revision,2);
+  const largeOrder=await make("/v1/sales/orders",{
+   ...orderData,lines:[{productId,quantity:"7"}]});
+  assert.equal(largeOrder.status,201,JSON.stringify(largeOrder.body));
+  assert.equal((await make("/v1/sales/orders/"+largeOrder.body.id+"/confirm",
+   {branchId:b})).status,200);
+  const heldLarge=await make("/v1/inventory/reservations",reservation(largeOrder.body.id));
+  assert.equal(heldLarge.status,201,JSON.stringify(heldLarge.body));
+  assert.equal(heldLarge.body.quantityBase,"2.000000");
+  assert.equal(heldLarge.body.backorderedBase,"5.000000");
+  assert.equal(heldLarge.body.warnings[0]?.severity,"WARN");
+  const zeroOrder=await make("/v1/sales/orders",{
+   ...orderData,lines:[{productId,quantity:"1"}]});
+  assert.equal(zeroOrder.status,201);
+  assert.equal((await make("/v1/sales/orders/"+zeroOrder.body.id+"/confirm",
+   {branchId:b})).status,200);
+  const zeroHold=await make("/v1/inventory/reservations",reservation(zeroOrder.body.id));
+  assert.equal(zeroHold.status,201,JSON.stringify(zeroHold.body));
+  assert.equal(zeroHold.body.quantityBase,"0.000000");
+  assert.equal(zeroHold.body.backorderedBase,"1.000000");
+  // Read the exact product: list pagination can place this SKU on page two.
+  const nowHeld=await pool.query<{onHand:string;reserved:string;available:string}>(`
+   SELECT on_hand::text AS "onHand",reserved::text AS reserved,
+     available::text AS available FROM inventory_stock_balance
+   WHERE installation_id=$1 AND branch_id=$2 AND warehouse_id=$3 AND product_id=$4`,
+   [t,b,w,productId]);
+  assert.equal(nowHeld.rows[0]?.onHand,"5.000000");
+  assert.equal(nowHeld.rows[0]?.reserved,"5.000000");
+  assert.equal(nowHeld.rows[0]?.available,"0.000000");
+  await assert.rejects(pool.query(
+   `INSERT INTO inventory_reservation(installation_id,branch_id,warehouse_id,
+     product_id,order_id,version_no,line_no,quantity_base,backordered_base,
+     actor_id,request_id) VALUES($1,$2,$3,$4,$5,1,1,0,0,$6,'invalid-shortage')`,
+   [t,b,w,productId,zeroOrder.body.id,root.actorId]),/check constraint|base quantity differs/i);
+  assert.equal((await make("/v1/inventory/guard-policy",
+   {...pScope,reserveShortageMode:"ALLOW"},2)).status,200);
+  const readPolicy=await call("/v1/inventory/guard-policy?branchId="+b+"&warehouseId="+w,
+    "GET",undefined,token);
+  assert.equal(readPolicy.body.policy.reserveShortageMode,"ALLOW");
+  assert.equal(readPolicy.body.policy.negativeIssueMode,"BLOCK");
+  assert.equal((await make("/v1/inventory/guard-policy",
+   {...pScope,reserveShortageMode:"UNSAFE"},3)).status,400);
+  // Negative stock remains a hard ledger gate pending a trusted T3 posting source.
+  await assert.rejects(pool.query(
+   `INSERT INTO inventory_ledger(installation_id,branch_id,warehouse_id,
+     product_id,kind,source_type,source_id,source_line,delta_base,actor_id,request_id)
+     VALUES($1,$2,$3,$4,'ISSUE','FULFILLMENT',$5,1,-1,$6,'negative-denied')`,
+   [t,b,w,productId,randomUUID(),root.actorId]),/insufficient available stock/i);
+  // Order edits/cancellation before physical posting must release unexecuted
+  // holds/backorders atomically instead of trapping the operator.
+  const amendedLarge=await make("/v1/sales/orders/"+largeOrder.body.id+"/amend",
+    {branchId:b,reason:"Change planned order"},1);
+  assert.equal(amendedLarge.status,201,JSON.stringify(amendedLarge.body));
+  assert.equal(amendedLarge.body.version,2);
+  const largeHoldAfter=await pool.query<{state:string;quantity:string;backordered:string}>(`
+   SELECT state,quantity_base::text AS quantity,backordered_base::text AS backordered
+   FROM inventory_reservation WHERE installation_id=$1 AND branch_id=$2
+     AND order_id=$3 ORDER BY created_at DESC LIMIT 1`,
+    [t,b,largeOrder.body.id]);
+  assert.deepEqual(largeHoldAfter.rows[0],{state:"RELEASED",quantity:"2.000000",backordered:"5.000000"});
+  const cancelledZero=await make("/v1/sales/orders/"+zeroOrder.body.id+"/cancel",
+    {branchId:b,reason:"Waiting for stock"},1);
+  assert.equal(cancelledZero.status,200,JSON.stringify(cancelledZero.body));
+  const zeroHoldAfter=await pool.query<{state:string}>(`
+   SELECT state FROM inventory_reservation WHERE installation_id=$1
+     AND branch_id=$2 AND order_id=$3 ORDER BY created_at DESC LIMIT 1`,
+    [t,b,zeroOrder.body.id]);
+  assert.equal(zeroHoldAfter.rows[0]?.state,"RELEASED");
+  // Same order mutation/command receipt must replay without releasing twice.
+  const closeKey="cancel-replay-"+randomUUID();
+  const cancelledWithReceipt=await make("/v1/sales/orders/"+orders[loser]+"/cancel",
+    {branchId:b,reason:"No longer required"},1,closeKey);
+  assert.equal(cancelledWithReceipt.status,200,JSON.stringify(cancelledWithReceipt.body));
+  assert.deepEqual((await make("/v1/sales/orders/"+orders[loser]+"/cancel",
+    {branchId:b,reason:"No longer required"},1,closeKey)).body,cancelledWithReceipt.body);
   // Simulate a production installation still on Sales 0010 while Inventory 0011 awaits approval.
   // Existing legitimate commercial actions must remain available without the new relation.
   await pool.query("DROP TABLE inventory_reservation CASCADE");
@@ -322,5 +457,126 @@ test("R3 real PostgreSQL: on-hand, hold, release, no oversell, exact replay, RBA
   if(pool)await pool.end();
   await admin.query('DROP DATABASE IF EXISTS "'+dbName+'" WITH (FORCE)');
   await admin.end();
+ }
+});
+
+
+test("T0 populated 0020 -> 0021 preserves legacy reserve/read and owner grants",
+ {skip:!ci},async()=>{
+ const admin=new Pool({connectionString:source,max:2});
+ const name="erp_ci_t0_upgrade_"+randomUUID().replaceAll("-","").slice(0,12);
+ const tmp=mkdtempSync(join(tmpdir(),"erp-t0-old-schema-"));
+ let pool:Pool|null=null,server:ReturnType<typeof buildApp>|null=null;
+ try{
+  const dir=resolve(process.cwd(),"db/migrations");
+  const sqlFiles=readdirSync(dir).filter(x=>/^\d{4}_[a-z0-9_]+\.sql$/.test(x));
+  assert.equal(sqlFiles.length,21);
+  for(const file of sqlFiles.filter(x=>!x.startsWith("0021_")))
+   copyFileSync(join(dir,file),join(tmp,file));
+  await admin.query('CREATE DATABASE "'+name+'"');
+  const u=new URL(source!);u.pathname="/"+name;
+  pool=new Pool({connectionString:u.toString(),max:8,query_timeout:12000});
+  pool.on("error",()=>{});
+  assert.equal((await applyMigrations(pool,tmp)).applied.length,20);
+  const password="T0-Upgrade-"+randomUUID();
+  const root=await bootstrapInstallation(pool,{
+   code:"t0-old",displayName:"T0 baseline upgrade",adminLogin:"owner",adminPassword:password,
+  });
+  const t=root.installationId,b=root.branchId,w=root.warehouseId;
+  // Emulate an installation bootstrapped with the old ERP permission catalog.
+  // This test uses the new bootstrap helper, whose owner grants already include
+  // inventory.policy.manage; that permission did not exist on the old release.
+  await pool.query("DELETE FROM role_permission WHERE installation_id=$1 AND permission_code=$2",
+   [t,"inventory.policy.manage"]);
+  const pre=await pool.query<{role_id:string;permission_code:string}>(`
+   SELECT role_id::text,permission_code FROM role_permission
+   WHERE installation_id=$1 ORDER BY role_id,permission_code`,[t]);
+  assert.ok(pre.rows.length>0);
+  assert.ok(pre.rows.every(x=>x.permission_code!=="inventory.policy.manage"));
+  server=buildApp(()=>isDatabaseReady(pool!),async()=>true,{
+   pool,installationId:t,allowedOrigin:"https://erp.example.test",
+   throttleSecret:"test-"+randomUUID(),
+  });
+  await new Promise<void>(ok=>server!.listen(0,"127.0.0.1",ok));
+  const host="http://127.0.0.1:"+(server.address() as AddressInfo).port;
+  const request=async(path:string,method="GET",data?:unknown,token?:string)=>{
+   const key="t0-"+randomUUID();
+   const response=await fetch(host+path,{method,headers:{
+    origin:"https://erp.example.test",
+    ...(data===undefined?{}:{"content-type":"application/json"}),
+    ...(token?{authorization:"Bearer "+token}:{}),
+    ...(method==="POST"?{"idempotency-key":key,"if-match":"0"}:{}),
+   },body:data===undefined?undefined:JSON.stringify(data)});
+   return {status:response.status,body:await response.json() as Record<string,any>};
+  };
+  const auth=await request("/v1/auth/login","POST",{loginName:"owner",password});
+  assert.equal(auth.status,200,JSON.stringify(auth.body));
+  const token=auth.body.token as string;
+  const oldPolicy=await request("/v1/inventory/guard-policy?branchId="+b+"&warehouseId="+w,
+    "GET",undefined,token);
+  assert.equal(oldPolicy.status,200,JSON.stringify(oldPolicy.body));
+  assert.equal(oldPolicy.body.policy.reserveShortageMode,"BLOCK");
+  assert.equal(oldPolicy.body.policy.migrationRequired,true);
+  const oldList=await request("/v1/inventory/reservations?branchId="+b+"&warehouseId="+w,
+    "GET",undefined,token);
+  assert.equal(oldList.status,200,JSON.stringify(oldList.body));
+  assert.deepEqual(oldList.body.items,[]);
+  const catalog=async(path:string,values:Record<string,unknown>)=>request(
+    "/v1/catalog/"+path,"POST",{branchId:b,...values},token);
+  const cust=await catalog("customers",{code:"OLD-C",name:"Old customer"});
+  const prod=await catalog("products",{code:"OLD-P",name:"Old product",baseUnit:"cai"});
+  const list=await catalog("price-lists",{code:"OLD-PL",name:"Old price list"});
+  for(const x of [cust,prod,list])assert.equal(x.status,201,JSON.stringify(x.body));
+  const price=await catalog("prices",{priceListId:list.body.id,
+    productId:prod.body.id,amount:"1000.0000",discountRate:"0",
+    effectiveAt:"2026-01-01T00:00:00Z"});
+  assert.equal(price.status,201,JSON.stringify(price.body));
+  const order=await request("/v1/sales/orders","POST",{
+   branchId:b,customerId:cust.body.id,priceListId:list.body.id,
+   lines:[{productId:prod.body.id,quantity:"2"}],note:""},token);
+  assert.equal(order.status,201,JSON.stringify(order.body));
+  const confirmed=await request("/v1/sales/orders/"+order.body.id+"/confirm",
+   "POST",{branchId:b},token);
+  assert.equal(confirmed.status,200,JSON.stringify(confirmed.body));
+  const opening=await request("/v1/inventory/openings","POST",
+   {branchId:b,warehouseId:w,productId:prod.body.id,quantity:"3"},token);
+  assert.equal(opening.status,201,JSON.stringify(opening.body));
+  const reserved=await request("/v1/inventory/reservations","POST",
+   {branchId:b,warehouseId:w,orderId:order.body.id,version:1,lineNo:1},token);
+  assert.equal(reserved.status,201,JSON.stringify(reserved.body));
+  assert.equal(reserved.body.quantityBase,"2.000000");
+  assert.equal(reserved.body.backorderedBase,"0.000000");
+  const listing=await request("/v1/inventory/reservations?branchId="+b+"&warehouseId="+w,
+   "GET",undefined,token);
+  assert.equal(listing.status,200,JSON.stringify(listing.body));
+  assert.equal(listing.body.items[0].backorderedBase,"0.000000");
+  const beforeRows=await pool.query(`
+   SELECT id::text,quantity_base::text,state FROM inventory_reservation
+    WHERE installation_id=$1 ORDER BY id`,[t]);
+  const upgrade=await applyMigrations(pool,dir);
+  assert.deepEqual(upgrade.applied,["0021_t0_partial_reservation_policy.sql"]);
+  assert.equal(upgrade.skipped.length,20);
+  const after=await pool.query<{role_id:string;permission_code:string}>(`
+   SELECT role_id::text,permission_code FROM role_permission
+   WHERE installation_id=$1 ORDER BY role_id,permission_code`,[t]);
+  for(const row of pre.rows)assert.ok(after.rows.some(x=>
+    x.role_id===row.role_id&&x.permission_code===row.permission_code));
+  const newGrant=after.rows.filter(x=>x.permission_code==="inventory.policy.manage");
+  assert.equal(newGrant.length,1);
+  assert.equal(after.rows.length,pre.rows.length+1);
+  const afterRows=await pool.query(`
+   SELECT id::text,quantity_base::text,state FROM inventory_reservation
+    WHERE installation_id=$1 ORDER BY id`,[t]);
+  assert.deepEqual(afterRows.rows,beforeRows.rows);
+  const migrated=await request("/v1/inventory/guard-policy?branchId="+b+"&warehouseId="+w,
+    "GET",undefined,token);
+  assert.equal(migrated.status,200,JSON.stringify(migrated.body));
+  assert.equal(migrated.body.policy.reserveShortageMode,"WARN");
+ }finally{
+  if(server)await new Promise<void>(ok=>server!.close(()=>ok()));
+  if(pool)await pool.end();
+  await admin.query('DROP DATABASE IF EXISTS "'+name+'" WITH (FORCE)');
+  await admin.end();
+  rmSync(tmp,{recursive:true,force:true});
  }
 });

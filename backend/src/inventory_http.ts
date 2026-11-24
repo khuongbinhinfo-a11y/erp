@@ -6,7 +6,8 @@ import { hasPermission } from "./rbac.ts";
 import { executeMutation, MutationFault, type MutationContext } from "./mutation.ts";
 import { validIdempotencyKey } from "./contracts.ts";
 import { InventoryFault, validBaseQty, balance, balances, movements, reservations,
-  openStock, reserveStock, releaseStock, type WarehouseScope } from "./inventory.ts";
+  openStock, reserveStock, releaseStock, readInventoryGuardPolicy,
+  setInventoryGuardPolicy, type ShortageMode, type WarehouseScope } from "./inventory.ts";
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const BEARER=/^Bearer ([A-Za-z0-9_-]{43})$/;
@@ -129,6 +130,33 @@ export async function handleInventoryHttp(req:IncomingMessage,res:ServerResponse
     }
    }finally{db.release();}
    return;
+  }
+  if(req.method==="GET"&&url.pathname==="/v1/inventory/guard-policy"){
+   const s=scope({branchId:url.searchParams.get("branchId"),
+    warehouseId:url.searchParams.get("warehouseId")});
+   const db=await pool.connect();
+   try{
+    if(!await hasPermission(db,{installationId:tenant,actorId,
+       permission:"inventory.read",...s}))
+      throw new InventoryFault(403,"INVENTORY_READ_DENIED");
+    send(res,200,{policy:await readInventoryGuardPolicy(db,tenant,s),requestId:id},id,cors);
+   }finally{db.release();}
+   return;
+  }
+  if(req.method==="POST"&&url.pathname==="/v1/inventory/guard-policy"){
+   const raw=await parseBody(req);
+   allowFields(raw,["branchId","warehouseId","reserveShortageMode"]);
+   const s=scope(raw),mode=raw.reserveShortageMode;
+   if(mode!=="ALLOW"&&mode!=="WARN"&&mode!=="BLOCK")
+    throw new InventoryFault(400,"INVALID_RESERVE_POLICY");
+   const payload={...s,reserveShortageMode:mode};
+   const c=ctx(req,id,tenant,actorId,"inventory.guard-policy.set",payload,false);
+   const outcome=await executeMutation(pool,c,{
+    authorize:(db,m)=>hasPermission(db,{installationId:m.installationId,
+      actorId:m.actorId,permission:"inventory.policy.manage",...s}),
+    execute:(db,m)=>setInventoryGuardPolicy(db,m,s,mode as ShortageMode),
+   });
+   send(res,outcome.status,outcome.body,id,cors);return;
   }
   if(req.method==="POST"&&url.pathname==="/v1/inventory/openings"){
    const raw=await parseBody(req);

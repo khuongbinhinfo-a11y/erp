@@ -11,6 +11,42 @@ export class InventoryFault extends Error {
     super(code);this.status=status;this.code=code;
   }
 }
+/** Legacy allocateWarehouseDemand, adapted to ERP's exact scaled bigint units.
+ * Source: NPP-Platform d39e8a87, sales-fulfillment.js:178-200.
+ * One warehouse/product scope, ordered in caller-defined stable order.
+ * Negative availability is a shortage, not a negative reservation.
+ * T0 characterization only: wire to transactional demand storage after
+ * migration/lock review; do not weaken existing ledger constraints here.
+ */
+export function allocateWarehouseDemand<T extends {ordered:bigint}>(
+ lines:readonly T[],available:bigint,allowBackorder:boolean,
+){
+ if(lines.some(line=>line.ordered<=0n))throw new InventoryFault(400,"INVALID_QUANTITY");
+ let remaining=available>0n?available:0n;
+ const required=lines.reduce((sum,line)=>sum+line.ordered,0n);
+ if(!allowBackorder&&required>remaining)return {
+   ok:false as const,code:"SALES_ORDER_INSUFFICIENT_STOCK" as const,
+   required,available:remaining,
+ };
+ return {ok:true as const,allocations:lines.map(line=>{
+   const reserved=line.ordered<remaining?line.ordered:remaining;
+   remaining-=reserved;
+   return {...line,reserved,backordered:line.ordered-reserved};
+ })};
+}
+
+/** Exact six-decimal minor units for inventory; never use JS float. */
+export function stockDecimalUnits(value:string):bigint{
+ const m=/^(-?)([0-9]{1,18})(?:\.([0-9]{1,6}))?$/.exec(value);
+ if(!m)throw new InventoryFault(409,"INVALID_STOCK_DECIMAL");
+ const unit=BigInt(m[2]!)*1000000n+BigInt((m[3]??"").padEnd(6,"0"));
+ return m[1]==="-"?-unit:unit;
+}
+export function stockUnitsDecimal(units:bigint):string{
+ const neg=units<0n?"-":"",n=units<0n?-units:units;
+ return neg+(n/1000000n).toString()+"."+(n%1000000n).toString().padStart(6,"0");
+}
+
 export type WarehouseScope={branchId:string;warehouseId:string};
 export type OpeningInput=WarehouseScope&{productId:string;quantity:string};
 export type ReserveInput=WarehouseScope&{orderId:string;version:number;lineNo:number};
@@ -24,6 +60,47 @@ async function lockWarehouse(db:PoolClient,t:string,s:WarehouseScope):Promise<vo
   [t,s.branchId,s.warehouseId]);
  if(r.rowCount!==1)throw new InventoryFault(404,"WAREHOUSE_NOT_FOUND");
 }
+export type ShortageMode="BLOCK"|"WARN"|"ALLOW";
+async function hasInventoryGuardSchema(db:PoolClient):Promise<boolean>{
+ const q=await db.query<{ready:boolean}>(
+  "SELECT to_regclass('public.inventory_guard_policy') IS NOT NULL AS ready");
+ return q.rows[0]?.ready===true;
+}
+/** Warehouse policy read; absence means warning-first for demand, but
+ * actual negative ledger posting remains deny-by-default. */
+export async function readInventoryGuardPolicy(db:PoolClient,t:string,s:WarehouseScope){
+ if(!await hasInventoryGuardSchema(db))return {
+  branchId:s.branchId,warehouseId:s.warehouseId,
+  reserveShortageMode:"BLOCK" as ShortageMode,
+  negativeIssueMode:"BLOCK",revision:0,migrationRequired:true,
+ };
+ const q=await db.query<{reserveShortageMode:ShortageMode;revision:string}>(
+  `SELECT reserve_shortage_mode AS "reserveShortageMode",revision::text AS revision
+   FROM inventory_guard_policy WHERE installation_id=$1 AND branch_id=$2 AND warehouse_id=$3`,
+  [t,s.branchId,s.warehouseId]);
+ return {branchId:s.branchId,warehouseId:s.warehouseId,
+  reserveShortageMode:q.rows[0]?.reserveShortageMode??"WARN",
+  negativeIssueMode:"BLOCK",revision:Number(q.rows[0]?.revision??"0")};
+}
+export async function setInventoryGuardPolicy(db:PoolClient,ctx:MutationContext,
+ s:WarehouseScope,mode:ShortageMode){
+ if(!await hasInventoryGuardSchema(db))
+  throw new InventoryFault(503,"INVENTORY_POLICY_MIGRATION_REQUIRED");
+ await lockWarehouse(db,ctx.installationId,s);
+ const old=await db.query<{revision:string}>(`SELECT revision::text AS revision
+  FROM inventory_guard_policy WHERE installation_id=$1 AND branch_id=$2 AND warehouse_id=$3
+  FOR UPDATE`,[ctx.installationId,s.branchId,s.warehouseId]);
+ requireRevision(ctx.expectedRevision,Number(old.rows[0]?.revision??"0"));
+ await db.query(`INSERT INTO inventory_guard_policy(
+   installation_id,branch_id,warehouse_id,reserve_shortage_mode,revision,updated_by)
+   VALUES($1,$2,$3,$4,1,$5)
+   ON CONFLICT (installation_id,branch_id,warehouse_id) DO UPDATE SET
+   reserve_shortage_mode=EXCLUDED.reserve_shortage_mode,revision=inventory_guard_policy.revision+1,
+   updated_by=EXCLUDED.updated_by,updated_at=now()`,
+   [ctx.installationId,s.branchId,s.warehouseId,mode,ctx.actorId]);
+ return {status:200,body:await readInventoryGuardPolicy(db,ctx.installationId,s)};
+}
+
 export async function balance(db:PoolClient,t:string,s:WarehouseScope,productId:string){
  const r=await db.query<{onHand:string;reserved:string;available:string}>(
   `SELECT on_hand::text AS "onHand",reserved::text AS "reserved",available::text AS "available"
@@ -62,10 +139,13 @@ export async function movements(db:PoolClient,t:string,s:WarehouseScope,offset=0
 /** Each page includes only one reservation lifecycle; released history cannot hide ACTIVE holds. */
 export async function reservations(db:PoolClient,t:string,s:WarehouseScope,
  state:"ACTIVE"|"RELEASED"="ACTIVE",offset=0){
+ const modern=await hasInventoryGuardSchema(db);
+ const backorder=modern?'r.backordered_base::text':"'0.000000'::text";
  const r=await db.query(
   `SELECT r.id,r.product_id AS "productId",p.sku,p.name AS "productName",
     r.order_id AS "orderId",o.document_no AS "documentNo",r.version_no AS version,
     r.line_no AS "lineNo",r.quantity_base::text AS "quantityBase",
+    ${backorder} AS "backorderedBase",
     r.state,r.revision::text,r.created_at AS "createdAt",r.released_at AS "releasedAt"
     FROM inventory_reservation r
     JOIN catalog_product p ON p.installation_id=r.installation_id
@@ -130,18 +210,44 @@ export async function reserveStock(db:PoolClient,ctx:MutationContext,input:Reser
    ?order.price_snapshot?.normalizedBaseQuantity
    :order.unit_code===order.base_unit?order.quantity:null;
  if(!validBaseQty(quantity))throw new InventoryFault(409,"BASE_QUANTITY_SNAPSHOT_REQUIRED");
+ // Policy and allocation are read while holding the warehouse lock.
+ // A rolling backend on pre-0021 schema keeps strict reserve behavior.
+ const modern=await hasInventoryGuardSchema(db);
+ let shortageMode:"ALLOW"|"WARN"|"BLOCK"="BLOCK";
+ if(modern){
+  const policy=await db.query<{reserve_shortage_mode:"ALLOW"|"WARN"|"BLOCK"}>(
+   `SELECT reserve_shortage_mode FROM inventory_guard_policy
+    WHERE installation_id=$1 AND branch_id=$2 AND warehouse_id=$3 FOR SHARE`,
+   [t,b,w]);
+  shortageMode=policy.rows[0]?.reserve_shortage_mode??"WARN";
+ }
  const stock=await balance(db,t,input,order.product_id);
- const enough=await db.query<{ok:boolean}>(
-  "SELECT $1::numeric <= $2::numeric AS ok",[quantity,stock.available]);
- if(enough.rows[0]?.ok!==true)throw new InventoryFault(409,"INSUFFICIENT_AVAILABLE_STOCK");
- const r=await db.query<{id:string;qty:string}>(
-  `INSERT INTO inventory_reservation(installation_id,branch_id,warehouse_id,product_id,
+ const required=stockDecimalUnits(quantity),available=stockDecimalUnits(stock.available);
+ const result=allocateWarehouseDemand([{ordered:required}],available,shortageMode!=="BLOCK");
+ if(!result.ok)throw new InventoryFault(409,"INSUFFICIENT_AVAILABLE_STOCK");
+ const reserved=stockUnitsDecimal(result.allocations[0]!.reserved);
+ const backordered=stockUnitsDecimal(result.allocations[0]!.backordered);
+ const r=modern
+  ?await db.query<{id:string;qty:string;backordered:string}>(
+   `INSERT INTO inventory_reservation(installation_id,branch_id,warehouse_id,product_id,
+    order_id,version_no,line_no,quantity_base,backordered_base,actor_id,request_id)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8::numeric,$9::numeric,$10,$11)
+    RETURNING id,quantity_base::text AS qty,backordered_base::text AS backordered`,
+   [t,b,w,order.product_id,input.orderId,input.version,input.lineNo,
+    reserved,backordered,ctx.actorId,ctx.requestId])
+  :await db.query<{id:string;qty:string;backordered:string}>(
+   `INSERT INTO inventory_reservation(installation_id,branch_id,warehouse_id,product_id,
     order_id,version_no,line_no,quantity_base,actor_id,request_id)
     VALUES($1,$2,$3,$4,$5,$6,$7,$8::numeric,$9,$10)
-    RETURNING id,quantity_base::text AS qty`,
-  [t,b,w,order.product_id,input.orderId,input.version,input.lineNo,quantity,ctx.actorId,ctx.requestId]);
+    RETURNING id,quantity_base::text AS qty,'0.000000'::text AS backordered`,
+   [t,b,w,order.product_id,input.orderId,input.version,input.lineNo,
+    reserved,ctx.actorId,ctx.requestId]);
+ const warnings=result.allocations[0]!.backordered>0n&&shortageMode==="WARN"
+   ?[{code:"INSUFFICIENT_AVAILABLE_STOCK",severity:"WARN",
+      message:"Tồn kho không đủ. Đã giữ phần có và ghi phần chờ hàng."}]:[];
  return {status:201,body:{id:r.rows[0]!.id,orderId:input.orderId,
    warehouseId:w,productId:order.product_id,quantityBase:r.rows[0]!.qty,
+   backorderedBase:r.rows[0]!.backordered,warnings,
    state:"ACTIVE",revision:0,stock:await balance(db,t,input,order.product_id)}};
 }
 export async function releaseStock(db:PoolClient,ctx:MutationContext,scope:WarehouseScope,id:string){

@@ -16,6 +16,7 @@ export const PERMISSIONS = {
   "inventory.read": "warehouse",
   "inventory.post": "warehouse",
   "inventory.reserve": "warehouse",
+  "inventory.policy.manage": "warehouse",
   "inventory.transfer.read": "warehouse",
   "inventory.transfer.create": "warehouse",
   "inventory.transfer.approve": "warehouse",
