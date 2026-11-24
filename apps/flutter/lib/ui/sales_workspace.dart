@@ -776,7 +776,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
             });
           }
           return Focus(autofocus:true,onKeyEvent:(node,event){
-            if(event is! KeyDownEvent)return KeyEventResult.ignored;
+            if(event is! KeyDownEvent&&event is! KeyRepeatEvent)return KeyEventResult.ignored;
             if(event.logicalKey==LogicalKeyboardKey.f3){
               skuFocus.requestFocus();
               skuSearch.selection=TextSelection(
@@ -879,7 +879,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       constraints:const BoxConstraints(maxWidth:760),
                       child:Row(children:[
                         Expanded(child:Focus(onKeyEvent:(node,event){
-                      if(event is! KeyDownEvent||customerMatches.isEmpty)
+                      if(event is! KeyDownEvent&&event is! KeyRepeatEvent||customerMatches.isEmpty)
                         return KeyEventResult.ignored;
                       if(event.logicalKey==LogicalKeyboardKey.arrowDown){
                         refresh(()=>selectedCustomerIndex=
@@ -1050,7 +1050,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
                     Focus(
                       onKeyEvent:(node,event){
-                        if(event is! KeyDownEvent||skuMatches.isEmpty||
+                        if(event is! KeyDownEvent&&event is! KeyRepeatEvent||skuMatches.isEmpty||
           skuResultsFor!=skuSearch.text.trim())return KeyEventResult.ignored;
                         if(event.logicalKey==LogicalKeyboardKey.arrowDown){
                           refresh((){
@@ -1157,7 +1157,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                                     key:ValueKey('sales-sku-result-'+i.toString()),
                                     onTap:()=>chooseSku(ctx,sku,refresh),
                                     onHover:(hover){
-                                      if(hover&&selectedSkuIndex!=i){
+                                      if(hover&&!skuExplicitSelection&&selectedSkuIndex!=i){
                                         // Hover updates the visual row; only arrow keys signal an
                                         // intentional keyboard override of a scanned exact ID.
                                         refresh(()=>selectedSkuIndex=i);
@@ -1289,27 +1289,16 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       final split=IconButton(
                         constraints:const BoxConstraints(minWidth:32,minHeight:32),
                         padding:EdgeInsets.zero,
-                        key:ValueKey('sales-split-$i'),tooltip:'Tách 1 đơn vị thành dòng riêng',
+                        key:ValueKey('sales-split-$i'),tooltip:'Thêm dòng độc lập, số lượng 1',
                         icon:const Icon(Icons.call_split_outlined,size:18),
-                        onPressed:(){
-                          final value=erpNumberCanonical(entry.quantity.text);
-                          final parts=value.split('.');
-                          final base=int.tryParse(parts.first);
-                          final frac=parts.length>1?int.tryParse(parts[1].padRight(3,'0')):0;
-                          if(base==null||frac==null||base*1000+frac<=1000){
-                            refresh(()=>formError='Số lượng phải lớn hơn 1 để tách dòng.');
-                            return;
-                          }
-                          final remain=base*1000+frac-1000;
-                          final fraction=(remain%1000).toString().padLeft(3,'0')
-                            .replaceFirst(RegExp(r'0+$'),'');
-                          entry.quantity.text=erpGroupedDecimalText(
-                            (remain~/1000).toString()+(fraction.isEmpty?'':'.$fraction'));
+                        onPressed:!can('orders.update')||lines.length>=30?null:(){
+                          // Do not deduct source quantity or copy stale manual price/discount.
                           final next=_OrderLine(entry.sellSkuId,'1');
-                          next.unitPrice.text=entry.unitPrice.text;
-                          next.discountRate.text=entry.discountRate.text;
-                          next.taxRate.text=entry.taxRate.text;
-                          lines.insert(i+1,next);pricingChanged(ctx,refresh);
+                          lines.insert(i+1,next);
+                          pricingChanged(ctx,refresh);
+                          WidgetsBinding.instance.addPostFrameCallback((_){
+                            if(ctx.mounted)next.quantityFocus.requestFocus();
+                          });
                         });
                       final previousPrice=IconButton(
                         constraints:const BoxConstraints(minWidth:32,minHeight:32),
