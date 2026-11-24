@@ -139,12 +139,32 @@ export async function resolveR1Price(db:PoolClient,input:Query){
             AND a.customer_group_id=$5::uuid)
           OR (a.scope_kind='CHANNEL' AND a.channel_id=$6::uuid))
         ${listScopePredicate('$3','$4','$5','$6')}
+        -- Discount-only price lists are overlays, not starting-price lists.
+        -- Never auto-select one without an effective base SKU or product price.
+        AND (EXISTS (SELECT 1 FROM catalog_sku_price_rule base
+          WHERE base.installation_id=l.installation_id
+            AND base.branch_id=l.branch_id AND base.price_list_id=l.id
+            AND base.sell_sku_id=$7::uuid AND base.scope_kind='BASE'
+            AND base.effective_from<=$3::timestamptz
+            AND (base.effective_to IS NULL OR base.effective_to>$3::timestamptz)
+            AND base.min_quantity<=$10::numeric
+            AND NOT EXISTS(SELECT 1 FROM catalog_sku_price_retirement retired
+              WHERE retired.installation_id=base.installation_id
+                AND retired.branch_id=base.branch_id
+                AND retired.rule_id=base.id
+                AND retired.retired_at<=$3::timestamptz))
+          OR ($8::boolean AND EXISTS (SELECT 1 FROM catalog_price_entry e
+            WHERE e.installation_id=l.installation_id
+              AND e.branch_id=l.branch_id AND e.price_list_id=l.id
+              AND e.product_id=$9::uuid
+              AND e.effective_at<=$3::timestamptz)))
       ORDER BY CASE a.scope_kind WHEN 'CUSTOMER' THEN 4
         WHEN 'CUSTOMER_GROUP' THEN 3 WHEN 'CHANNEL' THEN 2 ELSE 1 END DESC,
         a.priority DESC,l.priority DESC,
         a.effective_from DESC NULLS LAST,l.effective_from DESC NULLS LAST,
         a.id ASC LIMIT 1`,
-      [t,b,input.priceAt,customerId??null,customerGroupId,channelId??null]);
+      [t,b,input.priceAt,customerId??null,customerGroupId,channelId??null,
+        input.sellSkuId,item.isBase,item.productId,input.quantity]);
     if(!winner.rows[0])throw new R1QuoteError(409,"NO_APPLICABLE_PRICE_LIST");
     selectedListId=winner.rows[0].id;
     const label=winner.rows[0].scopeKind==="CUSTOMER"?"khách hàng":
