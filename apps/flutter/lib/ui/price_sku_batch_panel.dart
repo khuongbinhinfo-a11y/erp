@@ -25,7 +25,8 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
   final selected=<String,Map<String,dynamic>>{};
   final inputs=<String,TextEditingController>{};
   final current=<String,String>{};
-  List<Map<String,dynamic>> rows=[];
+  List<Map<String,dynamic>> rows=[],brands=[],groups=[],categories=[];
+  String? brandId,groupId,categoryId;
   int page=0;
   static const pageSize=12;
   final reading=<String>{};
@@ -35,14 +36,25 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
   int generation=0;
   String get listId=>widget.priceList['id'].toString();
   String get token=>widget.session.token;
-  @override void initState(){super.initState();load();}
+  @override void initState(){super.initState();loadTaxonomy();load();}
+  Future<void> loadTaxonomy()async{
+    try{
+      final data=await Future.wait([
+        widget.client.catalogItems(token,'brands',branchId:widget.branchId),
+        widget.client.catalogItems(token,'groups',branchId:widget.branchId),
+        widget.client.catalogItems(token,'categories',branchId:widget.branchId),
+      ]);
+      if(mounted)setState((){brands=data[0];groups=data[1];categories=data[2];});
+    }on ErpApiError catch(e){if(e.status!=503&&mounted)setState(()=>error=e.message);}
+  }
   @override void didUpdateWidget(covariant PriceSkuBatchPanel old){
     super.didUpdateWidget(old);
     if(old.branchId!=widget.branchId||old.priceList['id']!=listId||
         old.session.token!=token){
       generation++;query.clear();selected.clear();current.clear();reading.clear();page=0;
       for(final field in inputs.values){field.dispose();}
-      inputs.clear();rows=[];load();
+      inputs.clear();rows=[];brandId=null;groupId=null;categoryId=null;
+      brands=[];groups=[];categories=[];loadTaxonomy();load();
     }
   }
   @override void dispose(){
@@ -55,7 +67,8 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
     setState((){loading=true;error=null;current.clear();reading.clear();page=0;});
     try{
       final found=await widget.client.r1CatalogItems(token,'skus',
-        branchId:widget.branchId,query:query.text.trim());
+        branchId:widget.branchId,query:query.text.trim(),
+        brandId:brandId,groupId:groupId,categoryId:categoryId);
       if(mounted&&run==generation)setState((){
         rows=found.where((x)=>x['active']!=false).toList();
         loading=false;
