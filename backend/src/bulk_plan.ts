@@ -251,7 +251,8 @@ function normalizeRow(
     const effectiveGroup=op.groupId??current?.groupId??c?.groupId??null;
     if(c&&c.groupId!==effectiveGroup)
       throw new BulkFault("CATEGORY_GROUP_MISMATCH");
-    if(isNew&&c&&!op.groupId)assign("groupId",c.groupId);
+    // Inferred group must also be written for previously ungrouped products.
+    if(c&&!op.groupId&&!(current?.groupId))assign("groupId",c.groupId);
     assign("categoryId",c?.id??null);after.categoryCode=value;
    }else if(!isNew&&op.groupId!==undefined&&
              op.groupId!==current?.groupId&&current?.categoryId){
