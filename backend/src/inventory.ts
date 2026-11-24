@@ -60,6 +60,35 @@ async function lockWarehouse(db:PoolClient,t:string,s:WarehouseScope):Promise<vo
   [t,s.branchId,s.warehouseId]);
  if(r.rowCount!==1)throw new InventoryFault(404,"WAREHOUSE_NOT_FOUND");
 }
+export type ShortageMode="BLOCK"|"WARN"|"ALLOW";
+/** Warehouse policy read; absence means warning-first for demand, but
+ * actual negative ledger posting remains deny-by-default. */
+export async function readInventoryGuardPolicy(db:PoolClient,t:string,s:WarehouseScope){
+ const q=await db.query<{reserveShortageMode:ShortageMode;revision:string}>(
+  `SELECT reserve_shortage_mode AS "reserveShortageMode",revision::text AS revision
+   FROM inventory_guard_policy WHERE installation_id=$1 AND branch_id=$2 AND warehouse_id=$3`,
+  [t,s.branchId,s.warehouseId]);
+ return {branchId:s.branchId,warehouseId:s.warehouseId,
+  reserveShortageMode:q.rows[0]?.reserveShortageMode??"WARN",
+  negativeIssueMode:"BLOCK",revision:Number(q.rows[0]?.revision??"0")};
+}
+export async function setInventoryGuardPolicy(db:PoolClient,ctx:MutationContext,
+ s:WarehouseScope,mode:ShortageMode){
+ await lockWarehouse(db,ctx.installationId,s);
+ const old=await db.query<{revision:string}>(`SELECT revision::text AS revision
+  FROM inventory_guard_policy WHERE installation_id=$1 AND branch_id=$2 AND warehouse_id=$3
+  FOR UPDATE`,[ctx.installationId,s.branchId,s.warehouseId]);
+ requireRevision(ctx.expectedRevision,Number(old.rows[0]?.revision??"0"));
+ await db.query(`INSERT INTO inventory_guard_policy(
+   installation_id,branch_id,warehouse_id,reserve_shortage_mode,updated_by)
+   VALUES($1,$2,$3,$4,$5)
+   ON CONFLICT (installation_id,branch_id,warehouse_id) DO UPDATE SET
+   reserve_shortage_mode=EXCLUDED.reserve_shortage_mode,revision=inventory_guard_policy.revision+1,
+   updated_by=EXCLUDED.updated_by,updated_at=now()`,
+   [ctx.installationId,s.branchId,s.warehouseId,mode,ctx.actorId]);
+ return {status:200,body:await readInventoryGuardPolicy(db,ctx.installationId,s)};
+}
+
 export async function balance(db:PoolClient,t:string,s:WarehouseScope,productId:string){
  const r=await db.query<{onHand:string;reserved:string;available:string}>(
   `SELECT on_hand::text AS "onHand",reserved::text AS "reserved",available::text AS "available"
