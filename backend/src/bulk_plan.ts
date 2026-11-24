@@ -386,8 +386,10 @@ async function buildSelectedSkuPrices(db:PoolClient,tenant:string,actor:string,i
     if(!(err instanceof R1QuoteError&&err.code==="SKU_HAS_NO_EFFECTIVE_BASE_PRICE"))
      throw err;
    }
-   const sameInstant=await db.query<{id:string;amount:string}>(
-    `SELECT r.id,r.amount::text FROM catalog_sku_price_rule r
+   const sameInstant=await db.query<{id:string;amount:string;gross:string|null;discount:string|null}>(
+    `SELECT r.id,r.amount::text,r.imported_gross_amount::text AS gross,
+       r.imported_discount_rate::text AS discount
+       FROM catalog_sku_price_rule r
       WHERE r.installation_id=$1 AND r.branch_id=$2 AND r.price_list_id=$3
        AND r.sell_sku_id=$4 AND r.scope_kind='BASE'
        AND r.effective_from=$5::timestamptz AND r.min_quantity<=1
@@ -396,9 +398,12 @@ async function buildSelectedSkuPrices(db:PoolClient,tenant:string,actor:string,i
          AND retired.rule_id=r.id AND retired.retired_at<=$5::timestamptz)
        LIMIT 1`,[tenant,branch,input.priceListId,sku.id,at]);
    const same=sameInstant.rows[0];
-   if(same&&!equalDecimal(same.amount,net))
-    throw new BulkFault("PRICE_EFFECTIVE_TIME_CONFLICT");
-   if(same&&!equalDecimal(discount,"0")&&!equalDecimal(same.amount,amount))
+   if(same&&(!equalDecimal(same.amount,net)||
+     (same.gross!==null
+       ?(!equalDecimal(same.gross,amount)||
+         !equalDecimal(same.discount??"0",discount))
+       :(!equalDecimal(discount,"0")||
+         !equalDecimal(same.amount,amount)))))
     throw new BulkFault("PRICE_EFFECTIVE_TIME_CONFLICT");
    if(previous!==null&&input.mode==="CREATE")
     throw new BulkFault("ALREADY_EXISTS_USE_UPDATE");
