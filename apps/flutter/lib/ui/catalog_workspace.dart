@@ -25,6 +25,11 @@ bool samePendingProductBulkIntent(
     saved['branchId']==requested['branchId']&&saved[key]==requested[key];
 }
 
+/// A no-op group reassignment must preserve an already valid category.
+bool shouldClearCategoryForTargetGroup(
+    Map<String,dynamic> product,String? targetGroupId)=>
+  product['categoryId']!=null&&product['groupId']!=targetGroupId;
+
 /// Live, branch-scoped catalog. No offline confirmation and no fabricated rows.
 class CatalogWorkspace extends StatefulWidget {
   final String area;
@@ -298,7 +303,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
       if(action=='active')body['active']=value=='true';
       if(action=='group'){
         body['groupId']=groupId;
-        if(product['categoryId']!=null)body['categoryId']=null;
+        if(shouldClearCategoryForTargetGroup(product,groupId))
+          body['categoryId']=null;
       }
       if(action=='category'){
         final target=categories.where((x)=>x['id']==categoryId);
@@ -484,12 +490,12 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
         }on ErpApiError catch(e){if(e.status!=503)rethrow;}
       }
       if((resource=='products'||resource=='categories')&&previous==null){
-        availableGroups=await widget.client.catalogItems(
-          widget.session.token,'groups',branchId:branchId);
+        availableGroups=await widget.client.catalogDirectoryAll(
+          widget.session.token,'groups',branchId:branch);
       }
       if(resource=='products'&&previous==null){
-        availableGroups=await widget.client.catalogItems(
-          widget.session.token,'groups',branchId:branchId);
+        availableGroups=await widget.client.catalogDirectoryAll(
+          widget.session.token,'groups',branchId:branch);
         try{
           availableUnits=await widget.client.catalogUnitDefinitionsAll(
             widget.session.token,branchId:branch);
@@ -949,6 +955,9 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                                 'brandId':body['brandId'],'active':true,
                               });
                             }
+                            // Replay after a lost ACK must select the brand
+                            // actually stored on the originally created group.
+                            brandId=body['brandId'] as String?;
                             groupId=savedId;
                             categoryId=null; // A category cannot belong to two product groups.
                             groupBusy=false;newGroupCode.clear();newGroupName.clear();
