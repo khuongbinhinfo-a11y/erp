@@ -94,8 +94,8 @@ test("B1: real PostgreSQL order lifecycle, immutable versions, RBAC, replay and 
     const duplicate=await call("/v1/sales/quote","POST",{
       ...r2QuotePayload,lines:[...r2QuotePayload.lines,...r2QuotePayload.lines],
     },token);
-    assert.equal(duplicate.status,400);
-    assert.equal(duplicate.body.error.code,"DUPLICATE_PRODUCT");
+    assert.equal(duplicate.status,200);
+    assert.equal(duplicate.body.quote.lines.length,2,"same SKU can be split into two commercial lines");
     assert.equal((await call("/v1/sales/quote","POST",{
       ...r2QuotePayload,lines:[{sellSkuId,quantity:2}],
     },token)).status,400);
