@@ -235,10 +235,10 @@ test("Issue #7: catalog HTTP uses real PostgreSQL with tenant/branch RBAC, decim
         "price-list-big-"+randomUUID(),token);
       assert.equal(big.status,201,JSON.stringify(big.body));
       const bigPath="/v1/catalog/price-lists/assignments?branchId="+b+"&priceListId="+big.body.id;
-      const firstPage=await call(bigPath,"GET",undefined,token);
-      assert.equal(firstPage.body.items.length,100);
-      assert.equal(firstPage.body.hasMore,true);
-      assert.ok(firstPage.body.items.every((x:any)=>typeof x.customerName==="string"));
+      const bigFirstPage=await call(bigPath,"GET",undefined,token);
+      assert.equal(bigFirstPage.body.items.length,100);
+      assert.equal(bigFirstPage.body.hasMore,true);
+      assert.ok(bigFirstPage.body.items.every((x:any)=>typeof x.customerName==="string"));
       const searchPage=await call("/v1/catalog/customers?branchId="+b+"&q=UAT-KH-1001","GET",undefined,token);
       assert.equal(searchPage.body.items.length,1);
       assert.equal(searchPage.body.items[0].id,many[1000]);

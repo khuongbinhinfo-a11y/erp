@@ -619,4 +619,40 @@ void main(){
     expect(posted?['customerIds'],unorderedEquals([selectedId,foundId]));
   });
 
+  testWidgets('T1 product edit exposes locked identity, SKU, units, barcode and images in one dialog', (tester)async{
+    const product='00000000-0000-4000-8000-000000000020';
+    final reads=<String>[];
+    final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+      httpClient:MockClient((req)async{
+        final path=req.url.path;reads.add(path);
+        http.Response reply(Object body)=>http.Response(jsonEncode(body),200,headers:const {'content-type':'application/json; charset=utf-8'});
+        if(path=='/v1/catalog/branches')return reply({'items':[{'id':branch,'code':'MAIN','name':'Chi nhánh chính'}]});
+        if(path=='/v1/catalog/products')return reply({'items':[{'id':product,'code':'SP01','name':'Hàng A','baseUnit':'cai','active':true,'revision':0}],'r1ProductReady':true});
+        if(path=='/v1/catalog/r1/skus'||path=='/v1/catalog/r1/units'||path=='/v1/catalog/r1/barcodes'){
+          expect(req.url.queryParameters['productId'],product);
+          return reply({'items':[]});
+        }
+        if(path=='/v1/catalog/products/$product/media')return reply({'items':[]});
+        return reply({'items':[]});
+      }));
+    addTearDown(client.dispose);
+    tester.view.devicePixelRatio=1;
+    tester.view.physicalSize=const Size(1440,900);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),home:Scaffold(
+      body:CatalogWorkspace(area:'products',session:activeSession(),client:client))));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('catalog-edit-$product')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('catalog-edit-dialog')),findsOneWidget);
+    for(final kind in ['units','skus','barcodes']){
+      expect(find.byKey(ValueKey('product-edit-$product-$kind')),findsOneWidget);
+    }
+    expect(find.byKey(const ValueKey('product-edit-$product-images')),findsOneWidget);
+    expect(find.byKey(const ValueKey('catalog-edit-product-skus')),findsNothing);
+    expect(tester.widgetList<TextField>(find.byType(TextField)).where((x)=>x.readOnly).length,greaterThanOrEqualTo(2));
+    expect(reads,containsAll(['/v1/catalog/r1/skus','/v1/catalog/r1/units','/v1/catalog/r1/barcodes','/v1/catalog/products/$product/media']));
+  });
+
 }
