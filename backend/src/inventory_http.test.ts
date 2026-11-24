@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
+import { mkdtempSync, copyFileSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import type { AddressInfo } from "node:net";
 import { Pool } from "pg";
 import { applyMigrations } from "./migrate.ts";
@@ -455,5 +457,121 @@ test("R3 real PostgreSQL: on-hand, hold, release, no oversell, exact replay, RBA
   if(pool)await pool.end();
   await admin.query('DROP DATABASE IF EXISTS "'+dbName+'" WITH (FORCE)');
   await admin.end();
+ }
+});
+
+
+test("T0 populated 0020 -> 0021 preserves legacy reserve/read and owner grants",
+ {skip:!ci},async()=>{
+ const admin=new Pool({connectionString:source,max:2});
+ const name="erp_ci_t0_upgrade_"+randomUUID().replaceAll("-","").slice(0,12);
+ const tmp=mkdtempSync(join(tmpdir(),"erp-t0-old-schema-"));
+ let pool:Pool|null=null,server:ReturnType<typeof buildApp>|null=null;
+ try{
+  const dir=resolve(process.cwd(),"db/migrations");
+  const sqlFiles=readdirSync(dir).filter(x=>/^\\d{4}_[a-z0-9_]+\\.sql$/.test(x));
+  assert.equal(sqlFiles.length,21);
+  for(const file of sqlFiles.filter(x=>!x.startsWith("0021_")))
+   copyFileSync(join(dir,file),join(tmp,file));
+  await admin.query('CREATE DATABASE "'+name+'"');
+  const u=new URL(source!);u.pathname="/"+name;
+  pool=new Pool({connectionString:u.toString(),max:8,query_timeout:12000});
+  pool.on("error",()=>{});
+  assert.equal((await applyMigrations(pool,tmp)).applied.length,20);
+  const password="T0-Upgrade-"+randomUUID();
+  const root=await bootstrapInstallation(pool,{
+   code:"t0-old",displayName:"T0 baseline upgrade",adminLogin:"owner",adminPassword:password,
+  });
+  const t=root.installationId,b=root.branchId,w=root.warehouseId;
+  const pre=await pool.query<{role_id:string;permission_code:string}>(`
+   SELECT role_id::text,permission_code FROM role_permission
+   WHERE installation_id=$1 ORDER BY role_id,permission_code`,[t]);
+  assert.ok(pre.rows.length>0);
+  assert.ok(pre.rows.every(x=>x.permission_code!=="inventory.policy.manage"));
+  server=buildApp(()=>isDatabaseReady(pool!),async()=>true,{
+   pool,installationId:t,allowedOrigin:"https://erp.example.test",
+   throttleSecret:"test-"+randomUUID(),
+  });
+  await new Promise<void>(ok=>server!.listen(0,"127.0.0.1",ok));
+  const host="http://127.0.0.1:"+(server.address() as AddressInfo).port;
+  const request=async(path:string,method="GET",data?:unknown,token?:string)=>{
+   const key="t0-"+randomUUID();
+   const response=await fetch(host+path,{method,headers:{
+    origin:"https://erp.example.test",
+    ...(data===undefined?{}:{"content-type":"application/json"}),
+    ...(token?{authorization:"Bearer "+token}:{}),
+    ...(method==="POST"?{"idempotency-key":key,"if-match":"0"}:{}),
+   },body:data===undefined?undefined:JSON.stringify(data)});
+   return {status:response.status,body:await response.json() as Record<string,any>};
+  };
+  const auth=await request("/v1/auth/login","POST",{loginName:"owner",password});
+  assert.equal(auth.status,200,JSON.stringify(auth.body));
+  const token=auth.body.token as string;
+  const oldPolicy=await request("/v1/inventory/guard-policy?branchId="+b+"&warehouseId="+w,
+    "GET",undefined,token);
+  assert.equal(oldPolicy.status,200,JSON.stringify(oldPolicy.body));
+  assert.equal(oldPolicy.body.policy.reserveShortageMode,"BLOCK");
+  assert.equal(oldPolicy.body.policy.migrationRequired,true);
+  const oldList=await request("/v1/inventory/reservations?branchId="+b+"&warehouseId="+w,
+    "GET",undefined,token);
+  assert.equal(oldList.status,200,JSON.stringify(oldList.body));
+  assert.deepEqual(oldList.body.items,[]);
+  const catalog=async(path:string,values:Record<string,unknown>)=>request(
+    "/v1/catalog/"+path,"POST",{branchId:b,...values},token);
+  const cust=await catalog("customers",{code:"OLD-C",name:"Old customer"});
+  const prod=await catalog("products",{code:"OLD-P",name:"Old product",baseUnit:"cai"});
+  const list=await catalog("price-lists",{code:"OLD-PL",name:"Old price list"});
+  for(const x of [cust,prod,list])assert.equal(x.status,201,JSON.stringify(x.body));
+  const price=await catalog("prices",{priceListId:list.body.id,
+    productId:prod.body.id,amount:"1000.0000",discountRate:"0",
+    effectiveAt:"2026-01-01T00:00:00Z"});
+  assert.equal(price.status,201,JSON.stringify(price.body));
+  const order=await request("/v1/sales/orders","POST",{
+   branchId:b,customerId:cust.body.id,priceListId:list.body.id,
+   lines:[{productId:prod.body.id,quantity:"2"}],note:""},token);
+  assert.equal(order.status,201,JSON.stringify(order.body));
+  const confirmed=await request("/v1/sales/orders/"+order.body.id+"/confirm",
+   "POST",{branchId:b},token);
+  assert.equal(confirmed.status,200,JSON.stringify(confirmed.body));
+  const opening=await request("/v1/inventory/openings","POST",
+   {branchId:b,warehouseId:w,productId:prod.body.id,quantity:"3"},token);
+  assert.equal(opening.status,201,JSON.stringify(opening.body));
+  const reserved=await request("/v1/inventory/reservations","POST",
+   {branchId:b,warehouseId:w,orderId:order.body.id,version:1,lineNo:1},token);
+  assert.equal(reserved.status,201,JSON.stringify(reserved.body));
+  assert.equal(reserved.body.quantityBase,"2.000000");
+  assert.equal(reserved.body.backorderedBase,"0.000000");
+  const listing=await request("/v1/inventory/reservations?branchId="+b+"&warehouseId="+w,
+   "GET",undefined,token);
+  assert.equal(listing.status,200,JSON.stringify(listing.body));
+  assert.equal(listing.body.items[0].backorderedBase,"0.000000");
+  const beforeRows=await pool.query(`
+   SELECT id::text,quantity_base::text,state FROM inventory_reservation
+    WHERE installation_id=$1 ORDER BY id`,[t]);
+  const upgrade=await applyMigrations(pool,dir);
+  assert.deepEqual(upgrade.applied,["0021_t0_partial_reservation_policy.sql"]);
+  assert.equal(upgrade.skipped.length,20);
+  const after=await pool.query<{role_id:string;permission_code:string}>(`
+   SELECT role_id::text,permission_code FROM role_permission
+   WHERE installation_id=$1 ORDER BY role_id,permission_code`,[t]);
+  for(const row of pre.rows)assert.ok(after.rows.some(x=>
+    x.role_id===row.role_id&&x.permission_code===row.permission_code));
+  const newGrant=after.rows.filter(x=>x.permission_code==="inventory.policy.manage");
+  assert.equal(newGrant.length,1);
+  assert.equal(after.rows.length,pre.rows.length+1);
+  const afterRows=await pool.query(`
+   SELECT id::text,quantity_base::text,state FROM inventory_reservation
+    WHERE installation_id=$1 ORDER BY id`,[t]);
+  assert.deepEqual(afterRows.rows,beforeRows.rows);
+  const migrated=await request("/v1/inventory/guard-policy?branchId="+b+"&warehouseId="+w,
+    "GET",undefined,token);
+  assert.equal(migrated.status,200,JSON.stringify(migrated.body));
+  assert.equal(migrated.body.policy.reserveShortageMode,"WARN");
+ }finally{
+  if(server)await new Promise<void>(ok=>server!.close(()=>ok()));
+  if(pool)await pool.end();
+  await admin.query('DROP DATABASE IF EXISTS "'+name+'" WITH (FORCE)');
+  await admin.end();
+  rmSync(tmp,{recursive:true,force:true});
  }
 });
