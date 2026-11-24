@@ -276,7 +276,7 @@ class ErpIdentityClient {
   /// in customer group / sales region pickers. Codes are never free-form input.
   Future<List<Map<String,dynamic>>> catalogDirectoryAll(
       String token,String resource,{required String branchId,String query=''})async{
-    if(resource!='customer-groups'&&resource!='customer-regions')
+    if(!['customer-groups','customer-regions','brands','groups','categories'].contains(resource))
       throw ArgumentError.value(resource,'resource','Danh mục không hỗ trợ');
     final found=<Map<String,dynamic>>[];
     final seen=<String>{};
