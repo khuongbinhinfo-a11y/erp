@@ -243,3 +243,48 @@ jobs:
       - name: Build Flutter Web release (UI only)
         working-directory: apps/flutter
         run: flutter build web --release
+
+  native-android:
+    name: flutter-android-native-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.50.0'
+          channel: stable
+          cache: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Generate ERP Android scaffold and compile native bridge
+        working-directory: apps/flutter
+        run: |
+          python3 platform/prepare_native.py android
+          flutter pub get
+          flutter build apk --debug
+          test -s build/app/outputs/flutter-apk/app-debug.apk
+      # No debug APK artifact or production publication.
+  native-windows:
+    name: flutter-windows-native-build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.50.0'
+          channel: stable
+          cache: true
+      - name: Generate ERP Windows scaffold and compile
+        working-directory: apps/flutter
+        run: |
+          python platform/prepare_native.py windows
+          flutter pub get
+          flutter build windows --release
+          if (-not (Test-Path build/windows/x64/runner/Release/erp_distribution.exe)) { exit 1 }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: erp-windows-build
+          path: apps/flutter/build/windows/x64/runner/Release/
+          retention-days: 7

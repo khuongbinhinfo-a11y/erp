@@ -18,6 +18,12 @@ export default compute({
     "r2Bucket?": secretString(),
     "r2AccessKeyId?": secretString(),
     "r2SecretAccessKey?": secretString(),
+    "releaseR2AccountId?": secretString(),
+    "releaseR2Bucket?": secretString(),
+    "releaseR2AccessKeyId?": secretString(),
+    "releaseR2SecretAccessKey?": secretString(),
+    "androidCertSha256?": secretString(),
+    "releaseTicketSecret?": secretString(),
   }),
   build: node({ module: import.meta.url, entry: "../dist/compute.mjs" }),
 });

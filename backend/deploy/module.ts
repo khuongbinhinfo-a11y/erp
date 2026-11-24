@@ -17,6 +17,12 @@ export default module("erp-backend", ({ provision }) => {
       r2Bucket: envSecret("ERP_R2_BUCKET"),
       r2AccessKeyId: envSecret("ERP_R2_ACCESS_KEY_ID"),
       r2SecretAccessKey: envSecret("ERP_R2_SECRET_ACCESS_KEY"),
+      releaseR2AccountId: envSecret("ERP_RELEASE_R2_ACCOUNT_ID"),
+      releaseR2Bucket: envSecret("ERP_RELEASE_R2_BUCKET"),
+      releaseR2AccessKeyId: envSecret("ERP_RELEASE_R2_ACCESS_KEY_ID"),
+      releaseR2SecretAccessKey: envSecret("ERP_RELEASE_R2_SECRET_ACCESS_KEY"),
+      androidCertSha256: envSecret("ERP_ANDROID_CERT_SHA256"),
+      releaseTicketSecret: envSecret("ERP_RELEASE_TICKET_SECRET"),
     },
   });
 });
