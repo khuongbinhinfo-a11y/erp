@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:material_ui/material_ui.dart';
 
 import 'erp_tokens.dart';
@@ -41,6 +42,8 @@ class _ErpShellState extends State<ErpShell> {
   bool collapsed = false;
   bool showIntroToast = true;
   bool companyNavigationLocked = false;
+  String? _checkedUpdateSession;
+
 
   @override
   void initState() {
@@ -49,6 +52,7 @@ class _ErpShellState extends State<ErpShell> {
     visibleModules=List<int>.generate(erpFeatures.length,(i)=>i)
       .where((i)=>widget.previewOnly||hasModuleAccess(i)).toList();
     if(visibleModules.isNotEmpty) selected=visibleModules.first;
+    _scheduleQuietUpdateCheck();
   }
 
   @override
@@ -57,6 +61,7 @@ class _ErpShellState extends State<ErpShell> {
     if(oldWidget.session?.token!=widget.session?.token||
        oldWidget.previewOnly!=widget.previewOnly)companyNavigationLocked=false;
     if(oldWidget.session!=widget.session||oldWidget.previewOnly!=widget.previewOnly){
+      _scheduleQuietUpdateCheck();
       visibleModules=List<int>.generate(erpFeatures.length,(i)=>i)
         .where((i)=>widget.previewOnly||hasModuleAccess(i)).toList();
       if(visibleModules.isNotEmpty&&!visibleModules.contains(selected)){
@@ -65,6 +70,22 @@ class _ErpShellState extends State<ErpShell> {
     }
   }
 
+  void _scheduleQuietUpdateCheck(){
+    if(!_canUpdate)return;
+    final session=widget.session!;
+    if(_checkedUpdateSession==session.token)return;
+    _checkedUpdateSession=session.token;
+    WidgetsBinding.instance.addPostFrameCallback((_){
+      if(!mounted||widget.session?.token!=session.token||!_canUpdate)return;
+      unawaited(erpAndroidQuietUpdateVersion(widget.client!,session).then((version){
+        if(mounted&&version!=null&&widget.session?.token==session.token&&
+          !companyNavigationLocked){
+          ErpToast.show(context,'Có bản cập nhật ERP '+version+
+            '. Mở menu Cập nhật ứng dụng để xem và cài đặt.');
+        }
+      }));
+    });
+  }
   void protectedLogout(){
     if(companyNavigationLocked){
       ErpToast.show(context,

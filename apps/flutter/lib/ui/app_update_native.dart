@@ -10,6 +10,33 @@ import 'identity_client.dart';
 
 bool get erpAndroidUpdateSupported=>Platform.isAndroid;
 const _bridge=MethodChannel('erp/android_update');
+/// Automatic Android-only check at session start, without blocking ERP work.
+Future<String?> erpAndroidQuietUpdateVersion(ErpIdentityClient client,IdentitySession session)async{
+  if(!Platform.isAndroid||!session.expiresAt.isAfter(DateTime.now()))return null;
+  final origin=Uri.tryParse(client.apiOrigin);
+  if(origin==null||origin.scheme!='https'||origin.host.isEmpty||origin.userInfo.isNotEmpty)return null;
+  final httpClient=http.Client();
+  try{
+    final installed=await _bridge.invokeMapMethod<String,dynamic>('installed');
+    if(installed==null||installed['packageName']!=erpAndroidPackage||
+       installed['versionCode'] is! int||installed['signerSha256'] is! String)return null;
+    final req=http.Request('GET',origin.resolve('/v1/app/releases/latest'))
+      ..followRedirects=false
+      ..headers.addAll({'authorization':'Bearer ${session.token}','accept':'application/json'});
+    final response=await httpClient.send(req).timeout(const Duration(seconds:10));
+    if(response.statusCode!=200)return null;
+    final payload=await http.Response.fromStream(response).timeout(const Duration(seconds:10));
+    if(!session.expiresAt.isAfter(DateTime.now()))return null;
+    final data=jsonDecode(payload.body);
+    if(data is! Map<String,dynamic>||data['release']==null)return null;
+    final next=ErpAndroidRelease.parse(data['release']);
+    if(!next.canInstall(installedPackage:installed['packageName'] as String,
+      installedSigner:installed['signerSha256'] as String,
+      installedCode:installed['versionCode'] as int))return null;
+    return next.versionName;
+  }catch(_){return null;}
+  finally{httpClient.close();}
+}
 Future<void> showErpAndroidUpdate(BuildContext context,ErpIdentityClient client,
   IdentitySession session,bool Function() isCurrent) async {
   if(!erpAndroidUpdateSupported||!isCurrent())return;
