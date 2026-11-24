@@ -153,7 +153,7 @@ export async function resolveR1Price(db:PoolClient,input:Query){
       WHERE l.installation_id=$1 AND l.branch_id=$2 AND l.id=$3 AND l.active
         AND (l.effective_from IS NULL OR l.effective_from<=$4::timestamptz)
         AND (l.effective_to IS NULL OR l.effective_to>$4::timestamptz)
-        ${listScopePredicate('$4','$5','$6','$7')}`:
+        AND (($5::uuid IS NULL AND $7::uuid IS NULL) OR (true ${listScopePredicate('$4','$5','$6','$7')}))`:
       `SELECT currency,code FROM catalog_price_list
       WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active`,
     scoped?[t,b,selectedListId,input.priceAt,customerId??null,customerGroupId,channelId??null]:[t,b,selectedListId]);
@@ -218,7 +218,7 @@ export async function resolveR1Price(db:PoolClient,input:Query){
     {ruleId:sourceId,scope:origin,adjustment:"FIXED_PRICE",amount:basePrice,
      result:price,reason:origin==="BASE_RULE"?"Giá cơ sở của SKU":
       "Giá hiệu lực từ lịch sử sản phẩm",
-     priority:origin==="BASE_RULE"?base?.priority??null:null,
+     priority:base?.priority??null,
      minQuantity:origin==="BASE_RULE"?base?.min_quantity??null:null,
      effectiveFrom:origin==="BASE_RULE"?base?.effective_from?.toISOString()??null:null,stacking:null},
   ];
