@@ -124,22 +124,24 @@ class ErpLocalStore {
       if(match.length!=1)throw const LocalRecoveryConflict();
       final previous=match.single['status'];
       if(previous==status)return;
-      if(status=='inflight'&&!{'unsent','rejected',null}.contains(previous))throw const LocalRecoveryConflict();
+      if(status=='inflight'&&!{'unsent',null}.contains(previous))throw const LocalRecoveryConflict();
       if(status=='rejected'&&previous!='inflight')throw const LocalRecoveryConflict();
       match.single['status']=status;
       if(await (driver as AtomicLocalDriver).compareAndSwap(location,before,jsonEncode(drafts)))return;
     }
     throw const LocalRecoveryConflict();
   }
-  Future<void> clearUnsentSalesUpdate(LocalScope scope,String orderId,String key)async{
+  Future<void> clearUnsentSalesUpdate(LocalScope scope,String orderId,String key,{String? requiredStatus})async{
     if(driver is! AtomicLocalDriver||key.isEmpty)throw const LocalRecoveryConflict();
     final location=_key(scope,'unsent-update',orderId);
     for(var attempt=0;attempt<16;attempt++){
       final before=await driver.read(location);
       if(before==null)return;
       final drafts=await unsentSalesUpdates(scope,orderId);
+      final match=drafts.where((x)=>x['key']==key).toList();
+      if(match.isEmpty)return;
+      if(match.length!=1||(requiredStatus!=null&&match.single['status']!=requiredStatus))throw const LocalRecoveryConflict();
       final remaining=drafts.where((x)=>x['key']!=key).toList();
-      if(remaining.length==drafts.length)return;
       if(await (driver as AtomicLocalDriver).compareAndSwap(location,before,
         remaining.isEmpty?null:jsonEncode(remaining)))return;
     }

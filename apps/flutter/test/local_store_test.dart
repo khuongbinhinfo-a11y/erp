@@ -79,9 +79,21 @@ void main(){
     expect((await store.unsentSalesUpdates(a,id)).single['status'],'inflight');
     await store.markUnsentSalesUpdate(a,id,'k','rejected');
     expect((await store.unsentSalesUpdates(a,id)).single['status'],'rejected');
-    await store.markUnsentSalesUpdate(a,id,'k','inflight');
     await expectLater(store.markUnsentSalesUpdate(a,id,'wrong','rejected'),
       throwsA(isA<LocalRecoveryConflict>()));
+  });
+  test('terminal rejection cannot be reposted; compare and delete requires status',()async{
+    final store=ErpLocalStore(Memory());
+    const id='00000000-0000-4000-8000-000000000005';
+    await store.saveUnsentSalesUpdate(a,id,'k2',{'id':id,'body':{'lines':[]}});
+    await store.markUnsentSalesUpdate(a,id,'k2','inflight');
+    await store.markUnsentSalesUpdate(a,id,'k2','rejected');
+    await expectLater(store.markUnsentSalesUpdate(a,id,'k2','inflight'),
+      throwsA(isA<LocalRecoveryConflict>()));
+    await expectLater(store.clearUnsentSalesUpdate(a,id,'k2',requiredStatus:'unsent'),
+      throwsA(isA<LocalRecoveryConflict>()));
+    await store.clearUnsentSalesUpdate(a,id,'k2',requiredStatus:'rejected');
+    expect(await store.unsentSalesUpdates(a,id),isEmpty);
   });
   test('cache expiry is explicit, never proof of a current price',()async{
     final store=ErpLocalStore(Memory());

@@ -2329,7 +2329,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         }catch(_){inform('Bản sửa trên máy không hợp lệ, không gửi lại.',error:true);return;}
         final lines=body['lines'] as List;
         final status=item['status'];
-        final canReconcile=status=='unsent'||status=='rejected';
+        final canReconcile=status=='rejected';
         final decision=await showDialog<String>(context:context,builder:(ctx)=>AlertDialog(
           title:Text('Kiểm tra bản sửa · '+selected.split('-').skip(1).join('-')),
           content:SizedBox(width:520,height:350,
@@ -2371,7 +2371,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
             actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Giữ lại')),
               FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Xóa bản sửa'))]));
           if(approved==true&&_sameScope(token,scope.branch)){
-            try{await widget.client.localStore!.clearUnsentSalesUpdate(scope,id,selected);}
+            try{await widget.client.localStore!.clearUnsentSalesUpdate(scope,id,selected,requiredStatus:'rejected');}
             catch(_){inform('Không xóa được bản sửa lưu trên máy.',error:true);}
           }
           return;
@@ -2403,7 +2403,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     if(scope!=null){
       try{
         await widget.client.localStore!.saveUnsentSalesUpdate(scope,id,key,command);
-        if(supersededKey!=null)await widget.client.localStore!.clearUnsentSalesUpdate(scope,id,supersededKey);
+        if(supersededKey!=null)await widget.client.localStore!.clearUnsentSalesUpdate(scope,id,supersededKey,requiredStatus:'rejected');
       }catch(_){
         inform('Bản sửa chưa lưu an toàn. Không gửi yêu cầu.',error:true);
         return;
@@ -2424,15 +2424,42 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     final auto=cmd['auto']==true;
     setState(()=>saving=true);
     try{
+      // Original key receipt is authoritative after COMMIT, even if another
+      // tab already cleared its local unsent record.
+      if(_localConfigured&&pendingNeedsReceipt){
+        final prior=await widget.client.salesRecovery(token,'update',body,
+          key:key,revision:rev,orderId:id);
+        if(!_sameScope(token,body['branchId'] as String))return;
+        if(prior!=null){
+          try{await _persistPending(scope,null,null,null,previousKey:key);}
+          on LocalRecoveryConflict{ /* The current slot belongs to another tab. */ }
+          if(scope!=null){
+            try{await widget.client.localStore!.clearUnsentSalesUpdate(scope,id,key);}
+            catch(_){ /* Keep unrelated commands. Server ACK is authoritative. */ }
+          }
+          if(_sameScope(token,body['branchId'] as String)){
+            setState((){
+              pendingUpdate=null;pendingUpdateKey=null;localRecoveryBlocked=false;
+            });
+            inform('Máy chủ đã lưu bản sửa. Không gửi thêm đơn trùng.');
+            await reload();
+          }
+          return;
+        }
+      }
+      if(_localConfigured&&pendingNeedsReceipt&&scope!=null){
+        final saved=await widget.client.localStore!.unsentSalesUpdates(scope,id);
+        if(!saved.any((x)=>x['key']==key)){
+          inform('Không còn bản sửa lưu trên máy và chưa có xác nhận từ máy chủ. Không tự gửi lại.',error:true);
+          return;
+        }
+      }
       await _persistPending(scope,'update',key,cmd);
       if(scope!=null)await widget.client.localStore!.markUnsentSalesUpdate(scope,id,key,'inflight');
       if(!_sameScope(token,body['branchId'] as String))return;
-      // Replays the exact original body+key after a lost COMMIT acknowledgment.
-      final recovered=_localConfigured&&pendingNeedsReceipt
-        ?await widget.client.salesRecovery(token,'update',body,key:key,revision:rev,orderId:id):null;
-      if(!_sameScope(token,body['branchId'] as String))return;
+      // Only server can accept the original idempotent mutation.
       pendingNeedsReceipt=true;
-      final updated=recovered??await widget.client.updateSalesOrder(token,id,rev,body,key:key);
+      final updated=await widget.client.updateSalesOrder(token,id,rev,body,key:key);
       if(!_sameScope(token,body['branchId'] as String))return;
       final next=auto?<String,dynamic>{'id':id,'branchId':body['branchId'],'revision':updated['revision']}:null;
       final nextKey=auto?newKey():null;
