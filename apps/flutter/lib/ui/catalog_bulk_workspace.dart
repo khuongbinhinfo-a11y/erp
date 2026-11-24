@@ -51,7 +51,8 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
   late String kind;
   String mode='UPSERT';
   bool hasHeader=true,busy=false;
-  String? fileName,contentBase64,error;
+  String? fileName,contentBase64,error,priceListId,defaultEffectiveAt;
+  List<Map<String,dynamic>> priceLists=[];
   Map<String,dynamic>? inspection,preview,applied;
   final mapping=<String,String>{};
   Map<String,dynamic>? pendingPayload;
@@ -65,6 +66,7 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
     kind=widget.initialArea=='customers'?'customers':
       widget.initialArea=='price-lists'?'prices':'products';
     _restorePending();
+    if(kind=='prices')_loadPriceLists();
   }
   @override void didUpdateWidget(covariant CatalogBulkWorkspace old){
     super.didUpdateWidget(old);
@@ -73,8 +75,22 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
       setState((){
         fileName=null;contentBase64=null;inspection=null;preview=null;
         applied=null;mapping.clear();pendingPayload=null;pendingKey=null;error=null;
+        priceListId=null;defaultEffectiveAt=null;priceLists=[];
       });
       _restorePending();
+      if(kind=='prices')_loadPriceLists();
+    }
+  }
+  Future<void> _loadPriceLists()async{
+    final branch=widget.branchId,token=widget.session.token;
+    if(branch==null)return;
+    try{
+      final rows=await widget.client.catalogItems(token,'price-lists',branchId:branch);
+      if(!mounted||widget.branchId!=branch||widget.session.token!=token||kind!='prices')return;
+      setState(()=>priceLists=rows.where((x)=>x['active']!=false).toList());
+    }on ErpApiError catch(e){
+      if(mounted&&widget.branchId==branch&&widget.session.token==token&&kind=='prices')
+        setState(()=>error=e.message);
     }
   }
   void _restorePending(){
@@ -85,6 +101,8 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
     pendingPayload=Map<String,dynamic>.from(saved.payload);
     pendingKey=saved.key;
     final p=pendingPayload!;
+    priceListId=p['priceListId'] as String?;
+    defaultEffectiveAt=p['defaultEffectiveAt'] as String?;
     fileName=p['fileName'] as String?;
     contentBase64=p['contentBase64'] as String?;
     mode=p['mode'] as String? ?? 'UPSERT';
@@ -97,18 +115,23 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
     'branchId':widget.branchId,'resource':kind,'mode':mode,
     'fileName':fileName,'contentBase64':contentBase64,
     'hasHeader':hasHeader,'mapping':Map<String,String>.from(mapping),
+    if(kind=='prices'&&priceListId!=null)'priceListId':priceListId,
+    if(kind=='prices'&&defaultEffectiveAt!=null)'defaultEffectiveAt':defaultEffectiveAt,
   };
   bool get canOperate=>!busy&&pendingPayload==null&&widget.branchId!=null;
+  bool get canImport=>canOperate&&(kind!='prices'||priceListId!=null);
   void _changeKind(String? next){
     if(next==null||next==kind||!canOperate)return;
     setState((){
       kind=next;fileName=null;contentBase64=null;inspection=null;
+      priceListId=null;defaultEffectiveAt=null;priceLists=[];
       mapping.clear();preview=null;applied=null;error=null;
     });
     _restorePending();
+    if(kind=='prices')_loadPriceLists();
   }
   Future<void> _pick()async{
-    if(!canOperate)return;
+    if(!canImport)return;
     try{
       final result=await FilePicker.platform.pickFiles(
         dialogTitle:'Chọn Excel hoặc CSV',
@@ -125,6 +148,7 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
       }
       setState((){
         fileName=f.name;contentBase64=base64Encode(bytes);
+        if(kind=='prices')defaultEffectiveAt=DateTime.now().toUtc().toIso8601String();
         inspection=null;preview=null;applied=null;mapping.clear();error=null;
       });
       await _inspect();
@@ -152,7 +176,7 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
     }finally{if(mounted)setState(()=>busy=false);}
   }
   Future<void> _preview()async{
-    if(!canOperate||inspection==null||contentBase64==null)return;
+    if(!canImport||inspection==null||contentBase64==null)return;
     setState((){busy=true;preview=null;applied=null;error=null;});
     try{
       final result=await widget.client.bulkPreview(widget.session.token,params);
@@ -216,11 +240,11 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
   }
   Future<void> _saveCsv({required bool template,bool excel=false})async{
     final branch=widget.branchId;
-    if(branch==null||busy)return;
+    if(branch==null||!canImport)return;
     setState((){busy=true;error=null;});
     try{
       final result=await widget.client.bulkCsvFile(widget.session.token,kind,branch,
-        template:template,format:excel?'xlsx':'csv');
+        template:template,format:excel?'xlsx':'csv',priceListId:kind=='prices'?priceListId:null);
       if(!mounted)return;
       final fileName=result['fileName']?.toString()??(excel?'danh-muc.xlsx':'danh-muc.csv');
       final Uint8List bytes;
@@ -265,7 +289,7 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
         style:TextStyle(color:ErpTokens.muted,fontSize:12)),
       const SizedBox(height:12),
       Wrap(spacing:12,runSpacing:12,children:[
-        for(final field in fieldKeys)
+        for(final field in fieldKeys.where((f)=>kind!='prices'||f!='priceListCode'||mapping.containsKey(f)))
           SizedBox(width:290,child:DropdownButtonFormField<String?>(
             key:ValueKey('catalog-bulk-map-'+field+'-'+(mapping[field]??'')),
             isExpanded:true,initialValue:mapping[field],
@@ -369,6 +393,18 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
           items:names.entries.map((e)=>DropdownMenuItem(
             value:e.key,child:Text(e.value))).toList(),
           onChanged:canOperate?_changeKind:null)),
+        if(kind=='prices')SizedBox(width:300,child:DropdownButtonFormField<String>(
+          key:ValueKey('catalog-bulk-price-list-'+(priceListId??'')),
+          initialValue:priceLists.any((x)=>x['id']==priceListId)?priceListId:null,
+          isExpanded:true,
+          decoration:const InputDecoration(labelText:'Bảng giá đích'),
+          items:priceLists.map((x)=>DropdownMenuItem<String>(
+            value:x['id'].toString(),child:Text((x['name']??x['code']).toString(),
+              overflow:TextOverflow.ellipsis))).toList(),
+          onChanged:canOperate?(v)=>setState((){
+            priceListId=v;preview=null;applied=null;error=null;
+            defaultEffectiveAt=DateTime.now().toUtc().toIso8601String();
+          }):null)),
         SizedBox(width:230,child:DropdownButtonFormField<String>(
           key:const ValueKey('catalog-bulk-mode'),
           initialValue:mode,isExpanded:true,
@@ -381,23 +417,23 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
             if(v!=null)mode=v;preview=null;applied=null;
           }):null)),
         OutlinedButton.icon(key:const ValueKey('catalog-bulk-template'),
-          onPressed:canOperate?()=>_saveCsv(template:true):null,
+          onPressed:canImport?()=>_saveCsv(template:true):null,
           icon:const Icon(Icons.download_outlined),label:const Text('Tải mẫu CSV')),
         OutlinedButton.icon(key:const ValueKey('catalog-bulk-export'),
-          onPressed:canOperate?()=>_saveCsv(template:false):null,
+          onPressed:canImport?()=>_saveCsv(template:false):null,
           icon:const Icon(Icons.file_download_outlined),label:const Text('Xuất dữ liệu CSV')),
         OutlinedButton.icon(key:const ValueKey('catalog-bulk-template-xlsx'),
-          onPressed:canOperate?()=>_saveCsv(template:true,excel:true):null,
+          onPressed:canImport?()=>_saveCsv(template:true,excel:true):null,
           icon:const Icon(Icons.table_chart_outlined),label:const Text('Tải mẫu Excel')),
         OutlinedButton.icon(key:const ValueKey('catalog-bulk-export-xlsx'),
-          onPressed:canOperate?()=>_saveCsv(template:false,excel:true):null,
+          onPressed:canImport?()=>_saveCsv(template:false,excel:true):null,
           icon:const Icon(Icons.table_view_outlined),label:const Text('Xuất Excel có định dạng')),
       ]),
       const SizedBox(height:14),
       Wrap(spacing:12,runSpacing:12,crossAxisAlignment:WrapCrossAlignment.center,
         children:[
           FilledButton.icon(key:const ValueKey('catalog-bulk-file'),
-            onPressed:canOperate?_pick:null,icon:const Icon(Icons.upload_file),
+            onPressed:canImport?_pick:null,icon:const Icon(Icons.upload_file),
             label:const Text('1. Chọn Excel/CSV')),
           Text(fileName??'Chưa chọn file'),
           Row(mainAxisSize:MainAxisSize.min,children:[
@@ -416,7 +452,7 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
         _mappingEditor(),
         const SizedBox(height:12),
         FilledButton.icon(key:const ValueKey('catalog-bulk-preview'),
-          onPressed:canOperate?_preview:null,
+          onPressed:canImport?_preview:null,
           icon:const Icon(Icons.visibility_outlined),
           label:const Text('Xem trước toàn bộ thay đổi')),
       ],
