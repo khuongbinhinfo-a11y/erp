@@ -10,7 +10,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { spawnSync, execFileSync } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, readFileSync, writeFileSync, rmSync, statSync, chmodSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, statSync, chmodSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -380,6 +380,9 @@ async function verifyP0Schema(pool){
 
 async function main(mode){
  const e=process.env;
+ // Lock this operator to 0019. Never silently run migration 0020 via applyMigrations().
+ if(mode==="--apply"&&existsSync(resolve("db/migrations/0020_catalog_hierarchy_locations.sql")))
+  fail("P0_OPERATOR_SUPERSEDED_BY_0020_MIGRATION_OPERATOR_REQUIRED");
  const sha=git(["rev-parse","HEAD"]),branch=git(["branch","--show-current"]);
  const remote=git(["remote","get-url","origin"]);
  const tracked=git(["status","--porcelain","--untracked-files=all"]);
