@@ -10,6 +10,7 @@ import 'r1_catalog_workspace.dart';
 import 'catalog_bulk_workspace.dart';
 import 'price_list_assignments_panel.dart';
 import 'price_sku_batch_panel.dart';
+import 'customer_locations_dialog.dart';
 
 /// Live, branch-scoped catalog. No offline confirmation and no fabricated rows.
 class CatalogWorkspace extends StatefulWidget {
@@ -44,7 +45,9 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     ],
     'products':[
       ErpSectionTab('products','Sản phẩm'),
+      ErpSectionTab('brands','Nhãn hàng'),
       ErpSectionTab('groups','Nhóm hàng'),
+      ErpSectionTab('categories','Danh mục'),
       ErpSectionTab('unit-definitions','Đơn vị tính'),
       ErpSectionTab('units','Đơn vị và quy đổi'),
       ErpSectionTab('skus','SKU bán hàng'),
@@ -66,7 +69,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
   static const titles=<String,String>{
     'customers':'Khách hàng','customer-groups':'Nhóm khách',
     'customer-regions':'Khu vực','suppliers':'Nhà cung cấp',
-    'products':'Sản phẩm','groups':'Nhóm hàng',
+    'products':'Sản phẩm','brands':'Nhãn hàng',
+    'groups':'Nhóm hàng','categories':'Danh mục',
     'unit-definitions':'Đơn vị tính',
     'price-lists':'Bảng giá','prices':'Lịch sử đơn giá',
     'warehouses':'Kho hàng','bulk':'Nhập Excel/CSV',
@@ -1142,6 +1146,13 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
       )));
   }
 
+  Future<void> _customerLocations(Map<String,dynamic> customer)async{
+    final id=customer['id'];
+    if(id is! String||branchId==null)return;
+    await showDialog<void>(context:context,builder:(_)=>CustomerLocationsDialog(
+      client:widget.client,session:widget.session,branchId:branchId!,
+      customerId:id,customerName:customer['name'].toString(),canWrite:canWrite));
+  }
   void _beginInlinePrice(Map<String,dynamic> row){
     if(resource!='prices'||!canWrite||saving||branchId==null)return;
     final listId=row['priceListId'],productId=row['productId'],id=row['id'];
@@ -1649,11 +1660,13 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     'customer-groups'=>const [('code','Mã nhóm'),('name','Tên nhóm'),('active','Trạng thái')],
     'customer-regions'=>const [('code','Mã khu vực'),('name','Tên khu vực'),('active','Trạng thái')],
     'suppliers'=>const [('code','Mã'),('name','Nhà cung cấp'),('active','Trạng thái')],
-    'groups'=>const [('code','Mã nhóm'),('name','Tên nhóm'),('active','Trạng thái')],
+    'brands'=>const [('code','Mã nhãn hàng'),('name','Nhãn hàng'),('active','Trạng thái')],
+    'groups'=>const [('code','Mã nhóm'),('name','Tên nhóm'),('brandName','Nhãn hàng'),('active','Trạng thái')],
+    'categories'=>const [('code','Mã danh mục'),('name','Danh mục'),('parentCode','Danh mục cha'),('active','Trạng thái')],
     'unit-definitions'=>const [
       ('code','Mã đơn vị'),('name','Tên đơn vị'),('active','Trạng thái')],
     'products'=>const [('code','Mã hàng'),('name','Sản phẩm'),
-      ('groupName','Nhóm hàng'),('baseUnit','Đơn vị tồn kho'),
+      ('groupName','Nhóm hàng'),('categoryName','Danh mục'),('baseUnit','Đơn vị tồn kho'),
       ('sellSkuCount','SKU bán'),('barcode','Mã vạch gốc'),
       ('active','Trạng thái')],
     'price-lists'=>const [('code','Mã bảng giá'),('name','Bảng giá'),
@@ -1895,6 +1908,11 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                             icon:const Icon(Icons.content_copy_outlined,size:18),
                             tooltip:'Sao chép bảng giá cùng chính sách',
                             onPressed:saving?null:()=>_cloneList(entry)),
+                          if(resource=='customers')IconButton(
+                            key:ValueKey('catalog-customer-locations-'+entry['id'].toString()),
+                            icon:const Icon(Icons.storefront_outlined,size:18),
+                            tooltip:'Các cửa hàng / địa chỉ giao hàng',
+                            onPressed:saving?null:()=>_customerLocations(entry)),
                           if(resource=='products')IconButton(
                             key:ValueKey('catalog-product-images-'+entry['id'].toString()),
                             icon:const Icon(Icons.photo_library_outlined,size:18),
