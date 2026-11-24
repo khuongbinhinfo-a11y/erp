@@ -147,9 +147,11 @@ class ErpLocalStore {
   }
   Future<void> releaseRejectedCart(LocalScope scope,String id,{required String owner,required String commandKey})async{
     await _mutateScopedCart(scope,id,(entry){
-      if(entry['owner']!=owner||entry['status']!='submitted'||entry['commandKey']!=commandKey){
+      if(entry['owner']!=owner||entry['commandKey']!=commandKey){
         throw const LocalRecoveryConflict();
       }
+      if(entry['status']=='rejected')return entry; // same confirmed rejection in another tab
+      if(entry['status']!='submitted')throw const LocalRecoveryConflict();
       return {...entry,'status':'rejected','leaseUntil':0};
     });
   }

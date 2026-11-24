@@ -194,6 +194,7 @@ void main(){
     expect(await two.cartCreateDisposition(a,'original',owner:'actor-one',
       commandKey:'send-key'),'submitted');
     await one.releaseRejectedCart(a,'original',owner:'actor-one',commandKey:'send-key');
+    await two.releaseRejectedCart(a,'original',owner:'actor-one',commandKey:'send-key'); // idempotent peer rejection
     expect(await two.cartCreateDisposition(a,'original',owner:'actor-one',
       commandKey:'send-key'),'rejected');
     await two.claimScopedCart(a,'original','resumed',owner:'actor-two');
