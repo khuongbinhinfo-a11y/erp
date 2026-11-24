@@ -112,6 +112,9 @@ test("PG16+: nested categories forbid cycles, wrong group and multiple defaults"
     await admin.query('CREATE DATABASE "'+name+'"');
     const uri=new URL(base);uri.pathname="/"+name;
     db=new Pool({connectionString:uri.toString(),max:2});
+    // A forced isolated-DB teardown can terminate idle pg clients in the pool.
+    // Other integration suites install this handler to avoid uncaught events.
+    db.on('error',()=>{});
     const migrated=await applyMigrations(db,resolve(process.cwd(),"db/migrations"));
     assert.equal(migrated.applied.length,20);
     const installation=(await db.query<{id:string}>(`
