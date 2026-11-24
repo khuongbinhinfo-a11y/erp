@@ -11,8 +11,10 @@ import {
 test("Compute deployment config declares the exact ERP Composer module",()=>{
  const config=readFileSync(new URL("../deploy/prisma.config.ts",import.meta.url),"utf8");
  const moduleText=readFileSync(new URL("../deploy/module.ts",import.meta.url),"utf8");
- assert.match(config,/entry:\\s*["']\\.\\/module\\.ts["']/);
- assert.match(moduleText,/export default module\\("erp-backend"/);
+ assert.ok(config.includes('entry: "./module.ts"'),
+   "Prisma Composer CLI needs an explicit module entry");
+ assert.ok(moduleText.includes('export default module("erp-backend"'),
+   "Composer entry must be the existing ERP backend module");
 });
 
 const sha="a".repeat(40);
