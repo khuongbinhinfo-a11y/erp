@@ -97,9 +97,9 @@ async function exportRows(db:PoolClient,tenant:string,branch:string,kind:BulkRes
    // non-base units never inherit the retail price.
    sql=`SELECT s.sku AS "skuCode",p.name,s.unit_code AS "unitCode",
     CASE WHEN r.id IS NOT NULL AND (e.id IS NULL OR e.effective_at<=r.effective_from)
-      THEN r.amount::text ELSE e.amount::text END AS amount,
+      THEN coalesce(r.imported_gross_amount,r.amount)::text ELSE e.amount::text END AS amount,
     CASE WHEN r.id IS NOT NULL AND (e.id IS NULL OR e.effective_at<=r.effective_from)
-      THEN '0' ELSE e.discount_rate::text END AS "discountRate",
+      THEN coalesce(r.imported_discount_rate,0)::text ELSE e.discount_rate::text END AS "discountRate",
     to_char((CASE WHEN r.id IS NOT NULL AND
         (e.id IS NULL OR e.effective_at<=r.effective_from)
       THEN r.effective_from ELSE e.effective_at END) AT TIME ZONE 'UTC',
@@ -111,7 +111,8 @@ async function exportRows(db:PoolClient,tenant:string,branch:string,kind:BulkRes
       ON l.installation_id=s.installation_id AND l.branch_id=s.branch_id
        AND l.id=$3 AND l.active
     LEFT JOIN LATERAL (
-      SELECT r.id,r.amount,r.effective_from FROM catalog_sku_price_rule r
+      SELECT r.id,r.amount,r.effective_from,r.imported_gross_amount,r.imported_discount_rate
+      FROM catalog_sku_price_rule r
        WHERE r.installation_id=s.installation_id AND r.branch_id=s.branch_id
         AND r.sell_sku_id=s.id AND r.price_list_id=l.id
         AND r.scope_kind='BASE' AND r.min_quantity<=1
