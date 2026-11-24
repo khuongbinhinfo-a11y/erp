@@ -542,8 +542,12 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
  const groups=(res==="customers"||res==="products")?await db.query<Record<string,any>>(
   'SELECT id,code,active'+(res==="products"&&taxonomyReady?',brand_id AS "brandId"':'')+
   ' FROM '+(res==="customers"?"catalog_customer_group":"catalog_product_group")+
-  ' WHERE installation_id=$1 AND branch_id=$2 AND code=ANY($3::text[])',
-  [tenant,branch,all(res==="customers"?"customerGroupCode":"groupCode")]):{rows:[]};
+  ' WHERE installation_id=$1 AND branch_id=$2 AND (code=ANY($3::text[])'+
+  (res==="products"?' OR id=ANY($4::uuid[])':'')+')',
+  res==="products"?
+    [tenant,branch,all("groupCode"),
+      [...new Set(products.rows.map(p=>p.groupId).filter(Boolean))]]:
+    [tenant,branch,all("customerGroupCode")]):{rows:[]};
  const categories=res==="products"&&taxonomyReady?await db.query<Record<string,any>>(
   'SELECT c.id,c.code,c.group_id AS "groupId",c.active,g.active AS "groupActive",'+
   'g.brand_id AS "brandId" FROM catalog_product_category c '+
