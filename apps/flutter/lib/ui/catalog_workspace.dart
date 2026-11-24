@@ -1372,8 +1372,13 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     final oldProductGroupId=row['groupId'] as String?;
     String? customerGroupId=oldGroupId,customerRegionId=oldRegionId;
     String? productGroupId=oldProductGroupId;
+    final oldBrandId=row['brandId'] as String?;
+    final oldCategoryId=row['categoryId'] as String?;
+    final oldParentId=row['parentId'] as String?;
+    String? brandId=oldBrandId,categoryId=oldCategoryId,parentId=oldParentId;
     bool active=row['active'] as bool? ?? true;
-    List<Map<String,dynamic>> customerGroups=[],customerRegions=[],productGroups=[];
+    List<Map<String,dynamic>> customerGroups=[],customerRegions=[],productGroups=[],
+      brands=[],categories=[];
     try{
       if(resource=='customers'){
         final lookup=await Future.wait([
@@ -1408,9 +1413,13 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
             'Không tải được phân bổ. Đang giữ nguyên các phạm vi hiện có.',
             isError:true);
         }
-      }else if(resource=='products'){
-        productGroups=await widget.client.catalogItems(
-          widget.session.token,'groups',branchId:branch);
+      }else if(resource=='products'||resource=='groups'||resource=='categories'){
+        final results=await Future.wait([
+          widget.client.catalogItems(widget.session.token,'groups',branchId:branch),
+          widget.client.catalogItems(widget.session.token,'brands',branchId:branch),
+          widget.client.catalogItems(widget.session.token,'categories',branchId:branch),
+        ]);
+        productGroups=results[0];brands=results[1];categories=results[2];
       }
     }on ErpApiError catch(e){
       if(mounted)ErpToast.show(context,_errorMessage(e),isError:true);
@@ -1516,6 +1525,34 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                           style:TextStyle(fontSize:12,color:ErpTokens.muted))),
                     ],
                   ],
+                  if(resource=='groups')...[
+                    const SizedBox(height:12),
+                    DropdownButtonFormField<String?>(
+                      key:const ValueKey('catalog-edit-group-brand'),
+                      initialValue:brandId,isExpanded:true,
+                      decoration:const InputDecoration(labelText:'Nhãn hàng'),
+                      items:[
+                        const DropdownMenuItem<String?>(value:null,child:Text('Chưa gắn nhãn hàng')),
+                        ...brands.where((v)=>v['active']!=false||v['id']==brandId).map(
+                          (v)=>DropdownMenuItem<String?>(
+                            value:v['id'] as String,child:Text('${v['code']} · ${v['name']}'))),
+                      ],onChanged:(v)=>refresh(()=>brandId=v)),
+                  ],
+                  if(resource=='categories')...[
+                    const SizedBox(height:12),
+                    DropdownButtonFormField<String?>(
+                      key:const ValueKey('catalog-edit-category-parent'),
+                      initialValue:parentId,isExpanded:true,
+                      decoration:const InputDecoration(labelText:'Danh mục cha'),
+                      items:[
+                        const DropdownMenuItem<String?>(value:null,child:Text('Danh mục cấp đầu')),
+                        ...categories.where((c)=>c['groupId']==row['groupId']&&
+                          c['id']!=id&&c['active']!=false).map(
+                          (c)=>DropdownMenuItem<String?>(
+                            value:c['id'] as String,
+                            child:Text('${c['code']} · ${c['name']}'))),
+                      ],onChanged:(v)=>refresh(()=>parentId=v)),
+                  ],
                   if(resource=='products')...[
                     const SizedBox(height:12),
                     DropdownButtonFormField<String?>(
@@ -1534,7 +1571,24 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                             child:Text("${g['code']} · ${g['name']}",
                               overflow:TextOverflow.ellipsis))),
                       ],
-                      onChanged:(v)=>refresh(()=>productGroupId=v)),
+                      onChanged:(v)=>refresh((){productGroupId=v;categoryId=null;})),
+                    const SizedBox(height:12),
+                    DropdownButtonFormField<String?>(
+                      key:ValueKey('catalog-edit-product-category-$productGroupId'),
+                      initialValue:categoryId,isExpanded:true,
+                      decoration:const InputDecoration(labelText:'Danh mục sản phẩm'),
+                      items:[
+                        const DropdownMenuItem<String?>(value:null,child:Text('Chưa phân danh mục')),
+                        ...categories.where((c)=>c['groupId']==productGroupId&&
+                          (c['active']!=false||c['id']==categoryId)).map(
+                          (c)=>DropdownMenuItem<String?>(
+                            value:c['id'] as String,
+                            child:Text('${c['code']} · ${c['name']}'))),
+                      ],onChanged:(v)=>refresh(()=>categoryId=v)),
+                    const SizedBox(height:8),
+                    const Text('Mã hàng, ĐVT gốc, SKU và mã vạch đã phát sinh là định danh. '+
+                      'Thay đổi SKU/đơn vị qua tab SKU bán hàng và Đơn vị tính; ảnh qua nút ảnh sản phẩm.',
+                      style:TextStyle(color:ErpTokens.muted,fontSize:12)),
                   ],
                   if(resource=='customers')...[
                     const SizedBox(height:12),
@@ -1617,6 +1671,10 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
               },
               if(resource=='products'&&productGroupId!=oldProductGroupId)
                 'groupId':productGroupId,
+              if(resource=='products'&&categoryId!=oldCategoryId)
+                'categoryId':categoryId,
+              if(resource=='groups'&&brandId!=oldBrandId)'brandId':brandId,
+              if(resource=='categories'&&parentId!=oldParentId)'parentId':parentId,
               if(resource=='customers')...{
                 if(customerGroupId!=oldGroupId)'customerGroupId':customerGroupId,
                 if(customerRegionId!=oldRegionId)'customerRegionId':customerRegionId,
