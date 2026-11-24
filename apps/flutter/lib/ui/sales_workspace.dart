@@ -75,7 +75,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       if(!_sameScope(token,branch)||data==null)return;
       final kind=data['kind'],key=data['key'],body=data['body'];
       if(key is! String||key.isEmpty||body is! Map<String,dynamic>)throw const FormatException();
-      final actualBranch=kind=='update'?(body['body'] as Map?)?['branchId']:body['branchId'];
+      final nested=body['body'];
+      final actualBranch=kind=='update' ? (nested is Map ? nested['branchId'] : null) : body['branchId'];
       if(actualBranch!=branch)throw const FormatException();
       if(!{'create','update','confirm'}.contains(kind))throw const FormatException();
       setState((){
@@ -269,7 +270,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     final note=TextEditingController(text:order?['note'] as String? ?? '');
     final lines=<_OrderLine>[];
     var documentDiscountMode='NONE',documentDiscountValue='0',documentDiscountReason='',overrideReason='';
-    if(localDraft&&(!customers.any((x)=>x['id']==customer)||!lists.any((x)=>x['id']==list))){
+    if(localDraft&&((customer!=null&&!customers.any((x)=>x['id']==customer))||(list!=null&&!lists.any((x)=>x['id']==list)))){
       note.dispose();inform('Khách hàng hoặc bảng giá trong giỏ không còn khả dụng. Hãy kiểm tra danh mục.',error:true);return null;
     }
     if(order?['lines'] is List){
@@ -1965,6 +1966,19 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       if(source==null&&scope!=null){
         try{draft=await widget.client.localStore!.loadCart(scope);}catch(_){inform('Không đọc được giỏ trên máy.',error:true);return;}
         if(!_sameScope(token,scope.branch))return;
+        if(draft!=null){
+          if(!mounted)return;
+          final decision=await showDialog<String>(context:context,builder:(ctx)=>AlertDialog(
+            title:const Text('Giỏ hàng trên máy'),
+            content:const Text('Có đơn đang nhập được lưu trên máy. Tiếp tục nhập hoặc bỏ giỏ cũ? Chưa có chứng từ máy chủ.'),
+            actions:[TextButton(onPressed:()=>Navigator.pop(ctx,'discard'),child:const Text('Bỏ giỏ cũ')),
+              FilledButton(onPressed:()=>Navigator.pop(ctx,'resume'),child:const Text('Tiếp tục nhập'))]));
+          if(!_sameScope(token,scope.branch)||decision==null)return;
+          if(decision=='discard'){
+            try{await widget.client.localStore!.clearCart(scope);draft=null;}
+            catch(_){inform('Không xóa được giỏ trên máy.',error:true);return;}
+          }
+        }
       }
       final form=await editForm(order:source??draft,copying:source!=null,localDraft:draft!=null);if(form==null||!mounted||widget.session.token!=token)return;
       final auto=form.remove('_confirmAfterSave')==true;
@@ -1977,7 +1991,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   }
   Future<void> _resolveCreate()async{
     final body=pendingCreate,key=pendingCreateKey,scope=_localScope,token=widget.session.token;
-    if(saving||body==null||key==null)return;
+    if(saving||body==null||key==null||!can('orders.create'))return;
     setState(()=>saving=true);
     try{
       await _persistPending(scope,'create',key,body,auto:pendingCreateAutoConfirm);
@@ -2102,7 +2116,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   }
   Future<void> _resolvePendingUpdate()async{
     final cmd=pendingUpdate,key=pendingUpdateKey,scope=_localScope,token=widget.session.token;
-    if(cmd==null||key==null||saving)return;
+    if(cmd==null||key==null||saving||!can('orders.update'))return;
     final id=cmd['id'] as String,rev=cmd['revision'] as int;
     final body=Map<String,dynamic>.from(cmd['body'] as Map);
     final auto=cmd['auto']==true;

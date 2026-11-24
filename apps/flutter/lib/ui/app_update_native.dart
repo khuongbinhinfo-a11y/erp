@@ -74,7 +74,7 @@ class _UpdateDialogState extends State<_UpdateDialog>{
         throw const FormatException('Chữ ký bản mới không khớp. Không thể cài đặt.');
       }
       setState((){_installed=installed;_release=next!=null&&next.versionCode>(installed['versionCode'] as int)?next:null;
-        _message=_release==null?'Ứng dụng đã ở phiên bản mới nhất.':null;});
+        _message=next==null?'Chưa có bản cập nhật được phát hành.':_release==null?'Ứng dụng đã ở phiên bản mới nhất.':null;});
     }catch(e){if(mounted)setState(()=>_error=e is FormatException?e.message:'Không thể kiểm tra phiên bản. Hãy thử lại.');}
     finally{if(mounted)setState(()=>_busy=false);}
   }

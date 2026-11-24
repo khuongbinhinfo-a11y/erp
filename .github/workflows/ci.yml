@@ -45,6 +45,8 @@ jobs:
             echo 'Backup operator script must refuse without protected credentials' >&2
             exit 1
           fi
+      - name: Validate T2 release scripts (no credentials, no deployment)
+        run: python3 -m py_compile apps/flutter/platform/prepare_native.py apps/flutter/platform/prepare_pwa.py apps/flutter/platform/publish_android_release.py
       - name: Test canonical ERP login origins (browser entrypoint)
         run: node --test apps/flutter/test/web_origin_guard.test.mjs
       - name: Typecheck backend

@@ -15,3 +15,5 @@
 5. Báo cáo ngắn: task, SHA, PR, CI/Codex, merge/sync, migration/backend, Vercel, smoke/UAT, blocker thật. Không bịa PASS, không gọi CI xanh là UAT. Handoff ghi vào issue và đọc lại ở chat sau. Không tự merge khi gate chưa đạt, không tự migrate/deploy ngoài lệnh owner.
 
 Quy tắc trên thay thế hướng dẫn lịch sử direct-main và preview. Không thay thế bất biến an toàn dữ liệu trong Master Plan.
+
+- T2 release operator: xem [quy trình Android/PWA/offline](docs/T2_RELEASE_RUNBOOK.md). Workflow ký APK và workflow publish R2 tách riêng, môi trường được bảo vệ; không ghi nhận UAT/CI/owner approval giả. Không đặt latest trước khi tải lại và xác minh chính xác APK. Không đóng #46 khi chưa có bằng chứng máy thật.
