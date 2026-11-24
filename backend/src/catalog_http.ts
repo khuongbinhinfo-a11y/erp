@@ -346,6 +346,16 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
   return r.rows;
 }
 
+function listStackingMode(v:unknown):"EXCLUSIVE"|"STACKABLE"{
+ if(v===undefined)return "EXCLUSIVE";
+ if(v!=="EXCLUSIVE"&&v!=="STACKABLE")throw new CatalogError(400,"INVALID_PRICE_STACKING");
+ return v;
+}
+function listStopProcessing(v:unknown):boolean{
+ if(v===undefined)return false;
+ if(typeof v!=="boolean")throw new CatalogError(400,"INVALID_PRICE_STOP");
+ return v;
+}
 type PriceListScopeTargets={
  channelIds:string[];customerGroupIds:string[];customerIds:string[];
  defaultAssignment:boolean;
@@ -415,17 +425,19 @@ export function checkCreate(resource:Resource,raw:Record<string,unknown>){
   const name=requireName(raw.name,resource==="unit-definitions"?80:160);
   if(resource==="price-lists"){
     if(Object.keys(raw).some(k=>!["branchId","code","name","effectiveFrom",
-      "effectiveTo","priority",...PRICE_SCOPE_KEYS].includes(k)))
+      "effectiveTo","priority","stackingMode","stopProcessing",...PRICE_SCOPE_KEYS].includes(k)))
       throw new CatalogError(400,"UNKNOWN_FIELD");
     const scopes=priceScopes(raw);
-    const hasWindow=["effectiveFrom","effectiveTo","priority",...PRICE_SCOPE_KEYS]
+    const hasWindow=["effectiveFrom","effectiveTo","priority","stackingMode","stopProcessing",...PRICE_SCOPE_KEYS]
       .some(k=>Object.prototype.hasOwnProperty.call(raw,k));
     if(hasWindow){
       const effectiveFrom=raw.effectiveFrom==null?null:r1cDate(raw.effectiveFrom);
       const effectiveTo=raw.effectiveTo==null?null:r1cDate(raw.effectiveTo);
       const priority=r1cPriority(raw.priority??0);
       r1cRange(effectiveFrom,effectiveTo);
-      return {branchId,code,name,effectiveFrom,effectiveTo,priority,scopes};
+      return {branchId,code,name,effectiveFrom,effectiveTo,priority,scopes,
+        stackingMode:listStackingMode(raw.stackingMode),
+        stopProcessing:listStopProcessing(raw.stopProcessing)};
     }
     return {branchId,code,name};
   }
@@ -516,15 +528,22 @@ export async function executeCreate(db:PoolClient,context:MutationContext,
   if(resource==="price-lists"&&"effectiveFrom" in value){
     if(!await hasR1CPriceSchema(db))
       throw new CatalogError(503,"R1C_PRICE_LIST_MIGRATION_REQUIRED");
+    const p0=await hasP0PriceSchema(db);
+    if(!p0&&(value.stackingMode!=="EXCLUSIVE"||value.stopProcessing))
+      throw new CatalogError(503,"P0_PRICE_SCHEMA_REQUIRED");
     const r=await db.query<{id:string}>(`INSERT INTO catalog_price_list
-      (installation_id,branch_id,code,name,effective_from,effective_to,priority)
-      VALUES($1,$2,$3,$4,$5::timestamptz,$6::timestamptz,$7) RETURNING id`,
+      (installation_id,branch_id,code,name,effective_from,effective_to,priority
+       ${p0?",stacking_mode,stop_processing":""})
+      VALUES($1,$2,$3,$4,$5::timestamptz,$6::timestamptz,$7
+       ${p0?",$8,$9":""}) RETURNING id`,
       [installationId,branchId,value.code,value.name,
-        value.effectiveFrom,value.effectiveTo,value.priority]);
+        value.effectiveFrom,value.effectiveTo,value.priority,
+        ...(p0?[value.stackingMode,value.stopProcessing]:[])]);
     if(value.scopes)await syncPriceScopes(db,installationId,branchId,r.rows[0]!.id,value.scopes);
     return {status:201,body:{id:r.rows[0]!.id,code:value.code,
       name:value.name,revision:0,effectiveFrom:value.effectiveFrom,
-      effectiveTo:value.effectiveTo,priority:value.priority}};
+      effectiveTo:value.effectiveTo,priority:value.priority,
+      stackingMode:value.stackingMode,stopProcessing:value.stopProcessing}};
   }
   if(resource==="products"){
     if(!("baseUnit" in value))throw new CatalogError(400,"INVALID_PRODUCT");
@@ -633,7 +652,8 @@ export function parseEdit(resource:Editable,raw:Record<string,unknown>){
   const allow=new Set(["branchId","name","active",
     ...(resource==="customers"?["customerGroupId","customerRegionId","phone","deliveryAddress","paymentTermsDays"]:[]),
     ...(resource==="products"?["groupId"]:[]),
-    ...(resource==="price-lists"?["effectiveFrom","effectiveTo","priority",...PRICE_SCOPE_KEYS]:[])]);
+    ...(resource==="price-lists"?["effectiveFrom","effectiveTo","priority",
+      "stackingMode","stopProcessing",...PRICE_SCOPE_KEYS]:[])]);
   if(Object.keys(raw).some(key=>!allow.has(key)))throw new CatalogError(400,"UNKNOWN_FIELD");
   if(Object.prototype.hasOwnProperty.call(raw,"name"))
     columns.name=requireName(raw.name,resource==="unit-definitions"?80:160);
@@ -664,6 +684,10 @@ export function parseEdit(resource:Editable,raw:Record<string,unknown>){
       columns.effective_to=r1cDate(raw.effectiveTo);
     if(Object.prototype.hasOwnProperty.call(raw,"priority"))
       columns.priority=r1cPriority(raw.priority);
+    if(Object.prototype.hasOwnProperty.call(raw,"stackingMode"))
+      columns.stacking_mode=listStackingMode(raw.stackingMode);
+    if(Object.prototype.hasOwnProperty.call(raw,"stopProcessing"))
+      columns.stop_processing=listStopProcessing(raw.stopProcessing);
     if(columns.effective_from!==undefined&&columns.effective_to!==undefined)
       r1cRange(columns.effective_from as string|null,columns.effective_to as string|null);
   }
@@ -684,6 +708,10 @@ export async function applyEdit(db:PoolClient,context:MutationContext,
     Object.keys(value.columns).some(x=>["effective_from","effective_to","priority"].includes(x))&&
     !await hasR1CPriceSchema(db))
     throw new CatalogError(503,"R1C_PRICE_LIST_MIGRATION_REQUIRED");
+  if(resource==="price-lists"&&
+    Object.keys(value.columns).some(x=>["stacking_mode","stop_processing"].includes(x))&&
+    !await hasP0PriceSchema(db))
+    throw new CatalogError(503,"P0_PRICE_SCHEMA_REQUIRED");
   const table=editTables[resource];
   const row=await db.query<{revision:string}>(
     `SELECT revision::text FROM ${table} WHERE installation_id=$1
