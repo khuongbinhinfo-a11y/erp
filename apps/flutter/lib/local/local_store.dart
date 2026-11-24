@@ -276,6 +276,71 @@ class ErpLocalStore {
     }
     throw const LocalRecoveryConflict();
   }
+  /// CAS-only reconciliation claim. A never-confirmed command cannot be rebased.
+  /// An abandoned editor becomes reclaimable after ten minutes, but its old
+  /// claim token can never replace the newly claimed record.
+  Future<void> claimRejectedSalesUpdate(LocalScope scope,String orderId,String key,String owner,
+      {DateTime? now})async{
+    if(driver is! AtomicLocalDriver||key.isEmpty||owner.isEmpty)throw const LocalRecoveryConflict();
+    final path=_key(scope,'unsent-update',orderId);
+    final at=(now??DateTime.now()).toUtc().millisecondsSinceEpoch;
+    for(var attempt=0;attempt<24;attempt++){
+      final old=await driver.read(path);
+      if(old==null)throw const LocalRecoveryConflict();
+      late List<Map<String,dynamic>> items;
+      try{items=(jsonDecode(old) as List).map((x)=>Map<String,dynamic>.from(x as Map)).toList();}
+      catch(_){throw const LocalRecoveryConflict();}
+      final found=items.where((x)=>x['key']==key).toList();
+      if(found.length!=1)throw const LocalRecoveryConflict();
+      final entry=found.single;
+      final abandoned=entry['status']=='reconciling'&&entry['claimUntil'] is int&&
+          (entry['claimUntil'] as int)<=at;
+      if(entry['status']!='rejected'&&!abandoned)throw const LocalRecoveryConflict();
+      entry['status']='reconciling';entry['claimOwner']=owner;
+      entry['claimUntil']=at+const Duration(minutes:10).inMilliseconds;
+      if(await (driver as AtomicLocalDriver).compareAndSwap(path,old,jsonEncode(items)))return;
+    }
+    throw const LocalRecoveryConflict();
+  }
+  Future<void> releaseRejectedSalesClaim(LocalScope scope,String orderId,String key,String owner)async{
+    if(driver is! AtomicLocalDriver||owner.isEmpty)throw const LocalRecoveryConflict();
+    final path=_key(scope,'unsent-update',orderId);
+    for(var attempt=0;attempt<24;attempt++){
+      final old=await driver.read(path);
+      if(old==null)throw const LocalRecoveryConflict();
+      late List<Map<String,dynamic>> items;
+      try{items=(jsonDecode(old) as List).map((x)=>Map<String,dynamic>.from(x as Map)).toList();}
+      catch(_){throw const LocalRecoveryConflict();}
+      final matches=items.where((x)=>x['key']==key).toList();
+      if(matches.length!=1||matches.single['status']!='reconciling'||
+        matches.single['claimOwner']!=owner)throw const LocalRecoveryConflict();
+      matches.single['status']='rejected';
+      matches.single.remove('claimOwner');matches.single.remove('claimUntil');
+      if(await (driver as AtomicLocalDriver).compareAndSwap(path,old,jsonEncode(items)))return;
+    }
+    throw const LocalRecoveryConflict();
+  }
+  Future<void> replaceReconciledSalesUpdate(LocalScope scope,String orderId,
+      String oldKey,String claimOwner,String newKey,Map<String,dynamic> command)async{
+    if(driver is! AtomicLocalDriver||oldKey==newKey||claimOwner.isEmpty||newKey.isEmpty||
+      command['id']!=orderId)throw const LocalRecoveryConflict();
+    final path=_key(scope,'unsent-update',orderId);
+    for(var attempt=0;attempt<24;attempt++){
+      final old=await driver.read(path);
+      if(old==null)throw const LocalRecoveryConflict();
+      late List<Map<String,dynamic>> items;
+      try{items=(jsonDecode(old) as List).map((x)=>Map<String,dynamic>.from(x as Map)).toList();}
+      catch(_){throw const LocalRecoveryConflict();}
+      final match=items.where((x)=>x['key']==oldKey).toList();
+      if(match.length!=1||match.single['status']!='reconciling'||
+        match.single['claimOwner']!=claimOwner||
+        items.any((x)=>x['key']==newKey))throw const LocalRecoveryConflict();
+      items.removeWhere((x)=>x['key']==oldKey);
+      items.add({'key':newKey,'command':command,'status':'unsent'});
+      if(await (driver as AtomicLocalDriver).compareAndSwap(path,old,jsonEncode(items)))return;
+    }
+    throw const LocalRecoveryConflict();
+  }
   Future<void> clearUnsentSalesUpdate(LocalScope scope,String orderId,String key,{String? requiredStatus})async{
     if(driver is! AtomicLocalDriver||key.isEmpty)throw const LocalRecoveryConflict();
     final location=_key(scope,'unsent-update',orderId);
