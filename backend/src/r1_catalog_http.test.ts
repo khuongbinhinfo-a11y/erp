@@ -155,6 +155,24 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
   const found=await read("skus","BC-0001");
   assert.equal(found.body.items.length,1);
   assert.equal(found.body.items[0].code,"SP-01-T");
+  // T1: exact product filter precedes the LIMIT, while the cursor stays
+  // stable for products with many selling units.
+  const exact=await request("/v1/catalog/r1/skus?branchId="+b+
+    "&productId="+product.body.id,"GET",undefined,token);
+  assert.equal(exact.status,200,JSON.stringify(exact.body));
+  assert.deepEqual(new Set(exact.body.items.map((x:{id:string})=>x.id)),
+    new Set([baseSku,skuId]));
+  const sorted=[baseSku,skuId].sort();
+  const later=await request("/v1/catalog/r1/skus?branchId="+b+
+    "&productId="+product.body.id+"&after="+sorted[0],"GET",undefined,token);
+  assert.equal(later.status,200);
+  assert.deepEqual(later.body.items.map((x:{id:string})=>x.id),[sorted[1]]);
+  const foreign=await request("/v1/catalog/r1/skus?branchId="+b+
+    "&productId="+randomUUID(),"GET",undefined,token);
+  assert.equal(foreign.status,200);
+  assert.equal(foreign.body.items.length,0);
+  assert.equal((await request("/v1/catalog/r1/skus?branchId="+b+
+    "&productId=invalid","GET",undefined,token)).status,400);
   const list=await legacy("price-lists",{code:"SELL",name:"Giá bán"});
   assert.equal(list.status,201);
   const channel=await r1("channels",{code:"MCP",name:"Kênh nhân viên thị trường"});
