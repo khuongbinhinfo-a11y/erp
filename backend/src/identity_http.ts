@@ -126,7 +126,7 @@ export async function handleIdentityHttp(
              AND s.revoked_at IS NULL AND s.expires_at>now() AND u.disabled=false`,
           [tenant,actor.actorId,createHash('sha256').update(token!).digest('hex')]);
         if(!identity.rows[0]){fail(res,401,"AUTH_DENIED",id,corsOrigin);return;}
-        send(res,200,{actorId:actor.actorId,loginName:identity.rows[0].loginName,
+        send(res,200,{actorId:actor.actorId,installationId:tenant,loginName:identity.rows[0].loginName,
           expiresAt:identity.rows[0].expiresAt.toISOString(),grants:permissions,requestId:id},id,corsOrigin);
       }finally{db.release();}
       return;

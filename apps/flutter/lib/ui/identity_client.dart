@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
+import 'package:crypto/crypto.dart';
+import '../local/local_store.dart';
 
 const erpApiOrigin = String.fromEnvironment('ERP_API_BASE_URL', defaultValue: '');
 
@@ -22,11 +24,11 @@ class IdentityGrant {
     branchId:m['branchId'] as String?,warehouseId:m['warehouseId'] as String?);
 }
 class IdentitySession {
-  final String actorId,token,loginName;
+  final String actorId,token,loginName,installationId;
   final DateTime expiresAt;
   final List<IdentityGrant> grants;
   const IdentitySession({required this.actorId,required this.token,
-    this.loginName='',required this.expiresAt,required this.grants});
+    this.loginName='',this.installationId='',required this.expiresAt,required this.grants});
 }
 class IdentityUser {
   final String id,loginName;
@@ -52,6 +54,7 @@ class IdentityScopes {
 class ErpIdentityClient {
   final String apiOrigin;
   final http.Client _http;
+  final ErpLocalStore? localStore;
   int _sequence=0;
   // One unresolved R1 command per actor/branch/resource is retained in the
   // authenticated client across workspace navigation; never store auth tokens.
@@ -83,7 +86,7 @@ class ErpIdentityClient {
   void clearR1(String actorId,String branchId,String kind){
     _r1Pending.remove(_r1PendingId(actorId,branchId,kind));
   }
-  ErpIdentityClient({this.apiOrigin=erpApiOrigin,http.Client? httpClient}):_http=httpClient??http.Client();
+  ErpIdentityClient({this.apiOrigin=erpApiOrigin,http.Client? httpClient,this.localStore}):_http=httpClient??http.Client();
   bool get configured=>Uri.tryParse(apiOrigin)?.scheme=='https'&&
     Uri.tryParse(apiOrigin)?.host.isNotEmpty==true;
   void dispose(){_r1Pending.clear();_mediaPending.clear();_inventoryPending.clear();_purchasePending.clear();_transferPending.clear();_stocktakePending.clear();_http.close();}
@@ -183,7 +186,7 @@ class ErpIdentityClient {
       // login of the SAME actor may replay the exact idempotency key/body.
       // Never carry another account's pending catalog data across a switch.
       _r1Pending.removeWhere((scope,_)=>!scope.startsWith('$actor|'));
-      return IdentitySession(actorId:actor,token:token,
+      return IdentitySession(actorId:actor,token:token,installationId:r['installationId'] as String? ?? '',
         loginName:r['loginName'] as String? ?? username,
         expiresAt:DateTime.parse(r['expiresAt'] as String? ?? raw['expiresAt'] as String),
         grants:(r['grants'] as List<dynamic>).map((v)=>IdentityGrant.fromJson(v as Map<String,dynamic>)).toList());
@@ -195,7 +198,7 @@ class ErpIdentityClient {
   }
   Future<IdentitySession> restore(String token)async{
     final r=await _request('GET','/v1/auth/session',token:token);
-    return IdentitySession(actorId:r['actorId'] as String,token:token,
+    return IdentitySession(actorId:r['actorId'] as String,token:token,installationId:r['installationId'] as String? ?? '',
       loginName:r['loginName'] as String? ?? '',
       expiresAt:DateTime.parse(r['expiresAt'] as String),
       grants:(r['grants'] as List<dynamic>).map((v)=>
@@ -231,6 +234,61 @@ class ErpIdentityClient {
   Future<List<IdentityGrant>> grants(String token,String userId)async{
     final r=await _request('GET','/v1/admin/users/$userId/grants',token:token);
     return (r['grants'] as List<dynamic>).map((v)=>IdentityGrant.fromJson(v as Map<String,dynamic>)).toList();
+  }
+  LocalScope? localScope(IdentitySession session,String branch,{String warehouse=''}) {
+    if(localStore==null||!configured||session.installationId.isEmpty||
+      !session.expiresAt.isAfter(DateTime.now()))return null;
+    if(branch!='*'&&!session.grants.any((g)=>g.branchId==branch))return null;
+    if(warehouse.isNotEmpty&&!session.grants.any((g)=>g.branchId==branch&&g.warehouseId==warehouse))return null;
+    return LocalScope(origin:Uri.parse(apiOrigin).origin,installation:session.installationId,
+      actor:session.actorId,branch:branch,warehouse:warehouse);
+  }
+  String _grantStamp(IdentitySession session){
+    final grants=session.grants.map((g)=>jsonEncode([g.roleId,g.permission,g.branchId,g.warehouseId])).toList()..sort();
+    return sha256.convert(utf8.encode(jsonEncode(grants))).toString();
+  }
+  /// Only the order editor may use cached catalog snapshots. Never use them
+  /// as a current price quote or authorization to submit a document.
+  Future<({List<Map<String,dynamic>> items,bool cached})> salesCatalog(IdentitySession session,String resource,{
+    String? branchId,String query='',String? itemId})async{
+    final scope=localScope(session,branchId??'*');
+    final key=jsonEncode([_grantStamp(session),resource,query.trim(),itemId]);
+    try{
+      final items=await catalogItems(session.token,resource,branchId:branchId,query:query,itemId:itemId);
+      if(scope!=null){
+        try{await localStore!.saveCache(scope,key,items,fetchedAt:DateTime.now(),ttl:const Duration(hours:12));}catch(_){}
+      }
+      return (items:items,cached:false);
+    }on ErpApiError catch(e){
+      if(scope==null||!{0,503,504}.contains(e.status))rethrow;
+      try{
+        final entry=await localStore!.cache(scope,key,now:DateTime.now());
+        if(entry!=null&&!entry.stale&&entry.value is List){
+          return (items:(entry.value as List).map((x)=>Map<String,dynamic>.from(x as Map)).toList(),cached:true);
+        }
+      }catch(_){}
+      rethrow;
+    }
+  }
+  Future<({Map<String,dynamic> settings,bool cached})> localSalesEntrySettings(IdentitySession session,String branch)async{
+    final scope=localScope(session,branch);
+    final key='sales-settings-'+_grantStamp(session);
+    try{
+      final settings=await salesEntrySettings(session.token,branch);
+      if(scope!=null){
+        try{await localStore!.saveCache(scope,key,settings,fetchedAt:DateTime.now(),ttl:const Duration(hours:12));}catch(_){}
+      }
+      return (settings:settings,cached:false);
+    }on ErpApiError catch(e){
+      if(scope==null||!{0,503,504}.contains(e.status))rethrow;
+      try{
+        final entry=await localStore!.cache(scope,key,now:DateTime.now());
+        if(entry!=null&&!entry.stale&&entry.value is Map){
+          return (settings:Map<String,dynamic>.from(entry.value as Map),cached:true);
+        }
+      }catch(_){}
+      rethrow;
+    }
   }
   /// Catalog calls always use the authenticated installation and server-side RBAC.
   Future<List<Map<String,dynamic>>> catalogItems(String token,String resource,{

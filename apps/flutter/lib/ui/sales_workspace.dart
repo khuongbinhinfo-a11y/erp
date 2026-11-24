@@ -9,6 +9,7 @@ import 'erp_display.dart';
 import 'erp_number_input.dart';
 import 'erp_toast.dart';
 import 'identity_client.dart';
+import '../local/local_store.dart';
 
 class SalesWorkspace extends StatefulWidget {
   final ErpIdentityClient client;
@@ -47,9 +48,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   // A lost response must be replayed with exactly the same request, never a new form.
   Map<String,dynamic>? pendingCreate,pendingConfirm,pendingUpdate;
   String? pendingCreateKey,pendingConfirmKey,pendingUpdateKey;
-  bool pendingCreateAutoConfirm=false;
+  bool pendingCreateAutoConfirm=false,localRecoveryBusy=false;
+  LocalScope? get _localScope=>branchId==null?null:widget.client.localScope(widget.session,branchId!);
+  bool get _localConfigured=>widget.client.localStore!=null&&widget.session.installationId.isNotEmpty;
   bool _lastNavigationLock=false;
-  bool get _navigationLocked=>saving||pendingCreate!=null||
+  bool get _navigationLocked=>saving||localRecoveryBusy||pendingCreate!=null||
     pendingUpdate!=null||pendingConfirm!=null;
   @override void setState(VoidCallback fn){
     super.setState(fn);
@@ -60,6 +63,35 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         if(mounted)widget.onNavigationLockChanged?.call(locked);
       });
     }
+  }
+  bool _sameScope(String token,String branch)=>mounted&&widget.session.token==token&&branchId==branch;
+  Future<void> _restorePending()async{
+    final scope=_localScope,store=widget.client.localStore;
+    if(scope==null||store==null)return;
+    final token=widget.session.token,branch=scope.branch;
+    setState(()=>localRecoveryBusy=true);
+    try{
+      final data=await store.salesRecovery(scope);
+      if(!_sameScope(token,branch)||data==null)return;
+      final kind=data['kind'],key=data['key'],body=data['body'];
+      if(key is! String||key.isEmpty||body is! Map<String,dynamic>)throw const FormatException();
+      final actualBranch=kind=='update'?(body['body'] as Map?)?['branchId']:body['branchId'];
+      if(actualBranch!=branch)throw const FormatException();
+      if(!{'create','update','confirm'}.contains(kind))throw const FormatException();
+      setState((){
+        if(kind=='create'){pendingCreate=body;pendingCreateKey=key;pendingCreateAutoConfirm=data['auto']==true;}
+        if(kind=='update'){pendingUpdate=body;pendingUpdateKey=key;}
+        if(kind=='confirm'){pendingConfirm=body;pendingConfirmKey=key;}
+      });
+      inform('Có yêu cầu bán hàng chưa được đối chiếu. Hãy kiểm tra lại khi có kết nối.');
+    }catch(_){
+      if(_sameScope(token,branch))inform('Không đọc được dữ liệu chờ trên máy. Không tự gửi lại.',error:true);
+    }finally{if(_sameScope(token,branch))setState(()=>localRecoveryBusy=false);}
+  }
+  Future<void> _persistPending(LocalScope? scope,String? kind,String? key,Map<String,dynamic>? body,{bool auto=false})async{
+    if(!_localConfigured)return;
+    if(scope==null)throw StateError('Thiếu phạm vi lưu yêu cầu');
+    await widget.client.localStore!.saveSalesRecovery(scope,kind==null?null:{'kind':kind,'key':key,'body':body,'auto':auto});
   }
   String newKey()=>'sales-'+DateTime.now().microsecondsSinceEpoch.toString()+'-'+(++sequence).toString();
   bool can(String permission)=>widget.session.grants.any(
@@ -80,7 +112,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       generation++;branches=[];orders=[];branchId=null;retryKeys.clear();
       pendingCreate=null;pendingCreateKey=null;pendingConfirm=null;
       pendingConfirmKey=null;pendingUpdate=null;pendingUpdateKey=null;
-      pendingCreateAutoConfirm=false;loadBranches();
+      pendingCreateAutoConfirm=false;localRecoveryBusy=false;loadBranches();
     }
   }
   @override void dispose(){generation++;search.dispose();super.dispose();}
@@ -88,7 +120,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     final id=++generation;
     setState((){loading=true;error=null;});
     try{
-      final values=await widget.client.catalogItems(widget.session.token,'branches');
+      final result=await widget.client.salesCatalog(widget.session,'branches');
+      final values=result.items;
+      if(result.cached)inform('Đang dùng danh mục chi nhánh lưu trên máy; dữ liệu có thể cũ.');
       if(!mounted||generation!=id)return;
       final permitted=values.where((x)=>widget.session.grants.any((g)=>
         g.branchId==x['id']&&g.permission.startsWith('orders.'))).toList();
@@ -98,7 +132,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       });
       if(branchId==null){
         setState((){error='Tài khoản chưa có quyền xem đơn hàng.';loading=false;});
-      }else{await reload();}
+      }else{await _restorePending();await reload();}
     }on ErpApiError catch(e){
       if(mounted&&generation==id)setState((){loading=false;error=e.message;});
     }catch(_){
@@ -122,15 +156,22 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       });
     }
   }
-  Future<Map<String,dynamic>?> editForm({Map<String,dynamic>? order,bool copying=false})async{
+  Future<Map<String,dynamic>?> editForm({Map<String,dynamic>? order,bool copying=false,bool localDraft=false})async{
     final branch=branchId;if(branch==null)return null;
+    final formScope=_localScope,formToken=widget.session.token;
+    bool cachedCatalog=false;
+    Future<List<Map<String,dynamic>>> catalog(String resource,{String? query})async{
+      final value=await widget.client.salesCatalog(widget.session,resource,branchId:branch,query:query??'');
+      if(value.cached)cachedCatalog=true;
+      return value.items;
+    }
     List<Map<String,dynamic>> customers,skus,lists,channels;
     try{
       final items=await Future.wait([
-        widget.client.catalogItems(widget.session.token,'customers',branchId:branch),
-        widget.client.catalogItems(widget.session.token,'r1/skus',branchId:branch),
-        widget.client.catalogItems(widget.session.token,'price-lists',branchId:branch),
-        widget.client.catalogItems(widget.session.token,'r1/channels',branchId:branch),
+        catalog('customers'),
+        catalog('r1/skus'),
+        catalog('price-lists'),
+        catalog('r1/channels'),
       ]);
       customers=items[0].where((x)=>x['active']==true).toList();
       skus=items[1].where((x)=>x['active']==true).toList();
@@ -140,7 +181,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     catch(_){inform('Không tải được danh mục bán hàng.',error:true);return null;}
     Map<String,dynamic>? entrySettings;
     try{
-      entrySettings=await widget.client.salesEntrySettings(widget.session.token,branch);
+      final result=await widget.client.localSalesEntrySettings(widget.session,branch);
+      entrySettings=result.settings;if(result.cached)cachedCatalog=true;
     }on ErpApiError catch(e){
       if(e.status!=404&&e.status!=405){inform(e.message,error:true);return null;}
     }catch(_){inform('Không tải được thiết lập lập đơn.',error:true);return null;}
@@ -184,13 +226,13 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     List<Map<String,dynamic>> stockWarehouses=[];
     if(can('inventory.read')){
       try{
-        stockWarehouses=await widget.client.catalogItems(
-          widget.session.token,'warehouses',branchId:branch);
+        stockWarehouses=await catalog('warehouses');
       }catch(_){
         // An unavailable inventory service does not block order drafting.
       }
     }
-    if(!mounted)return null;
+    if(!_sameScope(formToken,branch))return null;
+    if(cachedCatalog)inform('Danh mục trên máy có thể cũ. Chỉ máy chủ mới xác nhận giá và đơn hàng.');
     if(modern&&stockWarehouses.isEmpty){
       inform('Tài khoản chưa có quyền kho xuất hàng.',error:true);return null;
     }
@@ -237,8 +279,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         if(matching.length!=1){
           // The initial page contains only 100 SKUs. Resolve a historical
           // line by its exact persisted SKU instead of silently replacing it.
-          final found=await widget.client.catalogItems(widget.session.token,
-            'r1/skus',branchId:branch,query:(row['sku']??'').toString());
+          final found=await catalog('r1/skus',query:(row['sku']??'').toString());
           matching=found.where((x)=>priorSku!=null
             ? x['id']==priorSku
             : x['productId']==legacyProduct&&x['isBase']==true&&
@@ -891,6 +932,41 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       }
     }
     String totalQuoted()=>previewGrandTotal??'0';
+    bool draftSaving=false;
+    Future<void> saveLocalDraft(BuildContext ctx,StateSetter refresh)async{
+      if(formScope==null||draftSaving||!_sameScope(formToken,branch))return;
+      if(quickCustomerBusy||walkInBusy||pendingQuickCustomer!=null){
+        refresh(()=>formError='Hãy đối chiếu yêu cầu tạo khách trước khi lưu trên máy.');return;
+      }
+      refresh(()=>draftSaving=true);
+      try{
+        final body=<String,dynamic>{
+          'customerId':customer,'priceListId':list,'channelId':channel,'note':note.text,
+          'shipping':{'warehouseId':warehouseId,'deliveryChoice':deliveryChoice,
+            'collectionPolicy':collectionPolicy,'customerMode':customerMode,'customerLocationId':locationId,
+            'deliveryAddress':deliveryAddress,'requestedDeliveryDate':deliveryDate,
+            'walkInName':walkInName,'walkInPhone':walkInPhone},
+          'lines':lines.map((line){
+            final sku=skus.where((x)=>x['id']==line.sellSkuId).firstOrNull;
+            return <String,dynamic>{'sellSkuId':line.sellSkuId,'sku':sku?['sku'],
+              'quantity':erpNumberCanonical(line.quantity.text),
+              'unitPrice':erpNumberCanonical(line.unitPrice.text),
+              'discountRate':erpNumberCanonical(line.discountRate.text),'taxRate':erpNumberCanonical(line.taxRate.text),
+              'priceSnapshot':{'manualOverride':adjusted(line),'manualPriceOverride':line.unitPrice.text.isNotEmpty,
+                'discountMode':line.discountMode,'taxMode':line.taxMode,'discountOverride':line.discountEdited,
+                'taxOverride':line.taxEdited,'discountValue':erpNumberCanonical(line.discountRate.text),
+                'overrideReason':overrideReason.trim().isNotEmpty?overrideReason:line.overrideReason,
+                if(documentDiscountActive())'documentDiscount':documentDiscount()}};
+          }).toList(),
+        };
+        await widget.client.localStore!.saveCart(formScope,body);
+        if(ctx.mounted&&_sameScope(formToken,branch)){
+          inform('Đã lưu giỏ trên máy; chưa tạo đơn, chưa xuất kho.');
+          Navigator.pop(ctx);
+        }
+      }catch(_){if(ctx.mounted)refresh(()=>formError='Không lưu được giỏ trên máy. Hãy giữ màn hình và thử lại.');}
+      finally{if(ctx.mounted)refresh(()=>draftSaving=false);}
+    }
     void submitForm(BuildContext ctx,StateSetter refresh,{required bool confirm}){
       if(customer==null||list==null||!validLines()){
         refresh(()=>formError='Kiểm tra khách hàng, SKU và số lượng từng dòng.');
@@ -1021,7 +1097,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                     const Icon(Icons.receipt_long_outlined,color:Colors.white),
                     const SizedBox(width:10),
                     Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-                      Text(order==null||copying?'Lập đơn bán hàng':'Điều chỉnh đơn bán hàng',
+                      Text(order==null||copying||localDraft?'Lập đơn bán hàng':'Điều chỉnh đơn bán hàng',
                         style:TextStyle(color:Colors.white,fontSize:narrow?16:21,
                           fontWeight:FontWeight.w800)),
                     ])),
@@ -1032,6 +1108,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                 Expanded(child:SingleChildScrollView(
                   padding:EdgeInsets.all(narrow?10:14),
                   child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+                    if(cachedCatalog)const Text('Danh mục lưu trên máy có thể cũ. Phải tra giá máy chủ trước khi lưu đơn.',style:TextStyle(color:ErpTokens.warning)),
                     Wrap(
                       key:const ValueKey('sales-order-context'),
                       spacing:12,runSpacing:12,children:[
@@ -1834,6 +1911,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           fontWeight:FontWeight.w800)),
                       Wrap(spacing:8,runSpacing:7,children:[
                         TextButton(onPressed:()=>requestClose(ctx),child:const Text('Đóng')),
+                        if(formScope!=null&&(order==null||copying||localDraft))OutlinedButton.icon(
+                          key:const ValueKey('sales-save-local'),onPressed:draftSaving?null:()=>saveLocalDraft(ctx,refresh),
+                          icon:const Icon(Icons.save_outlined),label:const Text('Lưu trên máy')),
                         OutlinedButton.icon(
                           key:const ValueKey('sales-quote'),
                           onPressed:quoteBusy?null:()=>preview(ctx,refresh),
@@ -1869,10 +1949,16 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     }
   }
   Future<void> createOrder({Map<String,dynamic>? source})async{
-    if(saving||pendingConfirm!=null||pendingUpdate!=null||
+    if(saving||localRecoveryBusy||pendingConfirm!=null||pendingUpdate!=null||
       !can('orders.create'))return;
     if(pendingCreate==null){
-      final form=await editForm(order:source,copying:source!=null);if(form==null||!mounted)return;
+      Map<String,dynamic>? draft;
+      final scope=_localScope,token=widget.session.token;
+      if(source==null&&scope!=null){
+        try{draft=await widget.client.localStore!.loadCart(scope);}catch(_){inform('Không đọc được giỏ trên máy.',error:true);return;}
+        if(!_sameScope(token,scope.branch))return;
+      }
+      final form=await editForm(order:source??draft,copying:source!=null,localDraft:draft!=null);if(form==null||!mounted)return;
       final auto=form.remove('_confirmAfterSave')==true;
       setState((){
         pendingCreate=Map<String,dynamic>.from(form);
@@ -1882,20 +1968,25 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     await _resolveCreate();
   }
   Future<void> _resolveCreate()async{
-    final body=pendingCreate,key=pendingCreateKey;
+    final body=pendingCreate,key=pendingCreateKey,scope=_localScope,token=widget.session.token;
     if(saving||body==null||key==null)return;
     setState(()=>saving=true);
     try{
+      await _persistPending(scope,'create',key,body,auto:pendingCreateAutoConfirm);
       // This exact body+key also recovers a lost acknowledgment after COMMIT.
-      final created=await widget.client.createSalesOrder(widget.session.token,body,key:key);
-      if(!mounted)return;
+      final created=await widget.client.createSalesOrder(token,body,key:key);
+      if(!_sameScope(token,body['branchId'] as String))return;
       final auto=pendingCreateAutoConfirm;
+      final next=auto?<String,dynamic>{'id':created['id'],'branchId':body['branchId'],'revision':created['revision']}:null;
+      final nextKey=auto?newKey():null;
+      if(scope!=null)await widget.client.localStore!.clearCart(scope);
+      await _persistPending(scope,auto?'confirm':null,nextKey,next);
+      if(!_sameScope(token,body['branchId'] as String))return;
       setState((){
         pendingCreate=null;pendingCreateKey=null;pendingCreateAutoConfirm=false;
         if(auto){
-          pendingConfirm={'id':created['id'],'branchId':body['branchId'],
-            'revision':created['revision']};
-          pendingConfirmKey=newKey();
+          pendingConfirm=next;
+          pendingConfirmKey=nextKey;
         }
       });
       if(!auto)inform('Đã lưu đơn hàng.');
@@ -1912,7 +2003,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         e.code=='SKU_HAS_NO_EFFECTIVE_BASE_PRICE'||
         e.code=='PRICE_LIST_UNAVAILABLE'||e.code=='CHANNEL_UNAVAILABLE'||
         e.code=='CUSTOMER_UNAVAILABLE'||e.code=='INVALID_LINE_IDENTITY';
-      if(rejected&&mounted){
+      if(rejected&&_sameScope(token,body['branchId'] as String)){
+        try{await _persistPending(scope,null,null,null);}catch(_){inform('Chưa xóa được yêu cầu đã từ chối trên máy.',error:true);return;}
+        if(!_sameScope(token,body['branchId'] as String))return;
         setState((){
           pendingCreate=null;pendingCreateKey=null;pendingCreateAutoConfirm=false;
         });
@@ -1930,12 +2023,13 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     if(mounted&&pendingConfirm!=null)await _resolveSavedConfirm();
   }
   Future<void> _resolveSavedConfirm()async{
-    final cmd=pendingConfirm,key=pendingConfirmKey;
+    final cmd=pendingConfirm,key=pendingConfirmKey,scope=_localScope,token=widget.session.token;
     if(cmd==null||key==null||saving)return;
     final id=cmd['id'] as String,branch=cmd['branchId'] as String,
       revision=cmd['revision'] as int;
     setState(()=>saving=true);
     try{
+      await _persistPending(scope,'confirm',key,cmd);
       // Lost confirmation ACK: check canonical server state before retrying.
       // Orders may be created and confirmed without the separate orders.read
       // grant. Use read-before-retry only when this actor is allowed to read;
@@ -1946,7 +2040,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       }
       if(existing?['versionStatus']=='CONFIRMED'&&
           existing?['revision'] is int&&(existing!['revision'] as int)>revision){
-        if(mounted)setState((){pendingConfirm=null;pendingConfirmKey=null;});
+        if(!_sameScope(token,branch))return;
+        await _persistPending(scope,null,null,null);
+        if(_sameScope(token,branch))setState((){pendingConfirm=null;pendingConfirmKey=null;});
         inform('Đơn hàng đã được máy chủ xác nhận.');
       }else{
         await widget.client.salesOrderAction(widget.session.token,id,'confirm',
@@ -1960,7 +2056,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           'VERSION_ALREADY_CONFIRMED','CUSTOMER_OR_PRICE_LIST_UNAVAILABLE',
           'CHANNEL_UNAVAILABLE','PRICE_LIST_UNAVAILABLE','CUSTOMER_UNAVAILABLE',
           'SKU_UNAVAILABLE','SKU_HAS_NO_EFFECTIVE_BASE_PRICE',
-          'INVALID_REFERENCE'}.contains(e.code)&&mounted){
+          'INVALID_REFERENCE'}.contains(e.code)&&_sameScope(token,branch)){
+        try{await _persistPending(scope,null,null,null);}catch(_){inform('Chưa xóa được yêu cầu đã từ chối trên máy.',error:true);return;}
+        if(!_sameScope(token,branch))return;
         setState((){pendingConfirm=null;pendingConfirmKey=null;});
         inform('Không thể xác nhận do đơn hoặc giá đã thay đổi. Đơn vẫn được lưu; hãy kiểm tra và cập nhật lại.',
           error:true);
@@ -1991,22 +2089,26 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     await _resolvePendingUpdate();
   }
   Future<void> _resolvePendingUpdate()async{
-    final cmd=pendingUpdate,key=pendingUpdateKey;
+    final cmd=pendingUpdate,key=pendingUpdateKey,scope=_localScope,token=widget.session.token;
     if(cmd==null||key==null||saving)return;
     final id=cmd['id'] as String,rev=cmd['revision'] as int;
     final body=Map<String,dynamic>.from(cmd['body'] as Map);
     final auto=cmd['auto']==true;
     setState(()=>saving=true);
     try{
+      await _persistPending(scope,'update',key,cmd);
       // Replays the exact original body+key after a lost COMMIT acknowledgment.
-      final updated=await widget.client.updateSalesOrder(widget.session.token,id,rev,body,key:key);
-      if(!mounted)return;
+      final updated=await widget.client.updateSalesOrder(token,id,rev,body,key:key);
+      if(!_sameScope(token,body['branchId'] as String))return;
+      final next=auto?<String,dynamic>{'id':id,'branchId':body['branchId'],'revision':updated['revision']}:null;
+      final nextKey=auto?newKey():null;
+      await _persistPending(scope,auto?'confirm':null,nextKey,next);
+      if(!_sameScope(token,body['branchId'] as String))return;
       setState((){
         pendingUpdate=null;pendingUpdateKey=null;
         if(auto){
-          pendingConfirm={'id':id,'branchId':body['branchId'],
-            'revision':updated['revision']};
-          pendingConfirmKey=newKey();
+          pendingConfirm=next;
+          pendingConfirmKey=nextKey;
         }
       });
       if(!auto)inform('Đã cập nhật đơn hàng.');
@@ -2018,7 +2120,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         'CUSTOMER_OR_PRICE_LIST_UNAVAILABLE','INVALID_REFERENCE',
         'CHANNEL_UNAVAILABLE','PRICE_LIST_UNAVAILABLE','CUSTOMER_UNAVAILABLE',
         'SKU_HAS_NO_EFFECTIVE_BASE_PRICE'}.contains(e.code);
-      if(rejected&&mounted){
+      if(rejected&&_sameScope(token,body['branchId'] as String)){
+        try{await _persistPending(scope,null,null,null);}catch(_){inform('Chưa xóa được yêu cầu đã từ chối trên máy.',error:true);return;}
+        if(!_sameScope(token,body['branchId'] as String))return;
         setState((){pendingUpdate=null;pendingUpdateKey=null;});
         inform('Không thể cập nhật vì dữ liệu hoặc giá đã thay đổi. Hãy mở lại đơn và tra giá.',
           error:true);
@@ -2299,7 +2403,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
               style:TextStyle(color:ErpTokens.ink,fontSize:18,fontWeight:FontWeight.w800)),
             FilledButton.icon(
               key:const ValueKey('sales-create'),
-              onPressed:saving?null:pendingConfirm!=null?_resolveSavedConfirm:
+              onPressed:saving||localRecoveryBusy?null:pendingConfirm!=null?_resolveSavedConfirm:
                 pendingUpdate!=null?_resolvePendingUpdate:
                 !can('orders.create')?null:createOrder,
               icon:Icon(pendingConfirm!=null||pendingCreate!=null||
@@ -2335,7 +2439,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           decoration:const InputDecoration(labelText:'Chi nhánh'),
           items:branches.map((x)=>DropdownMenuItem<String>(
             value:x['id'] as String,child:Text(x['name'] as String))).toList(),
-          onChanged:(value){setState(()=>branchId=value);reload();}),
+          onChanged:_navigationLocked?null:(value)async{setState(()=>branchId=value);await _restorePending();await reload();}),
         const SizedBox(height:12),
         TextField(key:const ValueKey('sales-search'),controller:search,
           onSubmitted:(_)=>reload(),

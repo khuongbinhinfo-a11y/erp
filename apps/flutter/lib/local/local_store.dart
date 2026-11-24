@@ -38,6 +38,15 @@ class ErpLocalStore {
     final fetched=DateTime.parse(data['fetchedAt'] as String);
     return (value:data['value'],stale:now.isBefore(fetched)||!now.isBefore(fetched.add(Duration(seconds:data['ttlSeconds'] as int))),fetchedAt:fetched);
   }
+  // Single atomic slot holds the full sales recovery state across transitions.
+  // A slot is branch-scoped because the sales permission itself is branch-scoped.
+  Future<void> saveSalesRecovery(LocalScope scope,Map<String,dynamic>? state)=>
+    state==null?driver.remove(_key(scope,'sales-recovery','current')):
+      driver.write(_key(scope,'sales-recovery','current'),jsonEncode(state));
+  Future<Map<String,dynamic>?> salesRecovery(LocalScope scope)async{
+    final raw=await driver.read(_key(scope,'sales-recovery','current'));
+    return raw==null?null:Map<String,dynamic>.from(jsonDecode(raw) as Map);
+  }
   /// Durable command intent only; never a local receipt, stock or ledger post.
   Future<void> saveIntent(LocalScope scope,String id,Map<String,dynamic> body)async{
     final key=_key(scope,'intent',id);
