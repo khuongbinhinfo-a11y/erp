@@ -609,6 +609,41 @@ export async function handleSalesHttp(req:IncomingMessage,res:ServerResponse,
       }finally{db.release();}
       return;
     }
+    if(url.pathname==="/v1/sales/last-purchase"&&req.method==="GET"){
+      const branchId=uuid(url.searchParams.get("branchId"));
+      const customerId=uuid(url.searchParams.get("customerId"));
+      const sellSkuId=uuid(url.searchParams.get("sellSkuId"));
+      const db=await pool.connect();
+      try{
+        const allowed=await hasPermission(db,{installationId:tenant,actorId,
+          permission:"orders.read",branchId})||
+          await hasPermission(db,{installationId:tenant,actorId,
+            permission:"orders.create",branchId})||
+          await hasPermission(db,{installationId:tenant,actorId,
+            permission:"orders.update",branchId});
+        if(!allowed)throw new SalesError(403,"LAST_PURCHASE_DENIED");
+        const customer=await db.query("SELECT id FROM catalog_customer WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active",
+          [tenant,branchId,customerId]);
+        if(!customer.rowCount)throw new SalesError(409,"CUSTOMER_UNAVAILABLE");
+        const found=await db.query<{unitPrice:string;discountRate:string;taxRate:string;confirmedAt:Date}>(
+          `SELECT line.unit_price::text AS "unitPrice",
+           line.discount_rate::text AS "discountRate",
+           line.tax_rate::text AS "taxRate",v.confirmed_at AS "confirmedAt"
+          FROM sales_order_line line
+          JOIN sales_order_version v ON v.installation_id=line.installation_id
+           AND v.branch_id=line.branch_id AND v.order_id=line.order_id
+           AND v.version_no=line.version_no AND v.state='CONFIRMED'
+          JOIN sales_order o ON o.installation_id=v.installation_id
+           AND o.branch_id=v.branch_id AND o.id=v.order_id
+          WHERE line.installation_id=$1 AND line.branch_id=$2
+           AND o.customer_id=$3 AND line.sell_sku_id=$4
+           AND o.status='CONFIRMED'
+          ORDER BY v.confirmed_at DESC,o.id DESC,line.line_no DESC LIMIT 1`,
+          [tenant,branchId,customerId,sellSkuId]);
+        send(res,200,{price:found.rows[0]??null,requestId:id},id,cors);
+      }finally{db.release();}
+      return;
+    }
     if(url.pathname==="/v1/sales/orders"&&req.method==="GET"){
       const b=uuid(url.searchParams.get("branchId")),q=(url.searchParams.get("q")??"").trim();
       if(q.length>80)throw new SalesError(400,"SEARCH_TOO_LONG");
