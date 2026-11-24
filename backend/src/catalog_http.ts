@@ -7,6 +7,8 @@ import { executeMutation, MutationFault, requireRevision, type MutationContext }
 import { validIdempotencyKey } from "./contracts.ts";
 import type { IdentityOptions } from "./identity_http.ts";
 import { clonePriceList } from "./r1c_price_list.ts";
+import { CustomerLocationFault,parseCustomerLocation,listCustomerLocations,
+  createCustomerLocation,updateCustomerLocation } from "./catalog_customer_locations.ts";
 import { PriceAssignmentFault,parsePriceAssignment,createPriceAssignment,
   listPriceAssignments,togglePriceAssignment } from "./r1c_price_assignment.ts";
 
@@ -1076,7 +1078,38 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
       });
       send(res,outcome.status,outcome.body,requestId,corsOrigin);return;
     }
-    const updatePath=/^\/v1\/catalog\/(customers|customer-groups|customer-regions|suppliers|brands|groups|categories|products|price-lists|unit-definitions)\/([0-9a-f-]{36})$/.exec(url.pathname);
+    const locationPath=/^\\/v1\\/catalog\\/customers\\/([0-9a-f-]{36})\\/locations(?:\\/([0-9a-f-]{36}))?$/.exec(url.pathname);
+    if(locationPath){
+      if(!await hasCatalogHierarchySchema(pool))
+        throw new CatalogError(503,"CATALOG_HIERARCHY_MIGRATION_REQUIRED");
+      const customerId=requireUuid(locationPath[1]);
+      const locationId=locationPath[2]?requireUuid(locationPath[2]):null;
+      if(req.method==="GET"&&!locationId){
+        const branch=requireUuid(url.searchParams.get("branchId"));
+        const db=await pool.connect();
+        try{
+          const items=await listCustomerLocations(db,tenant,actorId,branch,customerId);
+          send(res,200,{items,requestId},requestId,corsOrigin);
+        }finally{db.release();}
+        return;
+      }
+      if((req.method==="POST"&&!locationId)||(req.method==="PATCH"&&locationId)){
+        const input=parseCustomerLocation(await payloadFrom(req),req.method==="PATCH");
+        const ctx=requestMutation(req,requestId,actorId,tenant,
+          req.method==="POST"?"catalog.customer_location.create":"catalog.customer_location.update",
+          {customerId,locationId,...input},req.method==="PATCH");
+        const outcome=await executeMutation(pool,ctx,{
+          authorize:(db,c)=>hasPermission(db,{installationId:c.installationId,
+            actorId:c.actorId,permission:"catalog.write",branchId:input.branchId}),
+          execute:(db,c)=>req.method==="POST"?
+            createCustomerLocation(db,c,customerId,input):
+            updateCustomerLocation(db,c,customerId,locationId!,input),
+        });
+        send(res,outcome.status,outcome.body,requestId,corsOrigin);return;
+      }
+      throw new CatalogError(405,"METHOD_NOT_ALLOWED");
+    }
+    const updatePath=/^\\/v1\\/catalog\\/(customers|customer-groups|customer-regions|suppliers|brands|groups|categories|products|price-lists|unit-definitions)\/([0-9a-f-]{36})$/.exec(url.pathname);
     if(updatePath&&req.method==="PATCH"){
       const resource=updatePath[1] as Editable;
       if(!editable.has(resource))throw new CatalogError(404,"UNKNOWN_RESOURCE");
@@ -1151,7 +1184,7 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
     }
     fail(res,405,"METHOD_NOT_ALLOWED",requestId,corsOrigin);
   }catch(error){
-    if(error instanceof CatalogError||error instanceof PriceAssignmentFault){fail(res,error.status,error.code,requestId,corsOrigin);return;}
+    if(error instanceof CatalogError||error instanceof PriceAssignmentFault||error instanceof CustomerLocationFault){fail(res,error.status,error.code,requestId,corsOrigin);return;}
     if(error instanceof MutationFault){fail(res,error.httpStatus,error.code,requestId,corsOrigin);return;}
     if(typeof error==="object"&&error!==null&&"code" in error){
       if(error.code==="23505"){fail(res,409,"DUPLICATE",requestId,corsOrigin);return;}
