@@ -143,6 +143,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       if(e.status!=404&&e.status!=405){inform(e.message,error:true);return null;}
     }catch(_){inform('Không tải được thiết lập lập đơn.',error:true);return null;}
     final modern=entrySettings!=null;
+    if(!modern){inform('Máy chủ chưa hỗ trợ giao nhận mới. Cần cập nhật máy chủ.',error:true);}
     bool canPrice()=>can(modern?'orders.price.override':'orders.update');
     bool canDiscount()=>can(modern?'orders.discount.override':'orders.update');
     bool canTax()=>can(modern?'orders.tax.override':'orders.update');
@@ -1018,9 +1019,10 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                 Expanded(child:SingleChildScrollView(
                   padding:EdgeInsets.all(narrow?10:14),
                   child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+                    if(!modern)const Padding(padding:EdgeInsets.only(bottom:12),child:Text('Máy chủ chưa hỗ trợ giao nhận mới.',style:TextStyle(color:ErpTokens.danger,fontWeight:FontWeight.w700))),
                     Wrap(
                       key:const ValueKey('sales-order-context'),
-                      spacing:8,runSpacing:6,children:[
+                      spacing:12,runSpacing:12,children:[
                         if(stockWarehouses.isNotEmpty)SizedBox(width:narrow?((width-40)/2).clamp(108.0,240.0).toDouble():200,child:DropdownButtonFormField<String>(
                         key:ValueKey('sales-stock-warehouse-'+warehouseId.toString()),
                         initialValue:warehouseId,isExpanded:true,menuMaxHeight:240,
@@ -1068,7 +1070,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                             child:Text((x['name']??'').toString(),overflow:TextOverflow.ellipsis))),
                         ],onChanged:(v){channel=v;customerPricingChanged(ctx,refresh);})),
                       ]),
-                    const SizedBox(height:6),
+                    const SizedBox(height:18),
                     Align(alignment:Alignment.centerLeft,child:ConstrainedBox(
                       constraints:const BoxConstraints(maxWidth:760),
                       child:Row(children:[
@@ -1093,6 +1095,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                     },child:TextField(
                       key:const ValueKey('sales-customer-search'),
                       controller:customerSearch,focusNode:customerFocus,
+                      selectAllOnFocus:true,
                       onChanged:(_){
                         customerDebounce?.cancel();
                         customerSearchGeneration++;
@@ -1111,7 +1114,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           chooseCustomer(ctx,customerMatches[selectedCustomerIndex],refresh);
                         }else{findCustomers(ctx,refresh);}
                       },
-                      decoration:InputDecoration(labelText:customer==null?'Khách hàng · F4':selectedCustomer()+' · F4',isDense:true,contentPadding:const EdgeInsets.symmetric(horizontal:10,vertical:9),
+                      decoration:InputDecoration(labelText:customer==null?'Khách hàng · F4':selectedCustomer()+' · F4',isDense:false,contentPadding:const EdgeInsets.symmetric(horizontal:10,vertical:14),
                         floatingLabelBehavior:FloatingLabelBehavior.always,
                         hintText:'Tìm mã hoặc tên',
                         prefixIcon:const Icon(Icons.person_search_outlined),
@@ -1468,15 +1471,15 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           style:TextStyle(fontWeight:FontWeight.w700,fontSize:11,color:ErpTokens.muted))),
                         const SizedBox(width:92,child:Text('ĐVT',style:TextStyle(fontSize:11,color:ErpTokens.muted))),
                         const SizedBox(width:112,child:Text('SỐ LƯỢNG',style:TextStyle(fontSize:11,color:ErpTokens.muted))),
-                        const SizedBox(width:112,child:Text('ĐƠN GIÁ',textAlign:TextAlign.right,
+                        const SizedBox(width:124,child:Text('ĐƠN GIÁ',textAlign:TextAlign.right,
                           style:TextStyle(fontSize:11,color:ErpTokens.muted))),
-                        const SizedBox(width:60,child:Text('CK %',textAlign:TextAlign.right,
+                        const SizedBox(width:76,child:Text('CK',textAlign:TextAlign.right,
                           style:TextStyle(fontSize:11,color:ErpTokens.muted))),
-                        const SizedBox(width:60,child:Text('THUẾ %',textAlign:TextAlign.right,
+                        const SizedBox(width:76,child:Text('THUẾ %',textAlign:TextAlign.right,
                           style:TextStyle(fontSize:11,color:ErpTokens.muted))),
                         const SizedBox(width:120,child:Text('THÀNH TIỀN',textAlign:TextAlign.right,
                           style:TextStyle(fontSize:11,color:ErpTokens.muted))),
-                        const SizedBox(width:110),
+                        const SizedBox(width:36),
                       ])),
                     for(var i=0;i<lines.length;i++)Builder(builder:(rowContext){
                       final entry=lines[i];
@@ -1504,8 +1507,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           focusNode:entry.unitFocus,isDense:true,isExpanded:true,
                           menuMaxHeight:240,
                           decoration:const InputDecoration(
-                            isDense:true,labelText:'ĐVT',
-                            border:UnderlineInputBorder(),
+                            isDense:true,filled:false,
+                            border:UnderlineInputBorder(),enabledBorder:UnderlineInputBorder(),disabledBorder:UnderlineInputBorder(),focusedBorder:UnderlineInputBorder(),
                             contentPadding:EdgeInsets.symmetric(horizontal:3,vertical:4)),
                           items:unitChoices.map((variant)=>DropdownMenuItem<String>(
                             value:variant['id'] as String,
@@ -1547,6 +1550,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         child:TextField(
                           key:ValueKey('sales-qty-$i'),
                           controller:entry.quantity,focusNode:entry.quantityFocus,
+                          selectAllOnFocus:true,
                           onTap:()=>entry.quantity.selection=TextSelection(
                             baseOffset:0,extentOffset:entry.quantity.text.length),
                           onChanged:(_)=>pricingChanged(ctx,refresh),
@@ -1556,27 +1560,31 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           textInputAction:TextInputAction.next,
                           textAlign:TextAlign.center,
                           decoration:const InputDecoration(
-                            isDense:true,labelText:'Số lượng',
-                            border:UnderlineInputBorder(),
+                            isDense:true,filled:false,
+                            border:UnderlineInputBorder(),enabledBorder:UnderlineInputBorder(),disabledBorder:UnderlineInputBorder(),focusedBorder:UnderlineInputBorder(),
                             contentPadding:EdgeInsets.symmetric(horizontal:4,vertical:8)),
                         ));
-                      final unitPriceField=SizedBox(width:112,child:TextField(
+                      final unitPriceField=SizedBox(width:124,child:TextField(
                         key:ValueKey('sales-price-$i'),
                         controller:entry.unitPrice,
-                        enabled:canPrice(),
+                        selectAllOnFocus:true,
+                        readOnly:!canPrice(),
                         keyboardType:const TextInputType.numberWithOptions(decimal:true),
                         inputFormatters:const [ErpGroupedNumberFormatter(maxIntegerDigits:13,maxFractionDigits:4)],
                         onChanged:(_)=>pricingChanged(ctx,refresh),
                         textAlign:TextAlign.right,
                         decoration:InputDecoration(
-                          isDense:true,labelText:'Đơn giá',
-                          hintText:price=='—'?'Nhập giá':price,
+                          isDense:true,filled:false,
+                          hintText:price=='—'?'—':erpGroupedDecimalText(quote!['unitPrice']),
+                          hintStyle:const TextStyle(color:ErpTokens.ink,fontWeight:FontWeight.w600),
+                          floatingLabelBehavior:FloatingLabelBehavior.never,
+                          enabledBorder:const UnderlineInputBorder(),disabledBorder:const UnderlineInputBorder(),focusedBorder:const UnderlineInputBorder(),
                           contentPadding:const EdgeInsets.symmetric(horizontal:3,vertical:8),
                           border:const UnderlineInputBorder())));
                       Widget percentField(String title,TextEditingController controller,
-                          String fieldKey)=>SizedBox(width:60,child:TextField(
+                          String fieldKey)=>SizedBox(width:76,child:TextField(
                         key:ValueKey('sales-'+fieldKey+'-$i'),
-                        controller:controller,enabled:fieldKey=='discount'?canDiscount():canTax(),
+                        controller:controller,selectAllOnFocus:true,readOnly:fieldKey=='discount'?!canDiscount():!canTax(),
                         keyboardType:const TextInputType.numberWithOptions(decimal:true),
                         inputFormatters:[ErpGroupedNumberFormatter(
                           maxIntegerDigits:fieldKey=='discount'&&entry.discountMode!='PERCENT'?13:3,
@@ -1590,7 +1598,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           pricingChanged(ctx,refresh);
                         },
                         textAlign:TextAlign.right,
-                        decoration:InputDecoration(labelText:title,isDense:true,
+                        decoration:InputDecoration(hintText:title,isDense:true,filled:false,
+                          enabledBorder:const UnderlineInputBorder(),disabledBorder:const UnderlineInputBorder(),focusedBorder:const UnderlineInputBorder(),
                           border:const UnderlineInputBorder(),
                           contentPadding:const EdgeInsets.symmetric(horizontal:2,vertical:8))));
                       final discountField=percentField(entry.discountMode=='PERCENT'?'CK %':'CK ₫',entry.discountRate,'discount');
@@ -1622,11 +1631,10 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                             entry.taxMode='EXCLUSIVE';entry.overrideReason='';pricingChanged(ctx,refresh);},
                           child:const Text('Giá hệ thống',style:TextStyle(fontSize:11,color:ErpTokens.muted))),
                       ]);
-                      final split=IconButton(
-                        constraints:const BoxConstraints(minWidth:32,minHeight:32),
-                        padding:EdgeInsets.zero,
-                        key:ValueKey('sales-split-$i'),tooltip:'Thêm dòng độc lập, số lượng 1',
-                        icon:const Icon(Icons.call_split_outlined,size:18),
+                      final split=TextButton(
+                        style:TextButton.styleFrom(minimumSize:const Size(0,24),padding:const EdgeInsets.symmetric(horizontal:4),tapTargetSize:MaterialTapTargetSize.shrinkWrap),
+                        key:ValueKey('sales-split-$i'),
+                        child:const Text('↳ Tách dòng',style:TextStyle(fontSize:11)),
                         onPressed:!(can('orders.create')||can('orders.update'))||lines.length>=30?null:(){
                           // Do not deduct source quantity or copy stale manual price/discount.
                           final next=_OrderLine(entry.sellSkuId,'1');
@@ -1636,12 +1644,10 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                             if(ctx.mounted)next.unitFocus.requestFocus();
                           });
                         });
-                      final previousPrice=IconButton(
-                        constraints:const BoxConstraints(minWidth:32,minHeight:32),
-                        padding:EdgeInsets.zero,
+                      final previousPrice=TextButton(
+                        style:TextButton.styleFrom(minimumSize:const Size(0,24),padding:const EdgeInsets.symmetric(horizontal:4),tapTargetSize:MaterialTapTargetSize.shrinkWrap),
                         key:ValueKey('sales-last-price-$i'),
-                        tooltip:'Giá lần mua trước của khách này',
-                        icon:const Icon(Icons.history,size:18),
+                        child:const Text('Giá lần mua trước',style:TextStyle(fontSize:11)),
                         onPressed:customer==null||customerMode=='WALK_IN'||!canPrice()?null:()async{
                           final selectedCustomer=customer!;
                           final requestedSku=entry.sellSkuId;
@@ -1706,9 +1712,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
                             Row(children:[
                               Text((i+1).toString()+'. ',style:const TextStyle(color:ErpTokens.muted)),
-                              Expanded(child:productName),
-                              previousPrice,split,remove,
+                              Expanded(child:productName),remove,
                             ]),
+                            Wrap(spacing:4,children:[previousPrice,split]),
                             const SizedBox(height:5),
                             // Keep quantity input on its own line: long
                             // server-quoted amounts must not compete for
@@ -1731,14 +1737,13 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           ]):
                           Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
                           Row(children:[
-                            Expanded(flex:5,child:productName),
+                            Expanded(flex:5,child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[productName,Wrap(spacing:4,children:[previousPrice,split])])),
                             unitField,
                             SizedBox(width:112,child:quantityField),
                             unitPriceField,discountField,taxField,
                             SizedBox(width:120,child:Text(lineTotal,textAlign:TextAlign.right,
                               style:const TextStyle(fontWeight:FontWeight.w800))),
-                            SizedBox(width:144,child:Row(mainAxisSize:MainAxisSize.min,
-                              children:[previousPrice,split,remove])),
+                            SizedBox(width:36,child:remove),
                           ]),
                           if(modern)modes,
                           ]),
@@ -1782,8 +1787,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       key:const ValueKey('sales-override-reason'),initialValue:overrideReason,maxLength:500,
                       decoration:const InputDecoration(labelText:'Lý do điều chỉnh (không bắt buộc)',isDense:true),
                       onChanged:(v)=>overrideReason=v),
-                    TextField(controller:note,minLines:1,maxLines:2,
-                      decoration:const InputDecoration(labelText:'Ghi chú',isDense:true,border:UnderlineInputBorder())),
+                    TextField(controller:note,minLines:1,maxLines:2,selectAllOnFocus:true,
+                      decoration:const InputDecoration(labelText:'Ghi chú',isDense:true,filled:false,border:UnderlineInputBorder(),enabledBorder:UnderlineInputBorder(),focusedBorder:UnderlineInputBorder())),
                     if(formError!=null)Padding(
                       padding:const EdgeInsets.only(top:10),
                       child:Text(formError!,key:const ValueKey('sales-form-error'),
