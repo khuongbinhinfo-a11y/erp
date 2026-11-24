@@ -13,11 +13,12 @@ class CatalogBulkWorkspace extends StatefulWidget{
   final String? branchId;
   final bool canWrite;
   final String initialArea;
+  final String? initialPriceListId;
   /// Optional save hook for UI regression tests; production uses file_picker.
   final Future<void> Function(String fileName,Uint8List bytes)? saveCsvForTest;
   const CatalogBulkWorkspace({super.key,required this.client,required this.session,
     required this.branchId,required this.canWrite,required this.initialArea,
-    this.saveCsvForTest});
+    this.initialPriceListId,this.saveCsvForTest});
   @override State<CatalogBulkWorkspace> createState()=>_CatalogBulkWorkspaceState();
 }
 class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
@@ -66,17 +67,19 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
     super.initState();
     kind=widget.initialArea=='customers'?'customers':
       widget.initialArea=='price-lists'?'prices':'products';
+    priceListId=widget.initialPriceListId;
     _restorePending();
     if(kind=='prices')_loadPriceLists();
   }
   @override void didUpdateWidget(covariant CatalogBulkWorkspace old){
     super.didUpdateWidget(old);
     if(old.branchId!=widget.branchId||old.session.actorId!=widget.session.actorId||
-       old.session.token!=widget.session.token){
+       old.session.token!=widget.session.token||
+       old.initialPriceListId!=widget.initialPriceListId){
       setState((){
         fileName=null;contentBase64=null;inspection=null;preview=null;
         applied=null;mapping.clear();pendingPayload=null;pendingKey=null;error=null;
-        priceListId=null;defaultEffectiveAt=null;priceLists=[];
+        priceListId=widget.initialPriceListId;defaultEffectiveAt=null;priceLists=[];
       });
       _restorePending();
       if(kind=='prices')_loadPriceLists();
@@ -389,7 +392,7 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
         style:TextStyle(color:ErpTokens.muted,fontSize:12)),
       const SizedBox(height:15),
       Wrap(spacing:12,runSpacing:10,children:[
-        SizedBox(width:230,child:DropdownButtonFormField<String>(
+        if(widget.initialArea!='price-lists')SizedBox(width:230,child:DropdownButtonFormField<String>(
           key:const ValueKey('catalog-bulk-resource'),
           initialValue:kind,isExpanded:true,
           decoration:const InputDecoration(labelText:'Loại dữ liệu'),
@@ -404,7 +407,7 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
           items:priceLists.map((x)=>DropdownMenuItem<String>(
             value:x['id'].toString(),child:Text((x['name']??x['code']).toString(),
               overflow:TextOverflow.ellipsis))).toList(),
-          onChanged:canOperate?(v)=>setState((){
+          onChanged:widget.initialPriceListId!=null?null:canOperate?(v)=>setState((){
             priceListId=v;preview=null;applied=null;error=null;
             defaultEffectiveAt=DateTime.now().toUtc().toIso8601String();
           }):null)),
