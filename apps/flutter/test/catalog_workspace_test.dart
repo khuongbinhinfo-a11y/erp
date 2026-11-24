@@ -642,7 +642,9 @@ void main(){
     await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),home:Scaffold(
       body:CatalogWorkspace(area:'products',session:activeSession(),client:client))));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('catalog-edit-$product')));
+    final edit=find.byKey(const ValueKey('catalog-edit-$product'));
+    await tester.ensureVisible(edit);
+    await tester.tap(edit);
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('catalog-edit-dialog')),findsOneWidget);
     for(final kind in ['units','skus','barcodes']){
