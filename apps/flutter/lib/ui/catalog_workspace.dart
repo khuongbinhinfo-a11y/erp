@@ -831,8 +831,23 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                   const Text('2. Nhóm hàng',style:TextStyle(
                     fontWeight:FontWeight.w800,fontSize:16,color:ErpTokens.primary)),
                   const SizedBox(height:4),
-                  const Text('Chọn nhóm hiện có hoặc tạo nhóm mới bên dưới.',
+                  const Text('Chọn nhãn hàng rồi nhóm/danh mục; mọi trường lưu vào một sản phẩm.',
                     style:TextStyle(color:ErpTokens.muted,fontSize:12)),
+                  if(availableBrands.isNotEmpty)...[
+                    const SizedBox(height:10),
+                    DropdownButtonFormField<String?>(
+                      key:const ValueKey('catalog-product-brand'),
+                      initialValue:brandId,isExpanded:true,
+                      decoration:const InputDecoration(labelText:'Nhãn hàng'),
+                      items:[
+                        const DropdownMenuItem<String?>(value:null,child:Text('Tất cả nhãn hàng')),
+                        ...availableBrands.where((b)=>b['active']!=false).map(
+                          (b)=>DropdownMenuItem<String?>(
+                            value:b['id'] as String,
+                            child:Text('${b['code']} · ${b['name']}'))),
+                      ],
+                      onChanged:(v)=>refresh((){brandId=v;groupId=null;categoryId=null;}),
+                  ],
                   if(availableGroups.isNotEmpty)...[
                     const SizedBox(height:12),
                     DropdownButtonFormField<String?>(
@@ -841,7 +856,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                       decoration:const InputDecoration(labelText:'Nhóm hàng (tùy chọn)'),
                       items:[
                         const DropdownMenuItem<String?>(value:null,child:Text('Chưa phân nhóm')),
-                        ...availableGroups.map((g)=>DropdownMenuItem<String?>(
+                        ...availableGroups.where((g)=>brandId==null||
+                          g['brandId']==brandId).map((g)=>DropdownMenuItem<String?>(
                           value:g['id'] as String,
                           child:Text(g['name'].toString(),overflow:TextOverflow.ellipsis))),
                       ],
@@ -882,6 +898,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                         }
                         final body=old?.payload??<String,dynamic>{
                           'branchId':branch,'code':groupCode,'name':groupName,
+                          if(brandId!=null)'brandId':brandId,
                         };
                         final key=old?.key??
                           'catalog-groups-${DateTime.now().microsecondsSinceEpoch}';
