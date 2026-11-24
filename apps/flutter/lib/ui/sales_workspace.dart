@@ -198,9 +198,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     final branch=branchId;if(branch==null)return null;
     final formScope=_localScope,formToken=widget.session.token,formSession=widget.session;
     bool cachedCatalog=false;
-    Future<List<Map<String,dynamic>>> catalog(String resource,{String? query})async{
+    Future<List<Map<String,dynamic>>> catalog(String resource,{String? query,String? itemId})async{
       if(!_sameScope(formToken,branch))throw const ErpApiError(401,'Phiên đã thay đổi.');
-      final value=await widget.client.salesCatalog(formSession,resource,branchId:branch,query:query??'');
+      final value=await widget.client.salesCatalog(formSession,resource,branchId:branch,query:query??'',itemId:itemId);
       if(value.cached)cachedCatalog=true;
       return value.items;
     }
@@ -291,15 +291,15 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     List<Map<String,dynamic>> locations=[];
     Map<String,dynamic>? walkInCustomer=entrySettings['walkInCustomer'] is Map
       ?Map<String,dynamic>.from(entrySettings['walkInCustomer'] as Map):null;
-    String? customer=order?['customerId'] as String? ??
+    String? customer=localDraft?order?['customerId'] as String?:order?['customerId'] as String? ??
       (customers.length==1?customers.single['id'] as String:null);
     if(savedShipping.isEmpty&&customer!=null){
       deliveryAddress=(customers.where((x)=>x['id']==customer).firstOrNull?['deliveryAddress']??'').toString();
     }
-    String? list=order?['priceListId'] as String? ??
+    String? list=localDraft?order?['priceListId'] as String?:order?['priceListId'] as String? ??
       (lists.length==1?lists.single['id'] as String:null);
     String? channel=order?['channelId'] as String?;
-    bool listManuallySelected=order!=null;
+    bool listManuallySelected=localDraft?order?['localListManuallySelected']==true:order!=null;
     int listResolveGeneration=0;
     final note=TextEditingController(text:order?['note'] as String? ?? '');
     final lines=<_OrderLine>[];
@@ -308,8 +308,24 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     if(localDraft&&savedShipping['warehouseId']!=null&&!stockWarehouses.any((w)=>w['id']==savedShipping['warehouseId'])){
       note.dispose();inform('Kho của giỏ đã lưu không còn trong phạm vi được cấp. Không tự đổi kho.',error:true);return null;
     }
-    if(localDraft&&((customer!=null&&!customers.any((x)=>x['id']==customer))||(list!=null&&!lists.any((x)=>x['id']==list)))){
-      note.dispose();inform('Khách hàng hoặc bảng giá trong giỏ không còn khả dụng. Hãy kiểm tra danh mục.',error:true);return null;
+    if(localDraft){
+      // Resolve persisted IDs against authorized server data, not a truncated first page.
+      Future<bool> resolveSaved(String resource,String? id,List<Map<String,dynamic>> target)async{
+        if(id==null||target.any((x)=>x['id']==id))return true;
+        final matches=(await catalog(resource,itemId:id)).where((x)=>x['id']==id&&x['active']==true).toList();
+        if(matches.length!=1)return false;
+        target.add(matches.single);return true;
+      }
+      try{
+        final validCustomer=customerMode=='WALK_IN'
+          ?customer!=null&&walkInCustomer?['id']==customer&&walkInCustomer?['active']!=false
+          :await resolveSaved('customers',customer,customers);
+        final validList=await resolveSaved('price-lists',list,lists);
+        if(!_sameScope(formToken,branch)){note.dispose();return null;}
+        if(!validCustomer||!validList){
+          note.dispose();inform('Khách hàng hoặc bảng giá đã lưu không còn khả dụng. Giỏ vẫn được giữ trên máy.',error:true);return null;
+        }
+      }catch(_){note.dispose();inform('Chưa đối chiếu được khách hàng hoặc bảng giá đã lưu. Giỏ vẫn được giữ trên máy.',error:true);return null;}
     }
     if(order?['lines'] is List){
       for(final v in order!['lines'] as List<dynamic>){
@@ -984,7 +1000,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       return <String,dynamic>{
           'customerId':customer,'priceListId':list,'channelId':channel,'note':note.text,
           'localDocumentDiscount':{'mode':documentDiscountMode,'value':documentDiscountValue,'reason':documentDiscountReason},
-          'localOverrideReason':overrideReason,
+          'localOverrideReason':overrideReason,'localListManuallySelected':listManuallySelected,
           'shipping':{'warehouseId':warehouseId,'deliveryChoice':deliveryChoice,
             'collectionPolicy':collectionPolicy,'customerMode':customerMode,'customerLocationId':locationId,
             'deliveryAddress':deliveryAddress,'requestedDeliveryDate':deliveryDate,

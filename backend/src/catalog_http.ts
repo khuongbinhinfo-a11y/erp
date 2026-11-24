@@ -340,7 +340,7 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
     return rows.rows;
   }
   const taxonomyReady=await hasCatalogHierarchySchema(db);
-  const values=[tenant,branchId,"%"+search+"%"];
+  const values=[tenant,branchId,exactId??("%"+search+"%")];
   // Installations staged on catalog 0006/0007 must still list products
   // even before the separate R1 SKU/barcode migration 0009 is applied.
   const r1Ready=resource==="products"&&await hasR1CatalogSchema(db);
@@ -393,8 +393,8 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
           ORDER BY e.effective_at DESC,e.id DESC LIMIT 100`
       :`${resource==="products"?productSelection:resource==="customers"?customerSelection:resource==="price-lists"?listSelection:selections[resource]}
           WHERE installation_id=$1 AND branch_id=$2
-          AND (${resource==="products"?"sku":"code"} ILIKE $3 OR name ILIKE $3
-          ${resource==="customers"?"OR phone ILIKE $3 OR customer_group ILIKE $3":""})
+          ${exactId?"AND id=$3":`AND (${resource==="products"?"sku":"code"} ILIKE $3 OR name ILIKE $3
+          ${resource==="customers"?"OR phone ILIKE $3 OR customer_group ILIKE $3":""})`}
           ${hideWalkIn?"AND NOT EXISTS (SELECT 1 FROM sales_walk_in_customer w WHERE w.installation_id=catalog_customer.installation_id AND w.branch_id=catalog_customer.branch_id AND w.customer_id=catalog_customer.id)":""}
           ORDER BY ${resource==="products"?"sku":"code"},id LIMIT 100`,
     values);
@@ -1174,7 +1174,7 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
       if(afterCode&&([...afterCode].length>(resource==="unit-definitions"?24:64)||
         afterCode.trim().length===0||/[\u0000-\u001f\u007f]/.test(afterCode)))
         throw new CatalogError(400,"INVALID_UNIT_CURSOR");
-      const exactId=["groups","brands","categories"].includes(resource)&&
+      const exactId=["groups","brands","categories","customers","price-lists"].includes(resource)&&
         url.searchParams.has("id")?requireUuid(url.searchParams.get("id")):undefined;
       const client=await pool.connect();
       try{

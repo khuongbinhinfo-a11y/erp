@@ -170,6 +170,11 @@ test("Issue #7: catalog HTTP uses real PostgreSQL with tenant/branch RBAC, decim
       assert.equal(customerList.body.items[0].customerGroupCode,"KH_SI");
       assert.equal(customerList.body.items[0].customerRegionCode,"KV_MT");
       assert.equal(customerList.body.items[0].customerGroupId,masterGroup.body.id);
+      const exactCustomer=await call("/v1/catalog/customers?branchId="+b+"&id="+customer.body.id+"&q=not-the-code","GET",undefined,token);
+      assert.equal(exactCustomer.status,200);
+      assert.deepEqual(exactCustomer.body.items.map((x:{id:string})=>x.id),[customer.body.id]);
+      const missingCustomer=await call("/v1/catalog/customers?branchId="+b+"&id="+randomUUID(),"GET",undefined,token);
+      assert.deepEqual(missingCustomer.body.items,[]);
       const productPayload={
         code:"SKU-0001",name:"Synthetic Product",groupId:group.body.id,baseUnit:"cai",
         barcode:"BASE-0001",
