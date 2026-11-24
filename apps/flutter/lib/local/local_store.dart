@@ -147,6 +147,11 @@ class ErpLocalStore {
   }
   Future<void> releaseRejectedCart(LocalScope scope,String id,{required String owner,required String commandKey})async{
     await _mutateScopedCart(scope,id,(entry){
+      // A second tab may receive the same definitive rejection AFTER the
+      // operator has resumed the cart. The old retired ID preserves only this
+      // terminal key; never touch the new owner's editing record.
+      if(entry['owner']==owner&&entry['status']=='retired'&&
+        entry['rejectedCommandKey']==commandKey)return entry;
       if(entry['owner']!=owner||entry['commandKey']!=commandKey){
         throw const LocalRecoveryConflict();
       }

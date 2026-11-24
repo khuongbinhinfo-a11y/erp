@@ -198,6 +198,8 @@ void main(){
     expect(await two.cartCreateDisposition(a,'original',owner:'actor-one',
       commandKey:'send-key'),'rejected');
     await two.claimScopedCart(a,'original','resumed',owner:'actor-two');
+    await one.releaseRejectedCart(a,'original',owner:'actor-one',commandKey:'send-key');
+    expect((await two.savedCarts(a)).single.id,'resumed');
     expect(await one.cartCreateDisposition(a,'original',owner:'actor-one',
       commandKey:'send-key'),'rejected');
     await expectLater(one.markCartSubmitting(a,'original',owner:'actor-one',
