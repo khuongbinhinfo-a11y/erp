@@ -454,4 +454,51 @@ void main(){
       await tester.pumpAndSettle();
     });
 
+  testWidgets('price list search + selector share a row; editors are opt-in',
+    (tester)async{
+      const priceId='00000000-0000-4000-8000-000000000099';
+      final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+        httpClient:MockClient((request)async{
+          if(request.url.path=='/v1/catalog/branches'){
+            return http.Response(jsonEncode({'items':[
+              {'id':branch,'code':'MAIN','name':'Chi nhánh chính'}]}),200);
+          }
+          if(request.url.path=='/v1/catalog/price-lists'){
+            return http.Response(jsonEncode({'items':[
+              {'id':priceId,'code':'GIATEST','name':'Giá Test',
+                'active':true,'revision':0}]}),200);
+          }
+          return http.Response(jsonEncode({'items':[]}),200,
+            headers:const {'content-type':'application/json; charset=utf-8'});
+        }));
+      addTearDown(client.dispose);
+      tester.view.devicePixelRatio=1;
+      tester.view.physicalSize=const Size(1600,900);
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
+        home:Scaffold(body:CompanyWorkspace(previewOnly:false,grants:grants,
+          session:activeSession(),client:client))));
+      await openCompanyCatalog(tester,'products');
+      await tester.ensureVisible(find.byKey(const ValueKey('catalog-inner-price-lists')));
+      await tester.tap(find.byKey(const ValueKey('catalog-inner-price-lists')));
+      await tester.pumpAndSettle();
+      await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:120)));
+      await tester.pumpAndSettle();
+      final search=find.byKey(const ValueKey('catalog-search'));
+      final picker=find.byKey(const ValueKey('price-workspace-selected-$priceId'));
+      expect(search,findsOneWidget);
+      expect(picker,findsOneWidget);
+      expect((tester.getTopLeft(search).dy-tester.getTopLeft(picker).dy).abs(),
+        lessThan(16),reason:'Desktop search and selected price list occupy one row');
+      final editor=find.byKey(const ValueKey('price-skus-$branch-$priceId'));
+      expect(editor,findsNothing,reason:'Price editor must not appear on its own');
+      final menu=find.byKey(const ValueKey('catalog-price-list-actions-$priceId'));
+      await tester.tap(menu);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Giá bán').last);
+      await tester.pumpAndSettle();
+      expect(editor,findsOneWidget);
+    });
+
 }
