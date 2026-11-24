@@ -2,6 +2,7 @@
 """Generate Flutter 3.50 platform scaffolding from SDK template, then apply ERP-only overlay."""
 from pathlib import Path
 import argparse
+import os
 import shutil
 import subprocess
 import tempfile
@@ -18,7 +19,10 @@ def prepare(target):
         raise SystemExit("Native scaffold already exists; use a clean checkout")
     with tempfile.TemporaryDirectory() as temporary:
         generated = Path(temporary) / "erp_distribution"
-        subprocess.run(["flutter", "create", "--platforms=" + target,
+        sdk = shutil.which("flutter.bat" if os.name == "nt" else "flutter")
+        if not sdk:
+            raise SystemExit("Flutter SDK missing from PATH")
+        subprocess.run([sdk, "create", "--platforms=" + target,
                         "--org", "vn.erpdistribution", "--project-name", "erp_distribution",
                         "--android-language", "kotlin", "--no-pub", str(generated)], check=True)
         shutil.copytree(generated / target, destination)
