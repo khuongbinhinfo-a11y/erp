@@ -359,8 +359,8 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
           crossAxisAlignment:CrossAxisAlignment.start,children:[
            Text((item['sku']??'').toString()+' · '+(item['name']??'').toString(),
              style:const TextStyle(fontWeight:FontWeight.w700)),
-           Text('Đặt '+erpDecimalText(item['orderedBase'])+
-             ' · Đã nhận '+erpDecimalText(item['receivedBase']),
+           Text('Đặt '+erpNumberText(item['orderedBase'])+
+             ' · Đã nhận '+erpNumberText(item['receivedBase']),
              style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
            TextField(controller:controllers[(item['lineNo'] as num).toInt()],
              keyboardType:const TextInputType.numberWithOptions(decimal:true),
