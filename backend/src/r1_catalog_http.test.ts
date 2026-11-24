@@ -233,6 +233,38 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
   assert.equal(tooLate.status,409);
   assert.equal((await r1("rules",{...basic,sellSkuId:skuId,
    scopeKind:"BASE",adjustment:"PERCENT_DISCOUNT",amount:"10"})).status,400);
+  // P0 regression: history import and SKU editing must not disagree on the
+  // effective base price. Use a separate list and synthetic product fixture.
+  const recoveryList=await legacy("price-lists",{code:"P0-RECOVERY",name:"Kiểm thử giá đồng nhất"});
+  assert.equal(recoveryList.status,201,JSON.stringify(recoveryList.body));
+  const recoveryListId=recoveryList.body.id;
+  const recoveryContext={priceListId:recoveryListId,sellSkuId:baseSku,quantity:"1"};
+  const staleBase=await r1("rules",{priceListId:recoveryListId,sellSkuId:baseSku,
+   minQuantity:"1",scopeKind:"BASE",adjustment:"FIXED_PRICE",amount:"1.0000",
+   effectiveFrom:"2026-11-20T00:00:00Z"});
+  assert.equal(staleBase.status,201,JSON.stringify(staleBase.body));
+  const imported=await legacy("prices",{priceListId:recoveryListId,
+   productId:product.body.id,amount:"9800.0000",discountRate:"0",
+   effectiveAt:"2026-11-21T00:00:00Z"});
+  assert.equal(imported.status,201,JSON.stringify(imported.body));
+  const beforeImport=await resolvePrice({...recoveryContext,priceAt:"2026-11-20T12:00:00Z"});
+  assert.equal(beforeImport.status,200,JSON.stringify(beforeImport.body));
+  assert.equal(Number(beforeImport.body.quote.unitPrice),1);
+  const afterImport=await resolvePrice({...recoveryContext,priceAt:"2026-11-21T12:00:00Z"});
+  assert.equal(afterImport.status,200,JSON.stringify(afterImport.body));
+  assert.equal(Number(afterImport.body.quote.unitPrice),9800,
+   "later effective base-unit price from history must not be masked by a stale BASE rule");
+  const corrected=await r1("rules",{priceListId:recoveryListId,sellSkuId:baseSku,
+   minQuantity:"1",scopeKind:"BASE",adjustment:"FIXED_PRICE",amount:"10500.0000",
+   effectiveFrom:"2026-11-22T00:00:00Z"});
+  assert.equal(corrected.status,201,JSON.stringify(corrected.body));
+  const afterCorrection=await resolvePrice({...recoveryContext,priceAt:"2026-11-22T12:00:00Z"});
+  assert.equal(afterCorrection.status,200,JSON.stringify(afterCorrection.body));
+  assert.equal(Number(afterCorrection.body.quote.unitPrice),10500);
+  assert.equal((await resolvePrice({...recoveryContext,sellSkuId:skuId,
+   priceAt:"2026-11-22T12:00:00Z"})).status,409,
+   "product-level price history must not leak into a carton SKU");
+
   // R1-C.1: selection stays on the existing SKU pricing engine, with
   // strict list windows, scoped priority, concurrency, RBAC, and replay.
   assert.equal((await legacy("price-lists",{code:"BAD-WINDOW",name:"Sai thời hạn",
