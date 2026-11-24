@@ -14,6 +14,7 @@ type Rule={
   id:string;scope_kind:string;adjustment:string;amount:string;priority:number;min_quantity:string;
   stacking:string;stop_processing:boolean;channel_id:string|null;
   customer_id:string|null;customer_group:string|null;effective_from:Date;
+  price_list_id:string;priceListCode?:string;listStopProcessing?:boolean;
 };
 const percent=new Set(["PERCENT_DISCOUNT","PERCENT_MARKUP"]);
 const deduct=new Set(["PERCENT_DISCOUNT","AMOUNT_DISCOUNT"]);
@@ -114,6 +115,10 @@ export async function resolveR1Price(db:PoolClient,input:Query){
     SELECT 1 FROM public.schema_migrations
     WHERE version='0018_r1c_price_list_assignment.sql') AS ready`);
   const scoped=gate.rows[0]?.ready===true;
+  const p0=await db.query<{ready:boolean}>(`SELECT EXISTS(
+    SELECT 1 FROM public.schema_migrations
+    WHERE version='0019_p0_price_order_parity.sql') AS ready`);
+  const listStackingAvailable=p0.rows[0]?.ready===true;
   if(!selectedListId){
     if(!scoped)throw new R1QuoteError(503,"PRICE_LIST_ASSIGNMENT_MIGRATION_REQUIRED");
     const winner=await db.query<{
@@ -148,18 +153,22 @@ export async function resolveR1Price(db:PoolClient,input:Query){
     priceListSelectionReason="Tự chọn bảng giá "+winner.rows[0].code+
       " theo "+label+" · ưu tiên "+winner.rows[0].priority;
   }
-  const list=await db.query<{currency:string;code:string}>(
-    scoped?`SELECT l.currency,l.code FROM catalog_price_list l
+  const policyColumns=listStackingAvailable
+    ?'l.stacking_mode AS "stackingMode",l.stop_processing AS "stopProcessing"'
+    :"'EXCLUSIVE'::text AS \"stackingMode\",false AS \"stopProcessing\"";
+  const list=await db.query<{currency:string;code:string;
+    stackingMode:string;stopProcessing:boolean}>(
+    scoped?`SELECT l.currency,l.code,${policyColumns} FROM catalog_price_list l
       WHERE l.installation_id=$1 AND l.branch_id=$2 AND l.id=$3 AND l.active
         AND (l.effective_from IS NULL OR l.effective_from<=$4::timestamptz)
         AND (l.effective_to IS NULL OR l.effective_to>$4::timestamptz)
         AND (($5::uuid IS NULL AND $7::uuid IS NULL) OR (true ${listScopePredicate('$4','$5','$6','$7')}))`:
-      `SELECT currency,code FROM catalog_price_list
-      WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active`,
+      `SELECT l.currency,l.code,${policyColumns} FROM catalog_price_list l
+      WHERE l.installation_id=$1 AND l.branch_id=$2 AND l.id=$3 AND l.active`,
     scoped?[t,b,selectedListId,input.priceAt,customerId??null,customerGroupId,channelId??null]:[t,b,selectedListId]);
   if(list.rows[0]?.currency!=="VND")
     throw new R1QuoteError(409,"PRICE_LIST_UNAVAILABLE_OR_EXPIRED");
-  const rules=await db.query<Rule>(`SELECT r.id,r.scope_kind,r.adjustment,r.amount::text,
+  const rules=await db.query<Rule>(`SELECT r.id,r.price_list_id,r.scope_kind,r.adjustment,r.amount::text,
       r.priority,r.stacking,r.stop_processing,r.channel_id,r.customer_id,r.customer_group,r.min_quantity::text,r.effective_from
     FROM catalog_sku_price_rule r
     WHERE r.installation_id=$1 AND r.branch_id=$2 AND r.price_list_id=$3
@@ -213,6 +222,7 @@ export async function resolveR1Price(db:PoolClient,input:Query){
   const trace:{
     ruleId:string|null;scope:string;adjustment:string;amount:string;result:string;
     reason:string;priority:number|null;minQuantity:string|null;
+    priceListCode?:string;
     effectiveFrom:string|null;stacking:string|null;
   }[]=[
     {ruleId:sourceId,scope:origin,adjustment:"FIXED_PRICE",amount:basePrice,
