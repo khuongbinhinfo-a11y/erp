@@ -3,7 +3,9 @@ import { hasPermission } from "./rbac.ts";
 import { MutationFault, requireRevision, type MutationContext } from "./mutation.ts";
 
 export class CustomerLocationFault extends Error {
-  constructor(public status:number,public code:string){super(code);}
+  readonly status:number;
+  readonly code:string;
+  constructor(status:number,code:string){super(code);this.status=status;this.code=code;}
 }
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CODE=/^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$/;
