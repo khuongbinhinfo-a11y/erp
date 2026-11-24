@@ -314,8 +314,9 @@ class ErpIdentityClient {
       body:payload,revision:0,idempotencyKey:key);
 
   Future<Map<String,dynamic>> bulkCsvFile(
-      String token,String resource,String branchId,{bool template=false,String format='csv'})async{
+      String token,String resource,String branchId,{bool template=false,String format='csv',String? priceListId})async{
     final query=Uri(queryParameters:{'resource':resource,'branchId':branchId,
+      if(priceListId!=null)'priceListId':priceListId,
       if(format!='csv')'format':format}).query;
     return _request('GET',
       '/v1/catalog/bulk/${template?'template':'export'}?$query',token:token);
