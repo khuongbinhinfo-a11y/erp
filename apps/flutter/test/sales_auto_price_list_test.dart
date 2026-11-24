@@ -101,6 +101,6 @@ void main(){
     expect(selectedLists,contains(listB));
     final save=tester.widget<FilledButton>(find.byKey(const ValueKey('sales-save')));
     expect(save.onPressed,isNotNull);
-    expect(find.textContaining('30.000 ₫'),findsWidgets);
+    expect(find.textContaining('30,000 ₫'),findsWidgets);
   });
 }
