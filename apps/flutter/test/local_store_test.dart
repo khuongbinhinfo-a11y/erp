@@ -187,6 +187,24 @@ void main(){
     await store.releaseRejectedSalesClaim(a,id,'old','editor-two');
     expect((await store.unsentSalesUpdates(a,id)).single['status'],'rejected');
   });
+  test('terminal create rejection is fenced for both existing and moved IDs',()async{
+    final one=ErpLocalStore(Memory()),two=ErpLocalStore(one.driver);
+    await one.saveScopedCart(a,'original',{'quantity':'9'},owner:'actor-one');
+    await one.markCartSubmitting(a,'original',owner:'actor-one',commandKey:'send-key');
+    expect(await two.cartCreateDisposition(a,'original',owner:'actor-one',
+      commandKey:'send-key'),'submitted');
+    await one.releaseRejectedCart(a,'original',owner:'actor-one',commandKey:'send-key');
+    expect(await two.cartCreateDisposition(a,'original',owner:'actor-one',
+      commandKey:'send-key'),'rejected');
+    await two.claimScopedCart(a,'original','resumed',owner:'actor-two');
+    expect(await one.cartCreateDisposition(a,'original',owner:'actor-one',
+      commandKey:'send-key'),'rejected');
+    await expectLater(one.markCartSubmitting(a,'original',owner:'actor-one',
+      commandKey:'send-key'),throwsA(isA<LocalRecoveryConflict>()));
+    await two.markCartSubmitting(a,'resumed',owner:'actor-two',commandKey:'new-key');
+    expect(await one.cartCreateDisposition(a,'resumed',owner:'actor-two',
+      commandKey:'new-key'),'submitted');
+  });
   test('retired cart tombstones retain ownership fence but never customer PII',()async{
     final memory=Memory(),store=ErpLocalStore(memory);
     await store.saveScopedCart(a,'private',{'customerPhone':'0900000000'},owner:'person');
