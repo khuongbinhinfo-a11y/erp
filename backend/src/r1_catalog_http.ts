@@ -369,6 +369,313 @@ async function listing(db:PoolClient,t:string,b:string,kind:Kind,q:string,skuId?
   // Filter before the LIMIT, not on the client: large catalogs remain reachable.
   const {filters,values}=buildSkuTaxonomyFilters(scope);
   const params=[t,b,"%"+q+"%",...values];
+  const skuFilter=skuId?'AND s.id=
+  const r=await db.query(`SELECT s.id,s.product_id AS "productId",s.sku AS code,
+   p.name AS "productName",s.unit_code AS "unitCode",
+   s.conversion_to_base::text AS "toBase",s.is_base AS "isBase",s.active,s.revision::integer,
+   (SELECT b.barcode FROM catalog_sku_barcode b
+    WHERE b.installation_id=s.installation_id AND b.branch_id=s.branch_id
+      AND b.sell_sku_id=s.id AND b.active
+    ORDER BY b.is_primary DESC,b.barcode LIMIT 1) AS barcode
+   FROM catalog_sell_sku s
+   JOIN catalog_product p ON p.installation_id=s.installation_id
+     AND p.branch_id=s.branch_id AND p.id=s.product_id
+   WHERE s.installation_id=$1 AND s.branch_id=$2
+    AND (s.sku ILIKE $3 OR p.name ILIKE $3 OR EXISTS (
+     SELECT 1 FROM catalog_sku_barcode bc
+     WHERE bc.installation_id=s.installation_id AND bc.branch_id=s.branch_id
+      AND bc.sell_sku_id=s.id AND bc.active AND bc.barcode ILIKE $3))
+    ${filters.length?'AND '+filters.join(' AND '):''}
+    ${skuFilter}
+   ORDER BY ${scope?.productId?'s.id':'s.sku,s.id'}
+   LIMIT ${scope?.productId?'101':'100'}`,params);
+  return r.rows;
+ }
+ if(kind==="barcodes"){
+  // 0017 adds the row revision. Barcode listing must remain readable on 0016
+  // during a maintenance/rolling backend rollout.
+  const revision=(await hasR1A(db))?"c.revision::integer":"0::integer";
+  const r=await db.query(`SELECT c.id,c.sell_sku_id AS "sellSkuId",s.sku,
+     c.barcode,c.is_primary AS "isPrimary",c.active,${revision} AS revision,s.product_id AS "productId"
+   FROM catalog_sku_barcode c JOIN catalog_sell_sku s ON
+    s.installation_id=c.installation_id AND s.branch_id=c.branch_id
+    AND s.id=c.sell_sku_id
+   WHERE c.installation_id=$1 AND c.branch_id=$2
+    AND ($3::uuid IS NULL OR c.sell_sku_id=$3::uuid)
+    AND (c.barcode ILIKE $4 OR s.sku ILIKE $4)
+   ${scope?.productId?'AND s.product_id=$5 AND ($6::uuid IS NULL OR c.id>$6)':''}
+   ORDER BY ${scope?.productId?'c.id':'c.is_primary DESC,c.barcode'} LIMIT ${scope?.productId?101:100}`,
+    [t,b,skuId??null,"%"+q+"%",...(scope?.productId?[scope.productId,scope.afterId??null]:[])]);
+  return r.rows;
+ }
+ if(kind==="channels"){
+  const r=await db.query(`SELECT id,code,name,active,revision::integer FROM catalog_sales_channel
+   WHERE installation_id=$1 AND branch_id=$2 AND
+     (code ILIKE $3 OR name ILIKE $3)
+   ORDER BY code,id LIMIT 100`,[t,b,"%"+q+"%"]);
+  return r.rows;
+ }
+ const r=await db.query(`SELECT r.id,r.price_list_id AS "priceListId",
+    l.code AS "priceListCode",r.sell_sku_id AS "sellSkuId",s.sku,
+    r.scope_kind AS "scopeKind",r.channel_id AS "channelId",ch.code AS "channelCode",
+    r.customer_id AS "customerId",c.code AS "customerCode",
+    r.customer_group AS "customerGroup",
+    r.adjustment,r.amount::text,r.priority,r.stacking,
+    r.stop_processing AS "stopProcessing",r.min_quantity::text AS "minQuantity",
+    r.effective_from AS "effectiveFrom",r.effective_to AS "effectiveTo",
+    x.retired_at AS "retiredAt"
+   FROM catalog_sku_price_rule r
+   JOIN catalog_price_list l ON l.installation_id=r.installation_id
+      AND l.branch_id=r.branch_id AND l.id=r.price_list_id
+   LEFT JOIN catalog_sales_channel ch ON ch.installation_id=r.installation_id
+      AND ch.branch_id=r.branch_id AND ch.id=r.channel_id
+   LEFT JOIN catalog_customer c ON c.installation_id=r.installation_id
+      AND c.branch_id=r.branch_id AND c.id=r.customer_id
+   LEFT JOIN catalog_sku_price_retirement x ON
+     x.installation_id=r.installation_id AND x.branch_id=r.branch_id
+     AND x.rule_id=r.id
+   JOIN catalog_sell_sku s
+    ON s.installation_id=r.installation_id AND s.branch_id=r.branch_id
+    AND s.id=r.sell_sku_id
+   WHERE r.installation_id=$1 AND r.branch_id=$2
+    AND (s.sku ILIKE $3 OR r.scope_kind ILIKE $3 OR l.code ILIKE $3
+       OR c.code ILIKE $3 OR ch.code ILIKE $3 OR r.customer_group ILIKE $3)
+   ORDER BY r.created_at DESC,r.id DESC LIMIT 100`,[t,b,"%"+q+"%"]);
+ return r.rows;
+}
+export async function handleR1Http(req:IncomingMessage,res:ServerResponse,
+ requestId:string,url:URL,opts:IdentityOptions,ready:()=>Promise<boolean>):Promise<void>{
+ const origin=typeof req.headers.origin==="string"?req.headers.origin:undefined;
+ const cors=origin&&origin===opts.allowedOrigin?origin:undefined;
+ if(origin&&!cors){fail(res,403,"ORIGIN_DENIED",requestId);return;}
+ if(req.method==="OPTIONS"){
+  if(!cors){fail(res,403,"ORIGIN_DENIED",requestId);return;}
+  send(res,204,null,requestId,cors);return;
+ }
+ const t=opts.installationId,pool=opts.pool;
+ if(!pool||!t||!UUID.test(t)||!opts.allowedOrigin){
+  fail(res,503,"NOT_CONFIGURED",requestId,cors);return;
+ }
+ try{
+  if(!await ready()||!await schema(pool)){
+   fail(res,503,"R1_MIGRATION_REQUIRED",requestId,cors);return;
+  }
+  const raw=req.headers.authorization;
+  const token=typeof raw==="string"?/^Bearer ([A-Za-z0-9_-]{43})$/.exec(raw)?.[1]:null;
+  const conn=await pool.connect();let actorId:string|undefined;
+  try{actorId=token?(await resolveSession(conn,t,token))?.actorId:undefined;}
+  finally{conn.release();}
+  if(!actorId){fail(res,401,"AUTH_REQUIRED",requestId,cors);return;}
+  if(url.pathname==="/v1/catalog/r1/resolve"&&req.method==="POST"){
+   const raw=await body(req);
+   keys(raw,["branchId","sellSkuId","priceListId","quantity","customerId","channelId","priceAt"]);
+   const branchId=id(raw.branchId),sellSkuId=id(raw.sellSkuId),
+    priceListId=optionalId(raw.priceListId),quantity=decimal(raw.quantity,QTY);
+   const db=await pool.connect();
+   try{
+    if(!await hasPermission(db,{installationId:t,actorId,branchId,permission:"catalog.read"}))
+     throw new R1Error(403,"DENIED");
+    const quote=await resolveR1Price(db,{
+      installationId:t,branchId,sellSkuId,priceListId,quantity,
+      customerId:optionalId(raw.customerId),channelId:optionalId(raw.channelId),
+      priceAt:raw.priceAt==null?new Date().toISOString():iso(raw.priceAt),
+    });
+    send(res,200,{quote:{...quote,priceSignature:r1QuoteSignature(quote)},requestId},requestId,cors);
+   }finally{db.release();}
+   return;
+  }
+  const retirePath=/^\/v1\/catalog\/r1\/rules\/([0-9a-f-]{36})\/retire$/i.exec(url.pathname);
+  if(retirePath&&req.method==="POST"){
+   const ruleId=id(retirePath[1]),raw=await body(req);
+   keys(raw,["branchId","reason"]);
+   const branchId=id(raw.branchId),reason=label(raw.reason,500);
+   if(reason.length<3)throw new R1Error(400,"REASON_REQUIRED");
+   const ctx=mutation(req,{installationId:t,actorId,requestId,
+     action:"r1.catalog.rules.retire",payload:{branchId,ruleId,reason}});
+   const result=await executeMutation(pool,ctx,{
+     authorize:(db,c)=>hasPermission(db,{installationId:c.installationId,
+       actorId:c.actorId,permission:"catalog.write",branchId}),
+     execute:(db,c)=>retireRule(db,c.installationId,c.actorId,branchId,ruleId,reason),
+   });
+   send(res,result.status,result.body,requestId,cors);
+   return;
+  }
+  const patchPath=/^\/v1\/catalog\/r1\/(skus|barcodes|channels)\/([0-9a-f-]{36})$/i.exec(url.pathname);
+  if(patchPath&&req.method==="PATCH"){
+    const targetKind=patchPath[1] as "skus"|"barcodes"|"channels";
+    if(targetKind==="barcodes"&&!await hasR1A(pool))
+      throw new R1Error(503,"R1A_MIGRATION_REQUIRED");
+    const targetId=id(patchPath[2]),raw=await body(req);
+    const branchId=id(raw.branchId);
+    if(targetKind==="skus")keys(raw,["branchId","active","reason"]);
+    if(targetKind==="barcodes")keys(raw,["branchId","active","isPrimary"]);
+    if(targetKind==="channels")keys(raw,["branchId","name","active"]);
+    const activeFlag=raw.active===undefined?undefined:bool(raw.active);
+    const primaryFlag=raw.isPrimary===undefined?undefined:bool(raw.isPrimary);
+    const name=raw.name===undefined?undefined:label(raw.name);
+    const reason=raw.reason===undefined?undefined:label(raw.reason,500);
+    if(targetKind==="skus"&&activeFlag===false&&(!reason||reason.length<3))
+      throw new R1Error(400,"SKU_DISABLE_REASON_REQUIRED");
+    if(activeFlag===undefined&&primaryFlag===undefined&&name===undefined)
+      throw new R1Error(400,"EMPTY_UPDATE");
+    const ctx=patchMutation(req,{installationId:t,actorId,requestId,
+      action:"r1.catalog."+targetKind+".update",
+      payload:{branchId,targetId,targetKind,
+        ...(activeFlag!==undefined?{active:activeFlag}:{}),
+        ...(primaryFlag!==undefined?{isPrimary:primaryFlag}:{}),
+        ...(name!==undefined?{name}:{}),
+        ...(reason!==undefined?{reason}:{})}});
+    const outcome=await executeMutation(pool,ctx,{
+      authorize:(db,c)=>hasPermission(db,{installationId:c.installationId,
+        actorId:c.actorId,branchId,permission:"catalog.write"}),
+      execute:async(db,c)=>{
+        const table=targetKind==="skus"?"catalog_sell_sku":
+          targetKind==="barcodes"?"catalog_sku_barcode":"catalog_sales_channel";
+        if(targetKind==="skus"){
+          // Lock the parent before variant locks so concurrent deactivations
+          // cannot leave an enabled product with zero sellable variants.
+          await db.query(`SELECT id FROM catalog_product WHERE installation_id=$1
+            AND branch_id=$2 AND id=(SELECT product_id FROM catalog_sell_sku
+              WHERE installation_id=$1 AND branch_id=$2 AND id=$3) FOR UPDATE`,
+            [t,branchId,targetId]);
+        }
+        const current=await db.query<{revision:string;active:boolean;
+           isBase?:boolean;productId?:string;sellSkuId?:string;isPrimary?:boolean}>(
+          `SELECT revision::text,active${targetKind==="skus"?
+            ',is_base AS "isBase",product_id AS "productId"':targetKind==="barcodes"?
+            ',sell_sku_id AS "sellSkuId",is_primary AS "isPrimary"':''}
+           FROM ${table} WHERE installation_id=$1 AND branch_id=$2 AND id=$3 FOR UPDATE`,
+          [t,branchId,targetId]);
+        if(!current.rows[0])throw new R1Error(404,"NOT_FOUND");
+        requireRevision(c.expectedRevision,Number(current.rows[0].revision));
+        if(targetKind==="skus"){
+          if(activeFlag===true){
+            const product=await db.query<{active:boolean}>(`SELECT active FROM catalog_product
+              WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,
+              [t,branchId,current.rows[0].productId]);
+            if(product.rows[0]?.active!==true)
+              throw new R1Error(409,"PRODUCT_DISABLED_ENABLE_FIRST");
+          }
+          await db.query(`UPDATE catalog_sell_sku
+            SET active=$4,revision=revision+1
+            WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,
+            [t,branchId,targetId,activeFlag]);
+          if(activeFlag===false){
+            const other=await db.query(`SELECT 1 FROM catalog_sell_sku
+              WHERE installation_id=$1 AND branch_id=$2 AND product_id=$3
+                AND active LIMIT 1`,
+              [t,branchId,current.rows[0].productId]);
+            if(other.rowCount===0)
+              await db.query(`UPDATE catalog_product
+                SET active=false,revision=revision+1
+                WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active`,
+                [t,branchId,current.rows[0].productId]);
+          }
+        }else if(targetKind==="channels"){
+          await db.query(`UPDATE catalog_sales_channel
+            SET name=COALESCE($4,name),active=COALESCE($5,active),
+              revision=revision+1
+            WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,
+            [t,branchId,targetId,name??null,activeFlag??null]);
+        }else{
+          const newActive=activeFlag??current.rows[0].active;
+          const newPrimary=newActive?(primaryFlag??current.rows[0].isPrimary??false):false;
+          if(newPrimary){
+            // One primary per SKU, change prior choice atomically with the same
+            // audited command. Concurrent writers cannot bypass unique index.
+            await db.query(`UPDATE catalog_sku_barcode
+              SET is_primary=false,revision=revision+1
+              WHERE installation_id=$1 AND branch_id=$2 AND sell_sku_id=$3
+                AND id<>$4 AND is_primary AND active`,
+                [t,branchId,current.rows[0].sellSkuId,targetId]);
+          }
+          await db.query(`UPDATE catalog_sku_barcode
+            SET active=$4,is_primary=$5,revision=revision+1
+            WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,
+            [t,branchId,targetId,newActive,newPrimary]);
+        }
+        const saved=await db.query<{revision:string}>(`SELECT revision::text FROM ${table}
+          WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,
+          [t,branchId,targetId]);
+        // Receipt stores the corrective reason (in addition to fingerprint),
+        // so the SKU lifecycle decision remains reviewable after ACK/replay.
+        return {status:200,body:{id:targetId,revision:Number(saved.rows[0]!.revision),
+          ...(targetKind==="skus"&&activeFlag===false?{reason}:{}),
+        }};
+      },
+    });
+    send(res,outcome.status,outcome.body,requestId,cors);return;
+  }
+  const type=kind(url.pathname.slice("/v1/catalog/r1/".length));
+  if(req.method==="GET"){
+   const branchId=id(url.searchParams.get("branchId")),q=(url.searchParams.get("q")??"").trim();
+   if(q.length>80)throw new R1Error(400,"SEARCH_TOO_LONG");
+   const skuId=optionalId(url.searchParams.get("sellSkuId"));
+   const brandId=optionalId(url.searchParams.get("brandId"));
+   const groupId=optionalId(url.searchParams.get("groupId"));
+   const categoryId=optionalId(url.searchParams.get("categoryId"));
+   const productId=optionalId(url.searchParams.get("productId"));
+   const rawAfter=url.searchParams.get("after");
+   const scoped=productId!=null&&["units","skus","barcodes"].includes(type);
+   if(rawAfter!==null&&!scoped)throw new R1Error(400,"INVALID_PAGINATION");
+   if(productId&&!scoped)throw new R1Error(400,"INVALID_PRODUCT_SCOPE");
+   const afterId=rawAfter===null?undefined:type==="units"?label(rawAfter,24):id(rawAfter);
+   if((brandId||categoryId)&&type==="skus"){
+     const schema=await pool.query<{ready:boolean}>(
+       "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version='0020_catalog_hierarchy_locations.sql') AS ready");
+     if(schema.rows[0]?.ready!==true)throw new R1Error(503,"CATALOG_HIERARCHY_MIGRATION_REQUIRED");
+   }
+   const db=await pool.connect();
+   try{
+    if(!await hasPermission(db,{installationId:t,actorId,branchId,permission:"catalog.read"}))
+     throw new R1Error(403,"DENIED");
+    const items=await listing(db,t,branchId,type,q,skuId,
+      (type==="skus"||scoped)?{brandId:brandId??undefined,groupId:groupId??undefined,
+        categoryId:categoryId??undefined,productId:productId??undefined,
+        afterId:afterId??undefined}:undefined);
+    // Product-scoped keyset pagination precedes the LIMIT: never use a
+    // global 100-SKU page as the selectable units for a single product.
+    send(res,200,{items:scoped?items.slice(0,100):items,
+      ...(scoped&&items.length>100?{nextAfter:type==="units"?items[99].unitCode:items[99].id}:{}),requestId},requestId,cors);
+   }finally{db.release();}
+   return;
+  }
+  if(req.method==="POST"){
+   const parsed=parse(type,await body(req));
+   // Fingerprint only JSON fields actually provided; undefined is not JSON
+   // and must not break idempotent writes for optional pricing scopes.
+   const fingerprintPayload=Object.fromEntries(Object.entries(parsed)
+     .filter(([,value])=>value!==undefined));
+   const ctx=mutation(req,{installationId:t,actorId,requestId,
+    action:"r1.catalog."+type+".create",payload:{type,...fingerprintPayload}});
+   const result=await executeMutation(pool,ctx,{
+    authorize:(db,c)=>hasPermission(db,{installationId:c.installationId,
+      actorId:c.actorId,permission:"catalog.write",branchId:parsed.branchId}),
+    execute:(db,c)=>create(db,c.installationId,type,parsed),
+   });
+   send(res,result.status,result.body,requestId,cors);
+   return;
+  }
+  fail(res,405,"METHOD_NOT_ALLOWED",requestId,cors);
+ }catch(err){
+  if(err instanceof R1Error||err instanceof R1QuoteError){
+   fail(res,err.status,err.code,requestId,cors);return;
+  }
+  if(err instanceof MutationFault){
+   fail(res,err.httpStatus,err.code,requestId,cors);return;
+  }
+  if(typeof err==="object"&&err!==null&&"code" in err){
+   if(err.code==="23505"){fail(res,409,"DUPLICATE",requestId,cors);return;}
+   if(err.code==="23503"||err.code==="23514"){
+    fail(res,400,"INVALID_REFERENCE",requestId,cors);return;
+   }
+   if(err.code==="P0001"){fail(res,409,"IMMUTABLE_OR_UNIT_MISMATCH",requestId,cors);return;}
+  }
+  fail(res,503,"R1_UNAVAILABLE",requestId,cors);
+ }
+}
++(params.length+1):'';
+  if(skuId)params.push(skuId);
   const r=await db.query(`SELECT s.id,s.product_id AS "productId",s.sku AS code,
    p.name AS "productName",s.unit_code AS "unitCode",
    s.conversion_to_base::text AS "toBase",s.is_base AS "isBase",s.active,s.revision::integer,

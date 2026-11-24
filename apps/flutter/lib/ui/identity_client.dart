@@ -332,7 +332,7 @@ class ErpIdentityClient {
     final params=<String,String>{};
     if(branchId!=null)params['branchId']=branchId;
     if(query.trim().isNotEmpty)params['q']=query.trim();
-    if(itemId!=null)params['id']=itemId;
+    if(itemId!=null)params[resource=='r1/skus'?'sellSkuId':'id']=itemId;
     final suffix=params.isEmpty?'':'?${Uri(queryParameters:params).query}';
     final raw=await _request('GET','/v1/catalog/$resource$suffix',token:token);
     return (raw['items'] as List<dynamic>)

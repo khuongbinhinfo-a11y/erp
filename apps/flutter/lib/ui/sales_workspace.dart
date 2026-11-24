@@ -71,8 +71,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       _scheduleRecovery();
     });
   }
-  bool get _navigationLocked=>saving||localRecoveryBusy||pendingCreate!=null||
-    pendingUpdate!=null||pendingConfirm!=null;
+  bool get _navigationLocked=>saving||localRecoveryBusy||
+    (!localRecoveryBlocked&&(pendingCreate!=null||pendingUpdate!=null||pendingConfirm!=null));
   @override void setState(VoidCallback fn){
     super.setState(fn);
     final locked=_navigationLocked;
@@ -88,7 +88,14 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     final scope=_localScope,store=widget.client.localStore;
     if(scope==null||store==null)return;
     final token=widget.session.token,branch=scope.branch;
-    setState((){localRecoveryBusy=true;localRecoveryBlocked=false;});
+    setState((){
+      localRecoveryBusy=true;localRecoveryBlocked=false;pendingNeedsReceipt=false;
+      // Do not carry in-memory pending commands across branches or grants.
+      // The durable slot remains intact until an authenticated server ACK.
+      pendingCreate=null;pendingCreateKey=null;pendingCreateAutoConfirm=false;
+      pendingUpdate=null;pendingUpdateKey=null;
+      pendingConfirm=null;pendingConfirmKey=null;
+    });
     try{
       final data=await store.salesRecovery(scope);
       if(!_sameScope(token,branch)||data==null)return;
@@ -102,7 +109,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         final warehouse=(command['shipping'] as Map)['warehouseId'];
         if(warehouse is String&&!widget.session.grants.any((g)=>g.branchId==branch&&g.warehouseId==warehouse&&g.permission=='inventory.read'))throw const FormatException();
       }
-      if(!{'create','update','confirm'}.contains(kind))throw const FormatException();
+      final requiredPermission=switch(kind){
+        'create'=>'orders.create','update'=>'orders.update','confirm'=>'orders.confirm',
+        _=>null,
+      };
+      if(requiredPermission==null||!can(requiredPermission))throw const FormatException();
       setState((){
         pendingNeedsReceipt=true;
         if(kind=='create'){pendingCreate=body;pendingCreateKey=key;pendingCreateAutoConfirm=data['auto']==true;}
@@ -342,7 +353,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           // The initial page contains only 100 SKUs. Resolve a historical
           // line by its exact persisted SKU instead of silently replacing it.
           List<Map<String,dynamic>> found;
-          try{found=await catalog('r1/skus',query:(row['sku']??'').toString());}catch(_){found=[];}
+          try{
+            found=priorSku==null
+              ?await catalog('r1/skus',query:(row['sku']??row['code']??'').toString())
+              :await catalog('r1/skus',itemId:priorSku);
+          }catch(_){found=[];}
           matching=found.where((x)=>priorSku!=null
             ? x['id']==priorSku
             : x['productId']==legacyProduct&&x['isBase']==true&&
@@ -1007,7 +1022,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
             'walkInName':walkInName,'walkInPhone':walkInPhone,'rememberDeliveryChoice':rememberDelivery},
           'lines':lines.map((line){
             final sku=skus.where((x)=>x['id']==line.sellSkuId).firstOrNull;
-            return <String,dynamic>{'sellSkuId':line.sellSkuId,'sku':sku?['sku'],
+            return <String,dynamic>{'sellSkuId':line.sellSkuId,'sku':sku?['code']??sku?['sku'],
               'quantity':erpNumberCanonical(line.quantity.text),
               'unitPrice':erpNumberCanonical(line.unitPrice.text),
               'discountRate':erpNumberCanonical(line.discountRate.text),'taxRate':erpNumberCanonical(line.taxRate.text),
