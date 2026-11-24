@@ -107,6 +107,17 @@ void main(){
     expect(remaining.id,'tab-two');
     expect((remaining.draft['lines'] as List).single['quantity'],'2');
   });
+  test('claim a saved cart exactly once across racing tabs',()async{
+    final driver=Memory(),first=ErpLocalStore(driver),second=ErpLocalStore(driver);
+    await first.saveScopedCart(a,'old-cart',{'lines':[{'quantity':'7'}]});
+    final firstResult=await first.claimScopedCart(a,'old-cart','opened-one');
+    expect((firstResult['lines'] as List).single['quantity'],'7');
+    await expectLater(second.claimScopedCart(a,'old-cart','opened-two'),
+      throwsA(isA<LocalRecoveryConflict>()));
+    expect((await second.savedCarts(a)).map((x)=>x.id).toList(),['opened-one']);
+    await first.clearScopedCart(a,'opened-one');
+    expect(await second.savedCarts(a),isEmpty);
+  });
   test('cache expiry is explicit, never proof of a current price',()async{
     final store=ErpLocalStore(Memory());
     final time=DateTime.utc(2026,11,24);

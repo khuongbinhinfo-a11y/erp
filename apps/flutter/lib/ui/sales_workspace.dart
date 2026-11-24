@@ -1057,7 +1057,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     String totalQuoted()=>previewGrandTotal??'0';
     bool draftSaving=false,finishDraft=false,draftWriteFailed=false;
     final autoDraft=formScope!=null&&(order==null||copying||localDraft);
-    final cartId=autoDraft?newKey():null;
+    final cartId=autoDraft?(localDraft&&(order?['localCartId'] is String)?order!['localCartId'] as String:newKey()):null;
     final String? sourceCartId=localDraft ? (order?['localSourceCartId'] as String?) : null;
     bool sourceCartCleared=false;
     Map<String,dynamic> draftSnapshot(){
@@ -2183,7 +2183,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
             }
             return;
           }
-          draft=Map<String,dynamic>.from(target.draft)..['localSourceCartId']=picked;
+          try{
+            final claimedId=newKey();
+            draft=await widget.client.localStore!.claimScopedCart(scope,picked,claimedId);
+            draft['localCartId']=claimedId;
+          }catch(_){inform('Giỏ đã được mở trong cửa sổ khác. Không tạo trùng đơn.',error:true);return;}
         }
       }
       final form=await editForm(order:source??draft,copying:source!=null,localDraft:draft!=null);if(form==null||!mounted||widget.session.token!=token)return;

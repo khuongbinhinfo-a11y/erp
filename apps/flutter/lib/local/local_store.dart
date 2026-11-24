@@ -62,6 +62,38 @@ class ErpLocalStore {
     }
     throw const LocalRecoveryConflict();
   }
+  /// Atomically move a saved cart into a unique editor identity. Two tabs
+  /// selecting the same old cart cannot both submit it as separate orders.
+  Future<Map<String,dynamic>> claimScopedCart(LocalScope scope,String sourceId,String newId)async{
+    if(driver is! AtomicLocalDriver||newId.isEmpty||sourceId==newId||newId=='legacy'){
+      throw const LocalRecoveryConflict();
+    }
+    if(sourceId=='legacy'){
+      final oldKey=_key(scope,'cart','current'),old=await driver.read(oldKey);
+      if(old==null)throw const LocalRecoveryConflict();
+      Map<String,dynamic> cart;
+      try{cart=Map<String,dynamic>.from(jsonDecode(old) as Map);}
+      catch(_){throw const LocalRecoveryConflict();}
+      await saveScopedCart(scope,newId,cart);
+      if(!await (driver as AtomicLocalDriver).compareAndSwap(oldKey,old,null)){
+        await clearScopedCart(scope,newId);throw const LocalRecoveryConflict();
+      }
+      return cart;
+    }
+    final location=_key(scope,'cart','multi');
+    for(var attempt=0;attempt<16;attempt++){
+      final old=await driver.read(location);
+      if(old==null)throw const LocalRecoveryConflict();
+      Map<String,dynamic> items;
+      try{items=Map<String,dynamic>.from(jsonDecode(old) as Map);}
+      catch(_){throw const LocalRecoveryConflict();}
+      if(!items.containsKey(sourceId)||items.containsKey(newId))throw const LocalRecoveryConflict();
+      final cart=Map<String,dynamic>.from(items.remove(sourceId) as Map);
+      items[newId]=cart;
+      if(await (driver as AtomicLocalDriver).compareAndSwap(location,old,jsonEncode(items)))return cart;
+    }
+    throw const LocalRecoveryConflict();
+  }
   Future<void> clearScopedCart(LocalScope scope,String id)async{
     if(id=='legacy'){await clearCart(scope);return;}
     if(driver is! AtomicLocalDriver||id.isEmpty)throw const LocalRecoveryConflict();
