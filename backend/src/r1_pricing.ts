@@ -238,6 +238,7 @@ export async function resolveR1Price(db:PoolClient,input:Query){
   }
   if(basePrice===null)throw new R1QuoteError(409,"SKU_HAS_NO_EFFECTIVE_BASE_PRICE");
   let price=basePrice,usedExclusive=false,stopped=false;
+  let stopAfterListId:string|null=null;
   const equivalentPolicies=new Set<string>();
   const trace:{
     ruleId:string|null;scope:string;adjustment:string;amount:string;result:string;
@@ -284,7 +285,7 @@ export async function resolveR1Price(db:PoolClient,input:Query){
               a.scope_kind='CUSTOMER_GROUP' AND a.customer_group_id=$8::uuid OR
               a.scope_kind='CHANNEL' AND a.channel_id=$9::uuid))
         ${listScopePredicate('$5','$7','$8','$9')}
-      ORDER BY l.priority DESC,r.priority DESC,r.effective_from DESC,r.id DESC
+      ORDER BY l.priority DESC,l.id ASC,r.priority DESC,r.effective_from DESC,r.id DESC
       LIMIT 251`,
       [t,b,input.sellSkuId,selectedListId,input.priceAt,input.quantity,
         customerId??null,customerGroupId,channelId??null]);
@@ -293,7 +294,7 @@ export async function resolveR1Price(db:PoolClient,input:Query){
   }
   for(const rule of applicableRules){
     if(rule.scope_kind==="BASE")continue;
-    if(stopped)break;
+    if(stopped||(stopAfterListId!==null&&rule.price_list_id!==stopAfterListId))break;
     const applies=(rule.customer_id===null||rule.customer_id===customerId)&&
       (rule.channel_id===null||rule.channel_id===channelId)&&
       (rule.customer_group===null||customerGroups.has(rule.customer_group))&&
@@ -330,7 +331,8 @@ export async function resolveR1Price(db:PoolClient,input:Query){
         (rule.stacking==="STACKABLE"?" · cộng dồn":" · độc lập"),
       priority:rule.priority,minQuantity:rule.min_quantity,
       effectiveFrom:rule.effective_from.toISOString(),stacking:rule.stacking});
-    if(rule.stop_processing||rule.listStopProcessing)stopped=true;
+    if(rule.stop_processing)stopped=true;
+    else if(rule.listStopProcessing)stopAfterListId=rule.price_list_id;
   }
   const total=await db.query<{total:string;normalized:string}>(
     `SELECT round($1::numeric*$2::numeric,0)::text AS total,
