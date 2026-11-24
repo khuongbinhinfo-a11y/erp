@@ -1130,8 +1130,10 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     }
     var firstQuoteScheduled=false;
     try{
-      return await showDialog<Map<String,dynamic>>(
+      final navigator=Navigator.of(context,rootNavigator:true);
+      final route=DialogRoute<Map<String,dynamic>>(
         context:context,barrierDismissible:false,
+        themes:InheritedTheme.capture(from:context,to:navigator.context),
         builder:(dialog)=>StatefulBuilder(builder:(ctx,refresh){
           final media=MediaQuery.sizeOf(ctx);
           // Editable SKU unit adds 32px to the desktop row: stack before overflow.
@@ -2025,6 +2027,13 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           ));
         }),
       );
+      final result=await navigator.push(route);
+      autoTimer?.cancel();
+      quoteDebounce?.cancel();skuDebounce?.cancel();customerDebounce?.cancel();
+      // The popped route remains mounted during its exit animation. Never dispose
+      // focus nodes/controllers until the overlay has actually been removed.
+      await route.completed;
+      return result;
     }finally{
       autoTimer?.cancel();lifecycle?.dispose();
       await persistDraft();
