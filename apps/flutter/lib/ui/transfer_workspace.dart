@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:material_ui/material_ui.dart';
 import 'erp_tokens.dart';
 import 'erp_display.dart';
+import 'erp_number_input.dart';
 import 'erp_toast.dart';
 import 'identity_client.dart';
 
@@ -269,7 +270,8 @@ class _TransferWorkspaceState extends State<TransferWorkspace>{
                     SizedBox(width:110,child:TextField(
                       controller:entry.value.qty,
                       decoration:const InputDecoration(labelText:'SL gốc'),
-                      keyboardType:const TextInputType.numberWithOptions(decimal:true))),
+                      keyboardType:const TextInputType.numberWithOptions(decimal:true),
+                      inputFormatters:const [ErpGroupedNumberFormatter(maxIntegerDigits:12,maxFractionDigits:6)])),
                     IconButton(onPressed:lines.length<=1?null:
                       ()=>set(()=>lines.remove(entry.value)),
                       icon:const Icon(Icons.close),tooltip:'Bỏ dòng'),
@@ -285,7 +287,7 @@ class _TransferWorkspaceState extends State<TransferWorkspace>{
               'branchId':b,'sourceWarehouseId':source,
               'destinationWarehouseId':dest,'note':'',
               'lines':lines.map((x)=>{'productId':x.product,
-                'quantity':x.qty.text.trim()}).toList(),
+                'quantity':erpNumberCanonical(x.qty.text)}).toList(),
             }),child:const Text('Lưu phiếu')),
           ],
         )));
@@ -355,7 +357,8 @@ class _TransferWorkspaceState extends State<TransferWorkspace>{
                     style:const TextStyle(fontSize:12,color:ErpTokens.muted)),
                   TextField(controller:controls[(x['lineNo'] as num).toInt()],
                     decoration:const InputDecoration(labelText:'Nhận đợt này'),
-                    keyboardType:const TextInputType.numberWithOptions(decimal:true)),
+                    keyboardType:const TextInputType.numberWithOptions(decimal:true),
+                    inputFormatters:const [ErpGroupedNumberFormatter(maxIntegerDigits:12,maxFractionDigits:6)]),
                   const Divider(height:10),
                 ])),
             ]))),
@@ -363,7 +366,7 @@ class _TransferWorkspaceState extends State<TransferWorkspace>{
             TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Đóng')),
             FilledButton(onPressed:()=>Navigator.pop(ctx,[
               for(final c in controls.entries)if(c.value.text.trim().isNotEmpty)
-                {'transferLineNo':c.key,'quantity':c.value.text.trim()},
+                {'transferLineNo':c.key,'quantity':erpNumberCanonical(c.value.text)},
             ]),child:const Text('Ghi nhận hàng')),
           ],
         ));
