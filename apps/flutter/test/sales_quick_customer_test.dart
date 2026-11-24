@@ -28,12 +28,15 @@ void main(){
       const IdentityGrant(roleId:'b',permission:'orders.create',branchId:branch),
       const IdentityGrant(roleId:'c',permission:'catalog.read',branchId:branch),
       const IdentityGrant(roleId:'d',permission:'catalog.write',branchId:branch),
+      const IdentityGrant(roleId:'stock',permission:'inventory.read',branchId:branch,warehouseId:'00000000-0000-4000-8000-000000000009'),
     ];
     final session=IdentitySession(actorId:user,token:'synthetic-token',
       expiresAt:DateTime.now().add(const Duration(hours:1)),grants:rights);
     final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
       httpClient:MockClient((request)async{
         final path=request.url.path;
+        if(path=='/v1/sales/entry-settings')return reply({'settings':{'deliveryChoice':'TRIP'}},200);
+        if(path=='/v1/catalog/warehouses')return reply({'items':[{'id':'00000000-0000-4000-8000-000000000009','code':'MAIN','name':'Kho chính'}]},200);
         if(path=='/v1/catalog/branches'){
           return reply({'items':[{'id':branch,'code':'MAIN','name':'Chi nhánh chính'}]},200);
         }

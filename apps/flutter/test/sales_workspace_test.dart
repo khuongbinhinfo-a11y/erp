@@ -20,6 +20,7 @@ const rights=[
   IdentityGrant(roleId:'a',permission:'orders.read',branchId:branch),
   IdentityGrant(roleId:'b',permission:'orders.create',branchId:branch),
   IdentityGrant(roleId:'c',permission:'catalog.read',branchId:branch),
+  IdentityGrant(roleId:'stock',permission:'inventory.read',branchId:branch,warehouseId:'00000000-0000-4000-8000-000000000009'),
 ];
 IdentitySession loggedIn()=>IdentitySession(actorId:user,token:'local-test-token',
   expiresAt:DateTime.now().add(const Duration(hours:1)),grants:rights);
@@ -192,6 +193,9 @@ void main(){
     final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
       httpClient:MockClient((request)async{
         calls.add(request.url.path);
+        if(request.url.path=='/v1/sales/entry-settings')return http.Response(jsonEncode({'settings':{'deliveryChoice':'PICKUP'}}),200);
+        if(request.url.path=='/v1/catalog/warehouses')return http.Response(jsonEncode({'items':[{'id':'00000000-0000-4000-8000-000000000009','code':'MAIN','name':'Kho chính'}]}),200);
+        if(request.url.path=='/v1/inventory/balances')return http.Response(jsonEncode({'items':[]}),200);
         if(request.url.path=='/v1/catalog/branches'){
           return http.Response(jsonEncode({'items':[
             {'id':branch,'code':'MAIN','name':'Chi nhánh chính'}]}),200);
@@ -371,6 +375,7 @@ void main(){
       httpClient:MockClient((request)async{
         final path=request.url.path;
         traces.add(request.method+' '+path);
+        if(path=='/v1/sales/entry-settings')return reply({'settings':{'deliveryChoice':'PICKUP'}},200);
         if(path=='/v1/auth/config'){
           return reply({'enabled':true},200);
         }

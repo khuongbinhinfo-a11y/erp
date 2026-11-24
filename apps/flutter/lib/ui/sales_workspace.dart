@@ -145,7 +145,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       if(e.status!=404&&e.status!=405){inform(e.message,error:true);return null;}
     }catch(_){inform('Không tải được thiết lập lập đơn.',error:true);return null;}
     final modern=entrySettings!=null;
-    if(!modern){inform('Máy chủ chưa hỗ trợ giao nhận mới. Cần cập nhật máy chủ.',error:true);}
+    if(!modern){inform('Máy chủ chưa hỗ trợ giao nhận mới. Cần cập nhật máy chủ trước khi lập đơn.',error:true);return null;}
     bool canPrice()=>can(modern?'orders.price.override':'orders.update');
     bool canDiscount()=>can(modern?'orders.discount.override':'orders.update');
     bool canTax()=>can(modern?'orders.tax.override':'orders.update');
@@ -1032,7 +1032,6 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                 Expanded(child:SingleChildScrollView(
                   padding:EdgeInsets.all(narrow?10:14),
                   child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
-                    if(!modern)const Padding(padding:EdgeInsets.only(bottom:12),child:Text('Máy chủ chưa hỗ trợ giao nhận mới.',style:TextStyle(color:ErpTokens.danger,fontWeight:FontWeight.w700))),
                     Wrap(
                       key:const ValueKey('sales-order-context'),
                       spacing:12,runSpacing:12,children:[
@@ -1082,6 +1081,18 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                             value:x['id'] as String,
                             child:Text((x['name']??'').toString(),overflow:TextOverflow.ellipsis))),
                         ],onChanged:(v){channel=v;customerPricingChanged(ctx,refresh);})),
+                        SizedBox(width:narrow?((width-40)/2).clamp(108.0,240.0).toDouble():190,child:DropdownButtonFormField<String>(
+                          key:ValueKey('sales-delivery-$deliveryChoice'),initialValue:deliveryChoice,
+                          isExpanded:true,decoration:const InputDecoration(labelText:'Giao nhận',isDense:true),
+                          items:deliveryLabels.entries.map((e)=>DropdownMenuItem(value:e.key,child:Text(e.value,overflow:TextOverflow.ellipsis))).toList(),
+                          onChanged:customerMode=='WALK_IN'?null:(v){if(v!=null)refresh(()=>deliveryChoice=v);})),
+                        SizedBox(width:narrow?((width-40)/2).clamp(108.0,240.0).toDouble():190,child:DropdownButtonFormField<String>(
+                          key:ValueKey('sales-collection-$collectionPolicy'),initialValue:collectionPolicy,
+                          isExpanded:true,decoration:const InputDecoration(labelText:'Thanh toán',isDense:true),
+                          items:collectionLabels.entries.where((e)=>customerMode!='WALK_IN'||
+                            ['PREPAID','COLLECT_ON_DELIVERY'].contains(e.key))
+                            .map((e)=>DropdownMenuItem(value:e.key,child:Text(e.value,overflow:TextOverflow.ellipsis))).toList(),
+                          onChanged:(v){if(v!=null)refresh(()=>collectionPolicy=v);})),
                       ]),
                     const SizedBox(height:18),
                     Align(alignment:Alignment.centerLeft,child:ConstrainedBox(
@@ -1253,18 +1264,6 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         OutlinedButton.icon(key:const ValueKey('sales-walk-in'),
                           onPressed:walkInBusy||quickCustomerBusy?null:()=>chooseWalkIn(ctx,refresh),
                           icon:const Icon(Icons.person_outline),label:Text(walkInBusy?'Đang kiểm tra':'Khách lẻ')),
-                        SizedBox(width:190,child:DropdownButtonFormField<String>(
-                          key:ValueKey('sales-delivery-$deliveryChoice'),initialValue:deliveryChoice,
-                          isExpanded:true,decoration:const InputDecoration(labelText:'Giao nhận',isDense:true),
-                          items:deliveryLabels.entries.map((e)=>DropdownMenuItem(value:e.key,child:Text(e.value))).toList(),
-                          onChanged:customerMode=='WALK_IN'?null:(v){if(v!=null)refresh(()=>deliveryChoice=v);})),
-                        SizedBox(width:190,child:DropdownButtonFormField<String>(
-                          key:ValueKey('sales-collection-$collectionPolicy'),initialValue:collectionPolicy,
-                          isExpanded:true,decoration:const InputDecoration(labelText:'Điều kiện thanh toán',isDense:true),
-                          items:collectionLabels.entries.where((e)=>customerMode!='WALK_IN'||
-                            ['PREPAID','COLLECT_ON_DELIVERY'].contains(e.key))
-                            .map((e)=>DropdownMenuItem(value:e.key,child:Text(e.value))).toList(),
-                          onChanged:(v){if(v!=null)refresh(()=>collectionPolicy=v);})),
                         OutlinedButton.icon(key:const ValueKey('sales-delivery-date'),
                           onPressed:()async{
                             final now=DateTime.now(),selected=DateTime.tryParse(deliveryDate)??now;
@@ -1347,7 +1346,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       },
                       child:TextField(
                         key:const ValueKey('sales-sku-search'),
-                        controller:skuSearch,focusNode:skuFocus,
+                        controller:skuSearch,focusNode:skuFocus,selectAllOnFocus:true,
                         onChanged:(_){
                           skuDebounce?.cancel();
                           skuSearchGeneration++;priceGeneration++;
