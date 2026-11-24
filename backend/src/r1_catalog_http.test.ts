@@ -299,6 +299,41 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
   assert.equal((await resolvePrice({...combinedQuote,priceListId:combined.body.id,
     customerId:c1.body.id})).status,409);
 
+  // P0 manual price: a SKU without configured price can still be sold
+  // with an authorized explicit price, discount, VAT and split line.
+  const manualList=await legacy("price-lists",{code:"P0-MANUAL",name:"Giá nhập trực tiếp"});
+  assert.equal(manualList.status,201);
+  const manualInput={
+   customerId:c1.body.id,priceListId:manualList.body.id,
+   lines:[{sellSkuId:baseSku,quantity:"1",unitPrice:"10500",
+    discountRate:"10",taxRate:"8"},
+    {sellSkuId:baseSku,quantity:"1",unitPrice:"10500",
+    discountRate:"10",taxRate:"8"}],
+  };
+  const manualQuote=await request("/v1/sales/quote","POST",{
+   branchId:b,...manualInput},token);
+  assert.equal(manualQuote.status,200,JSON.stringify(manualQuote.body));
+  assert.equal(manualQuote.body.quote.subtotal,"21000");
+  assert.equal(manualQuote.body.quote.discountTotal,"2100");
+  assert.equal(manualQuote.body.quote.taxTotal,"1512");
+  assert.equal(manualQuote.body.quote.grandTotal,"20412");
+  const manualOrder=await write("/v1/sales/orders",{
+   ...manualInput,note:"Hai dòng cùng SKU",
+   lines:manualInput.lines.map((line,i)=>({...line,
+    expectedPriceSignature:manualQuote.body.quote.lines[i].priceSignature})),
+  });
+  assert.equal(manualOrder.status,201,JSON.stringify(manualOrder.body));
+  assert.equal(Number(manualOrder.body.total),20412);
+  const manualLines=await pool.query<{n:string}>(`SELECT count(*)::text AS n
+   FROM sales_order_line WHERE installation_id=$1 AND branch_id=$2
+    AND order_id=$3 AND pricing_engine='R1'`,
+   [root.installationId,b,manualOrder.body.id]);
+  assert.equal(manualLines.rows[0]!.n,"2");
+  const manualConfirmed=await write(
+   "/v1/sales/orders/"+manualOrder.body.id+"/confirm",
+   {branchId:b},"p0-manual-confirm-"+randomUUID());
+  assert.equal(manualConfirmed.status,200,JSON.stringify(manualConfirmed.body));
+
   // R1-C.1: selection stays on the existing SKU pricing engine, with
   // strict list windows, scoped priority, concurrency, RBAC, and replay.
   assert.equal((await legacy("price-lists",{code:"BAD-WINDOW",name:"Sai thời hạn",
