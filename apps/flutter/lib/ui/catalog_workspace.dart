@@ -31,7 +31,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
   int requestSerial=0;
   final search=TextEditingController();
   final inlineAmount=TextEditingController(),inlineDiscount=TextEditingController();
-  String? inlinePriceId,assignmentListId,priceSkuListId;
+  String? inlinePriceId,assignmentListId,priceSkuListId,selectedPriceListId;
 
   static const tabs=<String,List<ErpSectionTab<String>>>{
     'customers':[
@@ -84,7 +84,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     super.didUpdateWidget(oldWidget);
     if(oldWidget.session.token!=widget.session.token ||
       oldWidget.client!=widget.client || oldWidget.area!=widget.area){
-      requestSerial++;items=[];branches=[];branchId=null;inlinePriceId=null;assignmentListId=null;priceSkuListId=null;
+      requestSerial++;items=[];branches=[];branchId=null;inlinePriceId=null;assignmentListId=null;priceSkuListId=null;selectedPriceListId=null;
       productWriteReady=false;resource=widget.area;search.clear();
       _loadBranches();
     }
@@ -161,6 +161,10 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
       if(!mounted||requestSerial!=stamp)return;
       setState((){
         items=result;loading=false;
+        if(resource=='price-lists'){
+          selectedPriceListId=result.any((x)=>x['id']==selectedPriceListId)
+            ?selectedPriceListId:(result.isEmpty?null:result.first['id'].toString());
+        }
         productWriteReady=resource=='products'&&productResult?.writeReady==true;
       });
     }on ErpApiError catch(e){
@@ -176,7 +180,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
   void _changeResource(String next){
     if(next==resource)return;
     setState((){
-      resource=next;search.clear();items=[];productWriteReady=false;inlinePriceId=null;assignmentListId=null;priceSkuListId=null;
+      resource=next;search.clear();items=[];productWriteReady=false;inlinePriceId=null;assignmentListId=null;priceSkuListId=null;selectedPriceListId=null;
     });
     _loadRecords();
   }
@@ -1590,22 +1594,39 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                   onPressed:_loadRecords,icon:const Icon(Icons.arrow_forward))),
             ),
             const SizedBox(height:14),
-            if(resource=='price-lists'&&assignmentListId!=null&&
-              branchId!=null&&items.any((e)=>e['id']==assignmentListId))
-              PriceListAssignmentsPanel(
-                key:ValueKey('assign-'+branchId!+'-'+assignmentListId!),
-                client:widget.client,session:widget.session,branchId:branchId!,
-                priceList:items.firstWhere((e)=>e['id']==assignmentListId),
-                canWrite:canWrite,
-                onClose:()=>setState(()=>assignmentListId=null)),
-            if(resource=='price-lists'&&priceSkuListId!=null&&
-                branchId!=null&&items.any((e)=>e['id']==priceSkuListId))
-              PriceSkuBatchPanel(
-                key:ValueKey('price-skus-'+branchId!+'-'+priceSkuListId!),
-                client:widget.client,session:widget.session,branchId:branchId!,
-                priceList:items.firstWhere((e)=>e['id']==priceSkuListId),
-                canWrite:canWrite,
-                onClose:()=>setState(()=>priceSkuListId=null)),
+            if(resource=='price-lists'&&items.isNotEmpty&&branchId!=null)...[
+              Padding(padding:const EdgeInsets.only(bottom:10),child:
+                DropdownButtonFormField<String>(
+                  key:ValueKey('price-workspace-selected-'+selectedPriceListId.toString()),
+                  initialValue:items.any((x)=>x['id']==selectedPriceListId)
+                    ?selectedPriceListId:null,
+                  isExpanded:true,
+                  decoration:const InputDecoration(labelText:'Bảng giá đang quản lý',
+                    prefixIcon:Icon(Icons.price_change_outlined)),
+                  items:items.map((x)=>DropdownMenuItem<String>(
+                    value:x['id'].toString(),
+                    child:Text((x['name']??x['code']).toString(),
+                      overflow:TextOverflow.ellipsis))).toList(),
+                  onChanged:(id)=>setState(()=>selectedPriceListId=id))),
+              if(selectedPriceListId!=null&&items.any((x)=>x['id']==selectedPriceListId))...[
+                PriceSkuBatchPanel(
+                  key:ValueKey('price-skus-'+branchId!+'-'+selectedPriceListId!),
+                  client:widget.client,session:widget.session,branchId:branchId!,
+                  priceList:items.firstWhere((x)=>x['id']==selectedPriceListId),
+                  canWrite:canWrite,onClose:(){}),
+                PriceListAssignmentsPanel(
+                  key:ValueKey('assign-'+branchId!+'-'+selectedPriceListId!),
+                  client:widget.client,session:widget.session,branchId:branchId!,
+                  priceList:items.firstWhere((x)=>x['id']==selectedPriceListId),
+                  canWrite:canWrite,onClose:(){}),
+                Padding(padding:const EdgeInsets.only(top:14),
+                  child:CatalogBulkWorkspace(
+                    key:ValueKey('price-import-'+branchId!+'-'+selectedPriceListId!),
+                    client:widget.client,session:widget.session,
+                    branchId:branchId,canWrite:canWrite,
+                    initialArea:'price-lists',initialPriceListId:selectedPriceListId)),
+              ],
+            ],
             if(loading)const Center(child:Padding(
               padding:EdgeInsets.all(20),child:CircularProgressIndicator()))
             else if(error!=null)Padding(
@@ -1674,18 +1695,14 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                             icon:const Icon(Icons.groups_outlined,size:16),
                             label:const Text('Áp dụng cho'),
                             onPressed:()=>setState((){
-                              assignmentListId=assignmentListId==entry['id']
-                                ?null:entry['id'] as String;
-                              priceSkuListId=null;
+                              selectedPriceListId=entry['id'] as String;
                             })),
                           if(resource=='price-lists')TextButton.icon(
                             key:ValueKey('catalog-price-list-sku-prices-'+entry['id'].toString()),
                             icon:const Icon(Icons.price_change_outlined,size:16),
                             label:const Text('Giá bán'),
                             onPressed:saving?null:()=>setState((){
-                              priceSkuListId=priceSkuListId==entry['id']
-                                ?null:entry['id'] as String;
-                              assignmentListId=null;
+                              selectedPriceListId=entry['id'] as String;
                             })),
                           if(resource=='price-lists')IconButton(
                             key:ValueKey('catalog-price-list-clone-'+entry['id'].toString()),
