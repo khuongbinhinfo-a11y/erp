@@ -217,7 +217,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
   Future<void> _bulkEditProducts()async{
     if(saving||!canWrite||resource!='products'||selectedProducts.isEmpty||branchId==null)return;
     final selected=selectedProducts.values.toList();
-    final groups=await widget.client.catalogItems(widget.session.token,'groups',branchId:branchId);
+    final groups=await widget.client.catalogDirectoryAll(widget.session.token,'groups',branchId:branchId!);
     List<Map<String,dynamic>> categories=[];
     try{
       categories=await widget.client.catalogItems(widget.session.token,
@@ -462,9 +462,9 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
       }
       if((resource=='products'||resource=='groups'||resource=='categories')&&previous==null){
         try{
-          availableBrands=await widget.client.catalogItems(
+          availableBrands=await widget.client.catalogDirectoryAll(
             widget.session.token,'brands',branchId:branchId);
-          availableCategories=await widget.client.catalogItems(
+          availableCategories=await widget.client.catalogDirectoryAll(
             widget.session.token,'categories',branchId:branchId);
         }on ErpApiError catch(e){if(e.status!=503)rethrow;}
       }
@@ -1546,8 +1546,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
           widget.session.token,'groups',branchId:branch);
         try{
           final taxonomy=await Future.wait([
-            widget.client.catalogItems(widget.session.token,'brands',branchId:branch),
-            widget.client.catalogItems(widget.session.token,'categories',branchId:branch),
+            widget.client.catalogDirectoryAll(widget.session.token,'brands',branchId:branch),
+            widget.client.catalogDirectoryAll(widget.session.token,'categories',branchId:branch),
           ]);
           brands=taxonomy[0];categories=taxonomy[1];
         }on ErpApiError catch(e){if(e.status!=503)rethrow;}
