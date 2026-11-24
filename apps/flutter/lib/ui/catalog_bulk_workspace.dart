@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:material_ui/material_ui.dart';
 import 'erp_tokens.dart';
+import 'erp_display.dart';
 import 'identity_client.dart';
 
 /// R1-B master import. Files never go to local durable storage; the backend
@@ -325,8 +326,19 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
     String details(dynamic v){
       if(v==null)return '—';
       if(v is Map){
-        final entries=v.entries.map((e)=>(columns[kind]?[e.key.toString()]??e.key.toString())+': '+
-          (e.value??'∅').toString()).toList();
+        final entries=v.entries.map((e){
+          final key=e.key.toString(),value=e.value;
+          final display=value==null?'∅':[
+            'amount','unitPrice','netUnitPrice','discountRate','quantity',
+            'toBase','total','price','subtotal','taxRate'
+          ].contains(key)?erpNumberText(value):
+            (key=='effectiveAt'||key=='effectiveFrom'||key=='effectiveTo')
+              ?erpDateTimeText(value):value.toString();
+          return (columns[kind]?[key]??switch(key){
+            'unitPrice'=>'Giá cũ','netUnitPrice'=>'Giá thực áp dụng',
+            _=>key,
+          })+': '+display;
+        }).toList();
         return entries.join(' | ');
       }
       return v.toString();
