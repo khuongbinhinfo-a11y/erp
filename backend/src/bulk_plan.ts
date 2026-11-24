@@ -216,6 +216,7 @@ function normalizeRow(
  current:Record<string,any>|undefined,
  refs:{groups:Map<string,Record<string,any>>;regions:Map<string,Record<string,any>>;
   brands:Map<string,Record<string,any>>;categories:Map<string,Record<string,any>>;
+  taxonomyReady?:boolean;
   units:Map<string,Record<string,any>>;products:Map<string,Record<string,any>>;
   lists:Map<string,Record<string,any>>;productUnits:Map<string,Record<string,any>>},
  branchId:string,
@@ -245,6 +246,11 @@ function normalizeRow(
   if(resource==="products"){
    if(raw.categoryCode!==undefined){
     const value=raw.categoryCode;
+    // Empty mapped columns in exported CSVs must not write category_id on
+    // installations that have not yet applied the guarded taxonomy migration.
+    if(value===""&&refs.taxonomyReady===false){
+      after.categoryCode="";
+    }else{
     const c=value===""?null:refs.categories.get(value);
     if(value!==""&&(!c||c.active!==true||c.groupActive!==true))
       throw new BulkFault("CATEGORY_CODE_NOT_FOUND_OR_INACTIVE");
@@ -254,6 +260,7 @@ function normalizeRow(
     // Inferred group must also be written for previously ungrouped products.
     if(c&&!op.groupId&&!(current?.groupId))assign("groupId",c.groupId);
     assign("categoryId",c?.id??null);after.categoryCode=value;
+    }
    }else if(!isNew&&op.groupId!==undefined&&
              op.groupId!==current?.groupId&&current?.categoryId){
     assign("categoryId",null);
@@ -594,6 +601,7 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
   [tenant,branch,JSON.stringify(requested)]):{rows:[]};
  const occupiedByRow=mapBy(occupied.rows,x=>String(x.rowIndex));
  const refs={
+  taxonomyReady,
   products:mapBy(products.rows,x=>x.code),
   groups:mapBy(groups.rows,x=>x.code),
   categories:mapBy(categories.rows,x=>x.code),
