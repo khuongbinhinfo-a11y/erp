@@ -469,7 +469,7 @@ test("T0 populated 0020 -> 0021 preserves legacy reserve/read and owner grants",
  let pool:Pool|null=null,server:ReturnType<typeof buildApp>|null=null;
  try{
   const dir=resolve(process.cwd(),"db/migrations");
-  const sqlFiles=readdirSync(dir).filter(x=>/^\\d{4}_[a-z0-9_]+\\.sql$/.test(x));
+  const sqlFiles=readdirSync(dir).filter(x=>/^\d{4}_[a-z0-9_]+\.sql$/.test(x));
   assert.equal(sqlFiles.length,21);
   for(const file of sqlFiles.filter(x=>!x.startsWith("0021_")))
    copyFileSync(join(dir,file),join(tmp,file));
