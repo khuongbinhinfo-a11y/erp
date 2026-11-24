@@ -434,9 +434,12 @@ class ErpIdentityClient {
       _request('POST','/v1/catalog/$resource',token:token,
         body:fields,revision:0,idempotencyKey:key);
   Future<List<Map<String,dynamic>>> r1CatalogItems(String token,String kind,{
-      required String branchId,String query=''})async{
+      required String branchId,String query='',String? brandId,String? groupId,String? categoryId})async{
     final q=Uri(queryParameters:{'branchId':branchId,
-      if(query.trim().isNotEmpty)'q':query.trim()}).query;
+      if(query.trim().isNotEmpty)'q':query.trim(),
+      if(brandId!=null)'brandId':brandId,
+      if(groupId!=null)'groupId':groupId,
+      if(categoryId!=null)'categoryId':categoryId}).query;
     final raw=await _request('GET','/v1/catalog/r1/$kind?$q',token:token);
     return (raw['items'] as List<dynamic>).map(
       (x)=>Map<String,dynamic>.from(x as Map)).toList();
