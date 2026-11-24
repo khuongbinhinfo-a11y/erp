@@ -145,5 +145,6 @@ void main(){
     await tester.pumpAndSettle();
     expect(quotedSkuPairs.any((pair)=>pair.length==2&&pair[0]==base&&pair[1]==carton),isTrue,
       reason:'Changing UOM must requote exact target SKU, not multiply client prices');
-  });  }
+  });
+  }
 }
