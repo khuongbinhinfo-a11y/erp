@@ -1388,7 +1388,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                             unitPriceField,discountField,taxField,
                             SizedBox(width:120,child:Text(lineTotal,textAlign:TextAlign.right,
                               style:const TextStyle(fontWeight:FontWeight.w800))),
-                            SizedBox(width:110,child:Row(mainAxisSize:MainAxisSize.min,
+                            SizedBox(width:144,child:Row(mainAxisSize:MainAxisSize.min,
                               children:[previousPrice,split,remove])),
                           ]),
                       );
