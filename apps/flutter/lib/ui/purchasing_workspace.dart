@@ -4,6 +4,7 @@ import 'identity_client.dart';
 import 'erp_toast.dart';
 import 'erp_tokens.dart';
 import 'erp_display.dart';
+import 'erp_number_input.dart';
 
 class _PurchaseLineInput{
  String productId;
@@ -275,10 +276,12 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
                   SizedBox(width:150,child:TextField(
                     controller:item.value.quantity,
                     keyboardType:const TextInputType.numberWithOptions(decimal:true),
+                    inputFormatters:const [ErpGroupedNumberFormatter(maxIntegerDigits:12,maxFractionDigits:6)],
                     decoration:const InputDecoration(labelText:'SL đơn vị gốc'))),
                   SizedBox(width:180,child:TextField(
                     controller:item.value.unitCost,
                     keyboardType:const TextInputType.numberWithOptions(decimal:true),
+                    inputFormatters:const [ErpGroupedNumberFormatter(maxIntegerDigits:13,maxFractionDigits:4)],
                     decoration:const InputDecoration(labelText:'Giá mua / đơn vị gốc'))),
                 ]),
                 const Divider(height:18),
@@ -291,8 +294,8 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
         FilledButton(onPressed:supplier==null||rows.any((x)=>x.productId.isEmpty)?null:()=>Navigator.pop(ctx,{
            'supplierId':supplier,
            'lines':rows.map((item)=><String,dynamic>{
-            'productId':item.productId,'quantity':item.quantity.text.trim(),
-            'unitCost':item.unitCost.text.trim(),
+            'productId':item.productId,'quantity':erpNumberCanonical(item.quantity.text),
+            'unitCost':erpNumberCanonical(item.unitCost.text),
            }).toList(),
          }),child:const Text('Lưu đơn mua'))],
     )));
@@ -364,6 +367,7 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
              style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
            TextField(controller:controllers[(item['lineNo'] as num).toInt()],
              keyboardType:const TextInputType.numberWithOptions(decimal:true),
+             inputFormatters:const [ErpGroupedNumberFormatter(maxIntegerDigits:12,maxFractionDigits:6)],
              decoration:const InputDecoration(labelText:'Thực nhận đợt này')),
            const Divider(height:12),
           ])),
@@ -372,7 +376,7 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
        FilledButton(onPressed:()=>Navigator.pop(ctx,[
         for(final e in controllers.entries)
          if(e.value.text.trim().isNotEmpty)<String,dynamic>{
-          'orderLineNo':e.key,'quantity':e.value.text.trim(),
+          'orderLineNo':e.key,'quantity':erpNumberCanonical(e.value.text),
          },
        ]),child:const Text('Ghi nhận nhập kho'))],
      ));
