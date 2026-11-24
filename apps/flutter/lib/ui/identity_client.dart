@@ -521,6 +521,13 @@ class ErpIdentityClient {
     return _request('PATCH','/v1/catalog/$resource/$id',
       token:token,revision:expectedRevision,body:fields);
   }
+  /// Batch catalog changes keep their per-item idempotency key on ambiguous retries.
+  Future<Map<String,dynamic>> updateCatalogWithKey(
+    String token,String resource,String id,int expectedRevision,
+    Map<String,dynamic> fields,{required String key})=>
+      _request('PATCH','/v1/catalog/$resource/$id',
+        token:token,revision:expectedRevision,body:fields,idempotencyKey:key);
+
   /// Price quote is advisory, never confirms order fulfillment or inventory.
   Future<Map<String,dynamic>> catalogPriceQuote(String token,{
     required String branchId,required String priceListId,required String productId,
