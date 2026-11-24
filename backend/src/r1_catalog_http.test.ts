@@ -395,6 +395,19 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
   assert.equal(stacked.status,200,JSON.stringify(stacked.body));
   assert.equal(Number(stacked.body.quote.unitPrice),9310,
     "matching stackable discount on a different list is applied exactly once");
+  const secondPromotion=await r1("rules",{priceListId:promoList.body.id,
+    sellSkuId:baseSku,scopeKind:"PROMOTION",
+    adjustment:"PERCENT_DISCOUNT",amount:"10",
+    priority:10,stacking:"STACKABLE",effectiveFrom:"2026-11-17T00:00:00Z"});
+  assert.equal(secondPromotion.status,201,JSON.stringify(secondPromotion.body));
+  const promoStop=await request("/v1/catalog/price-lists/"+promoList.body.id,"PATCH",{
+    branchId:b,stopProcessing:true},token,{
+    "if-match":"0","idempotency-key":"p0-promo-stop-"+randomUUID()});
+  assert.equal(promoStop.status,200,JSON.stringify(promoStop.body));
+  const bothDiscounts=await quoteAtomic(c1.body.id,channel.body.id);
+  assert.equal(bothDiscounts.status,200,JSON.stringify(bothDiscounts.body));
+  assert.equal(Number(bothDiscounts.body.quote.unitPrice),8379,
+    "list-level stop must preserve both 5% and 10% rules from its own list");
   assert.equal(Number((await quoteAtomic(c1.body.id,anotherChannel.body.id))
     .body.quote.unitPrice),9800,"nonmatching channel cannot borrow channel-scoped discount");
   const stop=await request("/v1/catalog/price-lists/"+atomicList.body.id,"PATCH",{
