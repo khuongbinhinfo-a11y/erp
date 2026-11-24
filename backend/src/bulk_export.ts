@@ -19,7 +19,7 @@ const VI:Record<BulkResource,Record<string,string>>={
   toBase:"Hệ số quy đổi",active:"Trạng thái",reason:"Lý do ngừng",
  },
  prices:{
-  priceListCode:"Mã bảng giá",productCode:"Mã sản phẩm",
+  priceListCode:"Mã bảng giá",productCode:"Mã sản phẩm",skuCode:"Mã SKU",
   name:"Tên hàng",unitCode:"Đơn vị",
   amount:"Đơn giá",discountRate:"Chiết khấu %",effectiveAt:"Hiệu lực từ",
  },
@@ -138,7 +138,7 @@ export function bulkXlsx(kind:BulkResource,rows:string[][],fields=bulkColumns(ki
 export function bulkExport(kind:BulkResource,rows:string[][],format:"csv"|"xlsx",
  template=false,at=new Date(),selectedList=false){
  const stem=(template?"mau-":"xuat-")+TITLES[kind]+"-"+at.toISOString().slice(0,10);
- const columns=selectedList&&kind==="prices"?["productCode","name","unitCode","amount","discountRate","effectiveAt"]:bulkColumns(kind);
+ const columns=selectedList&&kind==="prices"?["skuCode","name","unitCode","amount","discountRate","effectiveAt"]:bulkColumns(kind);
  const headers=columns.map(field=>VI[kind][field]!);
  if(format==="xlsx")return {
   fileName:stem+".xlsx",format,columns,headers,contentBase64:bulkXlsx(kind,rows,columns).toString("base64"),
