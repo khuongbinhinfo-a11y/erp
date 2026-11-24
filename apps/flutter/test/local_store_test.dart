@@ -98,25 +98,58 @@ void main(){
   test('two simultaneous tabs keep independent carts after one clears',()async{
     final driver=Memory(),first=ErpLocalStore(driver),second=ErpLocalStore(driver);
     await Future.wait([
-      first.saveScopedCart(a,'tab-one',{'lines':[{'quantity':'1'}]}),
-      second.saveScopedCart(a,'tab-two',{'lines':[{'quantity':'2'}]}),
+      first.saveScopedCart(a,'tab-one',{'lines':[{'quantity':'1'}]},owner:'owner-one'),
+      second.saveScopedCart(a,'tab-two',{'lines':[{'quantity':'2'}]},owner:'owner-two'),
     ]);
     expect((await first.savedCarts(a)).map((x)=>x.id).toSet(),{'tab-one','tab-two'});
-    await first.clearScopedCart(a,'tab-one');
+    await first.clearScopedCart(a,'tab-one',owner:'owner-one');
     final remaining=(await second.savedCarts(a)).single;
     expect(remaining.id,'tab-two');
     expect((remaining.draft['lines'] as List).single['quantity'],'2');
   });
   test('claim a saved cart exactly once across racing tabs',()async{
     final driver=Memory(),first=ErpLocalStore(driver),second=ErpLocalStore(driver);
-    await first.saveScopedCart(a,'old-cart',{'lines':[{'quantity':'7'}]});
-    final firstResult=await first.claimScopedCart(a,'old-cart','opened-one');
+    await first.saveScopedCart(a,'old-cart',{'lines':[{'quantity':'7'}]},owner:'owner-old');
+    await expectLater(second.claimScopedCart(a,'old-cart','opened-early',owner:'owner-other'),throwsA(isA<LocalRecoveryConflict>()));
+    await first.releaseScopedCart(a,'old-cart',owner:'owner-old');
+    final firstResult=await first.claimScopedCart(a,'old-cart','opened-one',owner:'new-owner');
     expect((firstResult['lines'] as List).single['quantity'],'7');
-    await expectLater(second.claimScopedCart(a,'old-cart','opened-two'),
+    await expectLater(second.claimScopedCart(a,'old-cart','opened-two',owner:'other-owner'),
       throwsA(isA<LocalRecoveryConflict>()));
     expect((await second.savedCarts(a)).map((x)=>x.id).toList(),['opened-one']);
-    await first.clearScopedCart(a,'opened-one');
+    await first.clearScopedCart(a,'opened-one',owner:'new-owner');
     expect(await second.savedCarts(a),isEmpty);
+  });
+  test('previous cart owner cannot revive a moved cart or submit with a new key',()async{
+    final driver=Memory(),old=ErpLocalStore(driver),next=ErpLocalStore(driver);
+    await old.saveScopedCart(a,'cart-1',{'quantity':'1'},owner:'old-editor');
+    await old.releaseScopedCart(a,'cart-1',owner:'old-editor');
+    final taken=await next.claimScopedCart(a,'cart-1','cart-2',owner:'new-editor');
+    expect(taken['quantity'],'1');
+    await expectLater(old.saveScopedCart(a,'cart-1',{'quantity':'5'},owner:'old-editor'),
+      throwsA(isA<LocalRecoveryConflict>()));
+    await expectLater(old.markCartSubmitting(a,'cart-1',owner:'old-editor',commandKey:'other'),
+      throwsA(isA<LocalRecoveryConflict>()));
+    await next.markCartSubmitting(a,'cart-2',owner:'new-editor',commandKey:'original-key');
+    await next.markCartSubmitting(a,'cart-2',owner:'new-editor',commandKey:'original-key');
+    await expectLater(next.markCartSubmitting(a,'cart-2',owner:'new-editor',commandKey:'different-key'),
+      throwsA(isA<LocalRecoveryConflict>()));
+    await expectLater(next.saveScopedCart(a,'cart-2',{'quantity':'9'},owner:'new-editor'),
+      throwsA(isA<LocalRecoveryConflict>()));
+    await expectLater(next.clearScopedCart(a,'cart-2',owner:'new-editor',commandKey:'wrong'),
+      throwsA(isA<LocalRecoveryConflict>()));
+    await next.clearScopedCart(a,'cart-2',owner:'new-editor',commandKey:'original-key');
+    expect(await next.savedCarts(a),isEmpty);
+  });
+  test('definitively rejected create can resume a released cart; ambiguous create cannot',()async{
+    final store=ErpLocalStore(Memory());
+    await store.saveScopedCart(a,'cart',{'lines':[]},owner:'editor');
+    await store.markCartSubmitting(a,'cart',owner:'editor',commandKey:'k');
+    await expectLater(store.releaseScopedCart(a,'cart',owner:'editor'),
+      throwsA(isA<LocalRecoveryConflict>()));
+    await store.releaseRejectedCart(a,'cart',owner:'editor',commandKey:'k');
+    final reopened=await store.claimScopedCart(a,'cart','new-cart',owner:'new-editor');
+    expect(reopened['lines'],isEmpty);
   });
   test('cache expiry is explicit, never proof of a current price',()async{
     final store=ErpLocalStore(Memory());
