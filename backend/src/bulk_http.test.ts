@@ -553,17 +553,17 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
   const target=await create("price-lists",{code:"P0-TARGET",name:"Bảng đích mới"});
   assert.equal(target.status,201,JSON.stringify(target.body));
   const dest={branchId,resource:"prices",mode:"UPSERT",fileName:"selected.csv",
-   priceListId:target.body.id,defaultEffectiveAt:"2026-11-24T00:00:00Z",
-   contentBase64:Buffer.from("Mã SP,Giá\nSP01,9800\n").toString("base64"),
-   hasHeader:true,mapping:{productCode:"Mã SP",amount:"Giá"}};
+   priceListId:target.body.id,defaultEffectiveAt:"2026-11-20T00:00:00Z",
+   contentBase64:Buffer.from("Mã SKU,Giá\nSP01,9800\n").toString("base64"),
+   hasHeader:true,mapping:{skuCode:"Mã SKU",amount:"Giá"}};
   const destPreview=await preview(dest);
   assert.equal(destPreview.status,200,JSON.stringify(destPreview.body));
   assert.equal(destPreview.body.summary.create,1,JSON.stringify(destPreview.body));
   assert.equal((await apply({...dest,priceListId:priceList.body.id},
     destPreview.body.hash)).status,409,"preview cannot be replayed against another list");
   assert.equal((await apply(dest,destPreview.body.hash)).status,200);
-  const destNext={...dest,mode:"UPDATE",defaultEffectiveAt:"2026-11-25T00:00:00Z",
-   contentBase64:Buffer.from("Mã SP,Giá\nSP01,10500\n").toString("base64")};
+  const destNext={...dest,mode:"UPDATE",defaultEffectiveAt:"2026-11-21T00:00:00Z",
+   contentBase64:Buffer.from("Mã SKU,Giá\nSP01,10500\n").toString("base64")};
   const nextPreview=await preview(destNext);
   assert.equal(nextPreview.body.summary.update,1,JSON.stringify(nextPreview.body));
   assert.equal((await apply(destNext,nextPreview.body.hash)).status,200);
@@ -574,12 +574,14 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
    "&resource=prices&priceListId="+target.body.id,"GET",undefined,token);
   assert.equal(scopedExport.status,200,JSON.stringify(scopedExport.body));
   assert.equal(scopedExport.body.total,1);
+  assert.ok(scopedExport.body.columns.includes("skuCode"));
   assert.ok(!scopedExport.body.columns.includes("priceListCode"));
   assert.match(scopedExport.body.content,/10500/);
   assert.doesNotMatch(scopedExport.body.content,/BANLE/);
   const scopedTemplate=await request("/v1/catalog/bulk/template?branchId="+branchId+
    "&resource=prices&priceListId="+target.body.id,"GET",undefined,token);
   assert.equal(scopedTemplate.status,200);
+  assert.ok(scopedTemplate.body.headers.includes("Mã SKU"));
   assert.ok(!scopedTemplate.body.headers.includes("Mã bảng giá"));
 
   const otherBranch=(await db.query<{id:string}>(
