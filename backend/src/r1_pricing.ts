@@ -232,7 +232,46 @@ export async function resolveR1Price(db:PoolClient,input:Query){
      minQuantity:origin==="BASE_RULE"?base?.min_quantity??null:null,
      effectiveFrom:origin==="BASE_RULE"?base?.effective_from?.toISOString()??null:null,stacking:null},
   ];
-  for(const rule of rules.rows){
+  let applicableRules=rules.rows;
+  if(scoped&&listStackingAvailable&&list.rows[0]?.stackingMode==="STACKABLE"&&
+      list.rows[0]?.stopProcessing!==true){
+    const supplements=await db.query<Rule>(`SELECT r.id,r.price_list_id,r.scope_kind,
+       r.adjustment,r.amount::text,r.priority,r.stacking,r.stop_processing,
+       r.channel_id,r.customer_id,r.customer_group,r.min_quantity::text,
+       r.effective_from,l.code AS "priceListCode",
+       l.stop_processing AS "listStopProcessing"
+      FROM catalog_sku_price_rule r JOIN catalog_price_list l
+        ON l.installation_id=r.installation_id AND l.branch_id=r.branch_id
+         AND l.id=r.price_list_id
+      WHERE r.installation_id=$1 AND r.branch_id=$2 AND r.sell_sku_id=$3
+        AND r.price_list_id<>$4 AND r.scope_kind<>'BASE'
+        AND l.active AND l.currency='VND' AND l.stacking_mode='STACKABLE'
+        AND (l.effective_from IS NULL OR l.effective_from<=$5::timestamptz)
+        AND (l.effective_to IS NULL OR l.effective_to>$5::timestamptz)
+        AND r.effective_from<=$5::timestamptz
+        AND (r.effective_to IS NULL OR r.effective_to>$5::timestamptz)
+        AND r.min_quantity<=$6::numeric
+        AND NOT EXISTS (SELECT 1 FROM catalog_sku_price_retirement x
+          WHERE x.installation_id=r.installation_id AND x.branch_id=r.branch_id
+            AND x.rule_id=r.id AND x.retired_at<=$5::timestamptz)
+        AND EXISTS (SELECT 1 FROM catalog_price_list_assignment a
+          WHERE a.installation_id=l.installation_id AND a.branch_id=l.branch_id
+            AND a.price_list_id=l.id AND a.active
+            AND (a.effective_from IS NULL OR a.effective_from<=$5::timestamptz)
+            AND (a.effective_to IS NULL OR a.effective_to>$5::timestamptz)
+            AND (a.scope_kind='DEFAULT' OR
+              a.scope_kind='CUSTOMER' AND a.customer_id=$7::uuid OR
+              a.scope_kind='CUSTOMER_GROUP' AND a.customer_group_id=$8::uuid OR
+              a.scope_kind='CHANNEL' AND a.channel_id=$9::uuid))
+        ${listScopePredicate('$5','$7','$8','$9')}
+      ORDER BY l.priority DESC,r.priority DESC,r.effective_from DESC,r.id DESC
+      LIMIT 251`,
+      [t,b,input.sellSkuId,selectedListId,input.priceAt,input.quantity,
+        customerId??null,customerGroupId,channelId??null]);
+    if(supplements.rows.length>250)throw new R1QuoteError(409,"TOO_MANY_PRICE_POLICIES");
+    applicableRules=[...rules.rows,...supplements.rows];
+  }
+  for(const rule of applicableRules){
     if(rule.scope_kind==="BASE")continue;
     if(stopped)break;
     const applies=(rule.customer_id===null||rule.customer_id===customerId)&&
@@ -247,7 +286,7 @@ export async function resolveR1Price(db:PoolClient,input:Query){
     // IDs or effective timestamps must never compound the same discount twice.
     // A distinct promotion/discount is still selected by different price
     // parameters, scope, priority or quantity threshold.
-    const canonical=JSON.stringify([rule.scope_kind,rule.adjustment,rule.amount,
+    const canonical=JSON.stringify([rule.price_list_id,rule.scope_kind,rule.adjustment,rule.amount,
       rule.priority,rule.stacking,rule.stop_processing,rule.channel_id,
       rule.customer_id,
       rule.customer_group!==null&&canonicalGroup!==null&&customerGroups.has(rule.customer_group)
@@ -265,12 +304,13 @@ export async function resolveR1Price(db:PoolClient,input:Query){
       rule.scope_kind==="CHANNEL"?"Theo kênh bán":
       rule.scope_kind==="PROMOTION"?"Khuyến mãi":"Chính sách giá";
     trace.push({ruleId:rule.id,scope:rule.scope_kind,
+      ...(rule.priceListCode?{priceListCode:rule.priceListCode}:{}),
       adjustment:rule.adjustment,amount:rule.amount,result:price,
       reason:ruleName+" · từ "+rule.min_quantity+" đơn vị · ưu tiên "+rule.priority+
         (rule.stacking==="STACKABLE"?" · cộng dồn":" · độc lập"),
       priority:rule.priority,minQuantity:rule.min_quantity,
       effectiveFrom:rule.effective_from.toISOString(),stacking:rule.stacking});
-    if(rule.stop_processing)stopped=true;
+    if(rule.stop_processing||rule.listStopProcessing)stopped=true;
   }
   const total=await db.query<{total:string;normalized:string}>(
     `SELECT round($1::numeric*$2::numeric,0)::text AS total,
