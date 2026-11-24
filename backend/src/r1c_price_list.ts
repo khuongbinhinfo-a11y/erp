@@ -17,11 +17,18 @@ export async function clonePriceList(db:PoolClient,input:{
     SELECT 1 FROM public.schema_migrations
     WHERE version='0018_r1c_price_list_assignment.sql') AS ready`);
   const r1c=gate.rows[0]?.ready===true;
+  const p0Gate=await db.query<{ready:boolean}>(`SELECT EXISTS(
+   SELECT 1 FROM public.schema_migrations
+    WHERE version='0019_p0_price_order_parity.sql') AS ready`);
+  const p0=p0Gate.rows[0]?.ready===true;
   const original=await db.query<{
     revision:string;currency:string;effectiveFrom:Date|null;
     effectiveTo:Date|null;priority:number;
+    stackingMode?:string;stopProcessing?:boolean;
   }>(r1c?`SELECT revision::text,currency,
-      effective_from AS "effectiveFrom",effective_to AS "effectiveTo",priority
+      effective_from AS "effectiveFrom",effective_to AS "effectiveTo",priority,
+      ${p0?'stacking_mode':"'EXCLUSIVE'::text"} AS "stackingMode",
+      ${p0?'stop_processing':'false'} AS "stopProcessing"
       FROM catalog_price_list WHERE installation_id=$1 AND branch_id=$2
       AND id=$3 FOR UPDATE`:
     `SELECT revision::text,currency,NULL::timestamptz AS "effectiveFrom",
@@ -36,15 +43,17 @@ export async function clonePriceList(db:PoolClient,input:{
   const fresh=await db.query<{id:string;revision:number}>(
     r1c?`INSERT INTO catalog_price_list
        (installation_id,branch_id,code,name,currency,active,
-        effective_from,effective_to,priority)
-       VALUES($1,$2,$3,$4,$5,true,$6::timestamptz,$7::timestamptz,$8)
+        effective_from,effective_to,priority${p0?',stacking_mode,stop_processing':''})
+       VALUES($1,$2,$3,$4,$5,true,$6::timestamptz,$7::timestamptz,$8${p0?',$9,$10':''})
        RETURNING id,revision::integer`:
     `INSERT INTO catalog_price_list
        (installation_id,branch_id,code,name,currency,active)
        VALUES($1,$2,$3,$4,$5,true) RETURNING id,revision::integer`,
     r1c?[t,b,code,name,original.rows[0].currency,
       original.rows[0].effectiveFrom,original.rows[0].effectiveTo,
-      original.rows[0].priority]:[t,b,code,name,original.rows[0].currency]);
+      original.rows[0].priority,
+      ...(p0?[original.rows[0].stackingMode,original.rows[0].stopProcessing]:[])
+      ]:[t,b,code,name,original.rows[0].currency]);
   const targetId=fresh.rows[0]!.id;
   const productEntries=await db.query(
     `INSERT INTO catalog_price_entry
@@ -62,7 +71,8 @@ export async function clonePriceList(db:PoolClient,input:{
     `INSERT INTO catalog_sku_price_rule
       (id,installation_id,branch_id,price_list_id,sell_sku_id,scope_kind,
        channel_id,customer_id,customer_group,adjustment,amount,priority,
-       stacking,stop_processing,min_quantity,effective_from,effective_to)
+       stacking,stop_processing,min_quantity,effective_from,effective_to
+       ${p0?",imported_gross_amount,imported_discount_rate":""})
      SELECT (
        substr(md5($4::text),1,8)||'-'||substr(md5($4::text),9,4)||
        '-4'||substr(md5($4::text),14,3)||'-a'||substr(md5($4::text),18,3)||
@@ -72,6 +82,7 @@ export async function clonePriceList(db:PoolClient,input:{
        r.channel_id,r.customer_id,r.customer_group,r.adjustment,r.amount,
        r.priority,r.stacking,r.stop_processing,r.min_quantity,
        r.effective_from,r.effective_to
+       ${p0?",r.imported_gross_amount,r.imported_discount_rate":""}
      FROM catalog_sku_price_rule r
      JOIN catalog_sell_sku s ON s.installation_id=r.installation_id
        AND s.branch_id=r.branch_id AND s.id=r.sell_sku_id AND s.active
