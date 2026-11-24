@@ -391,14 +391,27 @@ async function confirm(db:PoolClient,ctx:MutationContext,id:string,b:string){
   const lines=await db.query<{
     product_id:string;price_entry_id:string|null;sell_sku_id:string|null;
     price_signature:string|null;pricing_engine:string;quantity:string;
+    price_snapshot:{manualOverride?:boolean}|null;
+    unit_price:string;discount_rate:string;tax_rate:string;
   }>(`SELECT product_id,price_entry_id,sell_sku_id,price_signature,pricing_engine,
-    quantity::text FROM sales_order_line WHERE installation_id=$1 AND branch_id=$2
+    price_snapshot,quantity::text,unit_price::text,discount_rate::text,tax_rate::text
+    FROM sales_order_line WHERE installation_id=$1 AND branch_id=$2
     AND order_id=$3 AND version_no=$4 ORDER BY line_no FOR SHARE`,[t,b,id,v]);
   if(!lines.rowCount)throw new SalesError(409,"ORDER_HAS_NO_LINES");
   for(const line of lines.rows){
     if(line.pricing_engine==="R1"){
       if(!line.sell_sku_id||!line.price_signature)throw new SalesError(409,"PRICE_STALE");
       try{
+        if(line.price_snapshot?.manualOverride===true){
+          const manual=await quoteManualSku(db,{installationId:t,branchId:b,
+            sellSkuId:line.sell_sku_id,priceListId:o.price_list_id,
+            customerId:o.customer_id,channelId:o.channel_id??undefined,
+            quantity:line.quantity,unitPrice:line.unit_price,
+            discountRate:line.discount_rate,taxRate:line.tax_rate});
+          if(manual.priceSignature!==line.price_signature)
+            throw new SalesError(409,"PRICE_STALE");
+          continue;
+        }
         const fresh=await resolveR1Price(db,{
           installationId:t,branchId:b,sellSkuId:line.sell_sku_id,
           priceListId:o.price_list_id,customerId:o.customer_id,
