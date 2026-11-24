@@ -27,3 +27,9 @@ Nguồn MCP-FBMN @ `3175e378628df85410a002950cb1afa064406c62`, chỉ hành vi/AP
 - Offline cart: dữ liệu lưu máy không có documentNo; cache không là giá/tồn hiện hành; tra giá live trước gửi. Create/update/confirm: giữ cùng key/body nếu không rõ ACK; đối chiếu receipt/canonical state trước retry. Không tự gửi xuất kho, thu tiền, post ledger offline; kiểm mất mạng trước/sau COMMIT, double tap, hai máy, đổi quyền, stale price.
 - Kiểm UOM baseline/underlines desktop/mobile, không đổi engine giá/quy đổi/tách dòng. Benchmark startup/search và UX in/barcode/ảnh trên thiết bị thật.
 - Known gaps cần hoàn tất trước chốt T2: browser HttpOnly/session migration; auto-save mọi thay đổi đang nhập, recovery khi app chết/eviction; cache đủ catalog/variant/stock, outbox toàn module, sync foreground/backoff, kiểm receipt lookup mới cho create/update/confirm lost ACK, scope kho và test thiết bị; không giả định CI hoặc lớp storage là full acceptance.
+
+## Ghi chú preflight 24/11/2026 — signing chưa được cấp
+
+- Prisma Compute T2 lần đầu thất bại `DEPLOY.PREFLIGHT_FAILED` vì module buộc sáu biến `ERP_RELEASE_R2_*`, `ERP_ANDROID_CERT_SHA256`, `ERP_RELEASE_TICKET_SECRET` chưa tồn tại. Không dùng giá trị giả, không sao chép khóa của ứng dụng cũ.
+- Bản sửa deploy tạm thời **bỏ liên kết sáu release secrets khỏi service Compute**; lõi ERP vẫn sử dụng đúng PostgreSQL, auth, R2 media như trước. API cập nhật APK tự từ chối an toàn (`RELEASE_UNAVAILABLE`) thay vì trả manifest sai. Không coi đây là đã phát hành chức năng updater.
+- Khi có **keystore ký APK riêng ERP**, chứng chỉ SHA-256 thật, R2 reader credential giới hạn bucket `erp-android-releases` và ticket secret mạnh bảo vệ trong Prisma Production, phải tạo PR bật lại đúng sáu binding, CI/Codex PASS, xác minh provider rồi mới deploy phiên bản Android update. Không thêm giả lập hoặc bật route không có đủ sáu biến.

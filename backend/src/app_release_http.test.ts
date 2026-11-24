@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import {readFileSync} from "node:fs";
 import {validateRelease,releaseTicket,validTicket,releaseConfig,ERP_ANDROID_PACKAGE} from "./app_release_http.ts";
 import {presignR2,presignReleaseRead} from "./r2_media_signer.ts";
 const signer="a".repeat(64);
@@ -32,4 +33,22 @@ test("tickets bind actor/session/grants, release bytes, version and short expira
   assert.equal(validTicket(key,"scopeA",checked,expires,ticket,expires),false);
   assert.equal(validTicket(key,"scopeA",checked,expires+1,ticket,now),false);
   assert.equal(validTicket(key,"scopeA",checked,expires,"x",now),false);
+});
+
+// T2 deploy smoke regression: unsigned APK publishing is NOT a prerequisite for
+// deploying the business API; the native release endpoints remain disabled.
+test("Compute deployment has no mandatory Android release secret bindings before signed APK setup",()=>{
+  const moduleCode=readFileSync(new URL("../deploy/module.ts",import.meta.url),"utf8");
+  const serviceCode=readFileSync(new URL("../deploy/service.ts",import.meta.url),"utf8");
+  const entryCode=readFileSync(new URL("../deploy/entry.ts",import.meta.url),"utf8");
+  for(const variable of ["ERP_RELEASE_R2_ACCOUNT_ID","ERP_RELEASE_R2_BUCKET","ERP_RELEASE_R2_ACCESS_KEY_ID","ERP_RELEASE_R2_SECRET_ACCESS_KEY","ERP_ANDROID_CERT_SHA256","ERP_RELEASE_TICKET_SECRET"]){
+    assert.equal(moduleCode.includes('envSecret("'+variable+'")'),false,variable);
+    assert.equal(entryCode.includes(variable+': serviceInput.'),false,variable);
+  }
+  for(const name of ["releaseR2AccountId","releaseR2Bucket","releaseR2AccessKeyId","releaseR2SecretAccessKey","androidCertSha256","releaseTicketSecret"])
+    assert.equal(serviceCode.includes('"'+name+'?"'),false,name);
+  // All existing DB/identity/media bindings are left intact.
+  assert.match(moduleCode,/envSecret\("ERP_POSTGRES_URL"\)/);
+  assert.match(moduleCode,/envSecret\("ERP_R2_SECRET_ACCESS_KEY"\)/);
+  assert.equal(releaseConfig({}),null);
 });
