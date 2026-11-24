@@ -2,6 +2,9 @@
 
 **Áp dụng sau khi nghiệp vụ có API thật; không tạo màn giả để lấp menu.** Tham chiếu docs/BUSINESS_UX_PARITY_REBASELINE_20261121.md, docs/UI_NAVIGATION_RULES.md, docs/UI_DESIGN_SYSTEM.md. Nghiệp vụ cũ chỉ là nguồn kiểm chứng use case, không sao chép giao diện cũ.
 
+## 0. Quy tắc xuyên suốt — owner 24/11/2026
+[Master Plan V4, mục 4.2](MASTER_PLAN.md) là chuẩn hiện hành, ưu tiên khi có xung đột. Áp dụng ngay mọi workspace: hiển thị nhóm nghìn bằng dấu phẩy, phần thập phân dùng dấu chấm, bỏ zero cuối không có ý nghĩa (9800.000000 → 9,800; 12.500000 → 12.5; giữ nguyên 0.125). Ô nhập tự phân nhóm khi gõ, caret/paste/delete ổn định; API/DB dùng Decimal canonical, không đổi giá trị do format. Một formatter/parser dùng chung. Không DEV/demo/preview/mock/stack trace/enum kỹ thuật hoặc text hướng dẫn dư thừa trong production; dùng tiếng Việt ngắn theo nghiệp vụ, chỉ giữ thông tin và hành động cần thiết. Không dùng “nháp” kỹ thuật, không banner thử nghiệm, toast thành công tự tắt. Chi tiết, ngoại lệ và QA tại Master Plan mục 4.2 và QA_MATRIX.md.
+
 ## 1. Information architecture (IA) cho từng vai trò
 
 | Phân hệ | Cấp 1 trên thanh xanh | Cấp 2 ở nội dung, căn trái |

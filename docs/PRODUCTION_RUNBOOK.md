@@ -1,3 +1,5 @@
+> **LỊCH SỬ / THAM CHIẾU — từ 24/11/2026:** [MASTER_PLAN V4](MASTER_PLAN.md) là nguồn điều hành hiện hành. Thứ tự B/R, trạng thái provider, direct-main, phạm vi port MCP/Retail và quy trình deploy cũ bên dưới đã được thay thế. Giữ tài liệu này làm bằng chứng lịch sử, không dùng để chạy lệnh production; kiểm target/script/SHA thực tế. Chính sách warning-first và hard invariants theo V4.
+
 # ERP — Production-only Runbook (chưa được kích hoạt)
 
 ## Điều kiện trước release

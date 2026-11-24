@@ -1,3 +1,5 @@
+> **LỊCH SỬ / THAM CHIẾU — từ 24/11/2026:** [MASTER_PLAN V4](MASTER_PLAN.md) là nguồn điều hành hiện hành. Thứ tự B/R, trạng thái provider, direct-main, phạm vi port MCP/Retail và quy trình deploy cũ bên dưới đã được thay thế. Giữ tài liệu này làm bằng chứng lịch sử, không dùng để chạy lệnh production; kiểm target/script/SHA thực tế. Chính sách warning-first và hard invariants theo V4.
+
 # ERP — Chuẩn hóa nghiệp vụ đầy đủ và UX thống nhất (21/11/2026)
 
 > Quyết định mới của owner, ưu tiên hơn việc tiếp tục riêng lẻ B2 sau B1: **hoàn thiện các tiền đề của một giao dịch thật và chuyển đầy đủ tập chức năng vận hành đã được chấp nhận của hệ thống cũ, đồng thời thiết kế lại trải nghiệm end-to-end.** Không coi việc hiển thị 6 phân hệ hay CI xanh là hoàn thành nghiệp vụ.
