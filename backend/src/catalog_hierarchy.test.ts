@@ -7,7 +7,7 @@ import { applyMigrations } from "./migrate.ts";
 import assert from "node:assert/strict";
 import { checkCreate, parseEdit, CatalogError } from "./catalog_http.ts";
 import { parseCustomerLocation, CustomerLocationFault } from "./catalog_customer_locations.ts";
-import { bulkColumns, suggestBulkMapping } from "./bulk_plan.ts";
+import { bulkColumns, suggestBulkMapping, normalizeRow, BulkFault } from "./bulk_plan.ts";
 import { buildSkuTaxonomyFilters } from "./r1_catalog_http.ts";
 
 const branch="00000000-0000-4000-8000-000000000001";
@@ -62,6 +62,29 @@ test("customer location payload has one client-supplied location and no tenant o
     {branchId:branch,code:"CH01",name:"Store",address:"A",phone:"123"},
   ])assert.throws(()=>parseCustomerLocation(invalid),CustomerLocationFault);
 });
+test("CSV: explicit group clear cannot keep old category; omitted group can",()=>{
+ const refs={
+  taxonomyReady:true,
+  groups:new Map([["TAP",{id:group,code:"TAP",brandId:brand,active:true}]]),
+  categories:new Map([["F04NA",{id:category,groupId:group,brandId:brand,active:true,groupActive:true}]]),
+  brands:new Map([["NATURE",{id:brand,active:true}]]),
+  regions:new Map(),units:new Map(),products:new Map(),lists:new Map(),productUnits:new Map(),
+ };
+ const current={id:"item1",code:"TAP01",name:"Nature",groupId:group,
+   categoryId:category,baseUnit:"Cuốn",active:true,revision:0};
+ assert.throws(()=>normalizeRow("products","UPDATE",
+   {groupCode:"",categoryCode:"F04NA"},current,refs,branch),
+   (e)=>e instanceof BulkFault&&e.code==="CATEGORY_GROUP_MISMATCH");
+ const unchanged=normalizeRow("products","UPDATE",
+   {categoryCode:"F04NA"},current,refs,branch);
+ assert.equal(unchanged.operation.categoryId,category);
+ assert.equal(Object.hasOwn(unchanged.operation,"groupId"),false);
+ const cleared=normalizeRow("products","UPDATE",
+   {groupCode:""},current,refs,branch);
+ assert.equal(cleared.operation.groupId,null);
+ assert.equal(cleared.operation.categoryId,null);
+});
+
 test("product CSV/XLSX mapping recognizes Vietnamese brand and category codes",()=>{
   const fields=bulkColumns("products");
   assert.ok(fields.includes("brandCode")&&fields.includes("categoryCode"));
