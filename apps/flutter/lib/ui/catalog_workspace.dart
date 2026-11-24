@@ -1279,100 +1279,15 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
   }
 
   Future<void> _productImages(Map<String,dynamic> product)async{
-    if(branchId==null)return;
-    final productId=product['id'] as String;
-    final branch=branchId!;
-    List<Map<String,dynamic>> images=[];
-    String? galleryError;
-    bool galleryBusy=false;
-    try{
-      images=await widget.client.productPhotos(
-        widget.session.token,branch,productId);
-    }on ErpApiError catch(e){galleryError=_errorMessage(e);}
-    if(!mounted)return;
-    await showDialog<void>(context:context,builder:(dialog)=>
-      StatefulBuilder(builder:(ctx,refresh)=>AlertDialog(
-        title:Text('Ảnh · ${product['name']}'),
-        content:SizedBox(
-          width:(MediaQuery.sizeOf(dialog).width-70).clamp(250.0,620.0).toDouble(),
-          child:SingleChildScrollView(child:Column(
-            mainAxisSize:MainAxisSize.min,crossAxisAlignment:CrossAxisAlignment.start,
-            children:[
-              const Text('Ảnh lưu riêng trên R2, chỉ người có quyền mới xem '
-                'được qua liên kết có thời hạn.',
-                style:TextStyle(fontSize:12,color:ErpTokens.muted)),
-              const SizedBox(height:14),
-              if(galleryBusy)const LinearProgressIndicator(),
-              if(galleryError!=null)Padding(
-                padding:const EdgeInsets.only(bottom:12),
-                child:Text(galleryError!,style:const TextStyle(
-                  color:ErpTokens.danger))),
-              if(images.isEmpty&&galleryError==null)
-                const Padding(padding:EdgeInsets.symmetric(vertical:20),
-                  child:Text('Chưa có hình ảnh cho sản phẩm này.')),
-              Wrap(spacing:10,runSpacing:10,children:[
-                for(final image in images)
-                  ClipRRect(borderRadius:BorderRadius.circular(8),
-                    child:Stack(children:[
-                      Image.network(image['downloadUrl'] as String,
-                        width:124,height:124,fit:BoxFit.cover,
-                        errorBuilder:(_,__,___)=>Container(
-                          width:124,height:124,color:ErpTokens.mint,
-                          child:const Icon(Icons.broken_image_outlined))),
-                      if(image['isPrimary']==true)
-                        const Positioned(left:3,top:3,
-                          child:Chip(label:Text('Ảnh chính'))),
-                    ])),
-              ]),
-            ]))),
-        actions:[
-          TextButton(onPressed:galleryBusy?null:()=>Navigator.pop(dialog),
-            child:const Text('Đóng')),
-          if(canWrite)FilledButton.icon(
-            key:const ValueKey('catalog-product-upload-image'),
-            icon:const Icon(Icons.add_photo_alternate_outlined),
-            onPressed:galleryBusy?null:()async{
-              try{
-                final selected=await FilePicker.platform.pickFiles(
-                  type:FileType.custom,
-                  allowedExtensions:['png','jpg','jpeg','webp'],
-                  withData:true);
-                if(selected==null||selected.files.isEmpty)return;
-                final first=selected.files.first;
-                final ext=first.extension?.toLowerCase();
-                final type=ext=='png'?'image/png':ext=='webp'?'image/webp':
-                  ext=='jpg'||ext=='jpeg'?'image/jpeg':null;
-                if(type==null||first.bytes==null||
-                  first.bytes!.isEmpty||first.bytes!.length>5242880){
-                  if(ctx.mounted)refresh(()=>galleryError=
-                    'Chọn PNG/JPG/WebP tối đa 5 MB.');
-                  return;
-                }
-                if(ctx.mounted)refresh((){
-                  galleryBusy=true;galleryError=null;
-                });
-                await widget.client.uploadProductPhoto(
-                  widget.session.token,widget.session.actorId,
-                  branch,productId,first.bytes!,type);
-                images=await widget.client.productPhotos(
-                  widget.session.token,branch,productId);
-                if(ctx.mounted)refresh((){
-                  galleryBusy=false;galleryError=null;
-                });
-              }on ErpApiError catch(e){
-                if(ctx.mounted)refresh((){
-                  galleryBusy=false;galleryError=_errorMessage(e);
-                });
-              }catch(_){
-                if(ctx.mounted)refresh((){
-                  galleryBusy=false;
-                  galleryError='Chưa xác nhận ảnh. Chọn lại đúng ảnh để thử lại.';
-                });
-              }
-            },
-            label:const Text('Thêm ảnh')),
-        ],
-      )));
+    final branch=branchId,id=product['id'];
+    if(branch==null||id is! String)return;
+    await showDialog<void>(context:context,builder:(dialog)=>AlertDialog(
+      title:Text('Ảnh · ${product['name']}'),
+      content:SizedBox(width:(MediaQuery.sizeOf(dialog).width-70).clamp(220.0,620.0).toDouble(),
+        child:SingleChildScrollView(child:_ProductEditImages(client:widget.client,session:widget.session,
+          branchId:branch,productId:id,canWrite:canWrite))),
+      actions:[TextButton(onPressed:()=>Navigator.pop(dialog),child:const Text('Đóng'))],
+    ));
   }
 
   Future<void> _customerLocations(Map<String,dynamic> customer)async{
@@ -1608,6 +1523,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
       return;
     }
     if(!mounted)return;
+    if(resource=='products')brandId=productGroups.where((g)=>g['id']==productGroupId).firstOrNull?['brandId'] as String?;
     final size=MediaQuery.sizeOf(context);
     final formWidth=(size.width-56).clamp(220.0,resource=='products'?920.0:620.0).toDouble();
     final formHeight=(size.height-185).clamp(120.0,resource=='products'?840.0:580.0).toDouble();
@@ -1746,8 +1662,15 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                     const SizedBox(height:16),
                     const Text('2. Nhóm hàng',style:TextStyle(fontWeight:FontWeight.w700,color:ErpTokens.primary)),
                     const SizedBox(height:8),
+                    if(brands.isNotEmpty)DropdownButtonFormField<String?>(
+                      key:const ValueKey('catalog-edit-product-brand'),initialValue:brands.any((x)=>x['id']==brandId)?brandId:null,
+                      isExpanded:true,decoration:const InputDecoration(labelText:'Nhãn hàng'),
+                      items:[const DropdownMenuItem<String?>(value:null,child:Text('Tất cả nhãn hàng')),
+                        ...brands.where((x)=>x['active']!=false||x['id']==brandId).map((x)=>DropdownMenuItem<String?>(value:x['id'] as String,child:Text((x['name']??x['code']).toString())))],
+                      onChanged:(v)=>refresh((){brandId=v;if(v!=null&&productGroups.where((g)=>g['id']==productGroupId).firstOrNull?['brandId']!=v){productGroupId=null;categoryId=null;}})),
+                    const SizedBox(height:8),
                     DropdownButtonFormField<String?>(
-                      key:const ValueKey('catalog-edit-product-group'),
+                      key:ValueKey('catalog-edit-product-group-$brandId-$productGroupId'),
                       initialValue:productGroups.any((g)=>g['id']==productGroupId)
                         ?productGroupId:null,
                       isExpanded:true,
@@ -1755,8 +1678,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                       items:[
                         const DropdownMenuItem<String?>(
                           value:null,child:Text('Chưa phân nhóm')),
-                        ...productGroups.where((g)=>g['active']!=false||
-                          g['id']==productGroupId).map((g)=>
+                        ...productGroups.where((g)=>(g['active']!=false||
+                          g['id']==productGroupId)&&(brandId==null||g['brandId']==brandId||g['id']==productGroupId)).map((g)=>
                           DropdownMenuItem<String?>(
                             value:g['id'] as String,
                             child:Text("${g['code']} · ${g['name']}",
@@ -1777,9 +1700,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                             child:Text('${c['code']} · ${c['name']}'))),
                       ],onChanged:(v)=>refresh(()=>categoryId=v)),
                     const SizedBox(height:8),
-                    Text('Nhãn hàng: ${productGroups.where((g)=>g['id']==productGroupId)
-                      .map((g)=>g['brandName']??'Chưa phân nhãn').firstOrNull??'Chưa phân nhãn'}',
-                      style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
+                    if(brands.isEmpty)Text('Nhãn hàng: ${productGroups.where((g)=>g['id']==productGroupId).map((g)=>g['brandName']??'Chưa phân nhãn').firstOrNull??'Chưa phân nhãn'}',style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
                     const Divider(height:24),
                     const Text('3. SKU, đơn vị quy đổi và mã vạch',style:TextStyle(fontWeight:FontWeight.w700,color:ErpTokens.primary)),
                     const SizedBox(height:8),

@@ -244,7 +244,7 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
   }
   Widget textField(String key,String title,{String hint='',bool numeric=false}){
     return TextField(
-      key:ValueKey('r1-input-'+key),controller:fields[key],
+      key:ValueKey('r1-input-'+key),controller:fields[key],selectAllOnFocus:true,
       onChanged:key=='quantity'?(_)=>changeQuoteContext((){}):null,
       keyboardType:numeric?TextInputType.numberWithOptions(
         decimal:key!='priority',signed:key=='priority'):TextInputType.text,
@@ -820,6 +820,18 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
     });
   }
   @override Widget build(BuildContext context){
+    if(fixedProductId!=null)return LayoutBuilder(builder:(ctx,box)=>Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+      Padding(padding:const EdgeInsets.only(top:8,bottom:4),child:Row(children:[
+        Expanded(child:Text(heading,style:const TextStyle(fontWeight:FontWeight.w700))),
+        IconButton(tooltip:'Làm mới',onPressed:loading?null:reload,icon:const Icon(Icons.refresh,size:18)),
+        if(canWrite)TextButton.icon(key:ValueKey('product-add-'+widget.kind),onPressed:busy?null:openForm,
+          icon:const Icon(Icons.add,size:17),label:Text(widget.kind=='units'?'Thêm quy đổi':widget.kind=='skus'?'Thêm SKU':'Thêm mã vạch')),
+      ])),
+      if(error!=null&&!form)Text(error!,style:const TextStyle(color:ErpTokens.danger)),
+      records(),
+      if(form)editor(box.maxWidth),
+      const Divider(height:16),
+    ]));
     return LayoutBuilder(builder:(ctx,constraints)=>Column(
       crossAxisAlignment:CrossAxisAlignment.stretch,children:[
         Card(child:Padding(padding:const EdgeInsets.all(16),
