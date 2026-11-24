@@ -247,9 +247,31 @@ async function priceAt(db:PoolClient,t:string,b:string,listId:string,productId:s
     priceEntryId:row.priceEntryId,amount:row.amount,discountRate:row.discountRate};
 }
 async function addLines(db:PoolClient,t:string,b:string,orderId:string,
-  version:number,listId:string,customerId:string,channelId:string|undefined,lines:LineInput[]){
+  version:number,listId:string,customerId:string,channelId:string|undefined,lines:LineInput[],actorId:string){
   let no=0;
   for(const input of lines){
+    if(input.sellSkuId&&input.unitPrice!==undefined){
+      const quote=await quoteManualSku(db,{installationId:t,branchId:b,
+        priceListId:listId,customerId,channelId,sellSkuId:input.sellSkuId,
+        quantity:input.quantity,unitPrice:input.unitPrice,
+        discountRate:input.discountRate??"0",taxRate:input.taxRate??"0"});
+      if(quote.priceSignature!==input.expectedPriceSignature)
+        throw new SalesError(409,"PRICE_STALE");
+      await db.query(`INSERT INTO sales_order_line
+       (installation_id,branch_id,order_id,version_no,line_no,product_id,
+        price_entry_id,sell_sku_id,pricing_engine,price_snapshot,price_signature,
+        sku,product_name,unit_code,quantity,unit_price,discount_rate,
+        subtotal,discount_amount,tax_rate,tax_amount,line_total)
+       VALUES($1,$2,$3,$4,$5,$6,NULL,$7,'R1',$8::jsonb,$9,$10,$11,$12,
+        $13::numeric,$14::numeric,$15::numeric,$16::numeric,
+        $17::numeric,$18::numeric,$19::numeric,$20::numeric)`,
+       [t,b,orderId,version,++no,quote.productId,quote.sellSkuId,
+        JSON.stringify({...quote,overrideActorId:actorId}),quote.priceSignature,
+        quote.sku,quote.productName,quote.unitCode,
+        input.quantity,quote.unitPrice,quote.discountRate,quote.subtotal,
+        quote.discountAmount,quote.taxRate,quote.taxAmount,quote.lineTotal]);
+      continue;
+    }
     if(input.sellSkuId){
       const quote=await resolveR1Price(db,{
         installationId:t,branchId:b,sellSkuId:input.sellSkuId,priceListId:listId,
@@ -310,7 +332,7 @@ async function create(db:PoolClient,ctx:MutationContext,input:OrderInput){
     (installation_id,branch_id,order_id,version_no,customer_code,customer_name,price_list_code,note,created_by)
     VALUES($1,$2,$3,1,$4,$5,$6,$7,$8)`,
     [t,b,id,refs.customer.code,refs.customer.name,refs.list.code,input.note,ctx.actorId]);
-  await addLines(db,t,b,id,1,input.priceListId,input.customerId,input.channelId,input.lines);
+  await addLines(db,t,b,id,1,input.priceListId,input.customerId,input.channelId,input.lines,ctx.actorId);
   const total=await recalc(db,t,b,id,1);
   return {status:201,body:{id,branchId:b,status:"DRAFT",versionStatus:"DRAFT",
     version:1,revision:0,documentNo:null,customerId:input.customerId,
@@ -347,7 +369,7 @@ async function edit(db:PoolClient,ctx:MutationContext,id:string,input:OrderInput
     price_list_code=$7,note=$8 WHERE installation_id=$1 AND branch_id=$2
     AND order_id=$3 AND version_no=$4`,
     [t,b,id,v,refs.customer.code,refs.customer.name,refs.list.code,input.note]);
-  await addLines(db,t,b,id,v,input.priceListId,input.customerId,input.channelId,input.lines);
+  await addLines(db,t,b,id,v,input.priceListId,input.customerId,input.channelId,input.lines,ctx.actorId);
   const total=await recalc(db,t,b,id,v);
   const q=await db.query<{revision:string}>(`UPDATE sales_order SET
     customer_id=$4,price_list_id=$5,channel_id=$6,revision=revision+1,updated_at=now()
@@ -598,8 +620,12 @@ export async function handleSalesHttp(req:IncomingMessage,res:ServerResponse,
       const input=parseOrder(await bodyOf(req));
       const ctx=mutation(req,id,tenant,actorId,"sales.order.create",input,true);
       const out=await executeMutation(pool,ctx,{
-        authorize:(db,c)=>hasPermission(db,{installationId:c.installationId,
-          actorId:c.actorId,permission:"orders.create",branchId:input.branchId}),
+        authorize:async(db,c)=>
+          await hasPermission(db,{installationId:c.installationId,
+            actorId:c.actorId,permission:"orders.create",branchId:input.branchId})&&
+          (!input.lines.some(line=>line.unitPrice!==undefined)||
+           await hasPermission(db,{installationId:c.installationId,
+            actorId:c.actorId,permission:"orders.update",branchId:input.branchId})),
         execute:(db,c)=>create(db,c,input),
       });
       send(res,out.status,out.body,id,cors);return;
