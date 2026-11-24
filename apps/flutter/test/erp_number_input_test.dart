@@ -43,4 +43,16 @@ void main(){
     expect(second.text,'12,567');
     expect(second.selection.extentOffset,2);
   });
+  test('forward delete at a grouping comma removes the next digit',(){
+    const formatter=ErpGroupedNumberFormatter();
+    final result=formatter.formatEditUpdate(
+      const TextEditingValue(text:'1,234',selection:TextSelection.collapsed(offset:1)),
+      const TextEditingValue(text:'1234',selection:TextSelection.collapsed(offset:1)));
+    expect(result.text,'134');
+    expect(result.selection.extentOffset,1);
+    final next=formatter.formatEditUpdate(result,
+      const TextEditingValue(text:'14',selection:TextSelection.collapsed(offset:1)));
+    expect(next.text,'14');
+    expect(next.selection.extentOffset,1);
+  });
 }
