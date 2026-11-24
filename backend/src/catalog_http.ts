@@ -230,6 +230,14 @@ async function hasR1CPriceSchema(db:Pool|PoolClient):Promise<boolean>{
     return r.rows[0]?.ready===true;
   }catch{return false;}
 }
+async function hasP0PriceSchema(db:Pool|PoolClient):Promise<boolean>{
+ try{
+  const r=await db.query<{ready:boolean}>(`SELECT EXISTS(
+    SELECT 1 FROM public.schema_migrations
+    WHERE version='0019_p0_price_order_parity.sql') AS ready`);
+  return r.rows[0]?.ready===true;
+ }catch{return false;}
+}
 async function hasCustomerDirectories(db:Pool|PoolClient):Promise<boolean>{
   try{
     const r=await db.query<{ok:boolean}>(
@@ -305,11 +313,16 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
     'customer_group AS "customerGroupName",NULL::text AS "customerRegionCode",'+
     'NULL::text AS "customerRegionName",phone,delivery_address AS "deliveryAddress",'+
     'payment_terms_days AS "paymentTermsDays",active,revision::integer FROM catalog_customer';
+  const p0Fields=resource==="price-lists"&&await hasP0PriceSchema(db);
   const listSelection=resource==="price-lists"&&await hasR1CPriceSchema(db)
     ?'SELECT id,code,name,currency,active,revision::integer,priority,'
-      +'effective_from AS "effectiveFrom",effective_to AS "effectiveTo" FROM catalog_price_list'
+      +'effective_from AS "effectiveFrom",effective_to AS "effectiveTo",'
+      +(p0Fields?'stacking_mode AS "stackingMode",stop_processing AS "stopProcessing" '
+        :"\'EXCLUSIVE\'::text AS \"stackingMode\",false AS \"stopProcessing\" ")
+      +'FROM catalog_price_list'
     :'SELECT id,code,name,currency,active,revision::integer,0::integer AS priority,'
-      +'NULL::timestamptz AS "effectiveFrom",NULL::timestamptz AS "effectiveTo" '
+      +'NULL::timestamptz AS "effectiveFrom",NULL::timestamptz AS "effectiveTo",'
+      +"'EXCLUSIVE'::text AS \"stackingMode\",false AS \"stopProcessing\" "
       +'FROM catalog_price_list';
   const r=await db.query(
     resource==="prices"
