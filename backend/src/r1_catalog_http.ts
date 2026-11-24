@@ -168,7 +168,7 @@ export function parse(kind:Kind,raw:Record<string,unknown>){
    raw.importGrossAmount===undefined||raw.importDiscountRate===undefined))
   throw new R1Error(400,"INVALID_IMPORT_PRICE_METADATA");
  const importGrossAmount=importing?decimal(raw.importGrossAmount,MONEY):undefined;
- const importDiscountRate=importing?decimal(raw.importDiscountRate,/^(?:100(?:\\.0{1,2})?|(?:[0-9]|[1-9][0-9])(?:\\.[0-9]{1,2})?)$/):undefined;
+ const importDiscountRate=importing?decimal(raw.importDiscountRate,/^(?:100(?:\.0{1,2})?|(?:[0-9]|[1-9][0-9])(?:\.[0-9]{1,2})?)$/):undefined;
  const channelId=optionalId(raw.channelId),customerId=optionalId(raw.customerId);
  const customerGroup=raw.customerGroup==null?undefined:label(raw.customerGroup,64);
  if(scopeKind==="BASE"&&(adjustment!=="FIXED_PRICE"||channelId||customerId||customerGroup))
