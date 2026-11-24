@@ -699,6 +699,7 @@ export async function applyBulkPlan(db:PoolClient,ctx:MutationContext,
     branchId:input.branchId,priceListId:input.priceListId,
     sellSkuId:data.sellSkuId,scopeKind:"BASE",adjustment:"FIXED_PRICE",
     amount:data.netUnitPrice,priority:data.priority,stacking:"EXCLUSIVE",
+    importGrossAmount:data.amount,importDiscountRate:data.discountRate,
     minQuantity:"1",effectiveFrom:data.effectiveAt,
    }));
    applied.push({line:row.line,action:row.action,id:String((result.body as {id:string}).id)});
