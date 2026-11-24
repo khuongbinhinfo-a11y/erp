@@ -44,7 +44,7 @@ export async function quoteManualSku(db:PoolClient,input:{
   normalizedBaseQuantity:string;
  }>(`WITH gross AS (
    SELECT round($1::numeric*$2::numeric,0) AS subtotal,
-    round($2::numeric*$5::numeric,6) AS normalized
+    round($1::numeric*$5::numeric,6) AS normalized
   ),discounted AS (
    SELECT subtotal,normalized,
     round(subtotal*$3::numeric/100,0) AS discount FROM gross
