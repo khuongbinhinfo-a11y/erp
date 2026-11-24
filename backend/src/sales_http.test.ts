@@ -276,6 +276,32 @@ test("B1: real PostgreSQL order lifecycle, immutable versions, RBAC, replay and 
     assert.equal(walkDetail.body.order.shipping.paymentTermsDays,0);
     assert.equal(walkDetail.body.order.paymentStatus,"NOT_DUE");
     assert.equal((await call("/v1/sales/entry-settings?branchId="+b,"GET",undefined,token)).body.settings.deliveryChoice,"MANUAL");
+    // T1 document discount uses the same server quote and save allocation;
+    // all money is integer VND, including rounding residuals.
+    const docDiscount={mode:"TOTAL_AMOUNT",value:"1001",reason:"Ưu đãi toàn đơn"};
+    const docQuoteInput={...r2QuotePayload,lines:[
+      {sellSkuId,quantity:"1",unitPrice:"10000",discountRate:"0",taxRate:"10"},
+      {sellSkuId,quantity:"2",unitPrice:"10000",discountRate:"0",taxRate:"10"}],
+      documentDiscount:docDiscount};
+    const docQuote=await call("/v1/sales/quote","POST",docQuoteInput,token);
+    assert.equal(docQuote.status,200,JSON.stringify(docQuote.body));
+    assert.equal(docQuote.body.quote.discountTotal,"1001");
+    assert.equal(docQuote.body.quote.grandTotal,"31899");
+    assert.deepEqual(docQuote.body.quote.lines.map((x:any)=>x.discountAmount),["334","667"]);
+    const docPayload={...docQuoteInput,shipping:{warehouseId:root.warehouseId,deliveryChoice:"PICKUP",
+      customerMode:"EXISTING",collectionPolicy:"PREPAID"},note:"",
+      lines:docQuoteInput.lines.map((l,i)=>({...l,overrideReason:"Giá được duyệt",
+        expectedPriceSignature:docQuote.body.quote.lines[i].priceSignature}))};
+    const docOrder=await write("/v1/sales/orders",docPayload,0,"t1-discount-"+randomUUID());
+    assert.equal(docOrder.status,201,JSON.stringify(docOrder.body));
+    assert.equal(docOrder.body.total,"31899");
+    const docDetail=await call("/v1/sales/orders/"+docOrder.body.id+"?branchId="+b,"GET",undefined,token);
+    assert.equal(docDetail.body.order.lines[0].priceSnapshot.documentDiscount.allocatedAmount,"334");
+    assert.equal(docDetail.body.order.lines[0].priceSnapshot.overrideReason,"Giá được duyệt");
+    assert.equal((await write("/v1/sales/orders/"+docOrder.body.id+"/confirm",{branchId:b},0,"t1-doc-confirm-"+randomUUID())).status,200);
+    assert.equal((await call("/v1/sales/quote","POST",{...docQuoteInput,
+      lines:[{...docQuoteInput.lines[0],discountRate:"10"}]},token)).status,400);
+    assert.equal((await write("/v1/sales/orders",{...docPayload,documentDiscount:{...docDiscount,reason:""}},0,"t1-doc-reason-"+randomUUID())).status,400);
     // R1-C: the legacy productId path must enforce the same list window
     // at both create and confirmation; existing posted documents stay intact.
     const pendingExpiry=await write("/v1/sales/orders",payload,0,
