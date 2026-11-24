@@ -1371,7 +1371,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         padding:EdgeInsets.zero,
                         key:ValueKey('sales-split-$i'),tooltip:'Thêm dòng độc lập, số lượng 1',
                         icon:const Icon(Icons.call_split_outlined,size:18),
-                        onPressed:!can('orders.update')||lines.length>=30?null:(){
+                        onPressed:!(can('orders.create')||can('orders.update'))||lines.length>=30?null:(){
                           // Do not deduct source quantity or copy stale manual price/discount.
                           final next=_OrderLine(entry.sellSkuId,'1');
                           lines.insert(i+1,next);
@@ -1388,11 +1388,16 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         icon:const Icon(Icons.history,size:18),
                         onPressed:customer==null||!can('orders.update')?null:()async{
                           final selectedCustomer=customer!;
+                          final requestedSku=entry.sellSkuId;
                           try{
                             final data=await widget.client.salesLastPurchasePrice(
                               widget.session.token,branchId:branch,
-                              customerId:selectedCustomer,sellSkuId:entry.sellSkuId);
+                              customerId:selectedCustomer,sellSkuId:requestedSku);
+                            // Changing UOM makes a previous per-piece price
+                            // inapplicable to the new carton SKU, even if the
+                            // old request returns after the new quote.
                             if(!ctx.mounted||customer!=selectedCustomer||
+                                entry.sellSkuId!=requestedSku||
                                 !lines.contains(entry))return;
                             if(data==null){
                               refresh(()=>formError='Khách này chưa từng mua SKU này.');
