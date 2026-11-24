@@ -1,5 +1,6 @@
 import { resolveR1Price,R1QuoteError,r1QuoteSignature } from "./r1_pricing.ts";
 import { quoteManualSku,manualPriceFields,ManualPriceFault } from "./order_manual_price.ts";
+import { DiscountFault,parseDocumentDiscount,allocateDocumentDiscount,applyDocumentDiscount,type DocumentDiscount } from "./sales_document_discount.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Pool, PoolClient } from "pg";
 import { resolveSession } from "./auth.ts";
@@ -78,21 +79,22 @@ function bearer(req:IncomingMessage):string|null{
   return typeof v==="string"?/^Bearer ([A-Za-z0-9_-]{43})$/.exec(v)?.[1]??null:null;
 }
 type LineInput={productId?:string;sellSkuId?:string;quantity:string;expectedPriceSignature?:string;
- unitPrice?:string;discountRate?:string;taxRate?:string};
+ unitPrice?:string;discountRate?:string;taxRate?:string;overrideReason?:string};
 type OrderInput={branchId:string;customerId:string;priceListId:string;
-  channelId?:string;note:string;lines:LineInput[];shipping?:OrderContextInput};
+  channelId?:string;note:string;lines:LineInput[];shipping?:OrderContextInput;documentDiscount?:DocumentDiscount};
 function parseOrder(raw:Record<string,unknown>):OrderInput{
-  allowKeys(raw,["branchId","customerId","priceListId","channelId","note","lines","shipping"]);
+  allowKeys(raw,["branchId","customerId","priceListId","channelId","note","lines","shipping","documentDiscount"]);
   const branchId=uuid(raw.branchId),customerId=uuid(raw.customerId),priceListId=uuid(raw.priceListId);
   const channelId=raw.channelId==null?undefined:uuid(raw.channelId);
   const note=requireText(raw.note??"",1000,true);
   const shipping=parseOrderContext(raw.shipping);
+  const documentDiscount=parseDocumentDiscount(raw.documentDiscount,true);
   if(!Array.isArray(raw.lines)||raw.lines.length<1||raw.lines.length>30)
     throw new SalesError(400,"INVALID_LINES");
   const used=new Set<string>();
   const lines:LineInput[]=raw.lines.map((rawItem:unknown)=>{
     const item=asRecord(rawItem);allowKeys(item,["productId","sellSkuId","quantity","expectedPriceSignature",
-      "unitPrice","discountRate","taxRate"]);
+      "unitPrice","discountRate","taxRate","overrideReason"]);
     const hasProduct=item.productId!==undefined,hasSku=item.sellSkuId!==undefined;
     if(hasProduct===hasSku)throw new SalesError(400,"INVALID_LINE_IDENTITY");
     const productId=hasProduct?uuid(item.productId):undefined;
@@ -104,7 +106,7 @@ function parseOrder(raw:Record<string,unknown>):OrderInput{
     if(productId&&used.has(key))throw new SalesError(400,"DUPLICATE_PRODUCT");
     used.add(key);
     if(productId){
-      if(item.unitPrice!==undefined||item.discountRate!==undefined||item.taxRate!==undefined)
+      if(item.unitPrice!==undefined||item.discountRate!==undefined||item.taxRate!==undefined||item.overrideReason!==undefined)
         throw new SalesError(400,"INVALID_MANUAL_PRICE_CONTEXT");
       if(item.expectedPriceSignature!==undefined)throw new SalesError(400,"INVALID_PRICE_CONTEXT");
       return {productId,quantity};
@@ -115,17 +117,22 @@ function parseOrder(raw:Record<string,unknown>):OrderInput{
     const manual=item.unitPrice===undefined?{}:manualPriceFields(item);
     if(item.unitPrice===undefined&&(item.discountRate!==undefined||item.taxRate!==undefined))
       throw new SalesError(400,"MANUAL_PRICE_REQUIRED");
-    return {sellSkuId,quantity,expectedPriceSignature:expected,...manual};
+    const overrideReason=item.overrideReason===undefined?undefined:requireText(item.overrideReason,500);
+    if(overrideReason&&item.unitPrice===undefined)throw new SalesError(400,"INVALID_MANUAL_PRICE_CONTEXT");
+    return {sellSkuId,quantity,expectedPriceSignature:expected,...manual,...(overrideReason?{overrideReason}:{})};
   });
   if(channelId&&lines.some(line=>!line.sellSkuId))
     throw new SalesError(400,"CHANNEL_REQUIRES_SELL_SKU");
-  return {branchId,customerId,priceListId,...(channelId?{channelId}:{}),note,lines,...(shipping?{shipping}:{})};
+  if(documentDiscount&&lines.some(line=>!line.sellSkuId))throw new DiscountFault("DOCUMENT_DISCOUNT_REQUIRES_SKU");
+  if(shipping&&lines.some(line=>line.unitPrice!==undefined&&!line.overrideReason))throw new SalesError(400,"OVERRIDE_REASON_REQUIRED");
+  return {branchId,customerId,priceListId,...(channelId?{channelId}:{}),note,lines,...(shipping?{shipping}:{}),...(documentDiscount?{documentDiscount}:{})};
 }
 type QuoteInput={branchId:string;customerId:string;priceListId:string;
   channelId?:string;lines:{sellSkuId:string;quantity:string;
-   unitPrice?:string;discountRate?:string;taxRate?:string}[]};
+   unitPrice?:string;discountRate?:string;taxRate?:string}[];documentDiscount?:DocumentDiscount};
 function parseQuote(raw:Record<string,unknown>):QuoteInput{
-  allowKeys(raw,["branchId","customerId","priceListId","channelId","lines"]);
+  allowKeys(raw,["branchId","customerId","priceListId","channelId","lines","documentDiscount"]);
+  const documentDiscount=parseDocumentDiscount(raw.documentDiscount,false);
   const branchId=uuid(raw.branchId),customerId=uuid(raw.customerId);
   const priceListId=uuid(raw.priceListId);
   const channelId=raw.channelId==null?undefined:uuid(raw.channelId);
@@ -142,13 +149,13 @@ function parseQuote(raw:Record<string,unknown>):QuoteInput{
     const manual=item.unitPrice===undefined?{}:manualPriceFields(item);
     return {sellSkuId,quantity,...manual};
   });
-  return {branchId,customerId,priceListId,...(channelId?{channelId}:{}),lines};
+  return {branchId,customerId,priceListId,...(channelId?{channelId}:{}),lines,...(documentDiscount?{documentDiscount}:{})};
 }
 async function previewOrder(db:PoolClient,t:string,input:QuoteInput){
   const {branchId:b,customerId,priceListId,channelId}=input;
   await eligibility(db,t,b,customerId,priceListId);
   const at=new Date().toISOString();
-  const lines=[];
+  let lines=[];
   for(const line of input.lines){
     if(line.unitPrice!==undefined){
       const quote=await quoteManualSku(db,{installationId:t,branchId:b,
@@ -163,6 +170,12 @@ async function previewOrder(db:PoolClient,t:string,input:QuoteInput){
       });
       lines.push({...quote,priceSignature:r1QuoteSignature(quote)});
     }
+  }
+  if(input.documentDiscount){
+    const amounts=allocateDocumentDiscount(lines.map(line=>({subtotal:"subtotal" in line?line.subtotal:line.lineTotal,
+      discountAmount:"discountAmount" in line?line.discountAmount:"0",taxRate:"taxRate" in line?line.taxRate:"0",
+      taxAmount:"taxAmount" in line?line.taxAmount:"0",lineTotal:line.lineTotal})),input.documentDiscount);
+    lines=lines.map((line,i)=>({...line,...amounts[i]!}));
   }
   // Single server-side NUMERIC aggregation, never a client JS/Flutter float.
   const summed=await db.query<{total:string}>(
@@ -272,7 +285,7 @@ async function addLines(db:PoolClient,t:string,b:string,orderId:string,
         $13::numeric,$14::numeric,$15::numeric,$16::numeric,
         $17::numeric,$18::numeric,$19::numeric,$20::numeric)`,
        [t,b,orderId,version,++no,quote.productId,quote.sellSkuId,
-        JSON.stringify({...quote,overrideActorId:actorId}),quote.priceSignature,
+        JSON.stringify({...quote,overrideActorId:actorId,...(input.overrideReason?{overrideReason:input.overrideReason}:{})}),quote.priceSignature,
         quote.sku,quote.productName,quote.unitCode,
         input.quantity,quote.unitPrice,quote.discountRate,quote.subtotal,
         quote.discountAmount,quote.taxRate,quote.taxAmount,quote.lineTotal]);
@@ -340,6 +353,7 @@ async function create(db:PoolClient,ctx:MutationContext,input:OrderInput){
     [t,b,id,refs.customer.code,refs.customer.name,refs.list.code,input.note,ctx.actorId]);
   await saveOrderContext(db,ctx,b,id,1,input.customerId,input.shipping,true);
   await addLines(db,t,b,id,1,input.priceListId,input.customerId,input.channelId,input.lines,ctx.actorId);
+  if(input.documentDiscount)await applyDocumentDiscount(db,t,b,id,1,input.documentDiscount,ctx.actorId);
   const total=await recalc(db,t,b,id,1);
   return {status:201,body:{id,branchId:b,status:"DRAFT",versionStatus:"DRAFT",
     version:1,revision:0,documentNo:null,customerId:input.customerId,
@@ -380,6 +394,7 @@ async function edit(db:PoolClient,ctx:MutationContext,id:string,input:OrderInput
     [t,b,id,v,refs.customer.code,refs.customer.name,refs.list.code,input.note]);
   await saveOrderContext(db,ctx,b,id,v,input.customerId,input.shipping,false);
   await addLines(db,t,b,id,v,input.priceListId,input.customerId,input.channelId,input.lines,ctx.actorId);
+  if(input.documentDiscount)await applyDocumentDiscount(db,t,b,id,v,input.documentDiscount,ctx.actorId);
   const total=await recalc(db,t,b,id,v);
   const q=await db.query<{revision:string}>(`UPDATE sales_order SET
     customer_id=$4,price_list_id=$5,channel_id=$6,revision=revision+1,updated_at=now()
@@ -663,7 +678,7 @@ export async function handleSalesHttp(req:IncomingMessage,res:ServerResponse,
           await hasPermission(db,{installationId:tenant,actorId,
             permission:"orders.update",branchId:input.branchId});
         if(!allowed)throw new SalesError(403,"ORDERS_QUOTE_DENIED");
-        if(input.lines.some(line=>line.unitPrice!==undefined)&&
+        if((input.documentDiscount||input.lines.some(line=>line.unitPrice!==undefined))&&
           !await hasPermission(db,{installationId:tenant,actorId,
             permission:"orders.update",branchId:input.branchId}))
           throw new SalesError(403,"MANUAL_PRICE_PERMISSION_REQUIRED");
@@ -735,7 +750,7 @@ export async function handleSalesHttp(req:IncomingMessage,res:ServerResponse,
         authorize:async(db,c)=>
           await hasPermission(db,{installationId:c.installationId,
             actorId:c.actorId,permission:"orders.create",branchId:input.branchId})&&
-          (!input.lines.some(line=>line.unitPrice!==undefined)||
+          (!input.documentDiscount&&!input.lines.some(line=>line.unitPrice!==undefined)||
            await hasPermission(db,{installationId:c.installationId,
             actorId:c.actorId,permission:"orders.update",branchId:input.branchId}))&&
           (!input.shipping||await hasPermission(db,{installationId:c.installationId,
@@ -779,6 +794,7 @@ export async function handleSalesHttp(req:IncomingMessage,res:ServerResponse,
     }
     fail(res,405,"METHOD_NOT_ALLOWED",id,cors);
   }catch(err){
+    if(err instanceof DiscountFault){fail(res,err.status,err.code,id,cors);return;}
     if(err instanceof OrderContextFault){fail(res,err.status,err.code,id,cors);return;}
     if(err instanceof SalesError){fail(res,err.httpStatus,err.code,id,cors);return;}
     if(err instanceof R1QuoteError){fail(res,err.status,err.code,id,cors);return;}
