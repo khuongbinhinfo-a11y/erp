@@ -158,11 +158,17 @@ export function parse(kind:Kind,raw:Record<string,unknown>){
  }
  keys(raw,["branchId","priceListId","sellSkuId","scopeKind","channelId","customerId",
   "customerGroup","adjustment","amount","priority","stacking","stopProcessing",
-  "minQuantity","effectiveFrom","effectiveTo"]);
+  "minQuantity","effectiveFrom","effectiveTo","importGrossAmount","importDiscountRate"]);
  const scopeKind=enumVal(raw.scopeKind,["BASE","CHANNEL","CUSTOMER_GROUP","CUSTOMER","PROMOTION"]);
  const adjustment=enumVal(raw.adjustment,["FIXED_PRICE","PERCENT_DISCOUNT",
   "AMOUNT_DISCOUNT","PERCENT_MARKUP","AMOUNT_MARKUP"]);
  const amount=decimal(raw.amount,MONEY);
+ const importing=raw.importGrossAmount!==undefined||raw.importDiscountRate!==undefined;
+ if(importing&&(scopeKind!=="BASE"||adjustment!=="FIXED_PRICE"||
+   raw.importGrossAmount===undefined||raw.importDiscountRate===undefined))
+  throw new R1Error(400,"INVALID_IMPORT_PRICE_METADATA");
+ const importGrossAmount=importing?decimal(raw.importGrossAmount,MONEY):undefined;
+ const importDiscountRate=importing?decimal(raw.importDiscountRate,/^(?:100(?:\\.0{1,2})?|(?:[0-9]|[1-9][0-9])(?:\\.[0-9]{1,2})?)$/):undefined;
  const channelId=optionalId(raw.channelId),customerId=optionalId(raw.customerId);
  const customerGroup=raw.customerGroup==null?undefined:label(raw.customerGroup,64);
  if(scopeKind==="BASE"&&(adjustment!=="FIXED_PRICE"||channelId||customerId||customerGroup))
@@ -186,7 +192,7 @@ export function parse(kind:Kind,raw:Record<string,unknown>){
   priority:number(raw.priority??0,-100000,100000),
   stacking:enumVal(raw.stacking??"EXCLUSIVE",["EXCLUSIVE","STACKABLE"]),
   stopProcessing:bool(raw.stopProcessing),minQuantity:decimal(raw.minQuantity??"1",QTY),
-  effectiveFrom:start,effectiveTo:end};
+  effectiveFrom:start,effectiveTo:end,importGrossAmount,importDiscountRate};
 }
 type Parsed=ReturnType<typeof parse>;
 export async function create(db:PoolClient,tenant:string,kind:Kind,parsed:Parsed){
@@ -276,12 +282,22 @@ export async function create(db:PoolClient,tenant:string,kind:Kind,parsed:Parsed
           AND x.rule_id=r.id AND x.retired_at<=transaction_timestamp())
     LIMIT 1`,args);
   if(clash.rows.length)throw new R1Error(409,"PRICE_RULE_OVERLAP");
+  const metadata=parsed.importGrossAmount!==undefined;
+  if(metadata){
+   const state=await db.query<{ready:boolean}>(`SELECT EXISTS(
+     SELECT 1 FROM public.schema_migrations
+     WHERE version='0019_p0_price_order_parity.sql') AS ready`);
+   if(!state.rows[0]?.ready)throw new R1Error(503,"P0_PRICE_SCHEMA_REQUIRED");
+  }
+  const extraColumns=metadata?",imported_gross_amount,imported_discount_rate":"";
+  const extraParameters=metadata?",$17::numeric,$18::numeric":"";
+  const insertArgs=metadata?[...args,parsed.importGrossAmount,parsed.importDiscountRate]:args;
   const r=await db.query<{id:string}>(`INSERT INTO catalog_sku_price_rule
    (installation_id,branch_id,price_list_id,sell_sku_id,scope_kind,
     channel_id,customer_id,customer_group,adjustment,amount,priority,stacking,
-    stop_processing,min_quantity,effective_from,effective_to)
+    stop_processing,min_quantity,effective_from,effective_to${extraColumns})
    SELECT $1,$2,l.id,s.id,$5,$6,$7,$8,$9,$10::numeric,$11,$12,
-      $13,$14::numeric,$15::timestamptz,$16::timestamptz
+      $13,$14::numeric,$15::timestamptz,$16::timestamptz${extraParameters}
    FROM catalog_price_list l
    JOIN catalog_sell_sku s ON s.installation_id=l.installation_id
      AND s.branch_id=l.branch_id AND s.id=$4 AND s.active
@@ -289,7 +305,7 @@ export async function create(db:PoolClient,tenant:string,kind:Kind,parsed:Parsed
      AND p.branch_id=s.branch_id AND p.id=s.product_id AND p.active
    WHERE l.installation_id=$1 AND l.branch_id=$2 AND l.id=$3 AND l.active
    RETURNING id`,
-   args);
+   insertArgs);
   if(!r.rows[0])throw new R1Error(409,"PRICE_TARGET_UNAVAILABLE");
   return {status:201,body:{id:r.rows[0].id,scopeKind:parsed.scopeKind,
     adjustment:parsed.adjustment,amount:parsed.amount,priceListId:parsed.priceListId,
