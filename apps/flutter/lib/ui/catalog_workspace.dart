@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:material_ui/material_ui.dart';
@@ -615,8 +616,9 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                       priceChannels,selectedChannels,refresh),
                     _priceScopeChips('Nhóm khách','price-create-group',
                       priceGroups,selectedGroups,refresh),
-                    _priceScopeChips('Khách hàng riêng','price-create-customer',
-                      priceCustomers,selectedCustomers,refresh),
+                    _PriceCustomerPicker(key:const ValueKey('price-create-customer-picker'),client:widget.client,
+                      session:widget.session,branchId:branch,initial:priceCustomers,chosen:selectedCustomers,
+                      prefix:'price-create-customer',onChanged:()=>refresh((){})),
                     const Padding(padding:EdgeInsets.only(top:8),
                       child:Text('Khi chọn cả kênh bán và nhóm khách: áp dụng theo KÊNH VÀ NHÓM.',
                         style:TextStyle(fontSize:12,color:ErpTokens.muted))),
@@ -1276,145 +1278,16 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     }
   }
 
-  /// Reuse the existing server-backed SKU/UOM/barcode workflows rather than
-  /// introduce a second mutation path or allow identities to be rewritten.
-  Future<void> _productDetails(Map<String,dynamic> product,String initialKind)async{
-    final branch=branchId;
-    if(branch==null||product['id'] is! String)return;
-    final session=widget.session,client=widget.client;
-    var kind=initialKind;
-    const sections=[('skus','SKU bán hàng'),('units','ĐVT và quy đổi'),
-      ('barcodes','Mã vạch')];
-    await showDialog<void>(context:context,builder:(dialog)=>
-      StatefulBuilder(builder:(ctx,refresh)=>AlertDialog(
-        key:const ValueKey('catalog-product-details-dialog'),
-        insetPadding:const EdgeInsets.symmetric(horizontal:12,vertical:12),
-        title:Text('Chi tiết · ${product['name']}'),
-        content:SizedBox(
-          width:(MediaQuery.sizeOf(ctx).width-56).clamp(220.0,1000.0).toDouble(),
-          height:(MediaQuery.sizeOf(ctx).height-180).clamp(160.0,720.0).toDouble(),
-          child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
-            Wrap(spacing:6,runSpacing:6,children:[
-              for(final section in sections)ChoiceChip(
-                label:Text(section.$2),selected:kind==section.$1,
-                onSelected:(_)=>refresh(()=>kind=section.$1)),
-            ]),
-            const SizedBox(height:8),
-            const Text('Mỗi thay đổi được lưu riêng trên máy chủ. '
-              'Mã và hệ số đã tạo được giữ nguyên để bảo toàn chứng từ.',
-              style:TextStyle(color:ErpTokens.muted,fontSize:12)),
-            const SizedBox(height:8),
-            Expanded(child:SingleChildScrollView(
-              child:R1CatalogWorkspace(
-                key:ValueKey('product-details-${product['id']}-$kind'),
-                kind:kind,branchId:branch,branches:const [],
-                session:session,client:client,product:product,
-                changeBranch:(_){},
-              ))),
-          ])),
-        actions:[TextButton(onPressed:()=>Navigator.pop(dialog),
-          child:const Text('Quay lại sản phẩm'))],
-      )));
-    if(mounted&&branchId==branch&&widget.session.token==session.token){
-      await _loadRecords();
-    }
-  }
-
   Future<void> _productImages(Map<String,dynamic> product)async{
-    if(branchId==null)return;
-    final productId=product['id'] as String;
-    final branch=branchId!;
-    List<Map<String,dynamic>> images=[];
-    String? galleryError;
-    bool galleryBusy=false;
-    try{
-      images=await widget.client.productPhotos(
-        widget.session.token,branch,productId);
-    }on ErpApiError catch(e){galleryError=_errorMessage(e);}
-    if(!mounted)return;
-    await showDialog<void>(context:context,builder:(dialog)=>
-      StatefulBuilder(builder:(ctx,refresh)=>AlertDialog(
-        title:Text('Ảnh · ${product['name']}'),
-        content:SizedBox(
-          width:(MediaQuery.sizeOf(dialog).width-70).clamp(250.0,620.0).toDouble(),
-          child:SingleChildScrollView(child:Column(
-            mainAxisSize:MainAxisSize.min,crossAxisAlignment:CrossAxisAlignment.start,
-            children:[
-              const Text('Ảnh lưu riêng trên R2, chỉ người có quyền mới xem '
-                'được qua liên kết có thời hạn.',
-                style:TextStyle(fontSize:12,color:ErpTokens.muted)),
-              const SizedBox(height:14),
-              if(galleryBusy)const LinearProgressIndicator(),
-              if(galleryError!=null)Padding(
-                padding:const EdgeInsets.only(bottom:12),
-                child:Text(galleryError!,style:const TextStyle(
-                  color:ErpTokens.danger))),
-              if(images.isEmpty&&galleryError==null)
-                const Padding(padding:EdgeInsets.symmetric(vertical:20),
-                  child:Text('Chưa có hình ảnh cho sản phẩm này.')),
-              Wrap(spacing:10,runSpacing:10,children:[
-                for(final image in images)
-                  ClipRRect(borderRadius:BorderRadius.circular(8),
-                    child:Stack(children:[
-                      Image.network(image['downloadUrl'] as String,
-                        width:124,height:124,fit:BoxFit.cover,
-                        errorBuilder:(_,__,___)=>Container(
-                          width:124,height:124,color:ErpTokens.mint,
-                          child:const Icon(Icons.broken_image_outlined))),
-                      if(image['isPrimary']==true)
-                        const Positioned(left:3,top:3,
-                          child:Chip(label:Text('Ảnh chính'))),
-                    ])),
-              ]),
-            ]))),
-        actions:[
-          TextButton(onPressed:galleryBusy?null:()=>Navigator.pop(dialog),
-            child:const Text('Đóng')),
-          if(canWrite)FilledButton.icon(
-            key:const ValueKey('catalog-product-upload-image'),
-            icon:const Icon(Icons.add_photo_alternate_outlined),
-            onPressed:galleryBusy?null:()async{
-              try{
-                final selected=await FilePicker.platform.pickFiles(
-                  type:FileType.custom,
-                  allowedExtensions:['png','jpg','jpeg','webp'],
-                  withData:true);
-                if(selected==null||selected.files.isEmpty)return;
-                final first=selected.files.first;
-                final ext=first.extension?.toLowerCase();
-                final type=ext=='png'?'image/png':ext=='webp'?'image/webp':
-                  ext=='jpg'||ext=='jpeg'?'image/jpeg':null;
-                if(type==null||first.bytes==null||
-                  first.bytes!.isEmpty||first.bytes!.length>5242880){
-                  if(ctx.mounted)refresh(()=>galleryError=
-                    'Chọn PNG/JPG/WebP tối đa 5 MB.');
-                  return;
-                }
-                if(ctx.mounted)refresh((){
-                  galleryBusy=true;galleryError=null;
-                });
-                await widget.client.uploadProductPhoto(
-                  widget.session.token,widget.session.actorId,
-                  branch,productId,first.bytes!,type);
-                images=await widget.client.productPhotos(
-                  widget.session.token,branch,productId);
-                if(ctx.mounted)refresh((){
-                  galleryBusy=false;galleryError=null;
-                });
-              }on ErpApiError catch(e){
-                if(ctx.mounted)refresh((){
-                  galleryBusy=false;galleryError=_errorMessage(e);
-                });
-              }catch(_){
-                if(ctx.mounted)refresh((){
-                  galleryBusy=false;
-                  galleryError='Chưa xác nhận ảnh. Chọn lại đúng ảnh để thử lại.';
-                });
-              }
-            },
-            label:const Text('Thêm ảnh')),
-        ],
-      )));
+    final branch=branchId,id=product['id'];
+    if(branch==null||id is! String)return;
+    await showDialog<void>(context:context,builder:(dialog)=>AlertDialog(
+      title:Text('Ảnh · ${product['name']}'),
+      content:SizedBox(width:(MediaQuery.sizeOf(dialog).width-70).clamp(220.0,620.0).toDouble(),
+        child:SingleChildScrollView(child:_ProductEditImages(client:widget.client,session:widget.session,
+          branchId:branch,productId:id,canWrite:canWrite))),
+      actions:[TextButton(onPressed:()=>Navigator.pop(dialog),child:const Text('Đóng'))],
+    ));
   }
 
   Future<void> _customerLocations(Map<String,dynamic> customer)async{
@@ -1601,7 +1474,13 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
             if(target=='DEFAULT')assignDefault=true;
             if(target=='CHANNEL')selectedChannels.add(assignment['channelId'].toString());
             if(target=='CUSTOMER_GROUP')selectedGroups.add(assignment['customerGroupId'].toString());
-            if(target=='CUSTOMER')selectedCustomers.add(assignment['customerId'].toString());
+            if(target=='CUSTOMER'){
+              final customerId=assignment['customerId'].toString();
+              selectedCustomers.add(customerId);
+              if(!priceCustomers.any((x)=>x['id']==customerId))priceCustomers.add({
+                'id':customerId,'code':assignment['customerCode'],'name':assignment['customerName']??assignment['customerCode']??'Khách đã chọn',
+              });
+            }
           }
           priceScopesLoaded=true;
         }catch(_){
@@ -1644,9 +1523,10 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
       return;
     }
     if(!mounted)return;
+    if(resource=='products')brandId=productGroups.where((g)=>g['id']==productGroupId).firstOrNull?['brandId'] as String?;
     final size=MediaQuery.sizeOf(context);
-    final formWidth=(size.width-56).clamp(220.0,620.0).toDouble();
-    final formHeight=(size.height-205).clamp(120.0,580.0).toDouble();
+    final formWidth=(size.width-56).clamp(220.0,resource=='products'?920.0:620.0).toDouble();
+    final formHeight=(size.height-185).clamp(120.0,resource=='products'?840.0:580.0).toDouble();
     final body=await showDialog<Map<String,dynamic>>(
       context:context,
       builder:(dialog)=>StatefulBuilder(builder:(context,refresh)=>AlertDialog(
@@ -1663,8 +1543,9 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
               child:Column(mainAxisSize:MainAxisSize.min,
                 crossAxisAlignment:CrossAxisAlignment.stretch,
                 children:[
-                  Text('Mã: ${row['code']??'—'}',
-                    style:const TextStyle(fontSize:12,color:ErpTokens.muted)),
+                  if(resource=='products')TextFormField(initialValue:(row['sku']??row['code']??'').toString(),readOnly:true,
+                    decoration:const InputDecoration(labelText:'Mã hàng / SKU gốc',suffixIcon:Icon(Icons.lock_outline,size:16)))
+                  else Text('Mã: ${row['code']??'—'}',style:const TextStyle(fontSize:12,color:ErpTokens.muted)),
                   const SizedBox(height:12),
                   TextFormField(key:const ValueKey('catalog-edit-name'),
                     initialValue:name,onChanged:(value)=>name=value,
@@ -1736,8 +1617,9 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                         priceChannels,selectedChannels,refresh),
                       _priceScopeChips('Nhóm khách','price-edit-group',
                         priceGroups,selectedGroups,refresh),
-                      _priceScopeChips('Khách hàng riêng','price-edit-customer',
-                        priceCustomers,selectedCustomers,refresh),
+                      _PriceCustomerPicker(key:const ValueKey('price-edit-customer-picker'),client:widget.client,
+                        session:widget.session,branchId:branch,initial:priceCustomers,chosen:selectedCustomers,
+                        prefix:'price-edit-customer',onChanged:()=>refresh((){})),
                       const Padding(padding:EdgeInsets.only(top:8),
                         child:Text('Kênh bán VÀ nhóm khách phải cùng khớp.',
                           style:TextStyle(fontSize:12,color:ErpTokens.muted))),
@@ -1772,9 +1654,23 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                       ],onChanged:(v)=>refresh(()=>parentId=v)),
                   ],
                   if(resource=='products')...[
-                    const SizedBox(height:12),
+                    const SizedBox(height:16),
+                    const Text('1. Thông tin sản phẩm',style:TextStyle(fontWeight:FontWeight.w700,color:ErpTokens.primary)),
+                    const SizedBox(height:8),
+                    TextFormField(initialValue:(row['baseUnit']??'').toString(),readOnly:true,
+                      decoration:const InputDecoration(labelText:'Đơn vị tồn kho gốc',suffixIcon:Icon(Icons.lock_outline,size:16))),
+                    const SizedBox(height:16),
+                    const Text('2. Nhóm hàng',style:TextStyle(fontWeight:FontWeight.w700,color:ErpTokens.primary)),
+                    const SizedBox(height:8),
+                    if(brands.isNotEmpty)DropdownButtonFormField<String?>(
+                      key:const ValueKey('catalog-edit-product-brand'),initialValue:brands.any((x)=>x['id']==brandId)?brandId:null,
+                      isExpanded:true,decoration:const InputDecoration(labelText:'Nhãn hàng'),
+                      items:[const DropdownMenuItem<String?>(value:null,child:Text('Tất cả nhãn hàng')),
+                        ...brands.where((x)=>x['active']!=false||x['id']==brandId).map((x)=>DropdownMenuItem<String?>(value:x['id'] as String,child:Text((x['name']??x['code']).toString())))],
+                      onChanged:(v)=>refresh((){brandId=v;if(v!=null&&productGroups.where((g)=>g['id']==productGroupId).firstOrNull?['brandId']!=v){productGroupId=null;categoryId=null;}})),
+                    const SizedBox(height:8),
                     DropdownButtonFormField<String?>(
-                      key:const ValueKey('catalog-edit-product-group'),
+                      key:ValueKey('catalog-edit-product-group-$brandId-$productGroupId'),
                       initialValue:productGroups.any((g)=>g['id']==productGroupId)
                         ?productGroupId:null,
                       isExpanded:true,
@@ -1782,8 +1678,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                       items:[
                         const DropdownMenuItem<String?>(
                           value:null,child:Text('Chưa phân nhóm')),
-                        ...productGroups.where((g)=>g['active']!=false||
-                          g['id']==productGroupId).map((g)=>
+                        ...productGroups.where((g)=>(g['active']!=false||
+                          g['id']==productGroupId)&&(brandId==null||g['brandId']==brandId||g['id']==productGroupId)).map((g)=>
                           DropdownMenuItem<String?>(
                             value:g['id'] as String,
                             child:Text("${g['code']} · ${g['name']}",
@@ -1804,37 +1700,22 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                             child:Text('${c['code']} · ${c['name']}'))),
                       ],onChanged:(v)=>refresh(()=>categoryId=v)),
                     const SizedBox(height:8),
-                    Text('ĐVT tồn kho: ${row['baseUnit']??'—'}',
-                      style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
-                    Text('Nhãn hàng: ${productGroups.where((g)=>g['id']==productGroupId)
-                      .map((g)=>g['brandName']??'Chưa phân nhãn').firstOrNull??'Chưa phân nhãn'}',
-                      style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
+                    if(brands.isEmpty)Text('Nhãn hàng: ${productGroups.where((g)=>g['id']==productGroupId).map((g)=>g['brandName']??'Chưa phân nhãn').firstOrNull??'Chưa phân nhãn'}',style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
+                    const Divider(height:24),
+                    const Text('3. SKU, đơn vị quy đổi và mã vạch',style:TextStyle(fontWeight:FontWeight.w700,color:ErpTokens.primary)),
+                    const Text('Mã và hệ số đã lưu được khóa. Quy cách và ảnh lưu theo từng thao tác.',style:TextStyle(fontSize:12,color:ErpTokens.muted)),
                     const SizedBox(height:8),
-                    Wrap(spacing:8,runSpacing:8,children:[
-                      OutlinedButton.icon(
-                        key:const ValueKey('catalog-edit-product-skus'),
-                        onPressed:()=>_productDetails(row,'skus'),
-                        icon:const Icon(Icons.inventory_2_outlined,size:18),
-                        label:const Text('SKU bán hàng')),
-                      OutlinedButton.icon(
-                        key:const ValueKey('catalog-edit-product-units'),
-                        onPressed:()=>_productDetails(row,'units'),
-                        icon:const Icon(Icons.straighten,size:18),
-                        label:const Text('ĐVT và quy đổi')),
-                      OutlinedButton.icon(
-                        key:const ValueKey('catalog-edit-product-barcodes'),
-                        onPressed:()=>_productDetails(row,'barcodes'),
-                        icon:const Icon(Icons.qr_code,size:18),
-                        label:const Text('Mã vạch')),
-                      OutlinedButton.icon(
-                        key:const ValueKey('catalog-edit-product-images'),
-                        onPressed:()=>_productImages(row),
-                        icon:const Icon(Icons.photo_library_outlined,size:18),
-                        label:const Text('Hình ảnh')),
-                    ]),
-                    const Text('SKU, ĐVT, mã vạch và ảnh được lưu riêng trên máy chủ. '
-                      'Mã hàng và ĐVT gốc đã tạo không bị ghi đè.',
-                      style:TextStyle(color:ErpTokens.muted,fontSize:12)),
+                    for(final kind in ['units','skus','barcodes'])
+                      R1CatalogWorkspace(
+                        key:ValueKey('product-edit-$id-$kind'),
+                        kind:kind,branchId:branch,branches:const [],
+                        session:widget.session,client:widget.client,product:row,
+                        changeBranch:(_){},
+                      ),
+                    const Divider(height:24),
+                    const Text('4. Ảnh sản phẩm',style:TextStyle(fontWeight:FontWeight.w700,color:ErpTokens.primary)),
+                    _ProductEditImages(key:ValueKey('product-edit-$id-images'),client:widget.client,
+                      session:widget.session,branchId:branch,productId:id,canWrite:canWrite),
                   ],
                   if(resource=='customers')...[
                     const SizedBox(height:12),
@@ -2320,4 +2201,147 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
           ]))),
     ]);
   }
+}
+
+
+/// A bounded, server-filtered picker. Chosen IDs remain independent from the
+/// current search page, so editing a large list never drops unseen assignments.
+class _PriceCustomerPicker extends StatefulWidget{
+  final ErpIdentityClient client;final IdentitySession session;
+  final String branchId,prefix;
+  final List<Map<String,dynamic>> initial;final Set<String> chosen;
+  final VoidCallback onChanged;
+  const _PriceCustomerPicker({super.key,required this.client,required this.session,
+    required this.branchId,required this.prefix,required this.initial,required this.chosen,required this.onChanged});
+  @override State<_PriceCustomerPicker> createState()=>_PriceCustomerPickerState();
+}
+class _PriceCustomerPickerState extends State<_PriceCustomerPicker>{
+  final search=TextEditingController(),selectedSearch=TextEditingController();
+  final known=<String,Map<String,dynamic>>{};
+  List<Map<String,dynamic>> results=[];
+  Timer? debounce;int generation=0;
+  bool loading=false;String? error;
+  @override void initState(){
+    super.initState();
+    results=widget.initial.where((x)=>x['active']!=false).toList();
+    for(final x in widget.initial){known[x['id'].toString()]=x;}
+  }
+  @override void dispose(){generation++;debounce?.cancel();search.dispose();selectedSearch.dispose();super.dispose();}
+  String label(Map<String,dynamic> x)=>[x['code'],x['name']].whereType<Object>()
+    .map((v)=>v.toString()).where((v)=>v.isNotEmpty).toSet().join(' · ');
+  void query(String value){
+    debounce?.cancel();final stamp=++generation;
+    setState((){loading=true;error=null;results=[];});
+    debounce=Timer(const Duration(milliseconds:250),()async{
+      try{
+        final found=await widget.client.catalogItems(widget.session.token,'customers',
+          branchId:widget.branchId,query:value.trim());
+        if(!mounted||stamp!=generation)return;
+        setState((){
+          results=found.where((x)=>x['active']!=false).toList();
+          for(final x in results){known[x['id'].toString()]=x;}
+          loading=false;
+        });
+      }catch(_){
+        if(mounted&&stamp==generation)setState((){loading=false;error='Không tìm được khách hàng. Thử lại.';});
+      }
+    });
+  }
+  void toggle(String id,bool add){
+    setState((){if(add){widget.chosen.add(id);}else{widget.chosen.remove(id);}});
+    widget.onChanged();
+  }
+  @override Widget build(BuildContext context){
+    final selectedTerm=selectedSearch.text.trim().toLowerCase();
+    final selected=widget.chosen.where((id)=>selectedTerm.isEmpty||
+      label(known[id]??const {}).toLowerCase().contains(selectedTerm)).toList();
+    final available=results.where((x)=>!widget.chosen.contains(x['id'].toString())).toList();
+    return Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+      const SizedBox(height:12),
+      Text('Khách hàng riêng · ${widget.chosen.length} đã chọn',style:const TextStyle(fontWeight:FontWeight.w700)),
+      const SizedBox(height:6),
+      TextField(key:ValueKey('${widget.prefix}-search'),controller:search,selectAllOnFocus:true,
+        decoration:const InputDecoration(labelText:'Tìm mã, tên hoặc số điện thoại',prefixIcon:Icon(Icons.search),isDense:true),
+        onChanged:query),
+      if(loading)const LinearProgressIndicator(minHeight:2),
+      if(error!=null)TextButton(onPressed:()=>query(search.text),child:Text(error!)),
+      if(!loading&&available.isNotEmpty)ConstrainedBox(
+        constraints:const BoxConstraints(maxHeight:164),
+        child:ListView.builder(shrinkWrap:true,itemCount:available.length,itemBuilder:(ctx,i){
+          final item=available[i],id=item['id'].toString();
+          return ListTile(key:ValueKey('${widget.prefix}-$id'),dense:true,visualDensity:VisualDensity.compact,
+            contentPadding:EdgeInsets.zero,title:Text(label(item),maxLines:1,overflow:TextOverflow.ellipsis),
+            trailing:IconButton(tooltip:'Thêm khách hàng',icon:const Icon(Icons.add,size:19),onPressed:()=>toggle(id,true)),
+            onTap:()=>toggle(id,true));
+        })),
+      if(!loading&&available.isEmpty&&error==null)const Text('Không có khách phù hợp để thêm.',style:TextStyle(fontSize:12,color:ErpTokens.muted)),
+      if(widget.chosen.isNotEmpty)...[
+        const SizedBox(height:8),
+        if(widget.chosen.length>5)TextField(controller:selectedSearch,selectAllOnFocus:true,
+          decoration:const InputDecoration(labelText:'Lọc khách đã chọn',isDense:true),
+          onChanged:(_)=>setState((){})),
+        ConstrainedBox(constraints:const BoxConstraints(maxHeight:164),child:ListView.builder(
+          shrinkWrap:true,itemCount:selected.length,itemBuilder:(ctx,i){
+            final id=selected[i],item=known[id];
+            return ListTile(dense:true,visualDensity:VisualDensity.compact,contentPadding:EdgeInsets.zero,
+              title:Text(item==null?'Khách đã chọn':label(item),maxLines:1,overflow:TextOverflow.ellipsis),
+              trailing:IconButton(key:ValueKey('${widget.prefix}-remove-$id'),
+                tooltip:'Bỏ khách hàng',icon:const Icon(Icons.close,size:17),onPressed:()=>toggle(id,false)));
+          })),
+      ],
+    ]);
+  }
+}
+
+class _ProductEditImages extends StatefulWidget{
+  final ErpIdentityClient client;final IdentitySession session;
+  final String branchId,productId;final bool canWrite;
+  const _ProductEditImages({super.key,required this.client,required this.session,
+    required this.branchId,required this.productId,required this.canWrite});
+  @override State<_ProductEditImages> createState()=>_ProductEditImagesState();
+}
+class _ProductEditImagesState extends State<_ProductEditImages>{
+  List<Map<String,dynamic>> images=[];bool busy=false;String? error;
+  @override void initState(){super.initState();reload();}
+  Future<void> reload()async{
+    if(mounted)setState(()=>busy=true);
+    try{
+      final rows=await widget.client.productPhotos(widget.session.token,widget.branchId,widget.productId);
+      if(mounted)setState((){images=rows;busy=false;error=null;});
+    }catch(_){if(mounted)setState((){busy=false;error='Không tải được ảnh. Thử lại.';});}
+  }
+  Future<void> upload()async{
+    if(busy)return;
+    setState((){busy=true;error=null;});
+    try{
+      final selected=await FilePicker.platform.pickFiles(type:FileType.custom,
+        allowedExtensions:['png','jpg','jpeg','webp'],withData:true);
+      if(!mounted)return;
+      if(selected==null||selected.files.isEmpty){setState(()=>busy=false);return;}
+      final first=selected.files.first,ext=first.extension?.toLowerCase();
+      final mime=ext=='png'?'image/png':ext=='webp'?'image/webp':ext=='jpg'||ext=='jpeg'?'image/jpeg':null;
+      if(mime==null||first.bytes==null||first.bytes!.isEmpty||first.bytes!.length>5242880){
+        setState((){busy=false;error='Chọn PNG/JPG/WebP tối đa 5 MB.';});return;
+      }
+      await widget.client.uploadProductPhoto(widget.session.token,widget.session.actorId,
+        widget.branchId,widget.productId,first.bytes!,mime);
+      if(mounted)await reload();
+    }catch(_){if(mounted)setState((){busy=false;error='Chưa xác nhận tải ảnh. Thử lại đúng ảnh.';});}
+  }
+  @override Widget build(BuildContext context)=>Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+    if(busy)const LinearProgressIndicator(minHeight:2),
+    if(error!=null)Text(error!,style:const TextStyle(color:ErpTokens.danger)),
+    if(images.isEmpty&&!busy&&error==null)const Text('Chưa có ảnh sản phẩm.'),
+    Wrap(spacing:8,runSpacing:8,children:[
+      for(final image in images)
+        Stack(children:[Image.network(image['downloadUrl'] as String,width:112,height:112,fit:BoxFit.cover,
+          errorBuilder:(_,__,___)=>const SizedBox(width:112,height:112,child:Icon(Icons.broken_image_outlined))),
+          if(image['isPrimary']==true)const Positioned(left:2,top:2,child:Chip(label:Text('Ảnh chính'))),]),
+    ]),
+    Wrap(spacing:8,children:[
+      if(widget.canWrite)TextButton.icon(key:const ValueKey('catalog-edit-upload-image'),
+        onPressed:busy?null:upload,icon:const Icon(Icons.add_photo_alternate_outlined),label:const Text('Thêm ảnh')),
+      TextButton(onPressed:busy?null:reload,child:const Text('Làm mới ảnh')),
+    ]),
+  ]);
 }

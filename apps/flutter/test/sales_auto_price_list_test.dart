@@ -24,6 +24,7 @@ void main(){
       IdentityGrant(roleId:'a',permission:'orders.read',branchId:branch),
       IdentityGrant(roleId:'b',permission:'orders.create',branchId:branch),
       IdentityGrant(roleId:'c',permission:'catalog.read',branchId:branch),
+      IdentityGrant(roleId:'stock',permission:'inventory.read',branchId:branch,warehouseId:'00000000-0000-4000-8000-000000000009'),
     ];
     final session=IdentitySession(actorId:customer,token:'local-test-token',
       expiresAt:DateTime.now().add(const Duration(hours:1)),grants:grants);
@@ -31,6 +32,9 @@ void main(){
       httpClient:MockClient((request)async{
         requested.add(request.url.path);
         switch(request.url.path){
+          case '/v1/sales/entry-settings': return http.Response(jsonEncode({'settings':{'deliveryChoice':'TRIP'}}),200);
+          case '/v1/catalog/warehouses': return http.Response(jsonEncode({'items':[{'id':'00000000-0000-4000-8000-000000000009','name':'Kho chính','code':'MAIN'}]}),200);
+          case '/v1/inventory/balances': return http.Response(jsonEncode({'items':[]}),200);
           case '/v1/catalog/branches':
             return http.Response(jsonEncode({'items':[
               {'id':branch,'code':'MAIN','name':'Chi nhanh chinh'}]}),200);
@@ -102,5 +106,9 @@ void main(){
     final save=tester.widget<FilledButton>(find.byKey(const ValueKey('sales-save')));
     expect(save.onPressed,isNotNull);
     expect(find.textContaining('30,000 ₫'),findsWidgets);
+    final price=tester.widget<TextField>(find.byKey(const ValueKey('sales-price-0')));
+    expect(price.controller!.text,'30,000');
+    expect(price.readOnly,isTrue);
+    expect(price.decoration!.filled,isFalse);
   });
 }

@@ -11,7 +11,7 @@ import { clonePriceList } from "./r1c_price_list.ts";
 import { CustomerLocationFault,parseCustomerLocation,listCustomerLocations,
   createCustomerLocation,updateCustomerLocation } from "./catalog_customer_locations.ts";
 import { PriceAssignmentFault,parsePriceAssignment,createPriceAssignment,
-  listPriceAssignments,togglePriceAssignment } from "./r1c_price_assignment.ts";
+  listPriceAssignments,togglePriceAssignment,createUnboundedPriceAssignments } from "./r1c_price_assignment.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CODE = /^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$/;
@@ -61,14 +61,14 @@ function tokenFrom(req:IncomingMessage):string|null{
   if(typeof h!=="string")return null;
   return /^Bearer ([A-Za-z0-9_-]{43})$/.exec(h)?.[1]??null;
 }
-async function payloadFrom(req:IncomingMessage):Promise<Record<string,unknown>>{
+async function payloadFrom(req:IncomingMessage,maxBytes=8192):Promise<Record<string,unknown>>{
   if(req.headers["content-type"]?.split(";")[0]?.trim().toLowerCase()!=="application/json")
     throw new CatalogError(415,"INVALID_CONTENT_TYPE");
-  if(Number(req.headers["content-length"]||0)>8192)throw new CatalogError(413,"BODY_TOO_LARGE");
+  if(Number(req.headers["content-length"]||0)>maxBytes)throw new CatalogError(413,"BODY_TOO_LARGE");
   const buffers:Buffer[]=[];let bytes=0;
   for await(const chunk of req){
     const buffer=Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk as Uint8Array);
-    bytes+=buffer.length;if(bytes>8192)throw new CatalogError(413,"BODY_TOO_LARGE");
+    bytes+=buffer.length;if(bytes>maxBytes)throw new CatalogError(413,"BODY_TOO_LARGE");
     buffers.push(buffer);
   }
   let value:unknown;
@@ -420,8 +420,8 @@ function priceScopes(raw:Record<string,unknown>):PriceListScopeTargets|null{
  if(!PRICE_SCOPE_KEYS.some(k=>Object.prototype.hasOwnProperty.call(raw,k)))return null;
  const ids=(key:string):string[]=>{
   const value=raw[key]??[];
-  if(!Array.isArray(value)||value.length>100)throw new CatalogError(400,"INVALID_PRICE_SCOPE");
-  const result=value.map(requireUuid);
+  if(!Array.isArray(value)||value.length>(key==="customerIds"?2000:100))throw new CatalogError(400,"INVALID_PRICE_SCOPE");
+  const result=value.map(v=>requireUuid(v).toLowerCase());
   if(new Set(result).size!==result.length)throw new CatalogError(400,"DUPLICATE_PRICE_SCOPE");
   return result;
  };
@@ -455,20 +455,18 @@ async function syncPriceScopes(db:PoolClient,installationId:string,
     customer_group_id,channel_id FROM catalog_price_list_assignment
    WHERE installation_id=$1 AND branch_id=$2 AND price_list_id=$3
     AND active FOR UPDATE`,[installationId,branchId,priceListId]);
- const already=new Set<string>();
+ const already=new Set<string>(),removed:string[]=[];
  for(const old of prior.rows){
   const key=old.scope_kind+":"+(old.customer_id??old.customer_group_id??old.channel_id??"");
   if(wanted.has(key)){already.add(key);continue;}
-  await db.query(`UPDATE catalog_price_list_assignment
-   SET active=false,revision=revision+1 WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,
-    [installationId,branchId,old.id]);
+  removed.push(old.id);
  }
- for(const target of targets){
-  const key=target.scopeKind+":"+(target.customerId??target.customerGroupId??target.channelId??"");
-  if(already.has(key))continue;
-  await createPriceAssignment(db,installationId,{branchId,priceListId,
-   ...target,priority:assignmentPriority,effectiveFrom:null,effectiveTo:null});
- }
+ if(removed.length)await db.query(`UPDATE catalog_price_list_assignment
+   SET active=false,revision=revision+1 WHERE installation_id=$1 AND branch_id=$2 AND id=ANY($3::uuid[])`,
+    [installationId,branchId,removed]);
+ const additions=targets.filter(target=>!already.has(target.scopeKind+":"+(target.customerId??target.customerGroupId??target.channelId??"")))
+   .map(target=>({branchId,priceListId,...target,priority:assignmentPriority,effectiveFrom:null,effectiveTo:null}));
+ if(additions.length)await createUnboundedPriceAssignments(db,installationId,additions);
 }
 export function checkCreate(resource:Resource,raw:Record<string,unknown>){
   if(resource==="warehouses")throw new CatalogError(405,"READ_ONLY_WAREHOUSE");
@@ -1143,7 +1141,7 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
       if((resource==="brands"||resource==="categories")&&!await hasCatalogHierarchySchema(pool))
         throw new CatalogError(503,"CATALOG_HIERARCHY_MIGRATION_REQUIRED");
       const targetId=requireUuid(updatePath[2]);
-      const input=parseEdit(resource,await payloadFrom(req));
+      const input=parseEdit(resource,await payloadFrom(req,resource==='price-lists'?96*1024:8192));
       const payload={id:targetId,branchId:input.branchId,...input.columns};
       const context=requestMutation(req,requestId,actorId,tenant,
         "catalog."+resource.replaceAll("-","_")+".update",payload,true);
@@ -1199,7 +1197,7 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
         throw new CatalogError(503,"CUSTOMER_DICTIONARY_MIGRATION_REQUIRED");
       if(resource==="products"&&!await hasR1CatalogSchema(pool))
         throw new CatalogError(503,"R1_PRODUCT_SCHEMA_REQUIRED");
-      const input=checkCreate(resource,await payloadFrom(req));
+      const input=checkCreate(resource,await payloadFrom(req,resource==='price-lists'?96*1024:8192));
       const context=requestMutation(req,requestId,actorId,tenant,
         "catalog."+resource.replaceAll("-","_")+".create",input);
       const response=await executeMutation(pool,context,{

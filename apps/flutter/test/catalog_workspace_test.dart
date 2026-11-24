@@ -568,4 +568,92 @@ void main(){
       expect(editor,findsOneWidget);
     });
 
+  testWidgets('T1 customer assignment searches beyond first page and preserves selected IDs', (tester)async{
+    const priceId='00000000-0000-4000-8000-000000000099';
+    const selectedId='00000000-0000-4000-8000-000000000098';
+    const foundId='00000000-0000-4000-8000-000000000097';
+    Map<String,dynamic>? posted;
+    final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+      httpClient:MockClient((req)async{
+        http.Response reply(Object body,[int status=200])=>http.Response(jsonEncode(body),status,
+          headers:const {'content-type':'application/json; charset=utf-8'});
+        final path=req.url.path;
+        if(path=='/v1/catalog/branches')return reply({'items':[{'id':branch,'name':'Chi nhánh chính','code':'MAIN'}]});
+        if(path=='/v1/catalog/price-lists')return reply({'items':[{'id':priceId,'name':'Giá Test','code':'GIATEST','active':true,'revision':0}]});
+        if(path=='/v1/catalog/price-lists/assignments')return reply({'items':[{'id':'assigned','scopeKind':'CUSTOMER','customerId':selectedId,'customerCode':'KH-0000','customerName':'Khách đã có','active':true}],'hasMore':false});
+        if(path=='/v1/catalog/customers'){
+          final term=req.url.queryParameters['q'];
+          if(term=='KH-1001')return reply({'items':[{'id':foundId,'code':'KH-1001','name':'Khách tìm được','active':true}]});
+          return reply({'items':[for(var n=0;n<100;n++){'id':'customer-$n','code':'KH-$n','name':'Khách $n','active':true}]});
+        }
+        if(path=='/v1/catalog/price-lists/$priceId'&&req.method=='PATCH'){
+          posted=jsonDecode(req.body) as Map<String,dynamic>;
+          return reply({'id':priceId,'revision':1});
+        }
+        return reply({'items':[]});
+      }));
+    addTearDown(client.dispose);
+    tester.view.devicePixelRatio=1;
+    tester.view.physicalSize=const Size(1440,900);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),home:Scaffold(
+      body:CatalogWorkspace(area:'price-lists',session:activeSession(),client:client))));
+    await tester.pumpAndSettle();
+    final edit=find.byKey(const ValueKey('catalog-edit-$priceId'));
+    await tester.ensureVisible(edit);
+    await tester.tap(edit);
+    await tester.pumpAndSettle();
+    final search=find.byKey(const ValueKey('price-edit-customer-search'));
+    await tester.ensureVisible(search);
+    await tester.enterText(search,'KH-1001');
+    await tester.pump(const Duration(milliseconds:350));
+    await tester.pumpAndSettle();
+    final add=find.byKey(const ValueKey('price-edit-customer-$foundId'));
+    await tester.ensureVisible(add);
+    await tester.tap(add);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('catalog-edit-save')));
+    await tester.pumpAndSettle();
+    expect(posted?['customerIds'],unorderedEquals([selectedId,foundId]));
+  });
+
+  testWidgets('T1 product edit exposes locked identity, SKU, units, barcode and images in one dialog', (tester)async{
+    const product='00000000-0000-4000-8000-000000000020';
+    final reads=<String>[];
+    final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+      httpClient:MockClient((req)async{
+        final path=req.url.path;reads.add(path);
+        http.Response reply(Object body)=>http.Response(jsonEncode(body),200,headers:const {'content-type':'application/json; charset=utf-8'});
+        if(path=='/v1/catalog/branches')return reply({'items':[{'id':branch,'code':'MAIN','name':'Chi nhánh chính'}]});
+        if(path=='/v1/catalog/products')return reply({'items':[{'id':product,'code':'SP01','name':'Hàng A','baseUnit':'cai','active':true,'revision':0}],'r1ProductReady':true});
+        if(path=='/v1/catalog/r1/skus'||path=='/v1/catalog/r1/units'||path=='/v1/catalog/r1/barcodes'){
+          expect(req.url.queryParameters['productId'],product);
+          return reply({'items':[]});
+        }
+        if(path=='/v1/catalog/products/$product/media')return reply({'items':[]});
+        return reply({'items':[]});
+      }));
+    addTearDown(client.dispose);
+    tester.view.devicePixelRatio=1;
+    tester.view.physicalSize=const Size(1440,900);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),home:Scaffold(
+      body:CatalogWorkspace(area:'products',session:activeSession(),client:client))));
+    await tester.pumpAndSettle();
+    final edit=find.byKey(const ValueKey('catalog-edit-$product'));
+    await tester.ensureVisible(edit);
+    await tester.tap(edit);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('catalog-edit-dialog')),findsOneWidget);
+    for(final kind in ['units','skus','barcodes']){
+      expect(find.byKey(ValueKey('product-edit-$product-$kind')),findsOneWidget);
+    }
+    expect(find.byKey(const ValueKey('product-edit-$product-images')),findsOneWidget);
+    expect(find.byKey(const ValueKey('catalog-edit-product-skus')),findsNothing);
+    expect(tester.widgetList<TextField>(find.byType(TextField)).where((x)=>x.readOnly).length,greaterThanOrEqualTo(2));
+    expect(reads,containsAll(['/v1/catalog/r1/skus','/v1/catalog/r1/units','/v1/catalog/r1/barcodes','/v1/catalog/products/$product/media']));
+  });
+
 }

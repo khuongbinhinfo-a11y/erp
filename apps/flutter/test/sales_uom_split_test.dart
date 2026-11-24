@@ -22,18 +22,24 @@ void main(){
     ?'T1 split resets override and discards stale purchase price'
     :'T1 create-only actor splits same SKU without changing original quantity', (tester)async{
     final quotedSkuPairs=<List<String>>[];
+    final quotedRequests=<List<Map<String,dynamic>>>[];
     final pendingLastPurchase=Completer<http.Response>();
     final rights=[
       IdentityGrant(roleId:'a',permission:'orders.read',branchId:branch),
       IdentityGrant(roleId:'b',permission:'orders.create',branchId:branch),
       if(canUpdate)IdentityGrant(roleId:'c',permission:'orders.update',branchId:branch),
       IdentityGrant(roleId:'d',permission:'catalog.read',branchId:branch),
+      IdentityGrant(roleId:'stock',permission:'inventory.read',branchId:branch,warehouseId:'00000000-0000-4000-8000-000000000009'),
+      if(canUpdate)for(final p in ['orders.price.override','orders.discount.override','orders.tax.override'])IdentityGrant(roleId:p,permission:p,branchId:branch),
     ];
     http.Response reply(Object data,int status)=>http.Response(jsonEncode(data),status,
       headers:const {'content-type':'application/json'});
     final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
       httpClient:MockClient((req)async{
         final path=req.url.path;
+        if(path=='/v1/sales/entry-settings')return reply({'settings':{'deliveryChoice':'PICKUP'}},200);
+        if(path=='/v1/catalog/warehouses')return reply({'items':[{'id':'00000000-0000-4000-8000-000000000009','code':'MAIN','name':'Kho chính'}]},200);
+        if(path=='/v1/inventory/balances')return reply({'items':[]},200);
         if(path=='/v1/catalog/branches')return reply({'items':[
           {'id':branch,'code':'MAIN','name':'Chi nhánh chính'}]},200);
         if(path=='/v1/catalog/customers')return reply({'items':[
@@ -69,6 +75,7 @@ void main(){
           final body=jsonDecode(req.body) as Map<String,dynamic>;
           final lines=(body['lines'] as List<dynamic>)
             .map((v)=>Map<String,dynamic>.from(v as Map)).toList();
+          quotedRequests.add(lines);
           quotedSkuPairs.add(lines.map((v)=>v['sellSkuId'].toString()).toList());
           final prices=[for(final line in lines)
             line['sellSkuId']==base?'9800':'90000'];
@@ -113,7 +120,8 @@ void main(){
     expect(tester.widget<TextField>(find.byKey(const ValueKey('sales-qty-1')))
       .controller!.text,'1');
     expect(tester.widget<TextField>(find.byKey(const ValueKey('sales-price-1')))
-      .controller!.text,isEmpty);
+      .controller!.text,'9,800');
+    expect(quotedRequests.last[1]['unitPrice'],isNull,reason:'Displayed automatic price must not become an override');
     expect(tester.widget<TextField>(find.byKey(const ValueKey('sales-discount-1')))
       .controller!.text,'0');
     expect(find.byKey(const ValueKey('sales-unit-1-$base')),findsOneWidget);
@@ -137,12 +145,13 @@ void main(){
     await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:50)));
     await tester.pumpAndSettle();
     expect(tester.widget<TextField>(find.byKey(const ValueKey('sales-price-1')))
-      .controller!.text,isEmpty,reason:'Old UOM price must never override carton price');
+      .controller!.text,isNot('1'),reason:'Old UOM price must never override carton price');
     expect(tester.widget<TextField>(find.byKey(const ValueKey('sales-discount-1')))
       .controller!.text,'0');
     await tester.pump(const Duration(milliseconds:400));
     await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:150)));
     await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(find.byKey(const ValueKey('sales-price-1'))).controller!.text,'90,000');
     expect(quotedSkuPairs.any((pair)=>pair.length==2&&pair[0]==base&&pair[1]==carton),isTrue,
       reason:'Changing UOM must requote exact target SKU, not multiply client prices');
     for(final viewport in const [Size(860,740),Size(960,800),Size(1024,800)]){

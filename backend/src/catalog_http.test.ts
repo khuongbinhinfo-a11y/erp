@@ -224,6 +224,35 @@ test("Issue #7: catalog HTTP uses real PostgreSQL with tenant/branch RBAC, decim
       assert.equal((await create("products",{code:"SKU-BAD",name:"Bad",baseUnit:"cai",
         units:[{unitCode:"thung",toBase:1.5}]},
         "bad-unit-"+randomUUID(),token)).status,400,"float UOM forbidden");
+      // The selector searches the server beyond its first 100 rows; large
+      // assignments are one transaction, preserve unseen customers, and roll
+      // back every row when any target conflicts.
+      const many=(await pool.query<{id:string}>(`INSERT INTO catalog_customer(installation_id,branch_id,code,name)
+        SELECT $1,$2,'UAT-KH-'||lpad(n::text,4,'0'),'UAT customer '||n
+        FROM generate_series(1,1001) n RETURNING id`,[root.installationId,b])).rows.map(x=>x.id);
+      const big=await create("price-lists",{code:"UAT-BIG",name:"Bảng giá nhiều khách",
+        priority:8765,customerIds:many.slice(0,1000)},
+        "price-list-big-"+randomUUID(),token);
+      assert.equal(big.status,201,JSON.stringify(big.body));
+      const bigPath="/v1/catalog/price-lists/assignments?branchId="+b+"&priceListId="+big.body.id;
+      const bigFirstPage=await call(bigPath,"GET",undefined,token);
+      assert.equal(bigFirstPage.body.items.length,100);
+      assert.equal(bigFirstPage.body.hasMore,true);
+      assert.ok(bigFirstPage.body.items.every((x:any)=>typeof x.customerName==="string"));
+      const searchPage=await call("/v1/catalog/customers?branchId="+b+"&q=UAT-KH-1001","GET",undefined,token);
+      assert.equal(searchPage.body.items.length,1);
+      assert.equal(searchPage.body.items[0].id,many[1000]);
+      const changed=[...many.slice(1,1000),many[1000]!];
+      const changeBig=await call("/v1/catalog/price-lists/"+big.body.id,"PATCH",
+        {branchId:b,customerIds:changed},token,{"if-match":"0","idempotency-key":"big-edit-"+randomUUID()});
+      assert.equal(changeBig.status,200,JSON.stringify(changeBig.body));
+      const count=await pool.query<{n:number}>(`SELECT count(*)::integer n FROM catalog_price_list_assignment
+       WHERE installation_id=$1 AND branch_id=$2 AND price_list_id=$3 AND active`,[root.installationId,b,big.body.id]);
+      assert.equal(count.rows[0]!.n,1000);
+      const conflict=await create("price-lists",{code:"UAT-CONFLICT",name:"Conflict",
+        priority:8765,customerIds:[many[0],many[1000]]},"big-conflict-"+randomUUID(),token);
+      assert.equal(conflict.status,409,JSON.stringify(conflict.body));
+      assert.equal((await pool.query("SELECT 1 FROM catalog_price_list WHERE installation_id=$1 AND branch_id=$2 AND code='UAT-CONFLICT'",[root.installationId,b])).rowCount,0);
       const priceList=await create("price-lists",{code:"RETAIL",name:"Giá bán lẻ"},
         "price-list-"+randomUUID(),token);
       assert.equal(priceList.status,201);
@@ -272,7 +301,7 @@ test("Issue #7: catalog HTTP uses real PostgreSQL with tenant/branch RBAC, decim
       assert.equal((await update("customers",customer.body.id,1,
         {code:"CHANGED"},"immutable-code-"+randomUUID())).status,400,
         "canonical code immutable");
-      assert.equal((await call("/v1/catalog/customers?branchId="+b,"GET",undefined,token))
+      assert.equal((await call("/v1/catalog/customers?branchId="+b+"&id="+customer.body.id,"GET",undefined,token))
         .body.items[0].active,false);
       const productUpdate=await update("products",product.body.id,0,
         {name:"Renamed Product"},"product-update-"+randomUUID());
@@ -331,8 +360,8 @@ test("Issue #7: catalog HTTP uses real PostgreSQL with tenant/branch RBAC, decim
       const audit=await pool.query<{total:string}>(
         "SELECT count(*)::text AS total FROM audit_event WHERE installation_id=$1 AND action_code LIKE 'catalog.%'",
         [root.installationId]);
-      assert.equal(audit.rows[0]!.total,"17",
-        "10 creations and 7 distinct PATCH mutations audited once; replay not double counted");
+      assert.equal(audit.rows[0]!.total,"19",
+        "11 creations and 8 distinct PATCH mutations audited once, including the large assignment transaction; replay not double counted");
     }finally{await new Promise<void>((ok,fail)=>app.close(e=>e?fail(e):ok()));}
   }finally{
     if(pool)await pool.end();

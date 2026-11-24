@@ -71,11 +71,11 @@ async function checkTarget(db:PoolClient,t:string,i:PriceAssignmentInput){
     if(!target.rows.length)throw new PriceAssignmentFault(409,"ASSIGNMENT_TARGET_UNAVAILABLE");
   }
 }
+function assignmentLock(t:string,i:PriceAssignmentInput){return JSON.stringify([t.toLowerCase(),i.branchId.toLowerCase(),i.scopeKind,i.customerId?.toLowerCase()??null,i.customerGroupId?.toLowerCase()??null,i.channelId?.toLowerCase()??null,i.priority]);}
 async function assertNoOverlap(db:PoolClient,t:string,i:PriceAssignmentInput,except?:string){
   // Serialize one scoped priority before checking overlap; repeated concurrent
   // creates cannot establish two equally-ranked winners.
-  const lock=JSON.stringify([t,i.branchId,i.scopeKind,i.customerId,
-    i.customerGroupId,i.channelId,i.priority]);
+  const lock=assignmentLock(t,i);
   await db.query("SELECT pg_advisory_xact_lock(hashtextextended($1::text,0))",[lock]);
   const r=await db.query(`SELECT id FROM catalog_price_list_assignment
     WHERE installation_id=$1 AND branch_id=$2 AND scope_kind=$3
@@ -107,7 +107,7 @@ export async function listPriceAssignments(db:PoolClient,t:string,b:string,q:str
   priceListId:string|null,offset:number){
   const r=await db.query(`SELECT a.id,a.price_list_id AS "priceListId",l.code AS "priceListCode",
     a.scope_kind AS "scopeKind",a.customer_id AS "customerId",
-    c.code AS "customerCode",a.customer_group_id AS "customerGroupId",
+    c.code AS "customerCode",c.name AS "customerName",a.customer_group_id AS "customerGroupId",
     g.code AS "customerGroupCode",a.channel_id AS "channelId",
     ch.code AS "channelCode",a.priority,a.effective_from AS "effectiveFrom",
     a.effective_to AS "effectiveTo",a.active,a.revision::integer
@@ -122,7 +122,7 @@ export async function listPriceAssignments(db:PoolClient,t:string,b:string,q:str
       AND ch.branch_id=a.branch_id AND ch.id=a.channel_id
     WHERE a.installation_id=$1 AND a.branch_id=$2
       AND ($4::uuid IS NULL OR a.price_list_id=$4::uuid)
-      AND (l.code ILIKE $3 OR c.code ILIKE $3 OR g.code ILIKE $3
+      AND (l.code ILIKE $3 OR c.code ILIKE $3 OR c.name ILIKE $3 OR g.code ILIKE $3
         OR ch.code ILIKE $3 OR a.scope_kind ILIKE $3)
     ORDER BY a.active DESC,a.priority DESC,a.created_at DESC,a.id DESC
     LIMIT 101 OFFSET $5`,[t,b,"%"+q+"%",priceListId,offset]);
@@ -156,4 +156,46 @@ export async function togglePriceAssignment(db:PoolClient,t:string,
     SET active=$4,revision=revision+1 WHERE installation_id=$1 AND branch_id=$2
     AND id=$3 RETURNING revision::integer`,[t,branchId,id,active]);
   return {status:200,body:{id,branchId,active,revision:r.rows[0]!.revision}};
+}
+
+
+/** Same validation and advisory lock keys as the single-target path, batched
+ * for a price-list editor containing hundreds/thousands of customer IDs.
+ * Caller owns a transaction and the list row lock. No partial assignment. */
+export async function createUnboundedPriceAssignments(db:PoolClient,t:string,items:PriceAssignmentInput[]){
+ if(items.length===0)return;
+ const first=items[0]!;
+ if(items.some(i=>i.branchId!==first.branchId||i.priceListId!==first.priceListId||
+    i.priority!==first.priority||i.effectiveFrom!==null||i.effectiveTo!==null))
+  throw new PriceAssignmentFault(400,"INVALID_ASSIGNMENT_BATCH");
+ const keys=items.map(i=>assignmentLock(t,i));
+ if(new Set(keys).size!==keys.length)throw new PriceAssignmentFault(400,"DUPLICATE_PRICE_SCOPE");
+ const list=await db.query("SELECT id FROM catalog_price_list WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active FOR SHARE",[t,first.branchId,first.priceListId]);
+ if(!list.rows.length)throw new PriceAssignmentFault(409,"PRICE_LIST_UNAVAILABLE");
+ for(const [table,ids] of [
+   ["catalog_customer",items.flatMap(i=>i.customerId?[i.customerId]:[])],
+   ["catalog_customer_group",items.flatMap(i=>i.customerGroupId?[i.customerGroupId]:[])],
+   ["catalog_sales_channel",items.flatMap(i=>i.channelId?[i.channelId]:[])],
+ ] as const){
+   if(!ids.length)continue;
+   const found=await db.query(`SELECT id FROM ${table} WHERE installation_id=$1 AND branch_id=$2
+     AND id=ANY($3::uuid[]) AND active ORDER BY id FOR SHARE`,[t,first.branchId,ids]);
+   if(found.rows.length!==ids.length)throw new PriceAssignmentFault(409,"ASSIGNMENT_TARGET_UNAVAILABLE");
+ }
+ // Each lock is identical to assertNoOverlap, sorted before acquisition.
+ await db.query("SELECT pg_advisory_xact_lock(hashtextextended(k,0)) FROM unnest($1::text[]) AS locks(k) ORDER BY k",[keys]);
+ const data=JSON.stringify(items.map(i=>({scope_kind:i.scopeKind,customer_id:i.customerId,
+   customer_group_id:i.customerGroupId,channel_id:i.channelId})));
+ const records="jsonb_to_recordset($4::jsonb) AS x(scope_kind text,customer_id uuid,customer_group_id uuid,channel_id uuid)";
+ const prior=await db.query(`SELECT a.id FROM catalog_price_list_assignment a JOIN ${records}
+    ON a.scope_kind=x.scope_kind AND a.customer_id IS NOT DISTINCT FROM x.customer_id
+      AND a.customer_group_id IS NOT DISTINCT FROM x.customer_group_id
+      AND a.channel_id IS NOT DISTINCT FROM x.channel_id
+    WHERE a.installation_id=$1 AND a.branch_id=$2 AND a.priority=$3 AND a.active LIMIT 1`,
+    [t,first.branchId,first.priority,data]);
+ if(prior.rows.length)throw new PriceAssignmentFault(409,"PRICE_LIST_ASSIGNMENT_OVERLAP");
+ await db.query(`INSERT INTO catalog_price_list_assignment
+   (installation_id,branch_id,price_list_id,scope_kind,customer_id,customer_group_id,channel_id,priority)
+   SELECT $1,$2,$5,x.scope_kind,x.customer_id,x.customer_group_id,x.channel_id,$3 FROM ${records}`,
+   [t,first.branchId,first.priority,data,first.priceListId]);
 }
