@@ -7,7 +7,8 @@ import type { MutationContext } from "./mutation.ts";
 // scoped walk-in identity, immutable version context, and server defaults.
 // ERP keeps branch-scoped customer IDs, exact version lifecycle and receipts.
 export class OrderContextFault extends Error {
- constructor(readonly status:number,readonly code:string){super(code);}
+ readonly status:number;readonly code:string;
+ constructor(status:number,code:string){super(code);this.status=status;this.code=code;}
 }
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export const DELIVERY_CHOICES=["MANUAL","TRIP","PICKUP"] as const;
