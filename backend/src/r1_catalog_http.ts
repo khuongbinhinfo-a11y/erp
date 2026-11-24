@@ -360,7 +360,9 @@ async function listing(db:PoolClient,t:string,b:string,kind:Kind,q:string,skuId?
       AND p.branch_id=u.branch_id AND p.id=u.product_id
     WHERE u.installation_id=$1 AND u.branch_id=$2
       AND (p.sku ILIKE $3 OR p.name ILIKE $3 OR u.unit_code ILIKE $3)
-    ORDER BY p.sku,u.unit_code LIMIT 100`,[t,b,"%"+q+"%"]);
+      ${scope?.productId?'AND u.product_id=$4 AND ($5::text IS NULL OR u.unit_code>$5)':''}
+    ORDER BY ${scope?.productId?'u.unit_code':'p.sku,u.unit_code'} LIMIT ${scope?.productId?101:100}`,
+    [t,b,"%"+q+"%",...(scope?.productId?[scope.productId,scope.afterId??null]:[])]);
   return r.rows;
  }
  if(kind==="skus"){
@@ -392,15 +394,16 @@ async function listing(db:PoolClient,t:string,b:string,kind:Kind,q:string,skuId?
   // during a maintenance/rolling backend rollout.
   const revision=(await hasR1A(db))?"c.revision::integer":"0::integer";
   const r=await db.query(`SELECT c.id,c.sell_sku_id AS "sellSkuId",s.sku,
-     c.barcode,c.is_primary AS "isPrimary",c.active,${revision} AS revision
+     c.barcode,c.is_primary AS "isPrimary",c.active,${revision} AS revision,s.product_id AS "productId"
    FROM catalog_sku_barcode c JOIN catalog_sell_sku s ON
     s.installation_id=c.installation_id AND s.branch_id=c.branch_id
     AND s.id=c.sell_sku_id
    WHERE c.installation_id=$1 AND c.branch_id=$2
     AND ($3::uuid IS NULL OR c.sell_sku_id=$3::uuid)
     AND (c.barcode ILIKE $4 OR s.sku ILIKE $4)
-   ORDER BY c.is_primary DESC,c.barcode LIMIT 100`,
-    [t,b,skuId??null,"%"+q+"%"]);
+   ${scope?.productId?'AND s.product_id=$5 AND ($6::uuid IS NULL OR c.id>$6)':''}
+   ORDER BY ${scope?.productId?'c.id':'c.is_primary DESC,c.barcode'} LIMIT ${scope?.productId?101:100}`,
+    [t,b,skuId??null,"%"+q+"%",...(scope?.productId?[scope.productId,scope.afterId??null]:[])]);
   return r.rows;
  }
  if(kind==="channels"){
@@ -610,8 +613,11 @@ export async function handleR1Http(req:IncomingMessage,res:ServerResponse,
    const groupId=optionalId(url.searchParams.get("groupId"));
    const categoryId=optionalId(url.searchParams.get("categoryId"));
    const productId=optionalId(url.searchParams.get("productId"));
-   const afterId=optionalId(url.searchParams.get("after"));
-   if(afterId&&(!productId||type!=="skus"))throw new R1Error(400,"INVALID_PAGINATION");
+   const rawAfter=url.searchParams.get("after");
+   const scoped=productId!=null&&["units","skus","barcodes"].includes(type);
+   if(rawAfter!==null&&!scoped)throw new R1Error(400,"INVALID_PAGINATION");
+   if(productId&&!scoped)throw new R1Error(400,"INVALID_PRODUCT_SCOPE");
+   const afterId=rawAfter===null?undefined:type==="units"?label(rawAfter,24):id(rawAfter);
    if((brandId||categoryId)&&type==="skus"){
      const schema=await pool.query<{ready:boolean}>(
        "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version='0020_catalog_hierarchy_locations.sql') AS ready");
@@ -622,14 +628,13 @@ export async function handleR1Http(req:IncomingMessage,res:ServerResponse,
     if(!await hasPermission(db,{installationId:t,actorId,branchId,permission:"catalog.read"}))
      throw new R1Error(403,"DENIED");
     const items=await listing(db,t,branchId,type,q,skuId,
-      type==="skus"?{brandId:brandId??undefined,groupId:groupId??undefined,
+      (type==="skus"||scoped)?{brandId:brandId??undefined,groupId:groupId??undefined,
         categoryId:categoryId??undefined,productId:productId??undefined,
         afterId:afterId??undefined}:undefined);
     // Product-scoped keyset pagination precedes the LIMIT: never use a
     // global 100-SKU page as the selectable units for a single product.
-    const scoped=type==="skus"&&productId!=null;
     send(res,200,{items:scoped?items.slice(0,100):items,
-      ...(scoped&&items.length>100?{nextAfter:items[99].id}:{}),requestId},requestId,cors);
+      ...(scoped&&items.length>100?{nextAfter:type==="units"?items[99].unitCode:items[99].id}:{}),requestId},requestId,cors);
    }finally{db.release();}
    return;
   }
