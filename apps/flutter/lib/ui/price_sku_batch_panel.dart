@@ -132,7 +132,10 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
       final quote=response['quote'] as Map;
       final trace=quote['trace'] as List;
       final base=trace.first as Map;
-      if(base['scope']=='EXISTING_BASE_PRICE')return 0;
+      if(base['scope']=='EXISTING_BASE_PRICE'){
+        final priority=base['priority'];
+        return priority is int?priority:0;
+      }
       final priority=base['priority'];
       if(base['scope']=='BASE_RULE'&&priority is int&&
           priority>= -100000&&priority<=100000)return priority;
