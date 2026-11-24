@@ -350,8 +350,8 @@ class _TransferWorkspaceState extends State<TransferWorkspace>{
               for(final x in lines)Padding(padding:const EdgeInsets.symmetric(vertical:9),
                 child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
                   Text((x['sku']??'').toString()+' · '+(x['name']??'').toString()),
-                  Text('Xuất: '+erpDecimalText(x['dispatchedBase'])+'  ·  Đã nhận: '+
-                    erpDecimalText(x['receivedBase'])+'  ·  Đang đi: '+erpDecimalText(x['inTransitBase']),
+                  Text('Xuất: '+erpNumberText(x['dispatchedBase'])+'  ·  Đã nhận: '+
+                    erpNumberText(x['receivedBase'])+'  ·  Đang đi: '+erpNumberText(x['inTransitBase']),
                     style:const TextStyle(fontSize:12,color:ErpTokens.muted)),
                   TextField(controller:controls[(x['lineNo'] as num).toInt()],
                     decoration:const InputDecoration(labelText:'Nhận đợt này'),
