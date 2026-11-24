@@ -1611,7 +1611,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
             if(q!=null)...[
               const SizedBox(height:8),
               Text('Chiết khấu: '+erpNumberText(q['discountRate'])+'%'),
-              Text('Hiệu lực: '+q['effectiveAt'].toString()),
+              Text('Hiệu lực: '+erpDateTimeText(q['effectiveAt'])),
             ],
             const SizedBox(height:12),
             const Text('Tồn kho chưa xác minh; chưa được xác nhận đơn hàng.',
@@ -1628,6 +1628,9 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     final value=item[key];
     if(value==null)return '—';
     if(value is bool)return value?'Hoạt động':'Ngừng';
+    if(key=='amount'||key=='discountRate'||key=='quantity')
+      return erpNumberText(value);
+    if(key=='effectiveAt')return erpDateTimeText(value);
     if(key=='effectiveFrom'||key=='effectiveTo'){
       final day=DateTime.tryParse(value.toString())?.toLocal();
       if(day==null)return '—';
