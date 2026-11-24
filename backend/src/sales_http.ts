@@ -454,22 +454,30 @@ async function confirm(db:PoolClient,ctx:MutationContext,id:string,b:string){
     revision:Number(updated.rows[0]!.revision),fulfillmentStatus:o.fulfillment_status,
     deliveryStatus:o.delivery_status,paymentStatus:o.payment_status}};
 }
-// Prior ERP installations may be running sales migration 0010 before inventory 0011.
-// Do not break existing cancel/amend while newer stock tables await separate approval.
-async function activeReservation(db:PoolClient,t:string,b:string,id:string){
-  const catalog=await db.query<{present:boolean}>(
-    "SELECT to_regclass('public.inventory_reservation') IS NOT NULL AS present");
-  if(catalog.rows[0]?.present!==true)return false;
-  const r=await db.query(
-    "SELECT 1 FROM inventory_reservation WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3 AND state='ACTIVE' LIMIT 1",
-    [t,b,id]);
-  return r.rowCount!==0;
+// Legacy installations without inventory 0011 must still edit Sales 0010.
+// The release query is therefore guarded by a schema existence check.
+/** Release unexecuted holds in the SAME order transaction, before amending
+ * or cancelling. No warehouse lock is required to release capacity; taking one
+ * after the Sales parent lock would invert reserveStock's warehouse->order lock.
+ * ReserveStock's parent FOR SHARE serializes with this parent FOR UPDATE.
+ */
+async function releaseUnexecutedSalesHolds(db:PoolClient,t:string,b:string,id:string){
+ const exists=await db.query<{present:boolean}>(
+   "SELECT to_regclass('public.inventory_reservation') IS NOT NULL AS present");
+ if(exists.rows[0]?.present!==true)return 0;
+ const r=await db.query(`UPDATE inventory_reservation
+  SET state='RELEASED',revision=revision+1,released_at=now()
+  WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3 AND state='ACTIVE'`,
+  [t,b,id]);
+ return r.rowCount??0;
 }
 async function amend(db:PoolClient,ctx:MutationContext,id:string,b:string,reason:string){
   const t=ctx.installationId,o=await lockOrder(db,t,b,id);
   requireRevision(ctx.expectedRevision,Number(o.revision));
   if(o.status!=="CONFIRMED")throw new SalesError(409,"ORDER_NOT_CONFIRMED");
-  if(await activeReservation(db,t,b,id))throw new SalesError(409,"ACTIVE_STOCK_RESERVATION");
+  if(o.fulfillment_status!=="NOT_ALLOCATED"||o.delivery_status!=="NOT_DISPATCHED"||
+     o.payment_status!=="NOT_DUE")throw new SalesError(409,"ORDER_ALREADY_EXECUTING");
+  await releaseUnexecutedSalesHolds(db,t,b,id);
   const newVersion=o.current_version+1;
   const current=await db.query<{state:string}>(`SELECT state FROM sales_order_version
     WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3 AND version_no=$4 FOR UPDATE`,
@@ -506,9 +514,9 @@ async function cancel(db:PoolClient,ctx:MutationContext,id:string,b:string,reaso
   const t=ctx.installationId,o=await lockOrder(db,t,b,id);
   requireRevision(ctx.expectedRevision,Number(o.revision));
   if(o.status==="CANCELLED")throw new SalesError(409,"ORDER_CANCELLED");
-  if(await activeReservation(db,t,b,id))throw new SalesError(409,"ACTIVE_STOCK_RESERVATION");
   if(o.fulfillment_status!=="NOT_ALLOCATED"||o.delivery_status!=="NOT_DISPATCHED"||
     o.payment_status!=="NOT_DUE")throw new SalesError(409,"ORDER_ALREADY_EXECUTING");
+  await releaseUnexecutedSalesHolds(db,t,b,id);
   await db.query(`UPDATE sales_order_version SET state='CANCELLED'
     WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3
       AND version_no=$4 AND state='DRAFT'`,[t,b,id,o.current_version]);
