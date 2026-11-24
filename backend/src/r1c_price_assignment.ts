@@ -71,7 +71,7 @@ async function checkTarget(db:PoolClient,t:string,i:PriceAssignmentInput){
     if(!target.rows.length)throw new PriceAssignmentFault(409,"ASSIGNMENT_TARGET_UNAVAILABLE");
   }
 }
-function assignmentLock(t:string,i:PriceAssignmentInput){return JSON.stringify([t,i.branchId,i.scopeKind,i.customerId,i.customerGroupId,i.channelId,i.priority]);}
+function assignmentLock(t:string,i:PriceAssignmentInput){return JSON.stringify([t.toLowerCase(),i.branchId.toLowerCase(),i.scopeKind,i.customerId?.toLowerCase()??null,i.customerGroupId?.toLowerCase()??null,i.channelId?.toLowerCase()??null,i.priority]);}
 async function assertNoOverlap(db:PoolClient,t:string,i:PriceAssignmentInput,except?:string){
   // Serialize one scoped priority before checking overlap; repeated concurrent
   // creates cannot establish two equally-ranked winners.

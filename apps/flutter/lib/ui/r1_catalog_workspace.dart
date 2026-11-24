@@ -54,6 +54,7 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
   int generation=0,seq=0,quoteSerial=0;
   Map<String,dynamic>? pending,quote;
   String? pendingKey;
+  String? inlineEditId;bool inlineActive=true,inlinePrimary=true;String inlineReason='';
   bool get isQuote=>widget.kind=='quote';
   String? get fixedProductId=>widget.product?['id'] as String?;
   bool get canWrite=>widget.session.grants.any((g)=>
@@ -427,11 +428,30 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
   }
   bool get canEditLifecycle=>canWrite &&
     const {'skus','barcodes','channels'}.contains(widget.kind);
+  Future<void> saveInlineLifecycle(Map<String,dynamic> row)async{
+    final branch=widget.branchId,id=row['id'],revision=row['revision'];
+    if(busy||branch==null||id is! String||revision is! int||inlineEditId!=id)return;
+    final originalActive=row['active']==true,originalPrimary=row['isPrimary']==true;
+    if(widget.kind=='skus'&&originalActive&&!inlineActive&&inlineReason.trim().length<3)return;
+    final payload=<String,dynamic>{'branchId':branch,
+      if(inlineActive!=originalActive)'active':inlineActive,
+      if(widget.kind=='skus'&&originalActive&&!inlineActive)'reason':inlineReason.trim(),
+      if(widget.kind=='barcodes'&&(inlinePrimary!=originalPrimary||!inlineActive&&originalPrimary))'isPrimary':inlineActive&&inlinePrimary};
+    if(payload.length==1){setState(()=>inlineEditId=null);return;}
+    setState(()=>busy=true);
+    try{
+      await widget.client.updateR1Catalog(widget.session.token,widget.kind,id,revision,payload);
+      if(!mounted)return;
+      setState(()=>inlineEditId=null);ErpToast.show(context,'Đã cập nhật.');await reload();
+    }on ErpApiError catch(e){if(mounted){ErpToast.show(context,errorMessage(e),isError:true);await reload();}}
+    finally{if(mounted)setState(()=>busy=false);}
+  }
   Future<void> editRow(Map<String,dynamic> row)async{
     if(!canEditLifecycle||busy||widget.branchId==null)return;
     final targetId=row['id'],revision=row['revision'];
     if(targetId is! String||revision is! int)return;
     final branch=widget.branchId!;
+    if(fixedProductId!=null){setState((){inlineEditId=targetId;inlineActive=row['active']==true;inlinePrimary=row['isPrimary']==true;inlineReason='';});return;}
     var active=row['active']==true;
     var primary=row['isPrimary']==true;
     var name=(row['name']??'').toString();
@@ -767,6 +787,26 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
     if(items.isEmpty)return const Padding(padding:EdgeInsets.all(26),
       child:Center(child:Text('Chưa có dữ liệu. Hãy thêm thông tin để bắt đầu.',
         style:TextStyle(color:ErpTokens.muted))));
+    if(fixedProductId!=null)return Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+      for(final x in items)Padding(padding:const EdgeInsets.only(top:6,bottom:6),child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+        Wrap(spacing:8,runSpacing:6,crossAxisAlignment:WrapCrossAlignment.center,children:[
+          for(final c in columns.where((c)=>!['productCode','productName','active','isPrimary'].contains(c.$1)))
+            SizedBox(width:c.$1=='code'||c.$1=='barcode'?180:130,child:TextFormField(
+              key:ValueKey('locked-${widget.kind}-${x['id']}-${c.$1}-${cell(x,c.$1)}'),initialValue:cell(x,c.$1),readOnly:true,
+              decoration:InputDecoration(labelText:c.$2,isDense:true,suffixIcon:const Icon(Icons.lock_outline,size:14)))),
+          if(widget.kind!='units')Text(x['active']==true?'Đang dùng':'Ngừng dùng',style:const TextStyle(fontSize:12,color:ErpTokens.muted)),
+          if(widget.kind=='barcodes'&&x['isPrimary']==true)const Text('Mã chính'),
+          if(canEditLifecycle&&inlineEditId!=x['id'])TextButton(key:ValueKey('r1-edit-${x['id']}'),onPressed:busy?null:()=>editRow(x),child:const Text('Sửa')),
+        ]),
+        if(inlineEditId==x['id'])...[
+          SwitchListTile(contentPadding:EdgeInsets.zero,title:const Text('Đang sử dụng'),value:inlineActive,onChanged:busy?null:(v)=>setState(()=>inlineActive=v)),
+          if(widget.kind=='barcodes')SwitchListTile(contentPadding:EdgeInsets.zero,title:const Text('Mã vạch chính'),value:inlinePrimary&&inlineActive,onChanged:busy||!inlineActive?null:(v)=>setState(()=>inlinePrimary=v)),
+          if(widget.kind=='skus'&&x['active']==true&&!inlineActive)TextFormField(key:ValueKey('product-sku-reason-${x['id']}'),initialValue:inlineReason,decoration:const InputDecoration(labelText:'Lý do ngừng SKU'),onChanged:(v)=>setState(()=>inlineReason=v)),
+          Wrap(spacing:8,children:[TextButton(onPressed:busy?null:()=>setState(()=>inlineEditId=null),child:const Text('Hủy')),
+            FilledButton(onPressed:busy||(widget.kind=='skus'&&x['active']==true&&!inlineActive&&inlineReason.trim().length<3)?null:()=>saveInlineLifecycle(x),child:const Text('Lưu thay đổi'))]),
+        ],
+      ])),
+    ]);
     return LayoutBuilder(builder:(ctx,box){
       if(box.maxWidth<680)return Column(children:items.map((x)=>Column(children:[
         Padding(padding:const EdgeInsets.symmetric(horizontal:8,vertical:12),

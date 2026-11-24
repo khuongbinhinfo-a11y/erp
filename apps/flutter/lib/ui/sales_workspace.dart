@@ -1482,7 +1482,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         const Expanded(flex:5,child:Text('HÀNG HÓA / SKU',
                           style:TextStyle(fontWeight:FontWeight.w700,fontSize:11,color:ErpTokens.muted))),
                         const SizedBox(width:92,child:Text('ĐVT',style:TextStyle(fontSize:11,color:ErpTokens.muted))),
-                        const SizedBox(width:112,child:Text('SỐ LƯỢNG',style:TextStyle(fontSize:11,color:ErpTokens.muted))),
+                        const SizedBox(width:112,child:Text('SỐ LƯỢNG',textAlign:TextAlign.center,style:TextStyle(fontSize:11,color:ErpTokens.muted))),
                         const SizedBox(width:124,child:Text('ĐƠN GIÁ',textAlign:TextAlign.right,
                           style:TextStyle(fontSize:11,color:ErpTokens.muted))),
                         const SizedBox(width:76,child:Text('CK',textAlign:TextAlign.right,
@@ -1518,10 +1518,10 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           initialValue:entry.sellSkuId,
                           focusNode:entry.unitFocus,isDense:true,isExpanded:true,
                           menuMaxHeight:240,
-                          decoration:const InputDecoration(
-                            isDense:true,filled:false,
-                            border:UnderlineInputBorder(),enabledBorder:UnderlineInputBorder(),disabledBorder:UnderlineInputBorder(),focusedBorder:UnderlineInputBorder(),
-                            contentPadding:EdgeInsets.symmetric(horizontal:3,vertical:4)),
+                          decoration:InputDecoration(
+                            isDense:true,filled:false,labelText:narrow?'ĐVT':null,
+                            border:const UnderlineInputBorder(),enabledBorder:const UnderlineInputBorder(),disabledBorder:const UnderlineInputBorder(),focusedBorder:const UnderlineInputBorder(),
+                            contentPadding:const EdgeInsets.symmetric(horizontal:3,vertical:4)),
                           items:unitChoices.map((variant)=>DropdownMenuItem<String>(
                             value:variant['id'] as String,
                             child:Text((variant['unitCode']??'').toString(),
@@ -1571,10 +1571,10 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           inputFormatters:const [ErpGroupedNumberFormatter(maxIntegerDigits:9,maxFractionDigits:3)],
                           textInputAction:TextInputAction.next,
                           textAlign:TextAlign.center,
-                          decoration:const InputDecoration(
-                            isDense:true,filled:false,
-                            border:UnderlineInputBorder(),enabledBorder:UnderlineInputBorder(),disabledBorder:UnderlineInputBorder(),focusedBorder:UnderlineInputBorder(),
-                            contentPadding:EdgeInsets.symmetric(horizontal:4,vertical:8)),
+                          decoration:InputDecoration(
+                            isDense:true,filled:false,labelText:narrow?'Số lượng':null,
+                            border:const UnderlineInputBorder(),enabledBorder:const UnderlineInputBorder(),disabledBorder:const UnderlineInputBorder(),focusedBorder:const UnderlineInputBorder(),
+                            contentPadding:const EdgeInsets.symmetric(horizontal:4,vertical:8)),
                         ));
                       final unitPriceField=SizedBox(width:124,child:TextField(
                         key:ValueKey('sales-price-$i'),
@@ -1590,7 +1590,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           isDense:true,filled:false,
                           hintText:price=='—'?'—':erpGroupedDecimalText(quote!['unitPrice']),
                           hintStyle:const TextStyle(color:ErpTokens.ink,fontWeight:FontWeight.w600),
-                          floatingLabelBehavior:FloatingLabelBehavior.never,
+                          labelText:narrow?'Đơn giá':null,
+                          floatingLabelBehavior:narrow?FloatingLabelBehavior.always:FloatingLabelBehavior.never,
                           enabledBorder:const UnderlineInputBorder(),disabledBorder:const UnderlineInputBorder(),focusedBorder:const UnderlineInputBorder(),
                           contentPadding:const EdgeInsets.symmetric(horizontal:3,vertical:8),
                           border:const UnderlineInputBorder())));
@@ -1611,7 +1612,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           pricingChanged(ctx,refresh);
                         },
                         textAlign:TextAlign.right,
-                        decoration:InputDecoration(hintText:title,isDense:true,filled:false,
+                        decoration:InputDecoration(labelText:narrow?title:null,hintText:narrow?null:title,isDense:true,filled:false,
                           enabledBorder:const UnderlineInputBorder(),disabledBorder:const UnderlineInputBorder(),focusedBorder:const UnderlineInputBorder(),
                           border:const UnderlineInputBorder(),
                           contentPadding:const EdgeInsets.symmetric(horizontal:2,vertical:8))));
