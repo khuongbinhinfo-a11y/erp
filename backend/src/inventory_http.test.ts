@@ -8,7 +8,42 @@ import { applyMigrations } from "./migrate.ts";
 import { bootstrapInstallation } from "./bootstrap.ts";
 import { buildApp } from "./server.ts";
 import { isDatabaseReady } from "./db.ts";
-import { validBaseQty } from "./inventory.ts";
+import { validBaseQty, allocateWarehouseDemand } from "./inventory.ts";
+
+// Characterization: legacy sales-order-fulfillment-demand.test.js, d39e8a87.
+// ERP uses six fractional digits, not the legacy twelve. No float conversion.
+test("T0 legacy demand: deterministic full, partial and zero hold",()=>{
+ const lines=[{lineNo:1,ordered:6000000n},{lineNo:2,ordered:6000000n}];
+ const partial=allocateWarehouseDemand(lines,8000000n,true);
+ assert.deepEqual(partial,{ok:true,allocations:[
+  {...lines[0],reserved:6000000n,backordered:0n},
+  {...lines[1],reserved:2000000n,backordered:4000000n},
+ ]});
+ assert.deepEqual(allocateWarehouseDemand(lines,8000000n,false),{
+  ok:false,code:"SALES_ORDER_INSUFFICIENT_STOCK",required:12000000n,available:8000000n,
+ });
+ assert.deepEqual(allocateWarehouseDemand(lines,12000000n,true),{
+  ok:true,allocations:lines.map(line=>({...line,reserved:line.ordered,backordered:0n})),
+ });
+ for(const available of [0n,-1000000n]){
+  assert.deepEqual(allocateWarehouseDemand(lines,available,true),{
+   ok:true,allocations:lines.map(line=>({...line,reserved:0n,backordered:line.ordered})),
+  });
+  assert.deepEqual(allocateWarehouseDemand(lines,available,false),{
+   ok:false,code:"SALES_ORDER_INSUFFICIENT_STOCK",required:12000000n,available:0n,
+  });
+ }
+ assert.deepEqual(lines,[{lineNo:1,ordered:6000000n},{lineNo:2,ordered:6000000n}]);
+});
+test("T0 legacy allocator rejects invalid demand, retains smallest exact unit",()=>{
+ for(const ordered of [0n,-1n])
+  assert.throws(()=>allocateWarehouseDemand([{ordered}],1n,true),/INVALID_QUANTITY/);
+ const ordered=999999999999999999n;
+ assert.deepEqual(allocateWarehouseDemand([{ordered}],ordered-1n,true),{
+  ok:true,allocations:[{ordered,reserved:ordered-1n,backordered:1n}],
+ });
+});
+
 
 test("R3 quantity contract accepts exact base-unit decimal strings only",()=>{
  for(const v of ["1","0.000001","25.500000","100000000000.123456"])
