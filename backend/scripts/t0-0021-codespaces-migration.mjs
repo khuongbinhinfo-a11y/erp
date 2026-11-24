@@ -348,6 +348,10 @@ async function legacySignature(pool){
     created_at,released_at FROM inventory_reservation`,
  roleGrants:`SELECT installation_id,role_id,permission_code FROM role_permission
     WHERE permission_code <> 'inventory.policy.manage'`,
+ delegatedPolicyGrants:`SELECT rp.installation_id,rp.role_id,rp.permission_code
+   FROM role_permission rp JOIN app_role ar ON ar.installation_id=rp.installation_id
+   AND ar.id=rp.role_id WHERE rp.permission_code='inventory.policy.manage'
+   AND ar.code <> 'PRIMARY_OWNER_MAIN'`,
  priceList:`SELECT installation_id,branch_id,id,code,name,currency,active,
    revision,created_at FROM catalog_price_list`
  };
@@ -416,7 +420,7 @@ async function verifyT0Schema(pool){
  */
 export function assertT0OwnerPermissionState(row){
  if(!row||row.primary_roles!==row.owner_grants||
-   row.all_policy_grants!==row.owner_grants)
+   row.unexpected_grants!=="0")
   fail("T0_POLICY_PERMISSION_GRANT_RECONCILIATION_FAILED");
 }
 async function verifyT0OwnerPermissionGrants(pool){
@@ -426,8 +430,10 @@ async function verifyT0OwnerPermissionGrants(pool){
    ON ar.installation_id=rp.installation_id AND ar.id=rp.role_id
    WHERE rp.permission_code='inventory.policy.manage'
      AND ar.code='PRIMARY_OWNER_MAIN') AS owner_grants,
-  (SELECT count(*)::text FROM role_permission
-   WHERE permission_code='inventory.policy.manage') AS all_policy_grants`);
+  (SELECT count(*)::text FROM role_permission rp JOIN app_role ar
+   ON ar.installation_id=rp.installation_id AND ar.id=rp.role_id
+   WHERE rp.permission_code='inventory.policy.manage'
+    AND ar.code<>'PRIMARY_OWNER_MAIN' AND LEFT(ar.code,6)<>'GRANT_') AS unexpected_grants`);
  assertT0OwnerPermissionState(r.rows[0]);
 }
 async function main(mode){
