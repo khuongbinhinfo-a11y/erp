@@ -798,7 +798,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         context:context,barrierDismissible:false,
         builder:(dialog)=>StatefulBuilder(builder:(ctx,refresh){
           final media=MediaQuery.sizeOf(ctx);
-          final narrow=media.width<720;
+          // Editable SKU unit adds 32px to the desktop row: stack before overflow.
+           final narrow=media.width<960;
           final width=media.width*0.96>1440?1440.0:media.width*0.96;
           final ready=quotes!=null&&quotedStamp==stamp();
           if(!firstQuoteScheduled){
