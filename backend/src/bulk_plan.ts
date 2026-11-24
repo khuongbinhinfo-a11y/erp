@@ -359,7 +359,7 @@ async function buildSelectedSkuPrices(db:PoolClient,tenant:string,actor:string,i
    const amount=exactDecimal(raw.amount,MONEY,"PRICE")!;
    const discount=exactDecimal(raw.discountRate,DISCOUNT,"DISCOUNT",true)??"0";
    const at=raw.effectiveAt;
-   if(!validEffectiveAt(at))throw new BulkFault("INVALID_EFFECTIVE_AT");
+   if(!at||!validEffectiveAt(at))throw new BulkFault("INVALID_EFFECTIVE_AT");
    const converted=await db.query<{net:string}>(`SELECT greatest(0,round(
        $1::numeric*(1-$2::numeric/100),0))::text AS net`,[amount,discount]);
    const net=converted.rows[0]!.net;
