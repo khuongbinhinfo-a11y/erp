@@ -19,13 +19,13 @@ test("price SKU taxonomy filters bind $4/$5/$6, never interpolate numeric UUID c
  const all=buildSkuTaxonomyFilters({groupId:group,categoryId:category,brandId:brand});
  assert.deepEqual(all.values,[group,category,brand]);
  assert.equal(all.filters.length,3);
- assert.match(all.filters[0],/p\.group_id=\$4::uuid/);
- assert.match(all.filters[1],/id=\$5::uuid/);
- assert.match(all.filters[1],/WITH RECURSIVE descendants/);
- assert.match(all.filters[2],/g\.brand_id=\$6::uuid/);
+ assert.match(all.filters[0]!,/p\.group_id=\$4::uuid/);
+ assert.match(all.filters[1]!,/id=\$5::uuid/);
+ assert.match(all.filters[1]!,/WITH RECURSIVE descendants/);
+ assert.match(all.filters[2]!,/g\.brand_id=\$6::uuid/);
  const only=buildSkuTaxonomyFilters({brandId:brand});
  assert.deepEqual(only.values,[brand]);
- assert.match(only.filters[0],/\$4::uuid/);
+ assert.match(only.filters[0]!,/\$4::uuid/);
 });
 test("brand / group / nested category identity is validated, no client-provided tenant",()=>{
   assert.deepEqual(checkCreate("brands",{branchId:branch,code:"NH01",name:"Nature"}),{
