@@ -12,7 +12,8 @@ const VI:Record<BulkResource,Record<string,string>>={
  },
  products:{
   code:"Mã sản phẩm",name:"Tên sản phẩm",baseUnit:"Mã đơn vị gốc",
-  groupCode:"Mã nhóm hàng",barcode:"Mã vạch gốc",active:"Trạng thái",
+  groupCode:"Mã nhóm hàng",brandCode:"Mã nhãn hàng",categoryCode:"Mã danh mục",
+  barcode:"Mã vạch gốc",active:"Trạng thái",
  },
  skus:{
   code:"Mã SKU",productCode:"Mã sản phẩm",unitCode:"Mã đơn vị",
