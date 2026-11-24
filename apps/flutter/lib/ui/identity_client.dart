@@ -234,11 +234,12 @@ class ErpIdentityClient {
   }
   /// Catalog calls always use the authenticated installation and server-side RBAC.
   Future<List<Map<String,dynamic>>> catalogItems(String token,String resource,{
-    String? branchId,String query='',
+    String? branchId,String query='',String? itemId,
   })async{
     final params=<String,String>{};
     if(branchId!=null)params['branchId']=branchId;
     if(query.trim().isNotEmpty)params['q']=query.trim();
+    if(itemId!=null)params['id']=itemId;
     final suffix=params.isEmpty?'':'?${Uri(queryParameters:params).query}';
     final raw=await _request('GET','/v1/catalog/$resource$suffix',token:token);
     return (raw['items'] as List<dynamic>)
