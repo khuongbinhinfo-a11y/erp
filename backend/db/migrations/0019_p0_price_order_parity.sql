@@ -25,3 +25,10 @@ ALTER TABLE catalog_sku_price_rule
 
 -- Price rule history is immutable; new import metadata is inserted atomically
 -- by the same audited R1 mutation, never patched into a posted rule.
+
+-- List-level combination policy is additive, with backward-compatible exclusive
+-- behavior for all lists created before P0.
+ALTER TABLE catalog_price_list
+ ADD COLUMN stacking_mode text NOT NULL DEFAULT 'EXCLUSIVE'
+   CHECK (stacking_mode IN ('EXCLUSIVE','STACKABLE')),
+ ADD COLUMN stop_processing boolean NOT NULL DEFAULT false;
