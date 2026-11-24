@@ -70,6 +70,19 @@ void main(){
     await secondTab.clearUnsentSalesUpdate(a,orderId,'second');
     expect(await firstTab.unsentSalesUpdates(a,orderId),isEmpty);
   });
+  test('unsent vs in-flight vs rejected edits permit only safe reconciliation',()async{
+    final store=ErpLocalStore(Memory());
+    const id='00000000-0000-4000-8000-000000000005';
+    await store.saveUnsentSalesUpdate(a,id,'k',{'id':id,'body':{'lines':[]}});
+    expect((await store.unsentSalesUpdates(a,id)).single['status'],'unsent');
+    await store.markUnsentSalesUpdate(a,id,'k','inflight');
+    expect((await store.unsentSalesUpdates(a,id)).single['status'],'inflight');
+    await store.markUnsentSalesUpdate(a,id,'k','rejected');
+    expect((await store.unsentSalesUpdates(a,id)).single['status'],'rejected');
+    await store.markUnsentSalesUpdate(a,id,'k','inflight');
+    await expectLater(store.markUnsentSalesUpdate(a,id,'wrong','rejected'),
+      throwsA(isA<LocalRecoveryConflict>()));
+  });
   test('cache expiry is explicit, never proof of a current price',()async{
     final store=ErpLocalStore(Memory());
     final time=DateTime.utc(2026,11,24);

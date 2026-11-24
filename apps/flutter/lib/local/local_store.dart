@@ -87,7 +87,7 @@ class ErpLocalStore {
       throw const LocalRecoveryConflict();
     }
     final location=_key(scope,'unsent-update',orderId);
-    final serialized=jsonEncode({'key':key,'command':command});
+    final serialized=jsonEncode({'key':key,'command':command,'status':'unsent'});
     for(var attempt=0;attempt<16;attempt++){
       final before=await driver.read(location);
       List<Map<String,dynamic>> drafts;
@@ -104,7 +104,29 @@ class ErpLocalStore {
         return;
       }
       if(drafts.length>=50)throw const LocalRecoveryConflict();
-      drafts.add({'key':key,'command':command});
+      drafts.add({'key':key,'command':command,'status':'unsent'});
+      if(await (driver as AtomicLocalDriver).compareAndSwap(location,before,jsonEncode(drafts)))return;
+    }
+    throw const LocalRecoveryConflict();
+  }
+  /// Explicit transaction state: before any network send, mark in-flight.
+  /// Rebase is permitted only for a never-sent or server-rejected command.
+  Future<void> markUnsentSalesUpdate(LocalScope scope,String orderId,String key,String status)async{
+    if(driver is! AtomicLocalDriver||!{'inflight','rejected'}.contains(status))throw const LocalRecoveryConflict();
+    final location=_key(scope,'unsent-update',orderId);
+    for(var attempt=0;attempt<16;attempt++){
+      final before=await driver.read(location);
+      if(before==null)throw const LocalRecoveryConflict();
+      List<Map<String,dynamic>> drafts;
+      try{drafts=(jsonDecode(before) as List).map((x)=>Map<String,dynamic>.from(x as Map)).toList();}
+      catch(_){throw const LocalRecoveryConflict();}
+      final match=drafts.where((x)=>x['key']==key).toList();
+      if(match.length!=1)throw const LocalRecoveryConflict();
+      final previous=match.single['status'];
+      if(previous==status)return;
+      if(status=='inflight'&&!{'unsent','rejected',null}.contains(previous))throw const LocalRecoveryConflict();
+      if(status=='rejected'&&previous!='inflight')throw const LocalRecoveryConflict();
+      match.single['status']=status;
       if(await (driver as AtomicLocalDriver).compareAndSwap(location,before,jsonEncode(drafts)))return;
     }
     throw const LocalRecoveryConflict();

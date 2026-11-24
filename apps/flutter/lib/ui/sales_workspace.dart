@@ -11,6 +11,51 @@ import 'erp_toast.dart';
 import 'identity_client.dart';
 import '../local/local_store.dart';
 
+/// Overlay an explicitly rejected or never-submitted edit onto the fresh
+/// canonical order. No old quote signatures are reused.
+Map<String,dynamic> erpSalesReconciliationOrder(
+  Map<String,dynamic> latest,Map<String,dynamic> command){
+  final body=Map<String,dynamic>.from(command['body'] as Map);
+  final edits=body['lines'] as List<dynamic>;
+  final previous=latest['lines'] is List?latest['lines'] as List:const <dynamic>[];
+  final result=<Map<String,dynamic>>[];
+  for(var i=0;i<edits.length;i++){
+    final src=Map<String,dynamic>.from(edits[i] as Map);
+    final sku=src['sellSkuId'];
+    final old=previous.where((x)=>x is Map&&x['sellSkuId']==sku).firstOrNull;
+    final former=old is Map?Map<String,dynamic>.from(old):<String,dynamic>{};
+    final manual=src.containsKey('unitPrice');
+    final discount=src.containsKey('discountRate')||src.containsKey('discountMode');
+    final tax=src.containsKey('taxRate')||src.containsKey('taxMode');
+    result.add({
+      ...former,
+      'sellSkuId':sku,'quantity':src['quantity'],
+      'unitPrice':manual?src['unitPrice']:former['unitPrice']??'0',
+      'discountRate':src['discountRate']??former['discountRate']??'0',
+      'taxRate':src['taxRate']??former['taxRate']??'0',
+      'priceSnapshot':{
+        'manualOverride':manual||discount||tax,
+        'manualPriceOverride':manual,
+        'discountOverride':discount,
+        'taxOverride':tax,
+        'restoreOverride':true,
+        'discountMode':src['discountMode']??'PERCENT',
+        'discountValue':src['discountValue']??src['discountRate']??'0',
+        'taxMode':src['taxMode']??'EXCLUSIVE',
+        'overrideReason':src['overrideReason']??'',
+        if(i==0&&body['documentDiscount'] is Map)
+          'documentDiscount':body['documentDiscount'],
+      },
+    });
+  }
+  return {
+    ...latest,
+    'customerId':body['customerId'],'priceListId':body['priceListId'],
+    'channelId':body['channelId'],'note':body['note'],
+    if(body['shipping'] is Map)'shipping':body['shipping'],
+    'lines':result,
+  };
+}
 class SalesWorkspace extends StatefulWidget {
   final ErpIdentityClient client;
   final IdentitySession session;
@@ -386,9 +431,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           line.taxMode=(snapshot['taxMode']??'EXCLUSIVE').toString();
           line.discountRate.text=erpGroupedDecimalText(line.discountMode=='PERCENT'?row['discountRate']:snapshot['discountValue']);
           line.taxRate.text=erpGroupedDecimalText(row['taxRate']);
-          line.discountEdited=snapshot['discountOverride']==true&&(localDraft||
+          line.discountEdited=snapshot['discountOverride']==true&&(localDraft||snapshot['restoreOverride']==true||
             (line.discountMode!='PERCENT'||RegExp('[1-9]').hasMatch(line.discountRate.text)));
-          line.taxEdited=snapshot['taxOverride']==true&&(localDraft||
+          line.taxEdited=snapshot['taxOverride']==true&&(localDraft||snapshot['restoreOverride']==true||
             (line.taxMode!='EXCLUSIVE'||RegExp('[1-9]').hasMatch(line.taxRate.text)));
           if(snapshot['discountOverride']==null)line.discountEdited=RegExp('[1-9]').hasMatch(line.discountRate.text);
           if(snapshot['taxOverride']==null)line.taxEdited=RegExp('[1-9]').hasMatch(line.taxRate.text);
@@ -2247,79 +2292,124 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     if(saving||localRecoveryBusy||pendingConfirm!=null||pendingCreate!=null||!can('orders.update'))return;
     if(pendingUpdate!=null){await _resolvePendingUpdate();return;}
     final scope=_localScope,id=order['id'] as String,token=widget.session.token;
+    var editSource=order;
+    String? supersededKey;
     if(scope!=null){
       List<Map<String,dynamic>> saved;
       try{saved=await widget.client.localStore!.unsentSalesUpdates(scope,id);}
-      catch(_){inform('Không đọc được bản sửa đơn đã lưu. Không tạo bản mới.',error:true);return;}
+      catch(_){inform('Không đọc được bản sửa đã lưu; chưa mở đơn mới.',error:true);return;}
       if(!_sameScope(token,scope.branch))return;
       if(saved.isNotEmpty){
-        final choice=await showDialog<String>(context:context,builder:(ctx)=>AlertDialog(
+        final selected=await showDialog<String>(context:context,builder:(ctx)=>AlertDialog(
           title:const Text('Bản sửa đơn chưa gửi'),
-          content:ConstrainedBox(constraints:const BoxConstraints(maxWidth:460),
-            child:Column(mainAxisSize:MainAxisSize.min,children:[
-              const Text('Có thay đổi của đơn này đã lưu trên máy. Chọn bản sửa để đối chiếu với máy chủ.'),
-              const SizedBox(height:12),
-              for(final item in saved)
+          content:SizedBox(width:510,height:((saved.length*76)+68).clamp(140,390).toDouble(),
+            child:ListView(children:[
+              const Text('Chọn bản sửa để xem nội dung trước khi gửi hoặc bỏ.'),
+              const SizedBox(height:8),
+              for(var index=0;index<saved.length;index++)
                 ListTile(
-                  title:Text('Sửa đơn · '+((item['key']??'').toString().length>12
-                    ?(item['key'] as String).substring(0,12):(item['key']??'').toString())),
-                  subtitle:Text('Số dòng: '+((item['command'] is Map&&
-                    (item['command'] as Map)['body'] is Map&&
-                    ((item['command'] as Map)['body'] as Map)['lines'] is List)
-                      ?(((item['command'] as Map)['body'] as Map)['lines'] as List).length.toString():'—')),
-                  onTap:()=>Navigator.pop(ctx,'retry:'+(item['key'] as String)),
-                  trailing:IconButton(
-                    tooltip:'Bỏ bản sửa này',
-                    onPressed:()=>Navigator.pop(ctx,'discard:'+(item['key'] as String)),
-                    icon:const Icon(Icons.delete_outline)),
+                  title:Text('Bản sửa '+(index+1).toString()+' · '+
+                    (saved[index]['key'] as String).split('-').skip(1).join('-')),
+                  subtitle:Text('Số dòng '+(((saved[index]['command'] as Map)['body'] as Map)['lines'] as List).length.toString()+
+                    ' · '+(saved[index]['status']=='rejected'?'Cần đối chiếu':
+                      saved[index]['status']=='unsent'?'Chưa gửi':'Cần xác minh máy chủ')),
+                  onTap:()=>Navigator.pop(ctx,saved[index]['key'] as String),
                 ),
             ])),
           actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Đóng'))],
         ));
-        if(!_sameScope(token,scope.branch)||choice==null)return;
-        final selected=choice.substring(choice.indexOf(':')+1);
-        final candidate=saved.where((x)=>x['key']==selected).firstOrNull;
-        if(candidate==null)return;
-        if(choice.startsWith('discard:')){
-          final accepted=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(
-            title:const Text('Bỏ bản sửa chưa gửi?'),
-            content:const Text('Chỉ xóa các thay đổi lưu trên máy, không hủy đơn trên máy chủ.'),
+        if(!_sameScope(token,scope.branch)||selected==null)return;
+        final item=saved.where((x)=>x['key']==selected).firstOrNull;
+        if(item==null)return;
+        Map<String,dynamic> cmd,body;
+        try{
+          cmd=Map<String,dynamic>.from(item['command'] as Map);
+          body=Map<String,dynamic>.from(cmd['body'] as Map);
+          if(cmd['id']!=id||body['branchId']!=scope.branch||body['lines'] is! List)throw const FormatException();
+        }catch(_){inform('Bản sửa trên máy không hợp lệ, không gửi lại.',error:true);return;}
+        final lines=body['lines'] as List;
+        final status=item['status'];
+        final canReconcile=status=='unsent'||status=='rejected';
+        final decision=await showDialog<String>(context:context,builder:(ctx)=>AlertDialog(
+          title:Text('Kiểm tra bản sửa · '+selected.split('-').skip(1).join('-')),
+          content:SizedBox(width:520,height:350,
+            child:SingleChildScrollView(child:Column(
+              crossAxisAlignment:CrossAxisAlignment.start,children:[
+                Text('Khách hàng: '+(body['customerId']??'—').toString()),
+                Text('Bảng giá: '+(body['priceListId']??'—').toString()),
+                Text('Ghi chú: '+(body['note']??'—').toString()),
+                Text('Trạng thái: '+(status=='rejected'?'Đã bị máy chủ từ chối':
+                  status=='unsent'?'Chưa gửi':'Chưa rõ kết quả, phải đối soát bản gốc')),
+                const SizedBox(height:10),
+                for(var index=0;index<lines.length;index++)...[
+                  Text('Dòng '+(index+1).toString()+' · SKU '+((lines[index] as Map)['sellSkuId']??'').toString(),
+                    style:const TextStyle(fontWeight:FontWeight.w700)),
+                  Text('SL: '+((lines[index] as Map)['quantity']??'').toString()+
+                    ' · Giá sửa: '+((lines[index] as Map)['unitPrice']??'Theo bảng giá').toString()),
+                  if((lines[index] as Map)['discountRate']!=null)
+                    Text('CK: '+((lines[index] as Map)['discountRate']).toString()),
+                  if((lines[index] as Map)['taxRate']!=null)
+                    Text('Thuế: '+((lines[index] as Map)['taxRate']).toString()),
+                ],
+              ],
+            ))),
+          actions:[
+            TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Đóng')),
+            if(canReconcile)TextButton(onPressed:()=>Navigator.pop(ctx,'discard'),
+              child:const Text('Bỏ bản sửa')),
+            if(canReconcile)OutlinedButton(onPressed:()=>Navigator.pop(ctx,'reconcile'),
+              child:const Text('Đối chiếu và sửa')),
+            if(status!='rejected')FilledButton(onPressed:()=>Navigator.pop(ctx,'retry'),
+              child:const Text('Kiểm tra/gửi bản gốc')),
+          ],
+        ));
+        if(!_sameScope(token,scope.branch)||decision==null)return;
+        if(decision=='discard'){
+          final approved=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(
+            title:const Text('Xóa bản sửa chưa gửi?'),
+            content:const Text('Thao tác chỉ xóa thay đổi lưu trên máy; không sửa hoặc hủy đơn máy chủ.'),
             actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Giữ lại')),
-              FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Bỏ bản sửa'))]));
-          if(accepted==true&&_sameScope(token,scope.branch)){
+              FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Xóa bản sửa'))]));
+          if(approved==true&&_sameScope(token,scope.branch)){
             try{await widget.client.localStore!.clearUnsentSalesUpdate(scope,id,selected);}
-            catch(_){inform('Không xóa được bản sửa trên máy.',error:true);}
+            catch(_){inform('Không xóa được bản sửa lưu trên máy.',error:true);}
           }
           return;
         }
-        try{
-          final cmd=Map<String,dynamic>.from(candidate['command'] as Map);
-          if(cmd['id']!=id||cmd['body'] is! Map||
-            (cmd['body'] as Map)['branchId']!=scope.branch)throw const FormatException();
-          if(!mounted)return;
+        if(decision=='retry'){
+          if(status=='rejected')return;
           setState((){
             pendingUpdate=cmd;pendingUpdateKey=selected;pendingNeedsReceipt=true;
             localRecoveryBlocked=false;
           });
-        }catch(_){inform('Bản sửa đã lưu không hợp lệ. Không gửi lại.',error:true);return;}
-        await _resolvePendingUpdate();
-        return;
+          await _resolvePendingUpdate();return;
+        }
+        if(decision!='reconcile'||!canReconcile)return;
+        try{
+          final latest=await widget.client.salesOrder(token,id,scope.branch);
+          if(!_sameScope(token,scope.branch))return;
+          editSource=erpSalesReconciliationOrder(latest,cmd);
+          supersededKey=selected;
+          inform('Đang đối chiếu bản sửa với đơn mới nhất. Giá phải tra lại trên máy chủ.');
+        }catch(_){inform('Chưa tải được đơn mới nhất để đối chiếu. Bản sửa được giữ nguyên.',error:true);return;}
       }
     }
-    final form=await editForm(order:order);
+    final form=await editForm(order:editSource);
     if(form==null||!mounted||widget.session.token!=token)return;
     final auto=form.remove('_confirmAfterSave')==true;
-    final command=<String,dynamic>{'id':id,'revision':order['revision'],
+    final command=<String,dynamic>{'id':id,'revision':editSource['revision'],
       'body':Map<String,dynamic>.from(form),'auto':auto};
     final key=newKey();
     if(scope!=null){
-      try{await widget.client.localStore!.saveUnsentSalesUpdate(scope,id,key,command);}
-      catch(_){
-        inform('Không lưu được bản sửa đơn trên máy. Không gửi yêu cầu.',error:true);
+      try{
+        await widget.client.localStore!.saveUnsentSalesUpdate(scope,id,key,command);
+        if(supersededKey!=null)await widget.client.localStore!.clearUnsentSalesUpdate(scope,id,supersededKey);
+      }catch(_){
+        inform('Bản sửa chưa lưu an toàn. Không gửi yêu cầu.',error:true);
         return;
       }
     }
-    if(!_sameScope(token,order['branchId']?.toString()??branchId??''))return;
+    if(!_sameScope(token,scope?.branch??branchId??''))return;
     setState((){
       pendingUpdate=command;pendingUpdateKey=key;pendingNeedsReceipt=false;
       localRecoveryBlocked=false;
@@ -2335,6 +2425,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     setState(()=>saving=true);
     try{
       await _persistPending(scope,'update',key,cmd);
+      if(scope!=null)await widget.client.localStore!.markUnsentSalesUpdate(scope,id,key,'inflight');
       if(!_sameScope(token,body['branchId'] as String))return;
       // Replays the exact original body+key after a lost COMMIT acknowledgment.
       final recovered=_localConfigured&&pendingNeedsReceipt
@@ -2370,10 +2461,12 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         'CHANNEL_UNAVAILABLE','PRICE_LIST_UNAVAILABLE','CUSTOMER_UNAVAILABLE',
         'SKU_HAS_NO_EFFECTIVE_BASE_PRICE'}.contains(e.code);
       if(rejected&&_sameScope(token,body['branchId'] as String)){
-        try{await _persistPending(scope,null,null,null,previousKey:key);}
-        catch(_){inform('Chưa xóa được yêu cầu đã từ chối trên máy.',error:true);return;}
+        try{
+          await _persistPending(scope,null,null,null,previousKey:key);
+          if(scope!=null)await widget.client.localStore!.markUnsentSalesUpdate(scope,id,key,'rejected');
+        }catch(_){inform('Chưa lưu được kết quả từ chối trên máy.',error:true);return;}
         if(!_sameScope(token,body['branchId'] as String))return;
-        // Retain the operator's edits for review/repricing rather than deleting them.
+        // Keep the rejected edit available for an explicitly reviewed new quote.
         setState((){pendingUpdate=null;pendingUpdateKey=null;localRecoveryBlocked=true;});
         inform('Không thể cập nhật vì dữ liệu hoặc giá đã thay đổi. Hãy mở lại đơn và tra giá.',
           error:true);
