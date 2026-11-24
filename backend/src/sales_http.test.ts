@@ -275,6 +275,9 @@ test("B1: real PostgreSQL order lifecycle, immutable versions, RBAC, replay and 
     assert.equal(walkDetail.body.order.shipping.customerMode,"WALK_IN");
     assert.equal(walkDetail.body.order.shipping.paymentTermsDays,0);
     assert.equal(walkDetail.body.order.paymentStatus,"NOT_DUE");
+    assert.equal((await call("/v1/sales/last-purchase?branchId="+b+"&customerId="+walkId+"&sellSkuId="+sellSkuId,"GET",undefined,token)).body.price,null);
+    assert.equal((await write("/v1/sales/orders/"+walkOrder.body.id+"/confirm",{branchId:b},0,"t1-walk-confirm-"+randomUUID())).status,200);
+    assert.equal((await call("/v1/sales/last-purchase?branchId="+b+"&customerId="+walkId+"&sellSkuId="+sellSkuId,"GET",undefined,token)).body.price,null);
     assert.equal((await call("/v1/sales/entry-settings?branchId="+b,"GET",undefined,token)).body.settings.deliveryChoice,"MANUAL");
     // T1 document discount uses the same server quote and save allocation;
     // all money is integer VND, including rounding residuals.
