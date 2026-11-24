@@ -2678,10 +2678,27 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       if(!auto)inform('Đã cập nhật đơn hàng.');
       await reload();
     }on LocalRecoveryConflict catch(_){
+      // A peer tab may have rejected/rebased this exact request between our
+      // receipt preflight and the CAS. Release only our original key, never
+      // another command, so a stranded slot cannot lock the whole branch.
+      var terminal=false;
+      if(scope!=null){
+        try{
+          final items=await widget.client.localStore!.unsentSalesUpdates(scope,id);
+          final matching=items.where((x)=>x['key']==key).toList();
+          terminal=matching.isEmpty||matching.any((x)=>
+            {'rejected','reconciling'}.contains(x['status']));
+          if(terminal){
+            try{await _persistPending(scope,null,null,null,previousKey:key);}catch(_){}
+          }
+        }catch(_){}
+      }
       if(_sameScope(token,body['branchId'] as String))setState((){
-        pendingUpdate=null;pendingUpdateKey=null;localRecoveryBlocked=true;
+        pendingUpdate=null;pendingUpdateKey=null;localRecoveryBlocked=!terminal;
       });
-      inform('Bản sửa chưa gửi đã được giữ riêng trên máy. Mở Sửa để gửi lại khi cửa sổ kia hoàn tất.',error:true);
+      inform(terminal
+        ?'Bản sửa cũ đã bị từ chối hoặc thay thế. Mở lại đơn để đối chiếu.'
+        :'Bản sửa chưa gửi đã được giữ riêng trên máy. Mở Sửa để kiểm tra.',error:true);
     }on ErpApiError catch(e){
       final rejected={'PRICE_STALE','SKU_UNAVAILABLE','INVALID_QUANTITY',
         'DUPLICATE_PRODUCT','INVALID_LINES','VERSION_ALREADY_CONFIRMED',
