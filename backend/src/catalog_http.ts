@@ -484,6 +484,11 @@ export function checkCreate(resource:Resource,raw:Record<string,unknown>){
     }
     return {branchId,code,name};
   }
+  if(resource==="brands"){
+    if(Object.keys(raw).some(k=>!["branchId","code","name"].includes(k)))
+      throw new CatalogError(400,"UNKNOWN_FIELD");
+    return {branchId,code,name};
+  }
   if(resource==="groups"){
     if(Object.keys(raw).some(k=>!["branchId","code","name","brandId"].includes(k)))
       throw new CatalogError(400,"UNKNOWN_FIELD");
