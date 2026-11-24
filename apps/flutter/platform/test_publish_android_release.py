@@ -107,6 +107,19 @@ class R2PublishRecovery(unittest.TestCase):
         self.arg.code = 1; self.arg.version = '1.0.0'
         with self.assertRaises(ValueError):
             self.run_publish()
+    def test_long_vietnamese_notes_never_block_history_readback(self):
+        self.arg.notes = 'ấ' * 3000
+        self.run_publish()
+        previous = self.assert_complete()
+        self.arg.code = 2; self.arg.version = '1.0.1'
+        self.run_publish()
+        self.assertEqual(json.loads(self.r2.objects['releases/2/manifest.json'])['previous'], previous)
+        self.assertEqual(self.assert_complete()['versionCode'], 2)
+    def test_reject_latest_manifest_over_native_api_16k_limit(self):
+        self.arg.notes = '😀' * 4000
+        with self.assertRaises(ValueError):
+            self.run_publish()
+        self.assertNotIn('releases/latest.json', self.r2.objects)
     def test_immutable_manifest_mismatch_denied(self):
         self.run_publish()
         original = self.assert_complete()

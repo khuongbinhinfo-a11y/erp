@@ -30,7 +30,7 @@ def verify(path, code, version, signer, tools):
     if not match or match.groups() != (PACKAGE, str(code), version):
         raise ValueError("Unexpected APK package or version")
 
-def read_manifest(s3, bucket, key):
+def read_manifest(s3, bucket, key, max_bytes=16384):
     from botocore.exceptions import ClientError
     try:
         result = s3.get_object(Bucket=bucket, Key=key)
@@ -39,8 +39,8 @@ def read_manifest(s3, bucket, key):
             return None, None
         raise
     with result["Body"] as body:
-        raw = body.read(16385)
-    if len(raw) > 16384:
+        raw = body.read(max_bytes + 1)
+    if len(raw) > max_bytes:
         raise ValueError("Invalid manifest")
     return json.loads(raw), result["ETag"]
 
@@ -84,7 +84,7 @@ def publish(args):
 
     key = f"releases/{args.code}/erp-{args.code}.apk"
     history_key = f"releases/{args.code}/manifest.json"
-    existing_history, _ = read_manifest(s3, bucket, history_key)
+    existing_history, _ = read_manifest(s3, bucket, history_key, max_bytes=65536)
     if existing_history is not None:
         timestamp = existing_history.get("releasedAt")
         if not isinstance(timestamp, str):
@@ -94,6 +94,9 @@ def publish(args):
     manifest = dict(schema=1, versionCode=args.code, versionName=args.version, packageName=PACKAGE,
         signerSha256=signer, sha256=sha, size=size, objectKey=key, sourceSha=args.sha,
         notes=args.notes, releasedAt=timestamp)
+    manifest_json = json.dumps(manifest, ensure_ascii=False, separators=(",", ":")).encode()
+    if len(manifest_json) > 16384:
+        raise ValueError("Latest release manifest exceeds native API size limit")
     if old is not None and old["versionCode"] == args.code and old != manifest:
         raise ValueError("A different version is already active at this versionCode")
     previous = existing_history.get("previous") if (old == manifest and existing_history) else old
@@ -119,19 +122,21 @@ def publish(args):
 
     if existing_history is None:
         payload = json.dumps(history, ensure_ascii=False, separators=(",", ":")).encode()
+        if len(payload) > 65536:
+            raise ValueError("Immutable version history exceeds bounded size limit")
         try:
             s3.put_object(Bucket=bucket, Key=history_key, Body=payload,
                 ContentType="application/json", IfNoneMatch="*")
         except Exception as manifest_error:
-            recovered, _ = read_manifest(s3, bucket, history_key)
+            recovered, _ = read_manifest(s3, bucket, history_key, max_bytes=65536)
             if recovered != history:
                 raise manifest_error
-    immutable, _ = read_manifest(s3, bucket, history_key)
+    immutable, _ = read_manifest(s3, bucket, history_key, max_bytes=65536)
     if immutable != history:
         raise ValueError("Immutable version manifest readback mismatch")
 
     if old != manifest:
-        latest = json.dumps(manifest, ensure_ascii=False, separators=(",", ":")).encode()
+        latest = manifest_json
         condition = {"IfMatch":etag} if etag else {"IfNoneMatch":"*"}
         try:
             s3.put_object(Bucket=bucket, Key=LATEST, Body=latest,
