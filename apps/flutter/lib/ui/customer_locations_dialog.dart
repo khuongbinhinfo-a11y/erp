@@ -89,24 +89,29 @@ class _CustomerLocationsDialogState extends State<CustomerLocationsDialog>{
           ));});
       if(payload==null||!mounted)return;
       final pending=widget.client.pendingR1(widget.session.actorId,widget.branchId,kind);
-      if(pending!=null&&
-        pending.payload.toString()!=payload.toString()){
+      // Keep the exact old revision inside the pending intent; it is part of
+      // the server idempotency fingerprint even after an ACK is lost.
+      final stored=pending?.payload??<String,dynamic>{
+        ...payload,if(old!=null)'_erpExpectedRevision':old['revision'] as int,
+      };
+      final outgoing=Map<String,dynamic>.from(stored)..remove('_erpExpectedRevision');
+      if(pending!=null&&outgoing.toString()!=payload.toString()){
         ErpToast.show(context,'Đang có yêu cầu chưa xác nhận. Kiểm tra lại trước khi đổi dữ liệu.',isError:true);
         return;
       }
-      final body=pending?.payload??payload;
+      final expected=(stored['_erpExpectedRevision'] as int?)??(old?['revision'] as int?)??0;
       final key=pending?.key??'location-${DateTime.now().microsecondsSinceEpoch}';
       if(pending==null)widget.client.retainR1(
-        widget.session.actorId,widget.branchId,kind,body,key);
+        widget.session.actorId,widget.branchId,kind,stored,key);
       setState(()=>saving=true);
       try{
         if(old==null){
           await widget.client.createCustomerLocation(
-            widget.session.token,widget.customerId,body,key:key);
+            widget.session.token,widget.customerId,outgoing,key:key);
         }else{
           await widget.client.updateCustomerLocation(
             widget.session.token,widget.customerId,old['id'].toString(),
-            old['revision'] as int,body,key:key);
+            expected,outgoing,key:key);
         }
         widget.client.clearR1(widget.session.actorId,widget.branchId,kind);
         if(mounted){
