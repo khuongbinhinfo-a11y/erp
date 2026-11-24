@@ -107,6 +107,23 @@ void main(){
     await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:150)));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('sales-line-0')),findsOneWidget);
+    Rect editorRect(String key)=>tester.getRect(find.descendant(
+      of:find.byKey(ValueKey(key)),matching:find.byType(InputDecorator)).first);
+    final desktopUnit=editorRect('sales-unit-0-$base');
+    for(final field in ['qty','price','discount','tax']){
+      final rect=editorRect('sales-$field-0');
+      expect(rect.height,closeTo(desktopUnit.height,1));
+      expect(rect.bottom,closeTo(desktopUnit.bottom,1));
+    }
+    tester.view.physicalSize=const Size(390,844);
+    await tester.pumpAndSettle();
+    final mobileUnit=editorRect('sales-unit-0-$base');
+    final mobileQty=editorRect('sales-qty-0');
+    expect(mobileQty.height,closeTo(mobileUnit.height,1));
+    expect(mobileQty.bottom,closeTo(mobileUnit.bottom,1));
+    expect(tester.takeException(),isNull);
+    tester.view.physicalSize=const Size(1440,900);
+    await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const ValueKey('sales-qty-0')),'3');
     if(canUpdate){
       await tester.enterText(find.byKey(const ValueKey('sales-price-0')),'9800');

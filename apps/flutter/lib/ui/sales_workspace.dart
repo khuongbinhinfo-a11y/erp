@@ -1512,16 +1512,25 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         if(variants==null||
                             !variants.any((x)=>x['id']==entry.sellSkuId))sku,
                       ];
+                      // Every editor uses the same text metrics and underline box.
+                      // Keep mobile labels floating so the selected unit and quantity align.
+                      final lineStyle=Theme.of(ctx).textTheme.bodyLarge;
+                      InputDecoration lineDecoration(String label,{String? hint,
+                          TextStyle? hintStyle})=>InputDecoration(
+                        isDense:true,filled:false,labelText:narrow?label:null,
+                        floatingLabelBehavior:narrow?FloatingLabelBehavior.always:FloatingLabelBehavior.never,
+                        hintText:hint,hintStyle:hintStyle,
+                        constraints:BoxConstraints.tightFor(height:narrow?56:48),
+                        border:const UnderlineInputBorder(),enabledBorder:const UnderlineInputBorder(),
+                        disabledBorder:const UnderlineInputBorder(),focusedBorder:const UnderlineInputBorder(),
+                        contentPadding:const EdgeInsets.symmetric(horizontal:3,vertical:8));
                       final unitField=SizedBox(width:narrow?128:92,
                         child:DropdownButtonFormField<String>(
                           key:ValueKey('sales-unit-$i-${entry.sellSkuId}'),
                           initialValue:entry.sellSkuId,
                           focusNode:entry.unitFocus,isDense:true,isExpanded:true,
-                          menuMaxHeight:240,
-                          decoration:InputDecoration(
-                            isDense:true,filled:false,labelText:narrow?'ĐVT':null,
-                            border:const UnderlineInputBorder(),enabledBorder:const UnderlineInputBorder(),disabledBorder:const UnderlineInputBorder(),focusedBorder:const UnderlineInputBorder(),
-                            contentPadding:const EdgeInsets.symmetric(horizontal:3,vertical:4)),
+                          menuMaxHeight:240,style:lineStyle,
+                          decoration:lineDecoration('ĐVT'),
                           items:unitChoices.map((variant)=>DropdownMenuItem<String>(
                             value:variant['id'] as String,
                             child:Text((variant['unitCode']??'').toString(),
@@ -1570,11 +1579,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           keyboardType:const TextInputType.numberWithOptions(decimal:true),
                           inputFormatters:const [ErpGroupedNumberFormatter(maxIntegerDigits:9,maxFractionDigits:3)],
                           textInputAction:TextInputAction.next,
-                          textAlign:TextAlign.center,
-                          decoration:InputDecoration(
-                            isDense:true,filled:false,labelText:narrow?'Số lượng':null,
-                            border:const UnderlineInputBorder(),enabledBorder:const UnderlineInputBorder(),disabledBorder:const UnderlineInputBorder(),focusedBorder:const UnderlineInputBorder(),
-                            contentPadding:const EdgeInsets.symmetric(horizontal:4,vertical:8)),
+                          textAlign:TextAlign.center,style:lineStyle,
+                          textAlignVertical:TextAlignVertical.center,
+                          decoration:lineDecoration('Số lượng'),
                         ));
                       final unitPriceField=SizedBox(width:124,child:TextField(
                         key:ValueKey('sales-price-$i'),
@@ -1585,16 +1592,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         keyboardType:const TextInputType.numberWithOptions(decimal:true),
                         inputFormatters:const [ErpGroupedNumberFormatter(maxIntegerDigits:13,maxFractionDigits:4)],
                         onChanged:(v){entry.unitPrice.text=v;pricingChanged(ctx,refresh);},
-                        textAlign:TextAlign.right,
-                        decoration:InputDecoration(
-                          isDense:true,filled:false,
-                          hintText:price=='—'?'—':erpGroupedDecimalText(quote!['unitPrice']),
-                          hintStyle:const TextStyle(color:ErpTokens.ink,fontWeight:FontWeight.w600),
-                          labelText:narrow?'Đơn giá':null,
-                          floatingLabelBehavior:narrow?FloatingLabelBehavior.always:FloatingLabelBehavior.never,
-                          enabledBorder:const UnderlineInputBorder(),disabledBorder:const UnderlineInputBorder(),focusedBorder:const UnderlineInputBorder(),
-                          contentPadding:const EdgeInsets.symmetric(horizontal:3,vertical:8),
-                          border:const UnderlineInputBorder())));
+                        textAlign:TextAlign.right,style:lineStyle,
+                        textAlignVertical:TextAlignVertical.center,
+                        decoration:lineDecoration('Đơn giá',
+                          hint:price=='—'?'—':erpGroupedDecimalText(quote!['unitPrice']),
+                          hintStyle:const TextStyle(color:ErpTokens.ink,fontWeight:FontWeight.w600))));
                       Widget percentField(String title,TextEditingController controller,
                           String fieldKey)=>SizedBox(width:76,child:TextField(
                         key:ValueKey('sales-'+fieldKey+'-$i'),
@@ -1611,11 +1613,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           else entry.taxEdited=true;
                           pricingChanged(ctx,refresh);
                         },
-                        textAlign:TextAlign.right,
-                        decoration:InputDecoration(labelText:narrow?title:null,hintText:narrow?null:title,isDense:true,filled:false,
-                          enabledBorder:const UnderlineInputBorder(),disabledBorder:const UnderlineInputBorder(),focusedBorder:const UnderlineInputBorder(),
-                          border:const UnderlineInputBorder(),
-                          contentPadding:const EdgeInsets.symmetric(horizontal:2,vertical:8))));
+                        textAlign:TextAlign.right,style:lineStyle,
+                        textAlignVertical:TextAlignVertical.center,
+                        decoration:lineDecoration(title,hint:narrow?null:title)));
                       final discountField=percentField(entry.discountMode=='PERCENT'?'CK %':'CK ₫',entry.discountRate,'discount');
                       final taxField=percentField('Thuế %',entry.taxRate,'tax');
                       final modes=Wrap(spacing:4,runSpacing:2,alignment:WrapAlignment.end,children:[
