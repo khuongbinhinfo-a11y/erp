@@ -35,7 +35,7 @@ void main(){
     final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
       httpClient:MockClient((request)async{
         http.Response reply(Map<String,dynamic> body,[int status=200])=>
-          http.Response(jsonEncode(body),status);
+          http.Response(jsonEncode(body),status,headers:{'content-type':'application/json; charset=utf-8'});
         final path=request.url.path;
         if(path=='/v1/catalog/branches')return reply({'items':[{'id':branch,'name':'Chi nhánh chính','code':'MAIN'}]});
         if(path=='/v1/catalog/customers')return reply({'items':[{'id':customer,'name':'Khách A','code':'KH01','active':true}]});
