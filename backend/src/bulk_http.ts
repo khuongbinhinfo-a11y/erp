@@ -61,6 +61,8 @@ function resource(v:unknown):BulkResource{
 }
 async function exportRows(db:PoolClient,tenant:string,branch:string,kind:BulkResource,priceListId?:string){
  const fields=priceListId&&kind==="prices"?["skuCode","name","unitCode","amount","discountRate","effectiveAt"]:bulkColumns(kind);
+ const taxonomyReady=kind==="products"&&(await db.query<{ready:boolean}>(
+  "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version='0020_catalog_hierarchy_locations.sql') AS ready")).rows[0]?.ready===true;
  let sql:string;
  switch(kind){
  case "customers":
@@ -75,12 +77,17 @@ async function exportRows(db:PoolClient,tenant:string,branch:string,kind:BulkRes
   break;
  case "products":
   sql='SELECT p.sku AS code,p.name,p.base_unit AS "baseUnit",g.code AS "groupCode",'+
+   (taxonomyReady?'b.code AS "brandCode",c.code AS "categoryCode",':
+     'NULL::text AS "brandCode",NULL::text AS "categoryCode",')+
    '(SELECT b.barcode FROM catalog_sku_barcode b JOIN catalog_sell_sku s '+
    'ON s.installation_id=b.installation_id AND s.branch_id=b.branch_id AND s.id=b.sell_sku_id '+
    'WHERE s.installation_id=p.installation_id AND s.branch_id=p.branch_id '+
    'AND s.product_id=p.id AND s.is_base AND b.active ORDER BY b.is_primary DESC,b.barcode LIMIT 1) '+
    'AS barcode,p.active FROM catalog_product p LEFT JOIN catalog_product_group g ON '+
    'g.installation_id=p.installation_id AND g.branch_id=p.branch_id AND g.id=p.group_id '+
+   (taxonomyReady?
+    'LEFT JOIN catalog_brand b ON b.installation_id=g.installation_id AND b.branch_id=g.branch_id AND b.id=g.brand_id '+
+    'LEFT JOIN catalog_product_category c ON c.installation_id=p.installation_id AND c.branch_id=p.branch_id AND c.id=p.category_id ': '')+
    'WHERE p.installation_id=$1 AND p.branch_id=$2 ORDER BY p.sku LIMIT 5001';
   break;
  case "skus":
