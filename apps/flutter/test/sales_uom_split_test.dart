@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -18,6 +19,7 @@ void main(){
 
   testWidgets('T1 split keeps original qty, resets price and switches exact UOM', (tester)async{
     final quotedSkuPairs=<List<String>>[];
+    final pendingLastPurchase=Completer<http.Response>();
     final rights=[
       IdentityGrant(roleId:'a',permission:'orders.read',branchId:branch),
       IdentityGrant(roleId:'b',permission:'orders.create',branchId:branch),
@@ -51,6 +53,10 @@ void main(){
           {'id':list,'code':'SELL','name':'Giá bán','active':true}]},200);
         if(path=='/v1/catalog/r1/channels')return reply({'items':[]},200);
         if(path=='/v1/sales/orders'&&req.method=='GET')return reply({'items':[]},200);
+        if(path=='/v1/sales/last-purchase'){
+          expect(req.url.queryParameters['sellSkuId'],base);
+          return pendingLastPurchase.future;
+        }
         if(path=='/v1/catalog/r1/resolve'){
           final body=jsonDecode(req.body) as Map<String,dynamic>;
           return reply({'quote':{'unitPrice':body['sellSkuId']==base?'9800':'90000',
@@ -108,12 +114,25 @@ void main(){
     expect(find.byKey(const ValueKey('sales-unit-1-$base')),findsOneWidget);
     await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:150)));
     await tester.pumpAndSettle();
+    // Simulate a slow previous-purchase response for the old per-piece SKU.
+    await tester.ensureVisible(find.byKey(const ValueKey('sales-last-price-1')));
+    await tester.tap(find.byKey(const ValueKey('sales-last-price-1')));
+    await tester.pump();
     await tester.ensureVisible(find.byKey(const ValueKey('sales-unit-1-$base')));
     await tester.tap(find.byKey(const ValueKey('sales-unit-1-$base')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('thùng').last);
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('sales-unit-1-$carton')),findsOneWidget);
+    pendingLastPurchase.complete(reply({'price':{
+      'unitPrice':'1','discountRate':'20','taxRate':'5',
+    }},200));
+    await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:50)));
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(find.byKey(const ValueKey('sales-price-1')))
+      .controller!.text,isEmpty,reason:'Old UOM price must never override carton price');
+    expect(tester.widget<TextField>(find.byKey(const ValueKey('sales-discount-1')))
+      .controller!.text,'0');
     await tester.pump(const Duration(milliseconds:400));
     await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:150)));
     await tester.pumpAndSettle();
