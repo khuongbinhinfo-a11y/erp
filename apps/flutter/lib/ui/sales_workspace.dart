@@ -822,11 +822,17 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         SizedBox(width:narrow?((width-40)/2).clamp(108.0,240.0).toDouble():240,child:DropdownButtonFormField<String>(
                         key:ValueKey('sales-price-list-'+list.toString()),
                         initialValue:lists.any((x)=>x['id']==list)?list:null,
-                        isExpanded:true,menuMaxHeight:240,decoration:const InputDecoration(labelText:'Bảng giá',isDense:true,contentPadding:EdgeInsets.symmetric(horizontal:10,vertical:8),border:UnderlineInputBorder()),
-                        items:lists.map((x)=>DropdownMenuItem<String>(
-                          value:x['id'] as String,
-                          child:Text((x['name']??'').toString(),overflow:TextOverflow.ellipsis))).toList(),
-                        onChanged:(v){listResolveGeneration++;listManuallySelected=true;
+                        isExpanded:true,menuMaxHeight:240,decoration:InputDecoration(labelText:listManuallySelected?'Bảng giá · Chọn tay':'Bảng giá · Tự động',isDense:true,contentPadding:const EdgeInsets.symmetric(horizontal:10,vertical:8),border:const UnderlineInputBorder()),
+                        hint:const Text('Theo khách hàng',overflow:TextOverflow.ellipsis),
+                        items:[
+                          const DropdownMenuItem<String>(value:null,child:Text('Tự động theo khách')),
+                          ...lists.map((x)=>DropdownMenuItem<String>(
+                            value:x['id'] as String,
+                            child:Text((x['name']??'').toString(),overflow:TextOverflow.ellipsis))),
+                        ],
+                        onChanged:(v){
+                          if(v==null){customerPricingChanged(ctx,refresh);return;}
+                          listResolveGeneration++;listManuallySelected=true;
                           list=v;pricingChanged(ctx,refresh);})),
                         SizedBox(width:narrow?((width-40)/2).clamp(108.0,240.0).toDouble():200,child:DropdownButtonFormField<String>(
                         key:ValueKey('sales-channel-'+channel.toString()),
