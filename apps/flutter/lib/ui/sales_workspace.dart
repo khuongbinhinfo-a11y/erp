@@ -2214,6 +2214,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     if(saving||body==null||key==null||!can('orders.create'))return;
     final recoveredAttempt=pendingNeedsReceipt;
     var serverMayHaveSeenCommand=recoveredAttempt;
+    Future<String> cartDisposition()async{
+      if(scope==null||pendingCreateCartId==null||pendingCreateCartOwner==null)return 'unknown';
+      return widget.client.localStore!.cartCreateDisposition(scope,pendingCreateCartId!,
+        owner:pendingCreateCartOwner!,commandKey:key);
+    }
     setState(()=>saving=true);
     try{
       // Always reconcile a lost acknowledgment before consulting mutable local
@@ -2225,6 +2230,24 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       if(recovered!=null){
         created=recovered;
       }else{
+        if(recoveredAttempt&&scope!=null&&pendingCreateCartId!=null){
+          final status=await cartDisposition();
+          if(status=='rejected'){
+            // Another tab already received a definite PRICE_STALE/validation
+            // rejection. Do not recreate the old recovery command.
+            try{await _persistPending(scope,null,null,null,previousKey:key);}catch(_){}
+            if(_sameScope(token,body['branchId'] as String)){
+              setState((){
+                pendingCreate=null;pendingCreateKey=null;pendingCreateAutoConfirm=false;
+                pendingCreateCartId=null;pendingCreateCartOwner=null;
+                localRecoveryBlocked=false;
+              });
+              inform('Đơn đã bị máy chủ từ chối. Giỏ được giữ để mở sửa và tra giá lại.',error:true);
+            }
+            return;
+          }
+          if(status!='submitted')throw const LocalRecoveryConflict();
+        }
         if(scope!=null&&pendingCreateCartId!=null&&pendingCreateCartOwner==null){
           throw const LocalRecoveryConflict();
         }
@@ -2284,16 +2307,21 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       if(!auto)inform('Đã lưu đơn hàng.');
       await reload();
     }on LocalRecoveryConflict catch(_){
-      if(!serverMayHaveSeenCommand){
-        // No mutation has reached the server; do not strand our own slot when
-        // a cart owner lease was taken over before the send.
+      // Terminal rejection is durable even if another tab already released
+      // and reopened the cart. Remove only this command's stranded slot.
+      String status='unknown';
+      try{status=await cartDisposition();}catch(_){}
+      if(!serverMayHaveSeenCommand||status=='rejected'){
         try{await _persistPending(scope,null,null,null,previousKey:key);}catch(_){}
       }
       if(_sameScope(token,body['branchId'] as String))setState((){
         pendingCreate=null;pendingCreateKey=null;pendingCreateAutoConfirm=false;
-        pendingCreateCartId=null;pendingCreateCartOwner=null;localRecoveryBlocked=true;
+        pendingCreateCartId=null;pendingCreateCartOwner=null;
+        localRecoveryBlocked=status!='rejected';
       });
-      inform('Yêu cầu đang chờ ở cửa sổ khác. Không gửi trùng.',error:true);
+      inform(status=='rejected'
+        ?'Đơn đã bị từ chối. Mở lại giỏ để kiểm tra giá và nhập lại.'
+        :'Yêu cầu đang chờ ở cửa sổ khác. Không gửi trùng.',error:true);
     }on ErpApiError catch(e){
       // Only explicit validation failures prove that the request was rolled back.
       // Unknown 409, timeout, 502/503/504 and transport errors stay replayable.
@@ -2308,11 +2336,14 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         e.code=='CUSTOMER_UNAVAILABLE'||e.code=='INVALID_LINE_IDENTITY';
       if(rejected&&_sameScope(token,body['branchId'] as String)){
         try{
-          await _persistPending(scope,null,null,null,previousKey:key);
           if(scope!=null&&pendingCreateCartId!=null&&pendingCreateCartOwner!=null){
-            await widget.client.localStore!.releaseRejectedCart(scope,pendingCreateCartId!,owner:pendingCreateCartOwner!,commandKey:key);
+            // Persist terminal rejection FIRST; a second tab may be restoring
+            // the same command while the recovery slot is still occupied.
+            await widget.client.localStore!.releaseRejectedCart(scope,pendingCreateCartId!,
+              owner:pendingCreateCartOwner!,commandKey:key);
           }
-        }catch(_){inform('Chưa giải phóng được giỏ đã bị từ chối.',error:true);return;}
+          await _persistPending(scope,null,null,null,previousKey:key);
+        }catch(_){inform('Chưa ghi xong kết quả đơn bị từ chối trên máy.',error:true);return;}
         if(!_sameScope(token,body['branchId'] as String))return;
         setState((){
           pendingCreate=null;pendingCreateKey=null;pendingCreateAutoConfirm=false;pendingCreateCartId=null;pendingCreateCartOwner=null;
