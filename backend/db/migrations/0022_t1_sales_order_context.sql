@@ -120,7 +120,7 @@ DECLARE chosen uuid;
 BEGIN
  SELECT warehouse_id INTO chosen FROM sales_order_version_context
  WHERE installation_id=NEW.installation_id AND branch_id=NEW.branch_id
-   AND order_id=NEW.order_id AND version_no=NEW.order_version;
+   AND order_id=NEW.order_id AND version_no=NEW.version_no;
  IF chosen IS NOT NULL AND chosen<>NEW.warehouse_id THEN
    RAISE EXCEPTION 'Reservation warehouse differs from sales version' USING ERRCODE='23514';
  END IF;
