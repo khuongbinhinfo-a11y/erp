@@ -482,17 +482,30 @@ export function checkCreate(resource:Resource,raw:Record<string,unknown>){
     }
     return {branchId,code,name};
   }
+  if(resource==="groups"){
+    if(Object.keys(raw).some(k=>!["branchId","code","name","brandId"].includes(k)))
+      throw new CatalogError(400,"UNKNOWN_FIELD");
+    const brandId=raw.brandId==null?null:requireUuid(raw.brandId);
+    return {branchId,code,name,brandId};
+  }
+  if(resource==="categories"){
+    if(Object.keys(raw).some(k=>!["branchId","code","name","groupId","parentId"].includes(k)))
+      throw new CatalogError(400,"UNKNOWN_FIELD");
+    return {branchId,code,name,groupId:requireUuid(raw.groupId),
+      parentId:raw.parentId==null?null:requireUuid(raw.parentId)};
+  }
   if(resource==="unit-definitions"){
     if(Object.keys(raw).some(k=>!["branchId","code","name"].includes(k)))
       throw new CatalogError(400,"UNKNOWN_FIELD");
     return {branchId,code,name};
   }
   if(resource==="products"){
-    if(Object.keys(raw).some(x=>!["branchId","code","name","baseUnit","groupId","barcode","units"].includes(x)))
+    if(Object.keys(raw).some(x=>!["branchId","code","name","baseUnit","groupId","categoryId","barcode","units"].includes(x)))
       throw new CatalogError(400,"UNKNOWN_FIELD");
     const baseUnit=requireName(raw.baseUnit,24);
     const barcode=optionalBarcode(raw.barcode);
     const groupId=raw.groupId==null?null:requireUuid(raw.groupId);
+    const categoryId=raw.categoryId==null?null:requireUuid(raw.categoryId);
     const units=raw.units??[];
     if(!Array.isArray(units)||units.length>12)throw new CatalogError(400,"INVALID_UNITS");
     const names=new Set<string>([baseUnit.toUpperCase()]);
@@ -517,7 +530,7 @@ export function checkCreate(resource:Resource,raw:Record<string,unknown>){
       if(unitBarcode)barcodes.add(unitBarcode.toUpperCase());
       conversions.push({unitCode,toBase,sku,barcode:unitBarcode});
     }
-    return {branchId,code,name,baseUnit,groupId,barcode,units:conversions};
+    return {branchId,code,name,baseUnit,groupId,categoryId,barcode,units:conversions};
   }
   if(resource==="customers"){
     if(Object.keys(raw).some(k=>!["branchId","code","name","customerGroupId","customerRegionId","phone","deliveryAddress","paymentTermsDays"].includes(k)))
@@ -586,6 +599,38 @@ export async function executeCreate(db:PoolClient,context:MutationContext,
       effectiveTo:value.effectiveTo,priority:value.priority,
       stackingMode:value.stackingMode,stopProcessing:value.stopProcessing}};
   }
+  if(resource==="groups"){
+    if(!("brandId" in value))throw new CatalogError(400,"INVALID_GROUP");
+    const hierarchy=await hasCatalogHierarchySchema(db);
+    if(value.brandId){
+      if(!hierarchy)throw new CatalogError(503,"CATALOG_HIERARCHY_MIGRATION_REQUIRED");
+      const brand=await db.query<{active:boolean}>(`SELECT active FROM catalog_brand
+        WHERE installation_id=$1 AND branch_id=$2 AND id=$3 FOR SHARE`,
+        [installationId,branchId,value.brandId]);
+      if(brand.rows[0]?.active!==true)throw new CatalogError(400,"BRAND_UNAVAILABLE");
+    }
+    const result=await db.query<{id:string}>(
+      hierarchy?
+        `INSERT INTO catalog_product_group(installation_id,branch_id,code,name,brand_id)
+          VALUES($1,$2,$3,$4,$5) RETURNING id`:
+        `INSERT INTO catalog_product_group(installation_id,branch_id,code,name)
+          VALUES($1,$2,$3,$4) RETURNING id`,
+      hierarchy?[installationId,branchId,value.code,value.name,value.brandId]:
+        [installationId,branchId,value.code,value.name]);
+    return {status:201,body:{id:result.rows[0]!.id,code:value.code,name:value.name,revision:0}};
+  }
+  if(resource==="categories"){
+    if(!("parentId" in value&&"groupId" in value))throw new CatalogError(400,"INVALID_CATEGORY");
+    if(!await hasCatalogHierarchySchema(db))
+      throw new CatalogError(503,"CATALOG_HIERARCHY_MIGRATION_REQUIRED");
+    await activeDirectoryCode(db,"catalog_product_group",installationId,branchId,value.groupId);
+    await activeCategory(db,installationId,branchId,value.parentId,value.groupId);
+    const result=await db.query<{id:string}>(`INSERT INTO catalog_product_category
+      (installation_id,branch_id,code,name,group_id,parent_id)
+      VALUES($1,$2,$3,$4,$5,$6) RETURNING id`,
+      [installationId,branchId,value.code,value.name,value.groupId,value.parentId]);
+    return {status:201,body:{id:result.rows[0]!.id,code:value.code,name:value.name,revision:0}};
+  }
   if(resource==="products"){
     if(!("baseUnit" in value))throw new CatalogError(400,"INVALID_PRODUCT");
     // Preserve older catalog clients while maintaining the new shared
@@ -604,12 +649,21 @@ export async function executeCreate(db:PoolClient,context:MutationContext,
           throw new CatalogError(400,"UNIT_DISABLED");
       }
     }
+    const hierarchy=await hasCatalogHierarchySchema(db);
+    if(value.categoryId&&!hierarchy)
+      throw new CatalogError(503,"CATALOG_HIERARCHY_MIGRATION_REQUIRED");
+    if(value.categoryId)await activeCategory(db,installationId,branchId,
+      value.categoryId,value.groupId);
     if(value.groupId!==null)
       await activeDirectoryCode(db,"catalog_product_group",installationId,branchId,value.groupId??null);
     const r=await db.query<{id:string}>(
-      `INSERT INTO catalog_product(installation_id,branch_id,sku,name,group_id,base_unit)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-      [installationId,branchId,value.code,value.name,value.groupId,value.baseUnit]);
+      hierarchy?
+        `INSERT INTO catalog_product(installation_id,branch_id,sku,name,group_id,base_unit,category_id)
+          VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`:
+        `INSERT INTO catalog_product(installation_id,branch_id,sku,name,group_id,base_unit)
+          VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+      [installationId,branchId,value.code,value.name,value.groupId,value.baseUnit,
+        ...(hierarchy?[value.categoryId]:[])]);
     const id=r.rows[0]!.id;
     await db.query(`INSERT INTO catalog_unit
       (installation_id,branch_id,product_id,unit_code,to_base) VALUES ($1,$2,$3,$4,1)`,
@@ -648,7 +702,7 @@ export async function executeCreate(db:PoolClient,context:MutationContext,
       }
     }
     return {status:201,body:{id,code:value.code,name:value.name,
-      baseUnit:value.baseUnit,groupId:value.groupId,revision:0,variants}};
+      baseUnit:value.baseUnit,groupId:value.groupId,categoryId:value.categoryId,revision:0,variants}};
   }
   if(!("code" in value))throw new CatalogError(400,"INVALID_RESOURCE");
   const table=tableFor[resource];
