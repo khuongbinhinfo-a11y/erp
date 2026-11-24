@@ -2357,7 +2357,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     if(pendingUpdate!=null){await _resolvePendingUpdate();return;}
     final scope=_localScope,id=order['id'] as String,token=widget.session.token;
     var editSource=order;
-    String? supersededKey;
+    String? supersededKey,supersededOwner;
     if(scope!=null){
       List<Map<String,dynamic>> saved;
       try{saved=await widget.client.localStore!.unsentSalesUpdates(scope,id);}
@@ -2393,7 +2393,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         }catch(_){inform('Bản sửa trên máy không hợp lệ, không gửi lại.',error:true);return;}
         final lines=body['lines'] as List;
         final status=item['status'];
-        final canReconcile=status=='rejected';
+        final canReconcile=status=='rejected'||status=='reconciling';
         final decision=await showDialog<String>(context:context,builder:(ctx)=>AlertDialog(
           title:Text('Kiểm tra bản sửa · '+selected.split('-').skip(1).join('-')),
           content:SizedBox(width:520,height:350,
@@ -2403,7 +2403,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                 Text('Bảng giá: '+(body['priceListId']??'—').toString()),
                 Text('Ghi chú: '+(body['note']??'—').toString()),
                 Text('Trạng thái: '+(status=='rejected'?'Đã bị máy chủ từ chối':
-                  status=='unsent'?'Chưa gửi':'Chưa rõ kết quả, phải đối soát bản gốc')),
+                  status=='unsent'?'Chưa gửi':status=='reconciling'?'Đang sửa ở cửa sổ khác':'Chưa rõ kết quả, phải đối soát bản gốc')),
                 const SizedBox(height:10),
                 for(var index=0;index<lines.length;index++)...[
                   Text('Dòng '+(index+1).toString()+' · SKU '+((lines[index] as Map)['sellSkuId']??'').toString(),
@@ -2419,7 +2419,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
             ))),
           actions:[
             TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Đóng')),
-            if(canReconcile)TextButton(onPressed:()=>Navigator.pop(ctx,'discard'),
+            if(status=='rejected')TextButton(onPressed:()=>Navigator.pop(ctx,'discard'),
               child:const Text('Bỏ bản sửa')),
             if(canReconcile)OutlinedButton(onPressed:()=>Navigator.pop(ctx,'reconcile'),
               child:const Text('Đối chiếu và sửa')),
@@ -2449,27 +2449,53 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           await _resolvePendingUpdate();return;
         }
         if(decision!='reconcile'||!canReconcile)return;
+        final claimId=newKey();
+        try{
+          await widget.client.localStore!.claimRejectedSalesUpdate(scope,id,selected,claimId);
+        }catch(_){
+          inform('Bản sửa đang được xử lý ở cửa sổ khác. Không được tự gửi lại.',error:true);
+          return;
+        }
         try{
           final latest=await widget.client.salesOrder(token,id,scope.branch);
-          if(!_sameScope(token,scope.branch))return;
+          if(!_sameScope(token,scope.branch)){
+            try{await widget.client.localStore!.releaseRejectedSalesClaim(scope,id,selected,claimId);}catch(_){}
+            return;
+          }
           editSource=erpSalesReconciliationOrder(latest,cmd);
           supersededKey=selected;
+          supersededOwner=claimId;
           inform('Đang đối chiếu bản sửa với đơn mới nhất. Giá phải tra lại trên máy chủ.');
-        }catch(_){inform('Chưa tải được đơn mới nhất để đối chiếu. Bản sửa được giữ nguyên.',error:true);return;}
+        }catch(_){
+          try{await widget.client.localStore!.releaseRejectedSalesClaim(scope,id,selected,claimId);}catch(_){}
+          inform('Chưa tải được đơn mới nhất để đối chiếu. Bản sửa được giữ nguyên.',error:true);return;
+        }
       }
     }
     final form=await editForm(order:editSource);
-    if(form==null||!mounted||widget.session.token!=token)return;
+    if(form==null||!mounted||widget.session.token!=token){
+      if(scope!=null&&supersededKey!=null&&supersededOwner!=null){
+        try{await widget.client.localStore!.releaseRejectedSalesClaim(scope,id,supersededKey!,supersededOwner!);}catch(_){}
+      }
+      return;
+    }
     final auto=form.remove('_confirmAfterSave')==true;
     final command=<String,dynamic>{'id':id,'revision':editSource['revision'],
       'body':Map<String,dynamic>.from(form),'auto':auto};
     final key=newKey();
     if(scope!=null){
       try{
-        await widget.client.localStore!.saveUnsentSalesUpdate(scope,id,key,command);
-        if(supersededKey!=null)await widget.client.localStore!.clearUnsentSalesUpdate(scope,id,supersededKey,requiredStatus:'rejected');
+        if(supersededKey!=null&&supersededOwner!=null){
+          await widget.client.localStore!.replaceReconciledSalesUpdate(
+            scope,id,supersededKey,supersededOwner,key,command);
+        }else{
+          await widget.client.localStore!.saveUnsentSalesUpdate(scope,id,key,command);
+        }
       }catch(_){
-        inform('Bản sửa chưa lưu an toàn. Không gửi yêu cầu.',error:true);
+        // An expired claim may have been taken by another tab. Preserve the
+        // operator's entered new quote separately; never send it automatically.
+        try{await widget.client.localStore!.saveUnsentSalesUpdate(scope,id,key,command);}catch(_){}
+        inform('Bản sửa mới chưa được đối chiếu an toàn. Đã giữ bản gốc; không gửi yêu cầu.',error:true);
         return;
       }
     }
