@@ -218,6 +218,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     final phone=TextEditingController(),deliveryAddress=TextEditingController();
     final paymentTerms=TextEditingController(text:'0');
     final listPriority=TextEditingController(text:'0');
+    String listStacking='EXCLUSIVE';bool listStop=false;
     DateTime? listStart,listEnd;
     final selectedChannels=<String>{},selectedGroups=<String>{},selectedCustomers=<String>{};
     bool assignDefault=false,priceScopesLoaded=false;
@@ -410,6 +411,23 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                     onChanged:(_)=>refresh((){}),
                     decoration:const InputDecoration(labelText:'Mức ưu tiên bảng giá',
                       helperText:'Số lớn được ưu tiên trong cùng phạm vi')),
+                  const SizedBox(height:8),
+                  DropdownButtonFormField<String>(
+                    key:const ValueKey('price-create-stacking'),
+                    initialValue:listStacking,isExpanded:true,
+                    decoration:const InputDecoration(labelText:'Cách kết hợp giá'),
+                    items:const [
+                      DropdownMenuItem(value:'EXCLUSIVE',
+                        child:Text('Độc lập: dùng mức giá này')),
+                      DropdownMenuItem(value:'STACKABLE',
+                        child:Text('Cộng dồn chính sách phù hợp')),
+                    ],
+                    onChanged:(v){if(v!=null)refresh(()=>listStacking=v);}),
+                  SwitchListTile(
+                    key:const ValueKey('price-create-stop'),
+                    contentPadding:EdgeInsets.zero,
+                    title:const Text('Ngừng xét bảng giá tiếp theo'),
+                    value:listStop,onChanged:(v)=>refresh(()=>listStop=v)),
                   const SizedBox(height:8),
                   Wrap(spacing:8,runSpacing:6,children:[
                     OutlinedButton.icon(
@@ -911,6 +929,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                       'effectiveFrom':listStart?.toIso8601String(),
                       'effectiveTo':_priceListEndExclusive(listEnd)?.toIso8601String(),
                       'priority':int.parse(listPriority.text.trim()),
+                      'stackingMode':listStacking,'stopProcessing':listStop,
                       if(priceScopesLoaded)...{
                         'channelIds':selectedChannels.toList(),
                         'customerGroupIds':selectedGroups.toList(),
@@ -1254,6 +1273,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     var deliveryAddress=(row['deliveryAddress']??'').toString();
     var paymentTermsDays=(row['paymentTermsDays']??0).toString();
     var listPriority=(row['priority']??0).toString();
+    var listStacking=(row['stackingMode']??'EXCLUSIVE').toString();
+    bool listStop=row['stopProcessing']==true;
     bool assignDefault=false,priceScopesLoaded=false;
     final selectedChannels=<String>{},selectedGroups=<String>{},selectedCustomers=<String>{};
     List<Map<String,dynamic>> priceChannels=[],priceGroups=[],priceCustomers=[];
@@ -1344,6 +1365,23 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                       keyboardType:TextInputType.number,
                       decoration:const InputDecoration(labelText:'Ưu tiên bảng giá'),
                       onChanged:(v)=>refresh(()=>listPriority=v)),
+                    const SizedBox(height:8),
+                    DropdownButtonFormField<String>(
+                      key:const ValueKey('price-edit-stacking'),
+                      initialValue:listStacking,isExpanded:true,
+                      decoration:const InputDecoration(labelText:'Cách kết hợp giá'),
+                      items:const [
+                        DropdownMenuItem(value:'EXCLUSIVE',
+                          child:Text('Độc lập: dùng mức giá này')),
+                        DropdownMenuItem(value:'STACKABLE',
+                          child:Text('Cộng dồn chính sách phù hợp')),
+                      ],
+                      onChanged:(v){if(v!=null)refresh(()=>listStacking=v);}),
+                    SwitchListTile(
+                      key:const ValueKey('price-edit-stop'),
+                      contentPadding:EdgeInsets.zero,
+                      title:const Text('Ngừng xét bảng giá tiếp theo'),
+                      value:listStop,onChanged:(v)=>refresh(()=>listStop=v)),
                     const SizedBox(height:8),
                     Wrap(spacing:8,runSpacing:6,children:[
                       OutlinedButton.icon(
@@ -1483,6 +1521,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                 'effectiveFrom':listStart?.toIso8601String(),
                 'effectiveTo':_priceListEndExclusive(listEnd)?.toIso8601String(),
                 'priority':int.parse(listPriority.trim()),
+                'stackingMode':listStacking,'stopProcessing':listStop,
                 if(priceScopesLoaded)...{
                   'channelIds':selectedChannels.toList(),
                   'customerGroupIds':selectedGroups.toList(),
