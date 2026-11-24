@@ -50,7 +50,7 @@ export async function clonePriceList(db:PoolClient,input:{
     `INSERT INTO catalog_price_entry
        (installation_id,branch_id,price_list_id,product_id,amount,discount_rate,effective_at)
      SELECT DISTINCT ON (e.product_id) e.installation_id,e.branch_id,$4::uuid,
-       e.product_id,e.amount,e.discount_rate,transaction_timestamp()
+       e.product_id,e.amount,e.discount_rate,e.effective_at
      FROM catalog_price_entry e
      JOIN catalog_product p ON p.installation_id=e.installation_id
        AND p.branch_id=e.branch_id AND p.id=e.product_id AND p.active
