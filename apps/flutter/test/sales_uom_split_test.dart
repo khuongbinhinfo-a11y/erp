@@ -22,6 +22,7 @@ void main(){
     ?'T1 split resets override and discards stale purchase price'
     :'T1 create-only actor splits same SKU without changing original quantity', (tester)async{
     final quotedSkuPairs=<List<String>>[];
+    final quotedRequests=<List<Map<String,dynamic>>>[];
     final pendingLastPurchase=Completer<http.Response>();
     final rights=[
       IdentityGrant(roleId:'a',permission:'orders.read',branchId:branch),
@@ -74,6 +75,7 @@ void main(){
           final body=jsonDecode(req.body) as Map<String,dynamic>;
           final lines=(body['lines'] as List<dynamic>)
             .map((v)=>Map<String,dynamic>.from(v as Map)).toList();
+          quotedRequests.add(lines);
           quotedSkuPairs.add(lines.map((v)=>v['sellSkuId'].toString()).toList());
           final prices=[for(final line in lines)
             line['sellSkuId']==base?'9800':'90000'];
@@ -118,7 +120,8 @@ void main(){
     expect(tester.widget<TextField>(find.byKey(const ValueKey('sales-qty-1')))
       .controller!.text,'1');
     expect(tester.widget<TextField>(find.byKey(const ValueKey('sales-price-1')))
-      .controller!.text,isEmpty);
+      .controller!.text,'9,800');
+    expect(quotedRequests.last[1]['unitPrice'],isNull,reason:'Displayed automatic price must not become an override');
     expect(tester.widget<TextField>(find.byKey(const ValueKey('sales-discount-1')))
       .controller!.text,'0');
     expect(find.byKey(const ValueKey('sales-unit-1-$base')),findsOneWidget);
