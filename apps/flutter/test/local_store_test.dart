@@ -52,6 +52,24 @@ void main(){
     await aTab.saveSalesRecovery(a,null,expectedKey:'confirm');
     expect(await bTab.salesRecovery(a),isNull);
   });
+  test('distinct tabs preserve multiple unsent order edits and selective clear',()async{
+    final shared=Memory(),firstTab=ErpLocalStore(shared),secondTab=ErpLocalStore(shared);
+    const orderId='00000000-0000-4000-8000-000000000005';
+    final first={'id':orderId,'body':{'branchId':'b','lines':[{'quantity':'1'}]}};
+    final second={'id':orderId,'body':{'branchId':'b','lines':[{'quantity':'2'}]}};
+    await Future.wait([
+      firstTab.saveUnsentSalesUpdate(a,orderId,'first',first),
+      secondTab.saveUnsentSalesUpdate(a,orderId,'second',second),
+    ]);
+    final snapshot=await firstTab.unsentSalesUpdates(a,orderId);
+    expect(snapshot.map((x)=>x['key']).toSet(),{'first','second'});
+    await expectLater(firstTab.saveUnsentSalesUpdate(a,orderId,'first',second),
+      throwsA(isA<LocalRecoveryConflict>()));
+    await firstTab.clearUnsentSalesUpdate(a,orderId,'first');
+    expect((await secondTab.unsentSalesUpdates(a,orderId)).single['key'],'second');
+    await secondTab.clearUnsentSalesUpdate(a,orderId,'second');
+    expect(await firstTab.unsentSalesUpdates(a,orderId),isEmpty);
+  });
   test('cache expiry is explicit, never proof of a current price',()async{
     final store=ErpLocalStore(Memory());
     final time=DateTime.utc(2026,11,24);

@@ -2244,16 +2244,85 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     }
   }
   Future<void> updateOrder(Map<String,dynamic> order)async{
-    // The previous create/confirm must reach a recoverable server outcome
-    // before another edit can replace any pending idempotency command.
-    if(saving||localRecoveryBusy||localRecoveryBlocked||pendingConfirm!=null||pendingCreate!=null)return;
+    if(saving||localRecoveryBusy||pendingConfirm!=null||pendingCreate!=null||!can('orders.update'))return;
     if(pendingUpdate!=null){await _resolvePendingUpdate();return;}
-    final form=await editForm(order:order);if(form==null||!mounted)return;
+    final scope=_localScope,id=order['id'] as String,token=widget.session.token;
+    if(scope!=null){
+      List<Map<String,dynamic>> saved;
+      try{saved=await widget.client.localStore!.unsentSalesUpdates(scope,id);}
+      catch(_){inform('Không đọc được bản sửa đơn đã lưu. Không tạo bản mới.',error:true);return;}
+      if(!_sameScope(token,scope.branch))return;
+      if(saved.isNotEmpty){
+        final choice=await showDialog<String>(context:context,builder:(ctx)=>AlertDialog(
+          title:const Text('Bản sửa đơn chưa gửi'),
+          content:ConstrainedBox(constraints:const BoxConstraints(maxWidth:460),
+            child:Column(mainAxisSize:MainAxisSize.min,children:[
+              const Text('Có thay đổi của đơn này đã lưu trên máy. Chọn bản sửa để đối chiếu với máy chủ.'),
+              const SizedBox(height:12),
+              for(final item in saved)
+                ListTile(
+                  title:Text('Sửa đơn · '+((item['key']??'').toString().length>12
+                    ?(item['key'] as String).substring(0,12):(item['key']??'').toString())),
+                  subtitle:Text('Số dòng: '+((item['command'] is Map&&
+                    (item['command'] as Map)['body'] is Map&&
+                    ((item['command'] as Map)['body'] as Map)['lines'] is List)
+                      ?(((item['command'] as Map)['body'] as Map)['lines'] as List).length.toString():'—')),
+                  onTap:()=>Navigator.pop(ctx,'retry:'+(item['key'] as String)),
+                  trailing:IconButton(
+                    tooltip:'Bỏ bản sửa này',
+                    onPressed:()=>Navigator.pop(ctx,'discard:'+(item['key'] as String)),
+                    icon:const Icon(Icons.delete_outline)),
+                ),
+            ])),
+          actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Đóng'))],
+        ));
+        if(!_sameScope(token,scope.branch)||choice==null)return;
+        final selected=choice.substring(choice.indexOf(':')+1);
+        final candidate=saved.where((x)=>x['key']==selected).firstOrNull;
+        if(candidate==null)return;
+        if(choice.startsWith('discard:')){
+          final accepted=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(
+            title:const Text('Bỏ bản sửa chưa gửi?'),
+            content:const Text('Chỉ xóa các thay đổi lưu trên máy, không hủy đơn trên máy chủ.'),
+            actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Giữ lại')),
+              FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Bỏ bản sửa'))]));
+          if(accepted==true&&_sameScope(token,scope.branch)){
+            try{await widget.client.localStore!.clearUnsentSalesUpdate(scope,id,selected);}
+            catch(_){inform('Không xóa được bản sửa trên máy.',error:true);}
+          }
+          return;
+        }
+        try{
+          final cmd=Map<String,dynamic>.from(candidate['command'] as Map);
+          if(cmd['id']!=id||cmd['body'] is! Map||
+            (cmd['body'] as Map)['branchId']!=scope.branch)throw const FormatException();
+          if(!mounted)return;
+          setState((){
+            pendingUpdate=cmd;pendingUpdateKey=selected;pendingNeedsReceipt=true;
+            localRecoveryBlocked=false;
+          });
+        }catch(_){inform('Bản sửa đã lưu không hợp lệ. Không gửi lại.',error:true);return;}
+        await _resolvePendingUpdate();
+        return;
+      }
+    }
+    final form=await editForm(order:order);
+    if(form==null||!mounted||widget.session.token!=token)return;
     final auto=form.remove('_confirmAfterSave')==true;
+    final command=<String,dynamic>{'id':id,'revision':order['revision'],
+      'body':Map<String,dynamic>.from(form),'auto':auto};
+    final key=newKey();
+    if(scope!=null){
+      try{await widget.client.localStore!.saveUnsentSalesUpdate(scope,id,key,command);}
+      catch(_){
+        inform('Không lưu được bản sửa đơn trên máy. Không gửi yêu cầu.',error:true);
+        return;
+      }
+    }
+    if(!_sameScope(token,order['branchId']?.toString()??branchId??''))return;
     setState((){
-      pendingUpdate={'id':order['id'],'revision':order['revision'],
-        'body':Map<String,dynamic>.from(form),'auto':auto};
-      pendingUpdateKey=newKey();pendingNeedsReceipt=false;
+      pendingUpdate=command;pendingUpdateKey=key;pendingNeedsReceipt=false;
+      localRecoveryBlocked=false;
     });
     await _resolvePendingUpdate();
   }
@@ -2277,6 +2346,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       final next=auto?<String,dynamic>{'id':id,'branchId':body['branchId'],'revision':updated['revision']}:null;
       final nextKey=auto?newKey():null;
       await _persistPending(scope,auto?'confirm':null,nextKey,next,previousKey:key);
+      if(scope!=null)await widget.client.localStore!.clearUnsentSalesUpdate(scope,id,key);
       if(!_sameScope(token,body['branchId'] as String))return;
       setState((){
         pendingUpdate=null;pendingUpdateKey=null;
@@ -2291,7 +2361,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       if(_sameScope(token,body['branchId'] as String))setState((){
         pendingUpdate=null;pendingUpdateKey=null;localRecoveryBlocked=true;
       });
-      inform('Yêu cầu ở cửa sổ khác đã thay đổi. Không gửi trùng.',error:true);
+      inform('Bản sửa chưa gửi đã được giữ riêng trên máy. Mở Sửa để gửi lại khi cửa sổ kia hoàn tất.',error:true);
     }on ErpApiError catch(e){
       final rejected={'PRICE_STALE','SKU_UNAVAILABLE','INVALID_QUANTITY',
         'DUPLICATE_PRODUCT','INVALID_LINES','VERSION_ALREADY_CONFIRMED',
@@ -2300,9 +2370,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         'CHANNEL_UNAVAILABLE','PRICE_LIST_UNAVAILABLE','CUSTOMER_UNAVAILABLE',
         'SKU_HAS_NO_EFFECTIVE_BASE_PRICE'}.contains(e.code);
       if(rejected&&_sameScope(token,body['branchId'] as String)){
-        try{await _persistPending(scope,null,null,null,previousKey:key);}catch(_){inform('Chưa xóa được yêu cầu đã từ chối trên máy.',error:true);return;}
+        try{await _persistPending(scope,null,null,null,previousKey:key);}
+        catch(_){inform('Chưa xóa được yêu cầu đã từ chối trên máy.',error:true);return;}
         if(!_sameScope(token,body['branchId'] as String))return;
-        setState((){pendingUpdate=null;pendingUpdateKey=null;});
+        // Retain the operator's edits for review/repricing rather than deleting them.
+        setState((){pendingUpdate=null;pendingUpdateKey=null;localRecoveryBlocked=true;});
         inform('Không thể cập nhật vì dữ liệu hoặc giá đã thay đổi. Hãy mở lại đơn và tra giá.',
           error:true);
         await reload();

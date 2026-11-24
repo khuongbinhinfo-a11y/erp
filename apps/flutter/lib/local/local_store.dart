@@ -70,6 +70,59 @@ class ErpLocalStore {
     final raw=await driver.read(_key(scope,'sales-recovery','current'));
     return raw==null?null:Map<String,dynamic>.from(jsonDecode(raw) as Map);
   }
+  /// Durable unsubmitted order edits, independent of the single active mutation.
+  /// A CAS-protected per-order array retains multiple tabs' different edits.
+  Future<List<Map<String,dynamic>>> unsentSalesUpdates(LocalScope scope,String orderId)async{
+    final raw=await driver.read(_key(scope,'unsent-update',orderId));
+    if(raw==null)return [];
+    try{
+      final decoded=jsonDecode(raw);
+      if(decoded is! List)throw const FormatException();
+      return decoded.map((x)=>Map<String,dynamic>.from(x as Map)).toList();
+    }catch(_){throw const LocalRecoveryConflict();}
+  }
+  Future<void> saveUnsentSalesUpdate(LocalScope scope,String orderId,String key,
+    Map<String,dynamic> command)async{
+    if(driver is! AtomicLocalDriver||key.isEmpty||orderId.isEmpty||command['id']!=orderId){
+      throw const LocalRecoveryConflict();
+    }
+    final location=_key(scope,'unsent-update',orderId);
+    final serialized=jsonEncode({'key':key,'command':command});
+    for(var attempt=0;attempt<16;attempt++){
+      final before=await driver.read(location);
+      List<Map<String,dynamic>> drafts;
+      if(before==null){drafts=[];}
+      else {
+        try{
+          final value=jsonDecode(before) as List;
+          drafts=value.map((x)=>Map<String,dynamic>.from(x as Map)).toList();
+        }catch(_){throw const LocalRecoveryConflict();}
+      }
+      final same=drafts.where((x)=>x['key']==key).toList();
+      if(same.isNotEmpty){
+        if(same.length!=1||jsonEncode(same.single)!=serialized)throw const LocalRecoveryConflict();
+        return;
+      }
+      if(drafts.length>=50)throw const LocalRecoveryConflict();
+      drafts.add({'key':key,'command':command});
+      if(await (driver as AtomicLocalDriver).compareAndSwap(location,before,jsonEncode(drafts)))return;
+    }
+    throw const LocalRecoveryConflict();
+  }
+  Future<void> clearUnsentSalesUpdate(LocalScope scope,String orderId,String key)async{
+    if(driver is! AtomicLocalDriver||key.isEmpty)throw const LocalRecoveryConflict();
+    final location=_key(scope,'unsent-update',orderId);
+    for(var attempt=0;attempt<16;attempt++){
+      final before=await driver.read(location);
+      if(before==null)return;
+      final drafts=await unsentSalesUpdates(scope,orderId);
+      final remaining=drafts.where((x)=>x['key']!=key).toList();
+      if(remaining.length==drafts.length)return;
+      if(await (driver as AtomicLocalDriver).compareAndSwap(location,before,
+        remaining.isEmpty?null:jsonEncode(remaining)))return;
+    }
+    throw const LocalRecoveryConflict();
+  }
   /// Durable command intent only; never a local receipt, stock or ledger post.
   Future<void> saveIntent(LocalScope scope,String id,Map<String,dynamic> body)async{
     final key=_key(scope,'intent',id);
