@@ -138,8 +138,8 @@ function requestMutation(req:IncomingMessage,id:string,actorId:string,tenant:str
   return {installationId:tenant,actorId,requestId:id,action,
     idempotencyKey:key,expectedRevision:parsed,payload};
 }
-type Resource="customers"|"customer-groups"|"customer-regions"|"suppliers"|"groups"|"products"|"price-lists"|"prices"|"warehouses"|"unit-definitions";
-const resources=new Set<Resource>(["customers","customer-groups","customer-regions","suppliers","groups","products","price-lists","prices","warehouses","unit-definitions"]);
+type Resource="customers"|"customer-groups"|"customer-regions"|"suppliers"|"brands"|"groups"|"categories"|"products"|"price-lists"|"prices"|"warehouses"|"unit-definitions";
+const resources=new Set<Resource>(["customers","customer-groups","customer-regions","suppliers","brands","groups","categories","products","price-lists","prices","warehouses","unit-definitions"]);
 function resourceOf(value:string):Resource{
   if(!resources.has(value as Resource))throw new CatalogError(404,"UNKNOWN_RESOURCE");
   return value as Resource;
@@ -168,7 +168,13 @@ const selections:Record<Resource,string>={
   "customer-groups":'SELECT id,code,name,active,revision::integer FROM catalog_customer_group',
   "customer-regions":'SELECT id,code,name,active,revision::integer FROM catalog_customer_region',
   "suppliers":'SELECT id,code,name,active,revision::integer FROM catalog_supplier',
+  "brands":'SELECT id,code,name,active,revision::integer FROM catalog_brand',
   "groups":'SELECT id,code,name,active,revision::integer FROM catalog_product_group',
+  "categories":`SELECT id,code,name,group_id AS "groupId",parent_id AS "parentId",
+    (SELECT p.code FROM catalog_product_category p WHERE
+      p.installation_id=catalog_product_category.installation_id AND
+      p.branch_id=catalog_product_category.branch_id AND p.id=catalog_product_category.parent_id)
+      AS "parentCode",active,revision::integer FROM catalog_product_category`,
   "unit-definitions":'SELECT id,code,name,active,revision::integer FROM catalog_unit_definition',
   "products":`SELECT id,sku AS code,name,base_unit AS "baseUnit",group_id AS "groupId",
     (SELECT g.name FROM catalog_product_group g WHERE
@@ -196,7 +202,9 @@ const tableFor:Record<Exclude<Resource,"warehouses"|"prices">,string>={
   "customer-groups":"catalog_customer_group",
   "customer-regions":"catalog_customer_region",
   "suppliers":"catalog_supplier",
+  "brands":"catalog_brand",
   "groups":"catalog_product_group",
+  "categories":"catalog_product_category",
   "unit-definitions":"catalog_unit_definition",
   "products":"catalog_product",
   "price-lists":"catalog_price_list",
@@ -256,6 +264,22 @@ async function activeDirectoryCode(db:PoolClient,table:"catalog_customer_group"|
   if(r.rows[0]?.active!==true)throw new CatalogError(400,"INVALID_OR_INACTIVE_DIRECTORY");
   return r.rows[0]!.code;
 }
+async function hasCatalogHierarchySchema(db:Pool|PoolClient):Promise<boolean>{
+  try{
+    const r=await db.query<{ok:boolean}>(
+      "SELECT EXISTS(SELECT 1 FROM public.schema_migrations WHERE version='0020_catalog_hierarchy_locations.sql') AS ok");
+    return r.rows[0]?.ok===true;
+  }catch{return false;}
+}
+async function activeCategory(db:PoolClient,installationId:string,branchId:string,
+  categoryId:string|null,groupId:string|null):Promise<void>{
+  if(categoryId===null)return;
+  if(!groupId)throw new CatalogError(400,"CATEGORY_REQUIRES_GROUP");
+  const found=await db.query<{active:boolean}>(`SELECT active
+    FROM catalog_product_category WHERE installation_id=$1 AND branch_id=$2
+    AND id=$3 AND group_id=$4 FOR SHARE`,[installationId,branchId,categoryId,groupId]);
+  if(found.rows[0]?.active!==true)throw new CatalogError(400,"INVALID_OR_INACTIVE_CATEGORY");
+}
 async function hasCatalogSchema(db:Pool):Promise<boolean>{
   try {
     const r=await db.query<{present:boolean}>(
@@ -294,11 +318,20 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
       [tenant,branchId,"%"+search+"%",afterCode]);
     return rows.rows;
   }
+  const taxonomyReady=await hasCatalogHierarchySchema(db);
+  if((resource==="brands"||resource==="categories")&&!taxonomyReady)
+    throw new CatalogError(503,"CATALOG_HIERARCHY_MIGRATION_REQUIRED");
   const values=[tenant,branchId,"%"+search+"%"];
   // Installations staged on catalog 0006/0007 must still list products
   // even before the separate R1 SKU/barcode migration 0009 is applied.
   const r1Ready=resource==="products"&&await hasR1CatalogSchema(db);
-  const productSelection=r1Ready?selections.products:
+  const productSelection=r1Ready?(
+    taxonomyReady?selections.products.replace(
+      'group_id AS "groupId",',
+      'group_id AS "groupId",category_id AS "categoryId",'+
+      '(SELECT c.name FROM catalog_product_category c WHERE c.installation_id=catalog_product.installation_id AND c.branch_id=catalog_product.branch_id AND c.id=catalog_product.category_id) AS "categoryName",'
+    ):selections.products
+  ):
     `SELECT id,sku AS code,name,base_unit AS "baseUnit",
       group_id AS "groupId",
       (SELECT g.name FROM catalog_product_group g WHERE
@@ -324,6 +357,9 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
       +'NULL::timestamptz AS "effectiveFrom",NULL::timestamptz AS "effectiveTo",'
       +"'EXCLUSIVE'::text AS \"stackingMode\",false AS \"stopProcessing\" "
       +'FROM catalog_price_list';
+  const groupSelection=taxonomyReady?
+    'SELECT g.id,g.code,g.name,g.brand_id AS "brandId",b.name AS "brandName",g.active,g.revision::integer FROM catalog_product_group g LEFT JOIN catalog_brand b ON b.installation_id=g.installation_id AND b.branch_id=g.branch_id AND b.id=g.brand_id':
+    selections.groups;
   const r=await db.query(
     resource==="prices"
       ?`SELECT e.id,e.price_list_id AS "priceListId",l.code AS "priceListCode",
@@ -338,10 +374,10 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
           WHERE e.installation_id=$1 AND e.branch_id=$2
             AND (p.sku ILIKE $3 OR p.name ILIKE $3 OR l.code ILIKE $3)
           ORDER BY e.effective_at DESC,e.id DESC LIMIT 100`
-      :`${resource==="products"?productSelection:resource==="customers"?customerSelection:resource==="price-lists"?listSelection:selections[resource]} WHERE installation_id=$1 AND branch_id=$2
-          AND (${resource==="products"?"sku":"code"} ILIKE $3 OR name ILIKE $3
+      :`${resource==="products"?productSelection:resource==="customers"?customerSelection:resource==="price-lists"?listSelection:resource==="groups"?groupSelection:selections[resource]} WHERE ${resource==="groups"&&taxonomyReady?"g.installation_id":"installation_id"}=$1 AND ${resource==="groups"&&taxonomyReady?"g.branch_id":"branch_id"}=$2
+          AND (${resource==="products"?"sku":resource==="groups"&&taxonomyReady?"g.code":"code"} ILIKE $3 OR ${resource==="groups"&&taxonomyReady?"g.name":"name"} ILIKE $3
           ${resource==="customers"?"OR phone ILIKE $3 OR customer_group ILIKE $3":""})
-          ORDER BY ${resource==="products"?"sku":"code"},id LIMIT 100`,
+          ORDER BY ${resource==="products"?"sku":resource==="groups"&&taxonomyReady?"g.code":"code"},${resource==="groups"&&taxonomyReady?"g.id":"id"} LIMIT 100`,
     values);
   return r.rows;
 }
@@ -960,6 +996,9 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
       send(res,outcome.status,outcome.body,requestId,corsOrigin);return;
     }
     const resource=resourceOf(url.pathname.slice("/v1/catalog/".length));
+    if((resource==="brands"||resource==="categories")&&
+       !await hasCatalogHierarchySchema(pool))
+      throw new CatalogError(503,"CATALOG_HIERARCHY_MIGRATION_REQUIRED");
     if((resource==="customer-groups"||resource==="customer-regions")&&
        !await hasCustomerDirectories(pool))
       throw new CatalogError(503,"CUSTOMER_DICTIONARY_MIGRATION_REQUIRED");
