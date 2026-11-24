@@ -1,11 +1,21 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
  BASE,RELEASE,checkVersions,checkOperator,checkPrimaryMainSha,
  assertP0PriceOrderState,canonicalRemote,parsePrismaCredential,
  requirePg17Client,BUCKET_S3_NAME,assertNotInterrupted,
  restoreContainerCleanupArgs
 } from "./p0-codespaces-migration.mjs";
+
+test("Compute deployment config declares the exact ERP Composer module",()=>{
+ const config=readFileSync(new URL("../deploy/prisma.config.ts",import.meta.url),"utf8");
+ const moduleText=readFileSync(new URL("../deploy/module.ts",import.meta.url),"utf8");
+ assert.ok(config.includes('entry: "./module.ts"'),
+   "Prisma Composer CLI needs an explicit module entry");
+ assert.ok(moduleText.includes('export default module("erp-backend"'),
+   "Composer entry must be the existing ERP backend module");
+});
 
 const sha="a".repeat(40);
 const origin="https://github.com/gustavjung24-ops/ERP.git";
