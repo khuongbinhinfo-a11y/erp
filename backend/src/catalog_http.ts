@@ -732,12 +732,12 @@ export async function executeCreate(db:PoolClient,context:MutationContext,
   return {status:201,body:{id:r.rows[0]!.id,code:value.code,name:value.name,revision:0}};
 }
 
-type Editable = "customers"|"customer-groups"|"customer-regions"|"suppliers"|"groups"|"products"|"price-lists"|"unit-definitions";
-const editable = new Set<Editable>(["customers","customer-groups","customer-regions","suppliers","groups","products","price-lists","unit-definitions"]);
+type Editable = "customers"|"customer-groups"|"customer-regions"|"suppliers"|"brands"|"groups"|"categories"|"products"|"price-lists"|"unit-definitions";
+const editable = new Set<Editable>(["customers","customer-groups","customer-regions","suppliers","brands","groups","categories","products","price-lists","unit-definitions"]);
 const editTables:Record<Editable,string>={
   "customers":"catalog_customer","suppliers":"catalog_supplier",
   "customer-groups":"catalog_customer_group","customer-regions":"catalog_customer_region",
-  "groups":"catalog_product_group","products":"catalog_product",
+  "brands":"catalog_brand","groups":"catalog_product_group","categories":"catalog_product_category","products":"catalog_product",
   "unit-definitions":"catalog_unit_definition",
   "price-lists":"catalog_price_list",
 };
@@ -746,7 +746,9 @@ export function parseEdit(resource:Editable,raw:Record<string,unknown>){
   const columns:Record<string,unknown>={};
   const allow=new Set(["branchId","name","active",
     ...(resource==="customers"?["customerGroupId","customerRegionId","phone","deliveryAddress","paymentTermsDays"]:[]),
-    ...(resource==="products"?["groupId"]:[]),
+    ...(resource==="products"?["groupId","categoryId"]:[]),
+    ...(resource==="groups"?["brandId"]:[]),
+    ...(resource==="categories"?["parentId"]:[]),
     ...(resource==="price-lists"?["effectiveFrom","effectiveTo","priority",
       "stackingMode","stopProcessing",...PRICE_SCOPE_KEYS]:[])]);
   if(Object.keys(raw).some(key=>!allow.has(key)))throw new CatalogError(400,"UNKNOWN_FIELD");
@@ -789,6 +791,12 @@ export function parseEdit(resource:Editable,raw:Record<string,unknown>){
   if(resource==="products"&&Object.prototype.hasOwnProperty.call(raw,"groupId")){
     columns.group_id=raw.groupId===null?null:requireUuid(raw.groupId);
   }
+  if(resource==="groups"&&Object.prototype.hasOwnProperty.call(raw,"brandId"))
+    columns.brand_id=raw.brandId===null?null:requireUuid(raw.brandId);
+  if(resource==="categories"&&Object.prototype.hasOwnProperty.call(raw,"parentId"))
+    columns.parent_id=raw.parentId===null?null:requireUuid(raw.parentId);
+  if(resource==="products"&&Object.prototype.hasOwnProperty.call(raw,"categoryId"))
+    columns.category_id=raw.categoryId===null?null:requireUuid(raw.categoryId);
   const scopes=resource==="price-lists"?priceScopes(raw):null;
   if(Object.keys(columns).length===0&&scopes===null)throw new CatalogError(400,"EMPTY_UPDATE");
   return {branchId,columns,scopes};
@@ -822,9 +830,47 @@ export async function applyEdit(db:PoolClient,context:MutationContext,
       await activeDirectoryCode(db,"catalog_customer_region",
         installationId,value.branchId,value.columns.customer_region_id as string|null);
   }
-  if(resource==="products"&&Object.prototype.hasOwnProperty.call(value.columns,"group_id"))
-    await activeDirectoryCode(db,"catalog_product_group",
-      installationId,value.branchId,value.columns.group_id as string|null);
+  if(resource==="products"){
+    if(Object.prototype.hasOwnProperty.call(value.columns,"group_id"))
+      await activeDirectoryCode(db,"catalog_product_group",
+        installationId,value.branchId,value.columns.group_id as string|null);
+    if(Object.prototype.hasOwnProperty.call(value.columns,"category_id")||
+       Object.prototype.hasOwnProperty.call(value.columns,"group_id")){
+      const hierarchy=await hasCatalogHierarchySchema(db);
+      if(!hierarchy&&Object.prototype.hasOwnProperty.call(value.columns,"category_id"))
+        throw new CatalogError(503,"CATALOG_HIERARCHY_MIGRATION_REQUIRED");
+      if(hierarchy){
+        const current=await db.query<{group_id:string|null;category_id:string|null}>(
+          'SELECT group_id,category_id FROM catalog_product WHERE installation_id=$1 AND branch_id=$2 AND id=$3',
+          [installationId,value.branchId,targetId]);
+        const category=Object.prototype.hasOwnProperty.call(value.columns,"category_id")?
+          value.columns.category_id as string|null:current.rows[0]?.category_id??null;
+        const group=Object.prototype.hasOwnProperty.call(value.columns,"group_id")?
+          value.columns.group_id as string|null:current.rows[0]?.group_id??null;
+        await activeCategory(db,installationId,value.branchId,category,group);
+      }
+    }
+  }
+  if(resource==="groups"&&Object.prototype.hasOwnProperty.call(value.columns,"brand_id")){
+    if(!await hasCatalogHierarchySchema(db))
+      throw new CatalogError(503,"CATALOG_HIERARCHY_MIGRATION_REQUIRED");
+    const brand=value.columns.brand_id as string|null;
+    if(brand){
+      const check=await db.query<{active:boolean}>(
+        'SELECT active FROM catalog_brand WHERE installation_id=$1 AND branch_id=$2 AND id=$3 FOR SHARE',
+        [installationId,value.branchId,brand]);
+      if(check.rows[0]?.active!==true)throw new CatalogError(400,"BRAND_UNAVAILABLE");
+    }
+  }
+  if(resource==="categories"&&Object.prototype.hasOwnProperty.call(value.columns,"parent_id")){
+    if(!await hasCatalogHierarchySchema(db))
+      throw new CatalogError(503,"CATALOG_HIERARCHY_MIGRATION_REQUIRED");
+    const existing=await db.query<{group_id:string}>(
+      'SELECT group_id FROM catalog_product_category WHERE installation_id=$1 AND branch_id=$2 AND id=$3',
+      [installationId,value.branchId,targetId]);
+    await activeCategory(db,installationId,value.branchId,
+      value.columns.parent_id as string|null,existing.rows[0]!.group_id);
+  }
   if(resource==="price-lists"&&value.scopes)
     await syncPriceScopes(db,installationId,value.branchId,targetId,value.scopes);
   const columnEntries=Object.entries(value.columns);
@@ -1030,13 +1076,15 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
       });
       send(res,outcome.status,outcome.body,requestId,corsOrigin);return;
     }
-    const updatePath=/^\/v1\/catalog\/(customers|customer-groups|customer-regions|suppliers|groups|products|price-lists|unit-definitions)\/([0-9a-f-]{36})$/.exec(url.pathname);
+    const updatePath=/^\/v1\/catalog\/(customers|customer-groups|customer-regions|suppliers|brands|groups|categories|products|price-lists|unit-definitions)\/([0-9a-f-]{36})$/.exec(url.pathname);
     if(updatePath&&req.method==="PATCH"){
       const resource=updatePath[1] as Editable;
       if(!editable.has(resource))throw new CatalogError(404,"UNKNOWN_RESOURCE");
       if((resource==="customers"||resource==="customer-groups"||
         resource==="customer-regions")&&!await hasCustomerDirectories(pool))
         throw new CatalogError(503,"CUSTOMER_DICTIONARY_MIGRATION_REQUIRED");
+      if((resource==="brands"||resource==="categories")&&!await hasCatalogHierarchySchema(pool))
+        throw new CatalogError(503,"CATALOG_HIERARCHY_MIGRATION_REQUIRED");
       const targetId=requireUuid(updatePath[2]);
       const input=parseEdit(resource,await payloadFrom(req));
       const payload={id:targetId,branchId:input.branchId,...input.columns};
