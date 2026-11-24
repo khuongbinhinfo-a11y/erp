@@ -2212,44 +2212,86 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   Future<void> _resolveCreate()async{
     final body=pendingCreate,key=pendingCreateKey,scope=_localScope,token=widget.session.token;
     if(saving||body==null||key==null||!can('orders.create'))return;
+    final recoveredAttempt=pendingNeedsReceipt;
+    var serverMayHaveSeenCommand=recoveredAttempt;
     setState(()=>saving=true);
     try{
-      await _persistPending(scope,'create',key,body,auto:pendingCreateAutoConfirm,cartId:pendingCreateCartId,cartOwner:pendingCreateCartOwner);
-      if(scope!=null&&pendingCreateCartId!=null&&pendingCreateCartOwner!=null){
-        await widget.client.localStore!.markCartSubmitting(scope,pendingCreateCartId!,owner:pendingCreateCartOwner!,commandKey:key);
-      }
-      if(!_sameScope(token,body['branchId'] as String))return;
-      // This exact body+key also recovers a lost acknowledgment after COMMIT.
-      final recovered=_localConfigured&&pendingNeedsReceipt
+      // Always reconcile a lost acknowledgment before consulting mutable local
+      // cart state. Another tab may have already retired the cart after ACK.
+      final recovered=_localConfigured&&recoveredAttempt
         ?await widget.client.salesRecovery(token,'create',body,key:key,revision:0):null;
       if(!_sameScope(token,body['branchId'] as String))return;
-      pendingNeedsReceipt=true;
-      final created=recovered??await widget.client.createSalesOrder(token,body,key:key);
+      Map<String,dynamic> created;
+      if(recovered!=null){
+        created=recovered;
+      }else{
+        if(scope!=null&&pendingCreateCartId!=null&&pendingCreateCartOwner==null){
+          throw const LocalRecoveryConflict();
+        }
+        await _persistPending(scope,'create',key,body,auto:pendingCreateAutoConfirm,
+          cartId:pendingCreateCartId,cartOwner:pendingCreateCartOwner);
+        if(scope!=null&&pendingCreateCartId!=null&&pendingCreateCartOwner!=null){
+          await widget.client.localStore!.markCartSubmitting(scope,pendingCreateCartId!,
+            owner:pendingCreateCartOwner!,commandKey:key);
+        }
+        if(!_sameScope(token,body['branchId'] as String))return;
+        serverMayHaveSeenCommand=true;
+        pendingNeedsReceipt=true;
+        created=await widget.client.createSalesOrder(token,body,key:key);
+      }
       if(!_sameScope(token,body['branchId'] as String))return;
       final auto=pendingCreateAutoConfirm;
-      final next=auto?<String,dynamic>{'id':created['id'],'branchId':body['branchId'],'revision':created['revision']}:null;
-      final nextKey=auto?newKey():null;
+      final next=auto?<String,dynamic>{
+        'id':created['id'],'branchId':body['branchId'],'revision':created['revision'],
+      }:null;
+      if(auto&&created['revision'] is! int)throw const LocalRecoveryConflict();
+      var nextKey=auto?newKey():null;
+      // A received ACK is final even when another PWA tab already cleared its
+      // local source slot. Reuse its pending confirm key, never generate two.
+      try{
+        await _persistPending(scope,auto?'confirm':null,nextKey,next,previousKey:key);
+      }on LocalRecoveryConflict{
+        final active=scope!=null?await widget.client.localStore!.salesRecovery(scope):null;
+        if(active==null){
+          if(auto)await _persistPending(scope,'confirm',nextKey,next);
+        }else if(auto&&active['kind']=='confirm'&&active['body'] is Map&&
+          (active['body'] as Map)['id']==created['id']&&
+          (active['body'] as Map)['revision']==created['revision']&&
+          active['key'] is String){
+          nextKey=active['key'] as String;
+        }else{
+          throw const LocalRecoveryConflict();
+        }
+      }
       if(scope!=null){
         if(pendingCreateCartId!=null&&pendingCreateCartOwner!=null){
-          try{await widget.client.localStore!.clearScopedCart(scope,pendingCreateCartId!,owner:pendingCreateCartOwner!,commandKey:key);}catch(_){ /* Server ACK is authoritative; another tab may have retired it. */ }
+          try{
+            await widget.client.localStore!.clearScopedCart(scope,pendingCreateCartId!,
+              owner:pendingCreateCartOwner!,commandKey:key);
+          }catch(_){ /* Receipt proves COMMIT; the other tab may have retired the cart. */ }
+        }else if(recoveredAttempt) {
+          // Never delete a different tab's new cart as part of a legacy ACK.
+        }else{
+          await widget.client.localStore!.clearCart(scope);
         }
-        else await widget.client.localStore!.clearCart(scope);
       }
-      await _persistPending(scope,auto?'confirm':null,nextKey,next,previousKey:key);
       if(!_sameScope(token,body['branchId'] as String))return;
       setState((){
-        pendingCreate=null;pendingCreateKey=null;pendingCreateAutoConfirm=false;pendingCreateCartId=null;pendingCreateCartOwner=null;
-        if(auto){
-          pendingConfirm=next;
-          pendingConfirmKey=nextKey;
-          pendingNeedsReceipt=false;
-        }
+        pendingCreate=null;pendingCreateKey=null;pendingCreateAutoConfirm=false;
+        pendingCreateCartId=null;pendingCreateCartOwner=null;
+        if(auto){pendingConfirm=next;pendingConfirmKey=nextKey;pendingNeedsReceipt=false;}
       });
       if(!auto)inform('Đã lưu đơn hàng.');
       await reload();
     }on LocalRecoveryConflict catch(_){
+      if(!serverMayHaveSeenCommand){
+        // No mutation has reached the server; do not strand our own slot when
+        // a cart owner lease was taken over before the send.
+        try{await _persistPending(scope,null,null,null,previousKey:key);}catch(_){}
+      }
       if(_sameScope(token,body['branchId'] as String))setState((){
-        pendingCreate=null;pendingCreateKey=null;pendingCreateAutoConfirm=false;pendingCreateCartId=null;pendingCreateCartOwner=null;localRecoveryBlocked=true;
+        pendingCreate=null;pendingCreateKey=null;pendingCreateAutoConfirm=false;
+        pendingCreateCartId=null;pendingCreateCartOwner=null;localRecoveryBlocked=true;
       });
       inform('Yêu cầu đang chờ ở cửa sổ khác. Không gửi trùng.',error:true);
     }on ErpApiError catch(e){
