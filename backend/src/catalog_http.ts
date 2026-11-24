@@ -339,8 +339,6 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
     return rows.rows;
   }
   const taxonomyReady=await hasCatalogHierarchySchema(db);
-  if((resource==="brands"||resource==="categories")&&!taxonomyReady)
-    throw new CatalogError(503,"CATALOG_HIERARCHY_MIGRATION_REQUIRED");
   const values=[tenant,branchId,"%"+search+"%"];
   // Installations staged on catalog 0006/0007 must still list products
   // even before the separate R1 SKU/barcode migration 0009 is applied.
@@ -377,17 +375,6 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
       +'NULL::timestamptz AS "effectiveFrom",NULL::timestamptz AS "effectiveTo",'
       +"'EXCLUSIVE'::text AS \"stackingMode\",false AS \"stopProcessing\" "
       +'FROM catalog_price_list';
-  const groupSelection=taxonomyReady?
-    'SELECT g.id,g.code,g.name,g.brand_id AS "brandId",b.name AS "brandName",g.active,g.revision::integer FROM catalog_product_group g LEFT JOIN catalog_brand b ON b.installation_id=g.installation_id AND b.branch_id=g.branch_id AND b.id=g.brand_id':
-    selections.groups;
-  if(exactId&&["groups","brands","categories"].includes(resource)){
-    const selection=resource==="groups"?groupSelection:selections[resource];
-    const prefix=resource==="groups"&&taxonomyReady?"g.":"";
-    const one=await db.query(`${selection} WHERE ${prefix}installation_id=$1
-      AND ${prefix}branch_id=$2 AND ${prefix}id=$3 LIMIT 1`,
-      [tenant,branchId,exactId]);
-    return one.rows;
-  }
   const r=await db.query(
     resource==="prices"
       ?`SELECT e.id,e.price_list_id AS "priceListId",l.code AS "priceListCode",
@@ -402,10 +389,11 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
           WHERE e.installation_id=$1 AND e.branch_id=$2
             AND (p.sku ILIKE $3 OR p.name ILIKE $3 OR l.code ILIKE $3)
           ORDER BY e.effective_at DESC,e.id DESC LIMIT 100`
-      :`${resource==="products"?productSelection:resource==="customers"?customerSelection:resource==="price-lists"?listSelection:resource==="groups"?groupSelection:selections[resource]} WHERE ${resource==="groups"&&taxonomyReady?"g.installation_id":"installation_id"}=$1 AND ${resource==="groups"&&taxonomyReady?"g.branch_id":"branch_id"}=$2
-          AND (${resource==="products"?"sku":resource==="groups"&&taxonomyReady?"g.code":"code"} ILIKE $3 OR ${resource==="groups"&&taxonomyReady?"g.name":"name"} ILIKE $3
+      :`${resource==="products"?productSelection:resource==="customers"?customerSelection:resource==="price-lists"?listSelection:selections[resource]}
+          WHERE installation_id=$1 AND branch_id=$2
+          AND (${resource==="products"?"sku":"code"} ILIKE $3 OR name ILIKE $3
           ${resource==="customers"?"OR phone ILIKE $3 OR customer_group ILIKE $3":""})
-          ORDER BY ${resource==="products"?"sku":resource==="groups"&&taxonomyReady?"g.code":"code"},${resource==="groups"&&taxonomyReady?"g.id":"id"} LIMIT 100`,
+          ORDER BY ${resource==="products"?"sku":"code"},id LIMIT 100`,
     values);
   return r.rows;
 }
