@@ -483,6 +483,11 @@ test("T0 populated 0020 -> 0021 preserves legacy reserve/read and owner grants",
    code:"t0-old",displayName:"T0 baseline upgrade",adminLogin:"owner",adminPassword:password,
   });
   const t=root.installationId,b=root.branchId,w=root.warehouseId;
+  // Emulate an installation bootstrapped with the old ERP permission catalog.
+  // This test uses the new bootstrap helper, whose owner grants already include
+  // inventory.policy.manage; that permission did not exist on the old release.
+  await pool.query("DELETE FROM role_permission WHERE installation_id=$1 AND permission_code=$2",
+   [t,"inventory.policy.manage"]);
   const pre=await pool.query<{role_id:string;permission_code:string}>(`
    SELECT role_id::text,permission_code FROM role_permission
    WHERE installation_id=$1 ORDER BY role_id,permission_code`,[t]);
