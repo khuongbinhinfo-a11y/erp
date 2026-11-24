@@ -5,6 +5,10 @@ import type { Pool, PoolClient } from "pg";
 import { resolveSession } from "./auth.ts";
 import type { IdentityOptions } from "./identity_http.ts";
 import { hasPermission } from "./rbac.ts";
+import { userAccess } from "./identity_admin.ts";
+import { OrderContextFault,parseOrderContext,type OrderContextInput,hasOrderContextSchema,
+  saveOrderContext,authorizeOrderContext,copyOrderContext,
+  lockContextWarehouses,readEntrySettings,ensureWalkInCustomer } from "./sales_order_context.ts";
 import { executeMutation, MutationFault, requireRevision, type MutationContext } from "./mutation.ts";
 import { validIdempotencyKey } from "./contracts.ts";
 
@@ -76,12 +80,13 @@ function bearer(req:IncomingMessage):string|null{
 type LineInput={productId?:string;sellSkuId?:string;quantity:string;expectedPriceSignature?:string;
  unitPrice?:string;discountRate?:string;taxRate?:string};
 type OrderInput={branchId:string;customerId:string;priceListId:string;
-  channelId?:string;note:string;lines:LineInput[]};
+  channelId?:string;note:string;lines:LineInput[];shipping?:OrderContextInput};
 function parseOrder(raw:Record<string,unknown>):OrderInput{
-  allowKeys(raw,["branchId","customerId","priceListId","channelId","note","lines"]);
+  allowKeys(raw,["branchId","customerId","priceListId","channelId","note","lines","shipping"]);
   const branchId=uuid(raw.branchId),customerId=uuid(raw.customerId),priceListId=uuid(raw.priceListId);
   const channelId=raw.channelId==null?undefined:uuid(raw.channelId);
   const note=requireText(raw.note??"",1000,true);
+  const shipping=parseOrderContext(raw.shipping);
   if(!Array.isArray(raw.lines)||raw.lines.length<1||raw.lines.length>30)
     throw new SalesError(400,"INVALID_LINES");
   const used=new Set<string>();
@@ -114,7 +119,7 @@ function parseOrder(raw:Record<string,unknown>):OrderInput{
   });
   if(channelId&&lines.some(line=>!line.sellSkuId))
     throw new SalesError(400,"CHANNEL_REQUIRES_SELL_SKU");
-  return {branchId,customerId,priceListId,...(channelId?{channelId}:{}),note,lines};
+  return {branchId,customerId,priceListId,...(channelId?{channelId}:{}),note,lines,...(shipping?{shipping}:{})};
 }
 type QuoteInput={branchId:string;customerId:string;priceListId:string;
   channelId?:string;lines:{sellSkuId:string;quantity:string;
@@ -333,6 +338,7 @@ async function create(db:PoolClient,ctx:MutationContext,input:OrderInput){
     (installation_id,branch_id,order_id,version_no,customer_code,customer_name,price_list_code,note,created_by)
     VALUES($1,$2,$3,1,$4,$5,$6,$7,$8)`,
     [t,b,id,refs.customer.code,refs.customer.name,refs.list.code,input.note,ctx.actorId]);
+  await saveOrderContext(db,ctx,b,id,1,input.customerId,input.shipping,true);
   await addLines(db,t,b,id,1,input.priceListId,input.customerId,input.channelId,input.lines,ctx.actorId);
   const total=await recalc(db,t,b,id,1);
   return {status:201,body:{id,branchId:b,status:"DRAFT",versionStatus:"DRAFT",
@@ -351,7 +357,9 @@ async function lockOrder(db:PoolClient,t:string,b:string,id:string):Promise<Lock
   return q.rows[0];
 }
 async function edit(db:PoolClient,ctx:MutationContext,id:string,input:OrderInput){
-  const t=ctx.installationId,b=input.branchId,o=await lockOrder(db,t,b,id);
+  const t=ctx.installationId,b=input.branchId;
+  await lockContextWarehouses(db,t,b,id,input.shipping?.warehouseId);
+  const o=await lockOrder(db,t,b,id);
   requireRevision(ctx.expectedRevision,Number(o.revision));
   if(o.status==="CANCELLED")throw new SalesError(409,"ORDER_CANCELLED");
 
@@ -370,6 +378,7 @@ async function edit(db:PoolClient,ctx:MutationContext,id:string,input:OrderInput
     price_list_code=$7,note=$8 WHERE installation_id=$1 AND branch_id=$2
     AND order_id=$3 AND version_no=$4`,
     [t,b,id,v,refs.customer.code,refs.customer.name,refs.list.code,input.note]);
+  await saveOrderContext(db,ctx,b,id,v,input.customerId,input.shipping,false);
   await addLines(db,t,b,id,v,input.priceListId,input.customerId,input.channelId,input.lines,ctx.actorId);
   const total=await recalc(db,t,b,id,v);
   const q=await db.query<{revision:string}>(`UPDATE sales_order SET
@@ -384,6 +393,7 @@ async function confirm(db:PoolClient,ctx:MutationContext,id:string,b:string){
   requireRevision(ctx.expectedRevision,Number(o.revision));
   if(o.status==="CANCELLED")throw new SalesError(409,"ORDER_CANCELLED");
   const v=o.current_version;
+  await authorizeOrderContext(db,t,b,ctx.actorId,id,v);
   const record=await db.query<{state:string}>(`SELECT state FROM sales_order_version
     WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3 AND version_no=$4 FOR UPDATE`,
     [t,b,id,v]);
@@ -472,7 +482,10 @@ async function releaseUnexecutedSalesHolds(db:PoolClient,t:string,b:string,id:st
  return r.rowCount??0;
 }
 async function amend(db:PoolClient,ctx:MutationContext,id:string,b:string,reason:string){
-  const t=ctx.installationId,o=await lockOrder(db,t,b,id);
+  const t=ctx.installationId;
+  await lockContextWarehouses(db,t,b,id);
+  const o=await lockOrder(db,t,b,id);
+  await authorizeOrderContext(db,t,b,ctx.actorId,id,o.current_version);
   requireRevision(ctx.expectedRevision,Number(o.revision));
   if(o.status!=="CONFIRMED")throw new SalesError(409,"ORDER_NOT_CONFIRMED");
   if(o.fulfillment_status!=="NOT_ALLOCATED"||o.delivery_status!=="NOT_DISPATCHED"||
@@ -492,6 +505,7 @@ async function amend(db:PoolClient,ctx:MutationContext,id:string,b:string,reason
       note,$6,$7 FROM sales_order_version
     WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3 AND version_no=$4`,
     [t,b,id,o.current_version,newVersion,reason,ctx.actorId]);
+  await copyOrderContext(db,t,b,id,o.current_version,newVersion);
   await db.query(`INSERT INTO sales_order_line
     (installation_id,branch_id,order_id,version_no,line_no,product_id,price_entry_id,
      sell_sku_id,pricing_engine,price_snapshot,price_signature,
@@ -512,6 +526,7 @@ async function amend(db:PoolClient,ctx:MutationContext,id:string,b:string,reason
 }
 async function cancel(db:PoolClient,ctx:MutationContext,id:string,b:string,reason:string){
   const t=ctx.installationId,o=await lockOrder(db,t,b,id);
+  await authorizeOrderContext(db,t,b,ctx.actorId,id,o.current_version);
   requireRevision(ctx.expectedRevision,Number(o.revision));
   if(o.status==="CANCELLED")throw new SalesError(409,"ORDER_CANCELLED");
   if(o.fulfillment_status!=="NOT_ALLOCATED"||o.delivery_status!=="NOT_DISPATCHED"||
@@ -527,10 +542,15 @@ async function cancel(db:PoolClient,ctx:MutationContext,id:string,b:string,reaso
     [t,b,id,ctx.actorId,reason]);
   return {status:200,body:{id,status:"CANCELLED",revision:Number(q.rows[0]!.revision)}};
 }
-async function listing(db:PoolClient,t:string,b:string,search:string){
+async function listing(db:PoolClient,t:string,b:string,search:string,actor:string){
+  const modern=await hasOrderContextSchema(db);
+  const warehouseIds=modern?(await userAccess(db,t,actor))
+    .filter(g=>g.branchId===b&&g.permission==="inventory.read"&&g.warehouseId).map(g=>g.warehouseId!):[];
   const r=await db.query(`SELECT o.id,o.document_no AS "documentNo",o.status,o.revision::integer,
     o.current_version AS version,v.state AS "versionStatus",v.grand_total::text AS total,
-    c.code AS "customerCode",c.name AS "customerName",o.created_at AS "createdAt",
+    c.code AS "customerCode",
+    ${modern?'coalesce(sc.walk_in_name,c.name) AS "customerName",sc.delivery_choice AS "deliveryChoice",sc.warehouse_name AS "warehouseName",':'c.name AS "customerName",'}
+    o.created_at AS "createdAt",
     o.fulfillment_status AS "fulfillmentStatus",o.delivery_status AS "deliveryStatus",
     o.payment_status AS "paymentStatus"
     FROM sales_order o
@@ -538,13 +558,15 @@ async function listing(db:PoolClient,t:string,b:string,search:string){
       AND v.branch_id=o.branch_id AND v.order_id=o.id AND v.version_no=o.current_version
     JOIN catalog_customer c ON c.installation_id=o.installation_id
       AND c.branch_id=o.branch_id AND c.id=o.customer_id
+    ${modern?'LEFT JOIN sales_order_version_context sc ON sc.installation_id=v.installation_id AND sc.branch_id=v.branch_id AND sc.order_id=v.order_id AND sc.version_no=v.version_no':''}
     WHERE o.installation_id=$1 AND o.branch_id=$2
+      ${modern?'AND (sc.warehouse_id IS NULL OR sc.warehouse_id=ANY($4::uuid[]))':''}
       AND ($3='' OR o.document_no ILIKE '%'||$3||'%' OR c.code ILIKE '%'||$3||'%'
-        OR c.name ILIKE '%'||$3||'%')
-    ORDER BY o.created_at DESC,o.id DESC LIMIT 100`,[t,b,search]);
+        OR c.name ILIKE '%'||$3||'%' ${modern?"OR sc.walk_in_name ILIKE '%'||$3||'%'":""})
+    ORDER BY o.created_at DESC,o.id DESC LIMIT 100`,[t,b,search,...(modern?[warehouseIds]:[])]);
   return r.rows;
 }
-async function detail(db:PoolClient,t:string,b:string,id:string){
+async function detail(db:PoolClient,t:string,b:string,id:string,actor:string){
   const r=await db.query(`SELECT o.id,o.branch_id AS "branchId",o.customer_id AS "customerId",
     o.price_list_id AS "priceListId",o.channel_id AS "channelId",
     o.document_no AS "documentNo",o.status,
@@ -559,6 +581,7 @@ async function detail(db:PoolClient,t:string,b:string,id:string){
     WHERE o.installation_id=$1 AND o.branch_id=$2 AND o.id=$3`,[t,b,id]);
   const item=r.rows[0] as Record<string,unknown>|undefined;
   if(!item)throw new SalesError(404,"ORDER_NOT_FOUND");
+  const shipping=await authorizeOrderContext(db,t,b,actor,id,Number(item.version));
   const lines=await db.query(`SELECT line_no AS "lineNo",product_id AS "productId",sku,
     product_name AS "productName",unit_code AS "unitCode",
     sell_sku_id AS "sellSkuId",pricing_engine AS "pricingEngine",
@@ -572,7 +595,7 @@ async function detail(db:PoolClient,t:string,b:string,id:string){
     amendment_reason AS "amendmentReason",created_at AS "createdAt",confirmed_at AS "confirmedAt"
     FROM sales_order_version WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3
     ORDER BY version_no DESC`,[t,b,id]);
-  return {...item,lines:lines.rows,history:versions.rows};
+  return {...item,...(shipping?{shipping}:{}),lines:lines.rows,history:versions.rows};
 }
 export async function handleSalesHttp(req:IncomingMessage,res:ServerResponse,
   id:string,url:URL,opts:IdentityOptions,ready:()=>Promise<boolean>):Promise<void>{
@@ -599,6 +622,29 @@ export async function handleSalesHttp(req:IncomingMessage,res:ServerResponse,
     }finally{client.release();}
     if(!actorId){fail(res,401,"AUTH_REQUIRED",id,cors);return;}
     const orderPath=/^\/v1\/sales\/orders\/([0-9a-f-]{36})(?:\/(confirm|amend|cancel))?$/.exec(url.pathname);
+    if(url.pathname==="/v1/sales/entry-settings"&&req.method==="GET"){
+      const branchId=uuid(url.searchParams.get("branchId")),db=await pool.connect();
+      try{
+        const allowed=await hasPermission(db,{installationId:tenant,actorId,
+          permission:"orders.create",branchId})||
+          await hasPermission(db,{installationId:tenant,actorId,permission:"orders.update",branchId});
+        if(!allowed)throw new SalesError(403,"ORDERS_ENTRY_DENIED");
+        send(res,200,{settings:await readEntrySettings(db,tenant,branchId,actorId),requestId:id},id,cors);
+      }finally{db.release();}
+      return;
+    }
+    if(url.pathname==="/v1/sales/walk-in"&&req.method==="POST"){
+      const raw=await bodyOf(req);allowKeys(raw,["branchId"]);const branchId=uuid(raw.branchId);
+      const ctx=mutation(req,id,tenant,actorId,"sales.walk-in.prepare",{branchId},true);
+      const out=await executeMutation(pool,ctx,{
+        authorize:async(db,c)=>await hasPermission(db,{installationId:c.installationId,
+          actorId:c.actorId,permission:"orders.create",branchId})||
+          await hasPermission(db,{installationId:c.installationId,actorId:c.actorId,
+            permission:"orders.update",branchId}),
+        execute:(db,c)=>ensureWalkInCustomer(db,c,branchId),
+      });
+      send(res,out.status,out.body,id,cors);return;
+    }
     if(url.pathname==="/v1/sales/quote"&&req.method==="POST"){
       const input=parseQuote(await bodyOf(req));
       const db=await pool.connect();
@@ -659,7 +705,7 @@ export async function handleSalesHttp(req:IncomingMessage,res:ServerResponse,
       try{
         if(!await hasPermission(db,{installationId:tenant,actorId,permission:"orders.read",branchId:b}))
           throw new SalesError(403,"ORDERS_READ_DENIED");
-        send(res,200,{items:await listing(db,tenant,b,q),requestId:id},id,cors);
+        send(res,200,{items:await listing(db,tenant,b,q,actorId),requestId:id},id,cors);
       }finally{db.release();}
       return;
     }
@@ -669,7 +715,7 @@ export async function handleSalesHttp(req:IncomingMessage,res:ServerResponse,
       try{
         if(!await hasPermission(db,{installationId:tenant,actorId,permission:"orders.read",branchId:b}))
           throw new SalesError(403,"ORDERS_READ_DENIED");
-        send(res,200,{order:await detail(db,tenant,b,orderId),requestId:id},id,cors);
+        send(res,200,{order:await detail(db,tenant,b,orderId,actorId),requestId:id},id,cors);
       }finally{db.release();}
       return;
     }
@@ -682,7 +728,10 @@ export async function handleSalesHttp(req:IncomingMessage,res:ServerResponse,
             actorId:c.actorId,permission:"orders.create",branchId:input.branchId})&&
           (!input.lines.some(line=>line.unitPrice!==undefined)||
            await hasPermission(db,{installationId:c.installationId,
-            actorId:c.actorId,permission:"orders.update",branchId:input.branchId})),
+            actorId:c.actorId,permission:"orders.update",branchId:input.branchId}))&&
+          (!input.shipping||await hasPermission(db,{installationId:c.installationId,
+            actorId:c.actorId,permission:"inventory.read",branchId:input.branchId,
+            warehouseId:input.shipping.warehouseId})),
         execute:(db,c)=>create(db,c,input),
       });
       send(res,out.status,out.body,id,cors);return;
@@ -716,6 +765,7 @@ export async function handleSalesHttp(req:IncomingMessage,res:ServerResponse,
     }
     fail(res,405,"METHOD_NOT_ALLOWED",id,cors);
   }catch(err){
+    if(err instanceof OrderContextFault){fail(res,err.status,err.code,id,cors);return;}
     if(err instanceof SalesError){fail(res,err.httpStatus,err.code,id,cors);return;}
     if(err instanceof R1QuoteError){fail(res,err.status,err.code,id,cors);return;}
     if(err instanceof ManualPriceFault){fail(res,err.status,err.code,id,cors);return;}
