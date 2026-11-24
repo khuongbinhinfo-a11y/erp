@@ -254,7 +254,10 @@ function normalizeRow(
     const c=value===""?null:refs.categories.get(value);
     if(value!==""&&(!c||c.active!==true||c.groupActive!==true))
       throw new BulkFault("CATEGORY_CODE_NOT_FOUND_OR_INACTIVE");
-    const effectiveGroup=op.groupId??current?.groupId??c?.groupId??null;
+    // Explicit group clearing is different from an omitted group column.
+    // Never approve a preview that later writes groupId:null + categoryId:UUID.
+    const groupExplicit=Object.prototype.hasOwnProperty.call(op,"groupId");
+    const effectiveGroup=groupExplicit?op.groupId:(current?.groupId??c?.groupId??null);
     if(c&&c.groupId!==effectiveGroup)
       throw new BulkFault("CATEGORY_GROUP_MISMATCH");
     // Inferred group must also be written for previously ungrouped products.
