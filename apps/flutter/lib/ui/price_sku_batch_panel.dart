@@ -1,5 +1,5 @@
 import 'package:material_ui/material_ui.dart';
-import 'erp_display.dart';
+import 'erp_number_input.dart';
 import 'erp_tokens.dart';
 import 'erp_toast.dart';
 import 'identity_client.dart';
@@ -26,6 +26,10 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
   final inputs=<String,TextEditingController>{};
   final current=<String,String>{};
   List<Map<String,dynamic>> rows=[];
+  int page=0;
+  static const pageSize=12;
+  final reading=<String>{};
+  List<Map<String,dynamic>> get pageRows=>rows.skip(page*pageSize).take(pageSize).toList();
   bool loading=false,saving=false;
   String? error;
   int generation=0;
@@ -36,7 +40,7 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
     super.didUpdateWidget(old);
     if(old.branchId!=widget.branchId||old.priceList['id']!=listId||
         old.session.token!=token){
-      generation++;query.clear();selected.clear();current.clear();
+      generation++;query.clear();selected.clear();current.clear();reading.clear();page=0;
       for(final field in inputs.values){field.dispose();}
       inputs.clear();rows=[];load();
     }
@@ -48,7 +52,7 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
   }
   Future<void> load()async{
     final run=++generation;
-    setState((){loading=true;error=null;});
+    setState((){loading=true;error=null;current.clear();reading.clear();page=0;});
     try{
       final found=await widget.client.r1CatalogItems(token,'skus',
         branchId:widget.branchId,query:query.text.trim());
@@ -56,6 +60,7 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
         rows=found.where((x)=>x['active']!=false).toList();
         loading=false;
       });
+      if(mounted&&run==generation)await loadPagePrices();
     }on ErpApiError catch(e){
       if(mounted&&run==generation)setState((){
         loading=false;error=e.message;
@@ -77,33 +82,43 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
         final input=inputs.putIfAbsent(id,()=>TextEditingController());
         final pending=widget.client.pendingR1(
           widget.session.actorId,widget.branchId,priceKind(id));
-        if(pending!=null)input.text=pending.payload['amount'].toString();
+        if(pending!=null)input.text=erpGroupedDecimalText(pending.payload['amount']);
       }else{
         selected.remove(id);
-        current.remove(id);
         inputs.remove(id)?.dispose();
       }
     });
-    if(checked)loadCurrent(id);
+    if(checked&&!current.containsKey(id))loadCurrent(id);
+  }
+  Future<void> loadPagePrices()async{
+    final run=generation;
+    final ids=pageRows.map((x)=>x['id'].toString()).toList();
+    for(var i=0;i<ids.length;i+=4){
+      if(!mounted||run!=generation)return;
+      await Future.wait(ids.skip(i).take(4).map((id)=>loadCurrent(id)));
+    }
   }
   Future<void> loadCurrent(String id)async{
+    if(current.containsKey(id)||reading.contains(id))return;
+    final run=generation;
+    reading.add(id);
     try{
       final result=await widget.client.r1PriceQuote(token,{
         'branchId':widget.branchId,'priceListId':listId,
         'sellSkuId':id,'quantity':'1',
       });
-      if(!mounted||!selected.containsKey(id))return;
+      if(!mounted||run!=generation)return;
       final quote=Map<String,dynamic>.from(result['quote'] as Map);
-      setState(()=>current[id]=erpVndText(quote['unitPrice']));
+      setState(()=>current[id]=erpGroupedVndText(quote['basePrice']));
     }on ErpApiError catch(e){
-      if(mounted&&selected.containsKey(id))setState((){
+      if(mounted&&run==generation)setState((){
         current[id]=e.code=='SKU_HAS_NO_EFFECTIVE_BASE_PRICE'
-          ?'Chưa có giá':'Không tra được giá hiện tại';
+          ?'Chưa có giá':'Không tải được giá';
       });
     }catch(_){
-      if(mounted&&selected.containsKey(id))
-        setState(()=>current[id]='Không tra được giá hiện tại');
-    }
+      if(mounted&&run==generation)
+        setState(()=>current[id]='Không tải được giá');
+    }finally{if(run==generation)reading.remove(id);}
   }
   // Read the effective BASE rule, not the final customer/promotion price.
   // Match its priority so this later version wins without masking future
@@ -128,7 +143,7 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
     }
   }
   void setSharedPrice(){
-    final amount=sharedPrice.text.trim();
+    final amount=erpNumberCanonical(sharedPrice.text);
     if(!RegExp(r'^\d{1,14}(?:\.\d{1,4})?$').hasMatch(amount)){
       setState(()=>error='Nhập đơn giá không âm, tối đa 4 số thập phân.');
       return;
@@ -136,14 +151,14 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
     setState((){
       error=null;
       for(final id in selected.keys){
-        if(!unresolved(id))inputs[id]!.text=amount;
+        if(!unresolved(id))inputs[id]!.text=erpGroupedDecimalText(amount);
       }
     });
   }
   Future<void> save()async{
     if(saving||!widget.canWrite||selected.isEmpty)return;
     for(final id in selected.keys){
-      final amount=inputs[id]?.text.trim()??'';
+      final amount=erpNumberCanonical(inputs[id]?.text??'');
       if(!RegExp(r'^\d{1,14}(?:\.\d{1,4})?$').hasMatch(amount)){
         setState(()=>error='Cần nhập giá hợp lệ cho tất cả SKU đã chọn.');
         return;
@@ -173,10 +188,8 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
     }
     final confirmed=await showDialog<bool>(context:context,
       builder:(dialog)=>AlertDialog(
-        title:const Text('Xác nhận cập nhật giá SKU'),
-        content:Text('Ghi ${selected.length} phiên bản giá mới. '
-          'Giá đang áp dụng được thay bằng phiên bản mới, '
-          'lịch sử đơn hàng đã xác nhận vẫn được giữ.'),
+        title:const Text('Lưu giá bán'),
+        content:Text('Cập nhật giá cho ${selected.length} mặt hàng? Đơn đã xác nhận không đổi.'),
         actions:[
           TextButton(onPressed:()=>Navigator.pop(dialog,false),
             child:const Text('Quay lại')),
@@ -198,7 +211,7 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
         final body=pending?.payload??<String,dynamic>{
           'branchId':widget.branchId,'priceListId':listId,
           'sellSkuId':id,'scopeKind':'BASE','adjustment':'FIXED_PRICE',
-          'amount':inputs[id]!.text.trim(),'priority':priority!,
+          'amount':erpNumberCanonical(inputs[id]!.text),'priority':priority!,
           'stacking':'EXCLUSIVE','stopProcessing':false,
           'minQuantity':'1','effectiveFrom':DateTime.now().toUtc().toIso8601String(),
         };
@@ -223,7 +236,7 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
         });
       }
       if(mounted){
-        ErpToast.show(context,'Đã cập nhật giá $done SKU trên máy chủ.');
+        ErpToast.show(context,'Đã cập nhật $done giá bán.');
         await load();
       }
     }on ErpApiError catch(e){
@@ -243,14 +256,11 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
         borderRadius:BorderRadius.circular(8)),
       child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
         Row(children:[
-          Expanded(child:Text('Sửa giá SKU · ${widget.priceList['code']}',
+          Expanded(child:Text('Giá bán · '+(widget.priceList['name']??widget.priceList['code']).toString(),
             style:const TextStyle(fontSize:16,fontWeight:FontWeight.w800))),
           IconButton(tooltip:'Đóng chỉnh giá SKU',onPressed:widget.onClose,
             icon:const Icon(Icons.close)),
         ]),
-        const Text('Chọn nhiều SKU, nhập giá mới tại từng dòng hoặc áp dụng chung. '
-          'Giá mới có hiệu lực ngay sau khi máy chủ xác nhận; đơn đã xác nhận không đổi.',
-          style:TextStyle(fontSize:12,color:ErpTokens.muted)),
         const SizedBox(height:10),
         Wrap(spacing:8,runSpacing:8,crossAxisAlignment:WrapCrossAlignment.center,
           children:[
@@ -262,19 +272,19 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
                 prefixIcon:Icon(Icons.search)))),
             OutlinedButton.icon(onPressed:loading||saving?null:load,
               icon:const Icon(Icons.search,size:17),
-              label:const Text('Tìm SKU')),
+              label:const Text('Tìm')),
             OutlinedButton(onPressed:loading||saving?null:()=>setState((){
-              for(final row in rows){
+              for(final row in pageRows){
                 final id=row['id'].toString();
                 selected[id]=row;
                 final input=inputs.putIfAbsent(id,()=>TextEditingController());
                 final pending=widget.client.pendingR1(
                   widget.session.actorId,widget.branchId,priceKind(id));
-                if(pending!=null)input.text=pending.payload['amount'].toString();
+                if(pending!=null)input.text=erpGroupedDecimalText(pending.payload['amount']);
               }
-            }),child:const Text('Chọn kết quả')),
+            }),child:const Text('Chọn trang')),
             TextButton(onPressed:saving?null:()=>setState((){
-              selected.clear();current.clear();
+              selected.clear();
               for(final input in inputs.values){input.dispose();}
               inputs.clear();
             }),child:const Text('Bỏ chọn')),
@@ -290,7 +300,7 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
           child:ListView(shrinkWrap:true,children:[
             for(final sku in [
               ...selected.values,
-              ...rows.where((r)=>!selected.containsKey(r['id'].toString())),
+              ...pageRows.where((r)=>!selected.containsKey(r['id'].toString())),
             ]) Builder(builder:(context){
               final id=sku['id'].toString();
               final checked=selected.containsKey(id);
@@ -308,25 +318,37 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
                         maxLines:1,overflow:TextOverflow.ellipsis,
                         style:const TextStyle(fontWeight:FontWeight.w700,fontSize:13)),
                       Text('${sku['code']??sku['sku']} · ${sku['unitCode']??''} '
-                        '· Giá hiện tại: ${current[id]??(checked?'Bấm tra giá':'Chọn để tra')}',
+                        '· Giá cơ sở: ${current[id]??(reading.contains(id)?'Đang tải…':'Chưa tải')}',
                         maxLines:2,overflow:TextOverflow.ellipsis,
                         style:const TextStyle(fontSize:11,color:ErpTokens.muted)),
                     ])),
-                  if(checked)IconButton(
-                    tooltip:'Tra giá hiện tại',
-                    onPressed:()=>loadCurrent(id),
+                  if(current[id]=='Không tải được giá'||(current[id]==null&&!pageRows.any((r)=>r['id'].toString()==id)&&!reading.contains(id)))IconButton(
+                    tooltip:'Tải lại giá',
+                    onPressed:(){setState(()=>current.remove(id));loadCurrent(id);},
                     icon:const Icon(Icons.refresh,size:18)),
+                  if(!checked&&widget.canWrite)TextButton(
+                    onPressed:saving?null:()=>selectSku(sku,true),child:const Text('Sửa giá')),
                   if(checked)SizedBox(width:130,
                     child:TextField(
                       key:ValueKey('price-sku-new-$id'),
                       controller:inputs[id],enabled:!saving&&!unresolved(id),
                       keyboardType:const TextInputType.numberWithOptions(decimal:true),
+                      inputFormatters:const [ErpGroupedNumberFormatter()],
                       decoration:InputDecoration(
                         labelText:unresolved(id)?'Giá chờ xác nhận':'Giá mới (₫)',isDense:true))),
                 ]),
               );
             }),
           ])),
+        if(rows.length>pageSize)Row(mainAxisAlignment:MainAxisAlignment.end,children:[
+          IconButton(tooltip:'Trang trước',onPressed:page==0||saving?null:(){
+            setState(()=>page--);loadPagePrices();
+          },icon:const Icon(Icons.chevron_left)),
+          Text('Trang '+(page+1).toString()+'/'+((rows.length+pageSize-1)~/pageSize).toString()),
+          IconButton(tooltip:'Trang sau',onPressed:(page+1)*pageSize>=rows.length||saving?null:(){
+            setState(()=>page++);loadPagePrices();
+          },icon:const Icon(Icons.chevron_right)),
+        ]),
         const SizedBox(height:10),
         Wrap(spacing:8,runSpacing:8,crossAxisAlignment:WrapCrossAlignment.center,
           children:[
@@ -334,6 +356,7 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
               key:const ValueKey('price-sku-shared'),
               controller:sharedPrice,
               keyboardType:const TextInputType.numberWithOptions(decimal:true),
+              inputFormatters:const [ErpGroupedNumberFormatter()],
               decoration:const InputDecoration(labelText:'Giá áp dụng chung (₫)',isDense:true))),
             OutlinedButton(onPressed:saving||selected.isEmpty?null:setSharedPrice,
               child:const Text('Áp cho SKU đã chọn')),

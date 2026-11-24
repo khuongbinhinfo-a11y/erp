@@ -343,6 +343,9 @@ void main(){
     expect(find.byKey(const ValueKey('sales-sku-search')),findsOneWidget,
       reason:'Actual calls: $traces; visible text: ${tester.widgetList<Text>(find.byType(Text)).map((t)=>t.data).take(30).toList()}');
     expect(find.byKey(const ValueKey('sales-save-confirm')),findsOneWidget);
+    final contextSize=tester.getSize(find.byKey(const ValueKey('sales-order-context')));
+    expect(contextSize.height,lessThan(90),reason:'Warehouse, price list and channel must share one desktop row');
+    expect(find.text('Người mua và chính sách giá'),findsNothing);
     // Fast-sale shortcuts navigate without closing the composer.
     await tester.sendKeyEvent(LogicalKeyboardKey.f3);
     await tester.pump();
@@ -359,7 +362,9 @@ void main(){
       Future<void>.delayed(const Duration(milliseconds:120)));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('sales-sku-dropdown')),findsOneWidget);
-    expect(find.text('35.000 ₫'),findsWidgets);
+    expect(tester.getSize(find.byKey(const ValueKey('sales-sku-dropdown'))).height,lessThan(180));
+    expect(tester.getSize(find.byKey(const ValueKey('sales-sku-search'))).width,lessThanOrEqualTo(760));
+    expect(find.text('35,000 ₫'),findsWidgets);
     expect(find.text('Chưa xác định tồn'),findsWidgets,
       reason:'Transient inventory failure must not fabricate stock');
     await tester.tap(find.byTooltip('Tìm hàng'));
@@ -410,7 +415,7 @@ void main(){
       reason:'R1-C must receive the edited selling quantity');
     await tester.ensureVisible(find.byKey(const ValueKey('sales-sku-dropdown')));
     await tester.pumpAndSettle();
-    expect(find.text('45.000 ₫'),findsWidgets,
+    expect(find.text('45,000 ₫'),findsWidgets,
       reason:'Server quotes $skuQuoteQuantities; visible: ${tester.widgetList<Text>(find.byType(Text)).map((t)=>t.data).whereType<String>().where((t)=>t.contains('giá')||t.contains('₫')).toList()}');
     await tester.ensureVisible(find.byKey(const ValueKey('sales-remove-0')));
     await tester.tap(find.byKey(const ValueKey('sales-remove-0')));
@@ -419,7 +424,7 @@ void main(){
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.byKey(const ValueKey('sales-sku-dropdown')));
     await tester.pumpAndSettle();
-    expect(find.text('35.000 ₫'),findsWidgets,
+    expect(find.text('35,000 ₫'),findsWidgets,
       reason:'Removed quantity tier must not remain in picker; $skuQuoteQuantities');
     await tester.ensureVisible(find.byKey(const ValueKey('sales-sku-result-0')));
     await tester.tap(find.byKey(const ValueKey('sales-sku-result-0')));
@@ -438,7 +443,7 @@ void main(){
     // Automatic server quotes now run whenever the SKU/quantity changes;
     // manual refresh must not be required to reach a usable price.
     expect(quoteCount,greaterThanOrEqualTo(1));
-    expect(find.textContaining('35.000 ₫'),findsWidgets);
+    expect(find.textContaining('35,000 ₫'),findsWidgets);
     // Large server amounts and a carton unit must fit a 320px viewport.
     useLongQuotedPrice=true;
     final countBeforeManualRefresh=quoteCount;

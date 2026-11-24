@@ -30,7 +30,7 @@ void main(){
         if(request.url.path=='/v1/catalog/r1/resolve'){
           final body=jsonDecode(request.body) as Map<String,dynamic>;
           return http.Response(jsonEncode({'quote':{
-            'unitPrice':'10000','basePrice':'10000',
+            'unitPrice':'9000','basePrice':'10000',
             'trace':[if(body['sellSkuId']==skuA)
               {'scope':'BASE_RULE','priority':27}
               else {'scope':'EXISTING_BASE_PRICE','priority':null}],
@@ -57,10 +57,13 @@ void main(){
           canWrite:true,onClose:(){})))));
     await tester.pumpAndSettle();
     expect(find.text('Hàng A'),findsOneWidget);
-    await tester.tap(find.text('Chọn kết quả'));
+    expect(find.textContaining('Giá cơ sở: 10,000 ₫'),findsWidgets);
+    expect(find.textContaining('Giá cơ sở: 9,000 ₫'),findsNothing);
+    await tester.tap(find.text('Chọn trang'));
     await tester.pump();
     expect(find.text('Đã chọn 2 SKU'),findsOneWidget);
     await tester.enterText(find.byKey(const ValueKey('price-sku-shared')),'25000');
+    expect(tester.widget<TextField>(find.byKey(const ValueKey('price-sku-shared'))).controller!.text,'25,000');
     await tester.tap(find.text('Áp cho SKU đã chọn'));
     await tester.pump();
     expect(find.byKey(const ValueKey('price-sku-new-'+skuA)),findsOneWidget);
