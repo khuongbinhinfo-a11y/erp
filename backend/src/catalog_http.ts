@@ -1078,7 +1078,7 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
       });
       send(res,outcome.status,outcome.body,requestId,corsOrigin);return;
     }
-    const locationPath=/^\\/v1\\/catalog\\/customers\\/([0-9a-f-]{36})\\/locations(?:\\/([0-9a-f-]{36}))?$/.exec(url.pathname);
+    const locationPath=/^\/v1\/catalog\/customers\/([0-9a-f-]{36})\/locations(?:\/([0-9a-f-]{36}))?$/.exec(url.pathname);
     if(locationPath){
       if(!await hasCatalogHierarchySchema(pool))
         throw new CatalogError(503,"CATALOG_HIERARCHY_MIGRATION_REQUIRED");
@@ -1109,7 +1109,7 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
       }
       throw new CatalogError(405,"METHOD_NOT_ALLOWED");
     }
-    const updatePath=/^\\/v1\\/catalog\\/(customers|customer-groups|customer-regions|suppliers|brands|groups|categories|products|price-lists|unit-definitions)\/([0-9a-f-]{36})$/.exec(url.pathname);
+    const updatePath=/^\/v1\/catalog\/(customers|customer-groups|customer-regions|suppliers|brands|groups|categories|products|price-lists|unit-definitions)\/([0-9a-f-]{36})$/.exec(url.pathname);
     if(updatePath&&req.method==="PATCH"){
       const resource=updatePath[1] as Editable;
       if(!editable.has(resource))throw new CatalogError(404,"UNKNOWN_RESOURCE");
