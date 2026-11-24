@@ -2152,7 +2152,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                 columns:[if(resource=='products')const DataColumn(label:Text('Chọn')),
                   ...columns.map((entry)=>DataColumn(
                   label:Text(entry.$2))).toList()]+
-                  [if(canEdit||resource=='prices')
+                  [if(canEdit||resource=='prices'||resource=='price-lists')
                     const DataColumn(label:Text('Thao tác'))],
                 rows:items.map((entry)=>DataRow(cells:[
                   if(resource=='products')DataCell(Checkbox(
@@ -2184,7 +2184,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                           fontWeight:FontWeight.w700,
                           color:entry['active']==true
                             ?ErpTokens.primary:ErpTokens.danger):null)),
-                  if(canEdit||resource=='prices')DataCell(
+                  if(canEdit||resource=='prices'||resource=='price-lists')DataCell(
                     resource=='prices'
                       ? (!canWrite?const Text('—'):
                         inlinePriceId==entry['id']
@@ -2205,7 +2205,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                               entry['priceListId'].toString()+'.'+entry['productId'].toString())!=null
                               ?'Kiểm tra yêu cầu':'Giá mới')))
                       : Row(mainAxisSize:MainAxisSize.min,children:[
-                          IconButton(
+                          if(canEdit)IconButton(
                             key:ValueKey('catalog-edit-'+entry['id'].toString()),
                             icon:const Icon(Icons.edit_outlined,size:18),
                             tooltip:'Sửa/ngừng sử dụng',
@@ -2223,7 +2223,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                               PopupMenuItem(value:'assignment',child:Text('Áp dụng cho')),
                               PopupMenuItem(value:'import',child:Text('Nhập / xuất')),
                             ]),
-                          if(resource=='price-lists')IconButton(
+                          if(resource=='price-lists'&&canWrite)IconButton(
                             key:ValueKey('catalog-price-list-clone-'+entry['id'].toString()),
                             icon:const Icon(Icons.content_copy_outlined,size:18),
                             tooltip:'Sao chép bảng giá cùng chính sách',

@@ -480,6 +480,49 @@ void main(){
       await tester.pumpAndSettle();
     });
 
+  testWidgets('price list view menu remains visible for catalog.read-only users',
+    (tester)async{
+      const priceId='00000000-0000-4000-8000-000000000099';
+      final readOnly=<IdentityGrant>[
+        const IdentityGrant(roleId:'reader',permission:'catalog.read',branchId:branch),
+      ];
+      final session=IdentitySession(actorId:actor,token:'test-local-session',
+        expiresAt:DateTime.now().add(const Duration(hours:1)),grants:readOnly);
+      final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+        httpClient:MockClient((req)async{
+          final items=req.url.path=='/v1/catalog/branches'
+            ?[{'id':branch,'code':'MAIN','name':'Chi nhánh chính'}]
+            :req.url.path=='/v1/catalog/price-lists'
+              ?[{'id':priceId,'code':'GIA','name':'Giá bán',
+                  'active':true,'revision':0}]
+              :<Map<String,dynamic>>[];
+          return http.Response(jsonEncode({'items':items}),200,
+            headers:const {'content-type':'application/json; charset=utf-8'});
+        }));
+      addTearDown(client.dispose);
+      tester.view.devicePixelRatio=1;
+      tester.view.physicalSize=const Size(1300,900);
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
+        home:Scaffold(body:CompanyWorkspace(previewOnly:false,grants:readOnly,
+          session:session,client:client))));
+      await openCompanyCatalog(tester,'prices');
+      await tester.runAsync(()async=>
+        Future<void>.delayed(const Duration(milliseconds:120)));
+      await tester.pumpAndSettle();
+      final menu=find.byKey(const ValueKey('catalog-price-list-actions-'+priceId));
+      expect(menu,findsOneWidget,reason:'View-only users must reach price tools');
+      expect(find.byKey(const ValueKey('catalog-edit-'+priceId)),findsNothing);
+      expect(find.byKey(const ValueKey('catalog-price-list-clone-'+priceId)),findsNothing);
+      await tester.tap(menu);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Giá bán').last);
+      await tester.pumpAndSettle();
+      expect(find.byKey(ValueKey('price-skus-'+branch+'-'+priceId)),findsOneWidget);
+      expect(tester.takeException(),isNull);
+    });
+
   testWidgets('price list search + selector share a row; editors are opt-in',
     (tester)async{
       const priceId='00000000-0000-4000-8000-000000000099';
