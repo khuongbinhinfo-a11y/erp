@@ -17,13 +17,16 @@ void main(){
   const base='00000000-0000-4000-8000-000000000006';
   const carton='00000000-0000-4000-8000-000000000007';
 
-  testWidgets('T1 split keeps original qty, resets price and switches exact UOM', (tester)async{
+  for(final canUpdate in const [true,false]){
+  testWidgets(canUpdate
+    ?'T1 split resets override and discards stale purchase price'
+    :'T1 create-only actor splits same SKU without changing original quantity', (tester)async{
     final quotedSkuPairs=<List<String>>[];
     final pendingLastPurchase=Completer<http.Response>();
     final rights=[
       IdentityGrant(roleId:'a',permission:'orders.read',branchId:branch),
       IdentityGrant(roleId:'b',permission:'orders.create',branchId:branch),
-      IdentityGrant(roleId:'c',permission:'orders.update',branchId:branch),
+      if(canUpdate)IdentityGrant(roleId:'c',permission:'orders.update',branchId:branch),
       IdentityGrant(roleId:'d',permission:'catalog.read',branchId:branch),
     ];
     http.Response reply(Object data,int status)=>http.Response(jsonEncode(data),status,
@@ -98,8 +101,10 @@ void main(){
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('sales-line-0')),findsOneWidget);
     await tester.enterText(find.byKey(const ValueKey('sales-qty-0')),'3');
-    await tester.enterText(find.byKey(const ValueKey('sales-price-0')),'9800');
-    await tester.enterText(find.byKey(const ValueKey('sales-discount-0')),'5');
+    if(canUpdate){
+      await tester.enterText(find.byKey(const ValueKey('sales-price-0')),'9800');
+      await tester.enterText(find.byKey(const ValueKey('sales-discount-0')),'5');
+    }
     await tester.ensureVisible(find.byKey(const ValueKey('sales-split-0')));
     await tester.tap(find.byKey(const ValueKey('sales-split-0')));
     await tester.pumpAndSettle();
@@ -115,16 +120,18 @@ void main(){
     await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:150)));
     await tester.pumpAndSettle();
     // Simulate a slow previous-purchase response for the old per-piece SKU.
-    await tester.ensureVisible(find.byKey(const ValueKey('sales-last-price-1')));
-    await tester.tap(find.byKey(const ValueKey('sales-last-price-1')));
-    await tester.pump();
+    if(canUpdate){
+      await tester.ensureVisible(find.byKey(const ValueKey('sales-last-price-1')));
+      await tester.tap(find.byKey(const ValueKey('sales-last-price-1')));
+      await tester.pump();
+    }
     await tester.ensureVisible(find.byKey(const ValueKey('sales-unit-1-$base')));
     await tester.tap(find.byKey(const ValueKey('sales-unit-1-$base')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('thùng').last);
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('sales-unit-1-$carton')),findsOneWidget);
-    pendingLastPurchase.complete(reply({'price':{
+    if(canUpdate)pendingLastPurchase.complete(reply({'price':{
       'unitPrice':'1','discountRate':'20','taxRate':'5',
     }},200));
     await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:50)));
@@ -138,5 +145,5 @@ void main(){
     await tester.pumpAndSettle();
     expect(quotedSkuPairs.any((pair)=>pair.length==2&&pair[0]==base&&pair[1]==carton),isTrue,
       reason:'Changing UOM must requote exact target SKU, not multiply client prices');
-  });
+  });  }
 }
