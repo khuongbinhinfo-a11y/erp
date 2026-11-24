@@ -94,6 +94,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   Map<String,dynamic>? pendingCreate,pendingConfirm,pendingUpdate;
   String? pendingCreateKey,pendingConfirmKey,pendingUpdateKey;
   bool pendingCreateAutoConfirm=false,localRecoveryBusy=false,localRecoveryBlocked=false;
+  String? pendingCreateCartId;
   LocalScope? get _localScope=>branchId==null?null:widget.client.localScope(widget.session,branchId!);
   bool get _localConfigured=>widget.client.localStore!=null&&widget.session.installationId.isNotEmpty;
   bool _lastNavigationLock=false;
@@ -137,7 +138,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       localRecoveryBusy=true;localRecoveryBlocked=false;pendingNeedsReceipt=false;
       // Do not carry in-memory pending commands across branches or grants.
       // The durable slot remains intact until an authenticated server ACK.
-      pendingCreate=null;pendingCreateKey=null;pendingCreateAutoConfirm=false;
+      pendingCreate=null;pendingCreateKey=null;pendingCreateAutoConfirm=false;pendingCreateCartId=null;
       pendingUpdate=null;pendingUpdateKey=null;
       pendingConfirm=null;pendingConfirmKey=null;
     });
@@ -161,7 +162,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       if(requiredPermission==null||!can(requiredPermission))throw const FormatException();
       setState((){
         pendingNeedsReceipt=true;
-        if(kind=='create'){pendingCreate=body;pendingCreateKey=key;pendingCreateAutoConfirm=data['auto']==true;}
+        if(kind=='create'){pendingCreate=body;pendingCreateKey=key;pendingCreateAutoConfirm=data['auto']==true;pendingCreateCartId=data['cartId'] is String?data['cartId'] as String:null;}
         if(kind=='update'){pendingUpdate=body;pendingUpdateKey=key;}
         if(kind=='confirm'){pendingConfirm=body;pendingConfirmKey=key;}
       });
@@ -173,10 +174,10 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       }
     }finally{if(_sameScope(token,branch))setState(()=>localRecoveryBusy=false);}
   }
-  Future<void> _persistPending(LocalScope? scope,String? kind,String? key,Map<String,dynamic>? body,{bool auto=false,String? previousKey})async{
+  Future<void> _persistPending(LocalScope? scope,String? kind,String? key,Map<String,dynamic>? body,{bool auto=false,String? previousKey,String? cartId})async{
     if(!_localConfigured)return;
     if(scope==null)throw StateError('Thiếu phạm vi lưu yêu cầu');
-    await widget.client.localStore!.saveSalesRecovery(scope,kind==null?null:{'kind':kind,'key':key,'body':body,'auto':auto},expectedKey:previousKey);
+    await widget.client.localStore!.saveSalesRecovery(scope,kind==null?null:{'kind':kind,'key':key,'body':body,'auto':auto,if(kind=='create'&&cartId!=null)'cartId':cartId},expectedKey:previousKey);
   }
   String newKey()=>'sales-'+DateTime.now().microsecondsSinceEpoch.toString()+'-'+(++sequence).toString();
   bool can(String permission)=>widget.session.grants.any(
@@ -1056,8 +1057,12 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     String totalQuoted()=>previewGrandTotal??'0';
     bool draftSaving=false,finishDraft=false,draftWriteFailed=false;
     final autoDraft=formScope!=null&&(order==null||copying||localDraft);
+    final cartId=autoDraft?newKey():null;
+    final sourceCartId=localDraft?order?['localSourceCartId'] as String?:null;
+    bool sourceCartCleared=false;
     Map<String,dynamic> draftSnapshot(){
       return <String,dynamic>{
+          if(cartId!=null)'localCartId':cartId,
           'customerId':customer,'priceListId':list,'channelId':channel,'note':note.text,
           'localDocumentDiscount':{'mode':documentDiscountMode,'value':documentDiscountValue,'reason':documentDiscountReason},
           'localOverrideReason':overrideReason,'localListManuallySelected':listManuallySelected,
@@ -1079,15 +1084,21 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           }).toList(),
         };
     }
-    final writer=formScope!=null&&(order==null||copying||localDraft)?LocalCartWriter(widget.client.localStore!,formScope):null;
+    final writer=formScope!=null&&cartId!=null?LocalCartWriter(widget.client.localStore!,formScope,cartId):null;
     String? lastSnapshot=autoDraft?jsonEncode(draftSnapshot()):null;
     Future<void> persistDraft({bool force=false})async{
       if(writer==null||finishDraft||!_sameScope(formToken,branch))return;
       final snapshot=draftSnapshot(),encoded=jsonEncode(snapshot);
       if(!force&&encoded==lastSnapshot&&!draftWriteFailed)return;
       lastSnapshot=encoded;
-      try{await writer.save(snapshot);draftWriteFailed=false;}
-      catch(_){draftWriteFailed=true;}
+      try{
+        await writer.save(snapshot);
+        if(!sourceCartCleared&&sourceCartId!=null&&formScope!=null){
+          await widget.client.localStore!.clearScopedCart(formScope,sourceCartId);
+          sourceCartCleared=true;
+        }
+        draftWriteFailed=false;
+      }catch(_){draftWriteFailed=true;}
     }
     final autoTimer=writer==null?null:Timer.periodic(const Duration(milliseconds:600),(_){
       if(!draftSaving)unawaited(persistDraft());
@@ -1166,6 +1177,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
             'overrideReason':overrideReason.trim().isNotEmpty?overrideReason.trim():entry.value.overrideReason,
         }).toList(),
         '_confirmAfterSave':confirm,
+        if(cartId!=null)'_localCartId':cartId,
       });
     }
     Future<void> requestClose(BuildContext ctx)async{
@@ -2132,26 +2144,54 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       Map<String,dynamic>? draft;
       final scope=_localScope,token=widget.session.token;
       if(scope!=null){
-        try{draft=await widget.client.localStore!.loadCart(scope);}catch(_){inform('Không đọc được giỏ trên máy.',error:true);return;}
+        List<({String id,Map<String,dynamic> draft})> carts;
+        try{carts=await widget.client.localStore!.savedCarts(scope);}
+        catch(_){inform('Không đọc được giỏ đang lưu trên máy.',error:true);return;}
         if(!_sameScope(token,scope.branch))return;
-        if(draft!=null){
-          if(!mounted)return;
-          if(source!=null){inform('Có giỏ chưa hoàn tất. Hãy xử lý giỏ trước khi sao chép đơn.',error:true);return;}
+        if(carts.isNotEmpty){
+          if(source!=null){inform('Có giỏ chưa hoàn tất. Xử lý giỏ trước khi sao chép đơn.',error:true);return;}
           final decision=await showDialog<String>(context:context,builder:(ctx)=>AlertDialog(
             title:const Text('Giỏ hàng trên máy'),
-            content:const Text('Có đơn đang nhập được lưu trên máy. Tiếp tục nhập hoặc bỏ giỏ cũ? Chưa có chứng từ máy chủ.'),
-            actions:[TextButton(onPressed:()=>Navigator.pop(ctx,'discard'),child:const Text('Bỏ giỏ cũ')),
-              FilledButton(onPressed:()=>Navigator.pop(ctx,'resume'),child:const Text('Tiếp tục nhập'))]));
+            content:SizedBox(width:440,height:((carts.length*74)+48).clamp(130,375).toDouble(),
+              child:ListView(children:[
+                const Text('Mỗi cửa sổ lưu giỏ riêng. Chọn giỏ để tiếp tục.'),
+                for(var i=0;i<carts.length;i++)
+                  ListTile(
+                    title:Text('Giỏ '+(i+1).toString()),
+                    subtitle:Text('Dòng hàng: '+((carts[i].draft['lines'] as List?)?.length??0).toString()+
+                      ' · '+carts[i].id.substring(carts[i].id.length>13?carts[i].id.length-13:0)),
+                    onTap:()=>Navigator.pop(ctx,'resume:'+carts[i].id),
+                    trailing:IconButton(tooltip:'Bỏ giỏ này',
+                      onPressed:()=>Navigator.pop(ctx,'discard:'+carts[i].id),
+                      icon:const Icon(Icons.delete_outline)),
+                  ),
+              ])),
+            actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Đóng'))],
+          ));
           if(!_sameScope(token,scope.branch)||decision==null)return;
-          if(decision=='discard'){
-            try{await widget.client.localStore!.clearCart(scope);draft=null;}
-            catch(_){inform('Không xóa được giỏ trên máy.',error:true);return;}
+          final picked=decision.substring(decision.indexOf(':')+1);
+          final target=carts.where((e)=>e.id==picked).firstOrNull;
+          if(target==null)return;
+          if(decision.startsWith('discard:')){
+            final yes=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(
+              title:const Text('Xóa giỏ trên máy?'),
+              content:const Text('Chỉ xóa giỏ được chọn, không xóa giỏ cửa sổ khác hoặc chứng từ.'),
+              actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Giữ lại')),
+                FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Xóa giỏ'))]));
+            if(yes==true&&_sameScope(token,scope.branch)){
+              try{await widget.client.localStore!.clearScopedCart(scope,picked);}
+              catch(_){inform('Không thể xóa giỏ trên máy.',error:true);}
+            }
+            return;
           }
+          draft=Map<String,dynamic>.from(target.draft)..['localSourceCartId']=picked;
         }
       }
       final form=await editForm(order:source??draft,copying:source!=null,localDraft:draft!=null);if(form==null||!mounted||widget.session.token!=token)return;
       final auto=form.remove('_confirmAfterSave')==true;
+      final selectedCartId=form.remove('_localCartId') as String?;
       setState((){
+        pendingCreateCartId=selectedCartId;
         pendingCreate=Map<String,dynamic>.from(form);
         pendingCreateKey=newKey();pendingCreateAutoConfirm=auto;pendingNeedsReceipt=false;
       });
@@ -2163,7 +2203,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     if(saving||body==null||key==null||!can('orders.create'))return;
     setState(()=>saving=true);
     try{
-      await _persistPending(scope,'create',key,body,auto:pendingCreateAutoConfirm);
+      await _persistPending(scope,'create',key,body,auto:pendingCreateAutoConfirm,cartId:pendingCreateCartId);
       if(!_sameScope(token,body['branchId'] as String))return;
       // This exact body+key also recovers a lost acknowledgment after COMMIT.
       final recovered=_localConfigured&&pendingNeedsReceipt
@@ -2175,11 +2215,14 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       final auto=pendingCreateAutoConfirm;
       final next=auto?<String,dynamic>{'id':created['id'],'branchId':body['branchId'],'revision':created['revision']}:null;
       final nextKey=auto?newKey():null;
-      if(scope!=null)await widget.client.localStore!.clearCart(scope);
+      if(scope!=null){
+        if(pendingCreateCartId!=null)await widget.client.localStore!.clearScopedCart(scope,pendingCreateCartId!);
+        else await widget.client.localStore!.clearCart(scope);
+      }
       await _persistPending(scope,auto?'confirm':null,nextKey,next,previousKey:key);
       if(!_sameScope(token,body['branchId'] as String))return;
       setState((){
-        pendingCreate=null;pendingCreateKey=null;pendingCreateAutoConfirm=false;
+        pendingCreate=null;pendingCreateKey=null;pendingCreateAutoConfirm=false;pendingCreateCartId=null;
         if(auto){
           pendingConfirm=next;
           pendingConfirmKey=nextKey;
@@ -2190,7 +2233,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       await reload();
     }on LocalRecoveryConflict catch(_){
       if(_sameScope(token,body['branchId'] as String))setState((){
-        pendingCreate=null;pendingCreateKey=null;pendingCreateAutoConfirm=false;localRecoveryBlocked=true;
+        pendingCreate=null;pendingCreateKey=null;pendingCreateAutoConfirm=false;pendingCreateCartId=null;localRecoveryBlocked=true;
       });
       inform('Yêu cầu đang chờ ở cửa sổ khác. Không gửi trùng.',error:true);
     }on ErpApiError catch(e){
@@ -2209,7 +2252,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         try{await _persistPending(scope,null,null,null,previousKey:key);}catch(_){inform('Chưa xóa được yêu cầu đã từ chối trên máy.',error:true);return;}
         if(!_sameScope(token,body['branchId'] as String))return;
         setState((){
-          pendingCreate=null;pendingCreateKey=null;pendingCreateAutoConfirm=false;
+          pendingCreate=null;pendingCreateKey=null;pendingCreateAutoConfirm=false;pendingCreateCartId=null;
         });
         inform('Không lưu được với thông tin đã chọn. Anh/chị hãy kiểm tra và lập lại đơn.',error:true);
       }else if(mounted){
