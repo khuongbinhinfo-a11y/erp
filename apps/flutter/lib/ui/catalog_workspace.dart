@@ -1527,12 +1527,33 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
             isError:true);
         }
       }else if(resource=='products'||resource=='groups'||resource=='categories'){
-        final results=await Future.wait([
-          widget.client.catalogItems(widget.session.token,'groups',branchId:branch),
-          widget.client.catalogItems(widget.session.token,'brands',branchId:branch),
-          widget.client.catalogItems(widget.session.token,'categories',branchId:branch),
-        ]);
-        productGroups=results[0];brands=results[1];categories=results[2];
+        // An installation on schema 0019 must still allow old name/status edits.
+        productGroups=await widget.client.catalogItems(
+          widget.session.token,'groups',branchId:branch);
+        try{
+          final taxonomy=await Future.wait([
+            widget.client.catalogItems(widget.session.token,'brands',branchId:branch),
+            widget.client.catalogItems(widget.session.token,'categories',branchId:branch),
+          ]);
+          brands=taxonomy[0];categories=taxonomy[1];
+        }on ErpApiError catch(e){if(e.status!=503)rethrow;}
+        // Do not drop assigned IDs merely because dropdown pages stop at 100.
+        Future<void> includeAssigned(String kind,String? assigned,
+            List<Map<String,dynamic>> options)async{
+          if(assigned==null||options.any((x)=>x['id']==assigned))return;
+          final found=await widget.client.catalogItems(widget.session.token,
+            kind,branchId:branch,itemId:assigned);
+          options.addAll(found);
+        }
+        await includeAssigned('groups',resource=='categories'
+          ?row['groupId'] as String?:productGroupId,productGroups);
+        if(brands.isNotEmpty||oldBrandId!=null){
+          await includeAssigned('brands',oldBrandId,brands);
+        }
+        if(categories.isNotEmpty||oldCategoryId!=null||oldParentId!=null){
+          await includeAssigned('categories',oldCategoryId,categories);
+          await includeAssigned('categories',oldParentId,categories);
+        }
       }
     }on ErpApiError catch(e){
       if(mounted)ErpToast.show(context,_errorMessage(e),isError:true);
