@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:erp_distribution/ui/company_workspace.dart';
+import 'package:erp_distribution/ui/catalog_workspace.dart';
 import 'package:erp_distribution/ui/erp_tokens.dart';
 import 'package:erp_distribution/ui/identity_client.dart';
 
@@ -29,6 +30,20 @@ Future<void> openCompanyCatalog(WidgetTester tester,String destination)async{
 }
 
 void main(){
+  test('lost ACK group edit replays original derived category removal',(){
+    final pending=<String,dynamic>{
+      'branchId':branch,'groupId':'new-group','categoryId':null,
+    };
+    final refreshed=<String,dynamic>{'branchId':branch,'groupId':'new-group'};
+    expect(samePendingProductBulkIntent(pending,'group',refreshed),isTrue);
+    expect(samePendingProductBulkIntent(pending,'group',
+      {'branchId':branch,'groupId':'other-group'}),isFalse);
+    expect(samePendingProductBulkIntent(pending,'category',
+      {'branchId':branch,'categoryId':null}),isTrue);
+    expect(samePendingProductBulkIntent(pending,'active',
+      {'branchId':branch,'active':true}),isFalse);
+  });
+
   test('login 503 is a backend problem, never shown as user network or bad password', () async {
     final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
       httpClient:MockClient((request)async{
