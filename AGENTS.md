@@ -5,6 +5,7 @@
 - Không viết lại backend/app từ đầu. Copy/adapt code nghiệp vụ **và tests** từ legacy read-only; giữ foundation ERP đã đúng. Kiểm dependency, lỗi nguồn, xung đột API/schema/Decimal/RBAC/transaction/ledger/audit/idempotency và ảnh hưởng liên module trước khi copy. Characterization + regression tests; không mang lỗi cũ sang, không tự cắt nghiệp vụ.
 - Ghi ma trận source SHA/path:line → target → KEEP/COPY-ADAPT/CONSOLIDATE/DROP/MISSING, lý do và test. Không duplicate engine giá/ledger; không copy raw migration, data/PII/secrets/assets khách cũ. Hai repo cũ chỉ đọc.
 - Flutter: UX mới phải tốt hơn; nếu không giữ bố cục/thao tác app cũ. Số format khi gõ, tiếng Việt, bảng compact, toast. V4.1 ưu tiên T0 rồi T1; #44/#43 repo phụ. Không nhảy lô.
+- **T2 APK bắt buộc (issue #46):** ngay APK Android đầu tiên phải có **Cập nhật ứng dụng** theo luồng tham khảo read-only `milktea-cus/MCP-FBMN`: agent tự build **signed release** và publish bản mới lên **R2 riêng ERP** sau gate/owner duyệt, app kiểm bản mới → tải ticket xác thực → SHA/signature/package/version verify → Android OS hỏi xác nhận cài đè. Giữ SQLite/outbox/session, không gỡ app, không silent install; test 2 bản signed trên thiết bị thật. Không dùng bucket/secret/package/branding MCP-FBMN; xem `docs/MASTER_PLAN.md §6.1` trước mọi việc T2 và không giao owner build/upload APK.
 
 ## Phát hành — không hỏi owner nhắc lại
 1. Dev trên `khuongbinhinfo-a11y/erp`, branch agent/* từ exact main. CI required PASS + Codex sạch trên final PR SHA, owner cho phép merge.
