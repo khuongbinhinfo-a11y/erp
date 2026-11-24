@@ -220,8 +220,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     final groups=await widget.client.catalogDirectoryAll(widget.session.token,'groups',branchId:branchId!);
     List<Map<String,dynamic>> categories=[];
     try{
-      categories=await widget.client.catalogItems(widget.session.token,
-        'categories',branchId:branchId);
+      categories=await widget.client.catalogDirectoryAll(widget.session.token,
+        'categories',branchId:branchId!);
     }on ErpApiError catch(e){if(e.status!=503)rethrow;}
     if(!mounted)return;
     String action='active',value='true';
@@ -463,9 +463,9 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
       if((resource=='products'||resource=='groups'||resource=='categories')&&previous==null){
         try{
           availableBrands=await widget.client.catalogDirectoryAll(
-            widget.session.token,'brands',branchId:branchId);
+            widget.session.token,'brands',branchId:branchId!);
           availableCategories=await widget.client.catalogDirectoryAll(
-            widget.session.token,'categories',branchId:branchId);
+            widget.session.token,'categories',branchId:branchId!);
         }on ErpApiError catch(e){if(e.status!=503)rethrow;}
       }
       if((resource=='products'||resource=='categories')&&previous==null){
@@ -1695,7 +1695,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                       items:[
                         const DropdownMenuItem<String?>(value:null,child:Text('Danh mục cấp đầu')),
                         ...categories.where((c)=>c['groupId']==row['groupId']&&
-                          c['id']!=id&&c['active']!=false).map(
+                          c['id']!=id&&(c['active']!=false||c['id']==parentId)).map(
                           (c)=>DropdownMenuItem<String?>(
                             value:c['id'] as String,
                             child:Text('${c['code']} · ${c['name']}'))),
