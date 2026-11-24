@@ -11,6 +11,7 @@ export type BulkAction="CREATE"|"UPDATE"|"UNCHANGED"|"ERROR";
 export type BulkInput={
  branchId:string;resource:BulkResource;mode:BulkMode;fileName:string;
  contentBase64:string;hasHeader:boolean;mapping:Record<string,string>;
+ priceListId?:string;defaultEffectiveAt?:string;
 };
 export type BulkRow={
  line:number;key:string;action:BulkAction;before:Record<string,unknown>|null;
@@ -98,7 +99,7 @@ export function suggestBulkMapping(resource:BulkResource,headers:string[]):Recor
 export function checkBulkInput(value:unknown):BulkInput{
  if(!value||typeof value!=="object"||Array.isArray(value))throw new BulkFault("INVALID_BULK_INPUT");
  const v=value as Record<string,unknown>;
- if(Object.keys(v).some(k=>!["branchId","resource","mode","fileName","contentBase64","hasHeader","mapping","previewHash"].includes(k)))
+ if(Object.keys(v).some(k=>!["branchId","resource","mode","fileName","contentBase64","hasHeader","mapping","previewHash","priceListId","defaultEffectiveAt"].includes(k)))
   throw new BulkFault("UNKNOWN_FIELD");
  if(typeof v.branchId!=="string"||
    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v.branchId))
@@ -111,17 +112,24 @@ export function checkBulkInput(value:unknown):BulkInput{
     typeof v.mapping!=="object"||Array.isArray(v.mapping))
   throw new BulkFault("INVALID_FILE_MAPPING");
  const resource=v.resource as BulkResource;
+ if(v.priceListId!==undefined&&(resource!=="prices"||typeof v.priceListId!=="string"||
+   !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v.priceListId)))
+  throw new BulkFault("INVALID_PRICE_LIST");
+ if(v.defaultEffectiveAt!==undefined&&(!v.priceListId||typeof v.defaultEffectiveAt!=="string"||
+   !validEffectiveAt(v.defaultEffectiveAt)))throw new BulkFault("INVALID_EFFECTIVE_AT");
  const mapping=v.mapping as Record<string,unknown>;
  if(Object.keys(mapping).some(x=>!DEFINITIONS[resource][x]||
     typeof mapping[x]!=="string"||(mapping[x] as string).length>160))
   throw new BulkFault("INVALID_FILE_MAPPING");
  if(new Set(Object.values(mapping)).size!==Object.keys(mapping).length)
   throw new BulkFault("DUPLICATE_COLUMN_MAPPING");
- const keys=resource==="prices"?["priceListCode","productCode"]:["code"];
+ const keys=resource==="prices"?(v.priceListId?["productCode"]:["priceListCode","productCode"]):["code"];
  if(keys.some(k=>!mapping[k]))throw new BulkFault("MISSING_KEY_MAPPING");
  return {branchId:v.branchId,resource,mode:v.mode as BulkMode,
    fileName:v.fileName,contentBase64:v.contentBase64,
-   hasHeader:v.hasHeader,mapping:mapping as Record<string,string>};
+   hasHeader:v.hasHeader,mapping:mapping as Record<string,string>,
+   ...(typeof v.priceListId==="string"?{priceListId:v.priceListId.toLowerCase()}:{}),
+   ...(typeof v.defaultEffectiveAt==="string"?{defaultEffectiveAt:v.defaultEffectiveAt}:{})};
 }
 export function mappedRows(input:BulkInput,parsed:ParsedBulkFile){
  for(const column of Object.values(input.mapping)){
@@ -133,6 +141,24 @@ export function mappedRows(input:BulkInput,parsed:ParsedBulkFile){
   const cell=(cells[index]??"").trim();
   return [f,isCsv?restoreCsvGuard(cell):cell];
  })) as Record<string,string>);
+}
+/** Resolve the selected destination against the authenticated branch for both
+ * preview and apply. A file declaring another destination is rejected. */
+async function mappedTargetRows(db:PoolClient,tenant:string,input:BulkInput,file:ParsedBulkFile){
+ const rows=mappedRows(input,file);
+ if(!input.priceListId)return rows;
+ const list=await db.query<{code:string}>(`SELECT code FROM catalog_price_list
+  WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active`,
+  [tenant,input.branchId,input.priceListId]);
+ const target=list.rows[0]?.code;
+ if(!target)throw new BulkFault("PRICE_LIST_NOT_FOUND_OR_INACTIVE",409);
+ for(const row of rows){
+  if(row.priceListCode&&row.priceListCode!==target)
+   throw new BulkFault("PRICE_LIST_TARGET_MISMATCH",409);
+  row.priceListCode=target;
+  if(!row.effectiveAt&&input.defaultEffectiveAt)row.effectiveAt=input.defaultEffectiveAt;
+ }
+ return rows;
 }
 function code(v:string|undefined,kind:string):string{
  if(!v||!CODE.test(v))throw new BulkFault("INVALID_"+kind);
@@ -302,7 +328,7 @@ function normalizeRow(
 export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
  input:BulkInput):Promise<BulkPlan>{
  const file=parseBulkFile(input.fileName,input.contentBase64,input.hasHeader);
- const data=mappedRows(input,file);
+ const data=await mappedTargetRows(db,tenant,input,file);
  const all=(f:string)=>[...new Set(data.map(r=>r[f]).filter(Boolean) as string[])];
  const branch=input.branchId,res=input.resource;
  const products=await db.query<Record<string,any>>(
@@ -538,6 +564,7 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
   tenant,actor,branch,resource:res,mode:input.mode,
   fileDigest:createHash("sha256").update(input.contentBase64).digest("hex"),
   mapping:input.mapping,hasHeader:input.hasHeader,rows:digest,
+  ...(input.priceListId?{priceListId:input.priceListId,defaultEffectiveAt:input.defaultEffectiveAt??null}:{}),
  })).digest("hex");
  return {rows,hash,summary};
 }
@@ -550,7 +577,8 @@ export async function applyBulkPlan(db:PoolClient,ctx:MutationContext,
   // Preview uses GET, apply must acquire same scope locks as single-price
   // inserts BEFORE checking the preview hash. Deterministic order avoids
   // deadlocks when two batches overlap multiple price lists/products.
-  const raw=mappedRows(input,parseBulkFile(input.fileName,input.contentBase64,input.hasHeader));
+  const raw=await mappedTargetRows(db,ctx.installationId,input,
+   parseBulkFile(input.fileName,input.contentBase64,input.hasHeader));
   const listCodes=[...new Set(raw.map(r=>r.priceListCode).filter(Boolean) as string[])];
   const productCodes=[...new Set(raw.map(r=>r.productCode).filter(Boolean) as string[])];
   const lists=await db.query<{id:string;code:string}>(
