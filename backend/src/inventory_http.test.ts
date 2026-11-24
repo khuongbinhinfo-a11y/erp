@@ -183,10 +183,7 @@ test("R3 real PostgreSQL: on-hand, hold, release, no oversell, exact replay, RBA
      VALUES($1,$2,$3,$4,'ISSUE','FULFILLMENT',$5,1,-3,$6,'direct-issue-test')`,
    [t,b,w,productId,randomUUID(),root.actorId]),/insufficient available stock/i);
   const heldOrder=orders[winner]!;
-  assert.equal((await make("/v1/sales/orders/"+heldOrder+"/amend",
-   {branchId:b,reason:"Change planned order"},1)).status,409);
-  assert.equal((await make("/v1/sales/orders/"+heldOrder+"/cancel",
-   {branchId:b,reason:"Cancel test order"},1)).status,409);
+  // No mutation yet: late lifecycle regression checks safe hold release.
   const held=await call("/v1/inventory/reservations?branchId="+b+"&warehouseId="+w,
    "GET",undefined,token);
   assert.equal(held.status,200);assert.equal(held.body.items.length,1);
@@ -413,6 +410,33 @@ test("R3 real PostgreSQL: on-hand, hold, release, no oversell, exact replay, RBA
      product_id,kind,source_type,source_id,source_line,delta_base,actor_id,request_id)
      VALUES($1,$2,$3,$4,'ISSUE','FULFILLMENT',$5,1,-1,$6,'negative-denied')`,
    [t,b,w,productId,randomUUID(),root.actorId]),/insufficient available stock/i);
+  // Order edits/cancellation before physical posting must release unexecuted
+  // holds/backorders atomically instead of trapping the operator.
+  const amendedLarge=await make("/v1/sales/orders/"+largeOrder.body.id+"/amend",
+    {branchId:b,reason:"Change planned order"},1);
+  assert.equal(amendedLarge.status,201,JSON.stringify(amendedLarge.body));
+  assert.equal(amendedLarge.body.version,2);
+  const largeHoldAfter=await pool.query<{state:string;quantity:string;backordered:string}>(`
+   SELECT state,quantity_base::text AS quantity,backordered_base::text AS backordered
+   FROM inventory_reservation WHERE installation_id=$1 AND branch_id=$2
+     AND order_id=$3 ORDER BY created_at DESC LIMIT 1`,
+    [t,b,largeOrder.body.id]);
+  assert.deepEqual(largeHoldAfter.rows[0],{state:"RELEASED",quantity:"2.000000",backordered:"5.000000"});
+  const cancelledZero=await make("/v1/sales/orders/"+zeroOrder.body.id+"/cancel",
+    {branchId:b,reason:"Waiting for stock"},1);
+  assert.equal(cancelledZero.status,200,JSON.stringify(cancelledZero.body));
+  const zeroHoldAfter=await pool.query<{state:string}>(`
+   SELECT state FROM inventory_reservation WHERE installation_id=$1
+     AND branch_id=$2 AND order_id=$3 ORDER BY created_at DESC LIMIT 1`,
+    [t,b,zeroOrder.body.id]);
+  assert.equal(zeroHoldAfter.rows[0]?.state,"RELEASED");
+  // Same order mutation/command receipt must replay without releasing twice.
+  const closeKey="cancel-replay-"+randomUUID();
+  const cancelledWithReceipt=await make("/v1/sales/orders/"+orders[loser]+"/cancel",
+    {branchId:b,reason:"No longer required"},1,closeKey);
+  assert.equal(cancelledWithReceipt.status,200,JSON.stringify(cancelledWithReceipt.body));
+  assert.deepEqual((await make("/v1/sales/orders/"+orders[loser]+"/cancel",
+    {branchId:b,reason:"No longer required"},1,closeKey)).body,cancelledWithReceipt.body);
   // Simulate a production installation still on Sales 0010 while Inventory 0011 awaits approval.
   // Existing legitimate commercial actions must remain available without the new relation.
   await pool.query("DROP TABLE inventory_reservation CASCADE");
