@@ -600,10 +600,9 @@ void main(){
     await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),home:Scaffold(
       body:CatalogWorkspace(area:'price-lists',session:activeSession(),client:client))));
     await tester.pumpAndSettle();
-    final menu=find.byKey(const ValueKey('catalog-price-list-actions-$priceId'));
-    await tester.tap(menu);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Sửa').last);
+    final edit=find.byKey(const ValueKey('catalog-edit-$priceId'));
+    await tester.ensureVisible(edit);
+    await tester.tap(edit);
     await tester.pumpAndSettle();
     final search=find.byKey(const ValueKey('price-edit-customer-search'));
     await tester.ensureVisible(search);
