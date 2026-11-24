@@ -583,6 +583,24 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
   assert.equal(scopedTemplate.status,200);
   assert.ok(scopedTemplate.body.headers.includes("Mã SKU"));
   assert.ok(!scopedTemplate.body.headers.includes("Mã bảng giá"));
+  const discounted={...dest,mode:"UPSERT",
+   defaultEffectiveAt:"2026-11-22T00:00:00Z",
+   contentBase64:Buffer.from("Mã SKU,Giá,CK\nSP01,10000,10\n").toString("base64"),
+   mapping:{skuCode:"Mã SKU",amount:"Giá",discountRate:"CK"}};
+  const discountedPreview=await preview(discounted);
+  assert.equal(discountedPreview.status,200,JSON.stringify(discountedPreview.body));
+  assert.equal(discountedPreview.body.summary.update,1);
+  assert.equal((await apply(discounted,discountedPreview.body.hash)).status,200);
+  const discountedAgain=await preview(discounted);
+  assert.equal(discountedAgain.status,200,JSON.stringify(discountedAgain.body));
+  assert.equal(discountedAgain.body.summary.unchanged,1,
+   "identical discounted SKU price reimport must be idempotent");
+  const discountedExport=await request("/v1/catalog/bulk/export?branchId="+branchId+
+   "&resource=prices&priceListId="+target.body.id,"GET",undefined,token);
+  assert.equal(discountedExport.status,200);
+  assert.match(discountedExport.body.content,/10000/);
+  assert.match(discountedExport.body.content,/10/);
+
 
   const otherBranch=(await db.query<{id:string}>(
    "INSERT INTO branch(installation_id,code,name) VALUES($1,'OTHER','Other') RETURNING id",
