@@ -83,6 +83,13 @@ test("CSV: explicit group clear cannot keep old category; omitted group can",()=
    {groupCode:""},current,refs,branch);
  assert.equal(cleared.operation.groupId,null);
  assert.equal(cleared.operation.categoryId,null);
+ assert.throws(()=>normalizeRow("products","UPDATE",
+   {groupCode:"",brandCode:"NATURE"},current,refs,branch),
+   (e)=>e instanceof BulkFault&&e.code==="BRAND_GROUP_MISMATCH");
+ const sameBrand=normalizeRow("products","UPDATE",
+   {brandCode:"NATURE"},current,refs,branch);
+ assert.equal(sameBrand.after.brandCode,"NATURE");
+ assert.equal(Object.hasOwn(sameBrand.operation,"groupId"),false);
 });
 
 test("product CSV/XLSX mapping recognizes Vietnamese brand and category codes",()=>{
