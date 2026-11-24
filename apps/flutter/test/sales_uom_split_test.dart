@@ -67,7 +67,7 @@ void main(){
           final quoted=[for(var i=0;i<lines.length;i++){
             'sellSkuId':lines[i]['sellSkuId'],
             'unitPrice':prices[i], 'lineTotal':prices[i],
-            'priceSignature':'NaN',
+            'priceSignature':'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
           }];
           return reply({'quote':{'lines':quoted,'subtotal':'9800',
             'discountTotal':'0','taxTotal':'0','grandTotal':'9800'}},200);
