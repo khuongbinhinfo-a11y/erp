@@ -18,6 +18,7 @@ class SalesWorkspace extends StatefulWidget {
 }
 class _OrderLine {
   String sellSkuId;
+  String overrideReason='';
   final TextEditingController quantity,unitPrice,discountRate,taxRate;
   final FocusNode quantityFocus=FocusNode();
   final FocusNode unitFocus=FocusNode();
@@ -211,6 +212,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     int listResolveGeneration=0;
     final note=TextEditingController(text:order?['note'] as String? ?? '');
     final lines=<_OrderLine>[];
+    var documentDiscountMode='NONE',documentDiscountValue='0',documentDiscountReason='',overrideReason='';
     if(order?['lines'] is List){
       for(final v in order!['lines'] as List<dynamic>){
         final row=Map<String,dynamic>.from(v as Map);
@@ -243,10 +245,17 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         }
         final line=_OrderLine(matching.single['id'] as String,row['quantity'].toString());
         final snapshot=row['priceSnapshot'];
+        if(!copying&&snapshot is Map&&snapshot['documentDiscount'] is Map){
+          final d=snapshot['documentDiscount'] as Map;
+          documentDiscountMode=(d['mode']??'NONE').toString();
+          documentDiscountValue=erpGroupedDecimalText(d['value']);
+          documentDiscountReason=(d['reason']??'').toString();
+        }
         if(!copying&&snapshot is Map&&snapshot['manualOverride']==true){
           line.unitPrice.text=erpGroupedDecimalText(row['unitPrice']);
           line.discountRate.text=erpGroupedDecimalText(row['discountRate']);
           line.taxRate.text=erpGroupedDecimalText(row['taxRate']);
+          line.overrideReason=(snapshot['overrideReason']??'').toString();
         }
         lines.add(line);
       }
@@ -268,8 +277,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         RegExp(r'^\d{1,13}(?:\.\d{1,4})?$').hasMatch(erpNumberCanonical(x.unitPrice.text)))&&
       RegExp(r'^\d{1,3}(?:\.\d{1,2})?$').hasMatch(erpNumberCanonical(x.discountRate.text))&&
       RegExp(r'^\d{1,3}(?:\.\d{1,2})?$').hasMatch(erpNumberCanonical(x.taxRate.text)));
+    bool documentDiscountActive()=>documentDiscountMode!='NONE'&&RegExp('[1-9]').hasMatch(documentDiscountValue);
+    Map<String,dynamic> documentDiscount()=>{'mode':documentDiscountMode,'value':erpNumberCanonical(documentDiscountValue),'reason':documentDiscountReason.trim()};
+    bool hasManualPrice()=>lines.any((line)=>line.unitPrice.text.trim().isNotEmpty);
     String stamp()=>[
-      customer??'',list??'',channel??'',
+      customer??'',list??'',channel??'',documentDiscountMode,erpNumberCanonical(documentDiscountValue),
       ...lines.map((x)=>[x.sellSkuId,erpNumberCanonical(x.quantity.text),
         erpNumberCanonical(x.unitPrice.text),erpNumberCanonical(x.discountRate.text),
         erpNumberCanonical(x.taxRate.text)].join(':')),
@@ -296,6 +308,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         final basket=await widget.client.salesPricePreview(widget.session.token,{
           'branchId':branch,'customerId':customer,'priceListId':list,
           if(channel!=null)'channelId':channel,
+          if(modern&&documentDiscountActive())'documentDiscount':documentDiscount(),
           'lines':lines.map((line)=>{'sellSkuId':line.sellSkuId,
             'quantity':erpNumberCanonical(line.quantity.text),
             if(line.unitPrice.text.trim().isNotEmpty)
@@ -845,6 +858,13 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         refresh(()=>formError='Giá chưa cập nhật xong. Kiểm tra kết nối hoặc bấm Làm mới giá.');
         return;
       }
+      if(modern&&documentDiscountActive()&&documentDiscountReason.trim().isEmpty){
+        refresh(()=>formError='Nhập lý do chiết khấu toàn đơn.');return;
+      }
+      if(modern&&lines.any((line)=>line.unitPrice.text.trim().isNotEmpty&&
+        line.overrideReason.trim().isEmpty)&&overrideReason.trim().isEmpty){
+        refresh(()=>formError='Nhập lý do điều chỉnh giá, chiết khấu hoặc thuế.');return;
+      }
       if(modern&&(warehouseId==null||walkInBusy||
         (customerMode=='WALK_IN'&&walkInPhone.trim().isNotEmpty&&
           !RegExp(r'^\+?[0-9]{9,15}$').hasMatch(walkInPhone.trim())))){
@@ -863,6 +883,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           if((order==null||copying)&&rememberDelivery)'rememberDeliveryChoice':true,
         },
         if(channel!=null)'channelId':channel,
+        if(modern&&documentDiscountActive())'documentDiscount':documentDiscount(),
         'note':note.text.trim(),
         'lines':lines.asMap().entries.map((entry)=>{
           'sellSkuId':entry.value.sellSkuId,
@@ -874,6 +895,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
             'discountRate':erpNumberCanonical(entry.value.discountRate.text),
           if(entry.value.unitPrice.text.trim().isNotEmpty)
             'taxRate':erpNumberCanonical(entry.value.taxRate.text),
+          if(modern&&entry.value.unitPrice.text.trim().isNotEmpty)
+            'overrideReason':overrideReason.trim().isNotEmpty?overrideReason.trim():entry.value.overrideReason,
         }).toList(),
         '_confirmAfterSave':confirm,
       });
@@ -890,7 +913,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         Navigator.pop(ctx);
         return;
       }
-      if(stamp()==originalStamp&&note.text.trim()==originalNote&&shippingStamp()==originalShippingStamp){
+      if(stamp()==originalStamp&&note.text.trim()==originalNote&&shippingStamp()==originalShippingStamp&&overrideReason.isEmpty){
         Navigator.pop(ctx);return;
       }
       final discard=await showDialog<bool>(context:ctx,builder:(confirmCtx)=>
@@ -1650,6 +1673,39 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       child:Text('Chưa có dòng hàng. Tìm theo mã, tên hoặc barcode rồi nhấn Enter để thêm.',
                         style:TextStyle(color:ErpTokens.muted))),
                     const Divider(height:12),
+                    if(modern&&can('orders.update'))...[
+                      Wrap(spacing:8,runSpacing:8,crossAxisAlignment:WrapCrossAlignment.center,children:[
+                        SizedBox(width:210,child:DropdownButtonFormField<String>(
+                          key:ValueKey('sales-document-discount-$documentDiscountMode'),
+                          initialValue:documentDiscountMode,isExpanded:true,
+                          decoration:const InputDecoration(labelText:'Chiết khấu toàn đơn',isDense:true),
+                          items:const [DropdownMenuItem(value:'NONE',child:Text('Không áp dụng')),
+                            DropdownMenuItem(value:'PERCENT',child:Text('Phần trăm')),
+                            DropdownMenuItem(value:'TOTAL_AMOUNT',child:Text('Số tiền VND'))],
+                          onChanged:(v){
+                            if(v==null)return;
+                            refresh((){documentDiscountMode=v;documentDiscountValue='0';});
+                            invalidate(refresh);scheduleQuote(ctx,refresh);
+                          })),
+                        if(documentDiscountMode!='NONE')SizedBox(width:160,child:TextFormField(
+                          key:ValueKey('sales-document-discount-value-$documentDiscountMode'),
+                          initialValue:documentDiscountValue,
+                          keyboardType:const TextInputType.numberWithOptions(decimal:true),
+                          inputFormatters:[ErpGroupedNumberFormatter(maxIntegerDigits:documentDiscountMode=='PERCENT'?3:13,
+                            maxFractionDigits:documentDiscountMode=='PERCENT'?2:0)],
+                          decoration:InputDecoration(labelText:documentDiscountMode=='PERCENT'?'Tỷ lệ %':'Số tiền VND',isDense:true),
+                          onChanged:(v){documentDiscountValue=v;invalidate(refresh);scheduleQuote(ctx,refresh);})),
+                      ]),
+                      if(documentDiscountMode!='NONE')TextFormField(
+                        key:const ValueKey('sales-document-discount-reason'),
+                        initialValue:documentDiscountReason,maxLength:500,
+                        decoration:const InputDecoration(labelText:'Lý do chiết khấu toàn đơn',isDense:true),
+                        onChanged:(v)=>documentDiscountReason=v),
+                      if(hasManualPrice())TextFormField(
+                        key:const ValueKey('sales-override-reason'),initialValue:overrideReason,maxLength:500,
+                        decoration:const InputDecoration(labelText:'Lý do điều chỉnh giá/CK/thuế',isDense:true),
+                        onChanged:(v)=>overrideReason=v),
+                    ],
                     TextField(controller:note,minLines:1,maxLines:2,
                       decoration:const InputDecoration(labelText:'Ghi chú',isDense:true,border:UnderlineInputBorder())),
                     if(formError!=null)Padding(
@@ -2048,6 +2104,13 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         Text('Thành tiền: '+money(line['lineTotal']),
                           style:const TextStyle(fontWeight:FontWeight.w700)),
                       ]),
+                      if(line['priceSnapshot'] is Map&&line['priceSnapshot']['overrideReason']!=null)
+                        Text('Lý do điều chỉnh: ${line['priceSnapshot']['overrideReason']}',
+                          style:const TextStyle(fontSize:12,color:ErpTokens.muted)),
+                      if(line['priceSnapshot'] is Map&&line['priceSnapshot']['documentDiscount'] is Map)
+                        Text('CK toàn đơn: '+money(line['priceSnapshot']['documentDiscount']['allocatedAmount'])+
+                          ' · '+(line['priceSnapshot']['documentDiscount']['reason']??'').toString(),
+                          style:const TextStyle(fontSize:12,color:ErpTokens.muted)),
                       if(line['priceSnapshot'] is Map)
                         Padding(padding:const EdgeInsets.only(top:6),
                           child:Text('Đơn vị cơ sở quy đổi: '+
