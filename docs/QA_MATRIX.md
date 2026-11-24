@@ -1,26 +1,25 @@
-# ERP — QA Matrix (PASS chỉ dựa trên log thực)
+# ERP — QA Matrix V4 (24/11/2026)
+PASS chỉ dựa trên log thật; [Master Plan V4](MASTER_PLAN.md) là lộ trình hiện hành.
 
 | Vùng | Kiểm thử bắt buộc | Gate |
-| --- | --- | --- |
-| Backend | lint, TypeScript strict, unit, integration, contract | PR CI |
-| PostgreSQL | fresh migration, replay, drift, constraints, concurrent transactions | POC |
-| Documents | post-once, revision, idempotency, reversal, lost ACK | Vertical slice |
-| Inventory | no-negative policy, two-device race, reconciliation | Vertical slice |
-| AR/AP | NUMERIC precision, payment dedupe, ledger rebuild | Vertical slice |
-| RBAC | installation, branch, warehouse, deny-by-default | POC |
-| Flutter | analyze, widget + integration, Android, Windows, Web | PR/release |
-| UI | 1440/1280/390/360 px, keyboard/focus/reduced motion | PR/UAT |
-| Offline | disconnect pre/post COMMIT, retry, stale data, account switch | POC |
-| Operations | secrets audit, backup, restore, smoke, release SHA | Release |
+|---|---|---|
+| Legacy reuse | Function-level KEEP/COPY/ADAPT/CONSOLIDATE/DROP/MISSING, characterization test, fixture tổng hợp, không data/secret cũ | Trước từng lô |
+| Backend | lint, typecheck, unit, integration, contract | PR CI |
+| PostgreSQL | fresh migration, replay, drift, concurrency, constraints | PR CI |
+| Policy | WARN/ALLOW tiếp tục đúng scope, BLOCK đúng hard invariant, âm kho/lô/vị trí/FEFO override, audit và reconciliation | T0/T3 |
+| Pricing/sales | Một engine search/quote/save/confirm, exact SKU, auto list/override, tax/CK, Decimal, price history, warehouse snapshot, stale/lost ACK | T1 |
+| Documents | post-once, revision, idempotency, correction/reversal, lost ACK | Mỗi vertical slice |
+| Inventory | partial reserve/backorder, actual negative stock by policy, lot/location, FEFO hint, two-device race, ledger rebuild | T3 |
+| Purchasing/AR/AP/COD | partial receipt/delivery, returns, payments/dedupe, custody, allocations, Decimal/reconciliation | T4/T5 |
+| RBAC | installation, branch, warehouse, deny-by-default | Mỗi lô |
+| Flutter | analyze, widget/integration, Android APK/AAB, Windows/Web build, PWA Safari Home Screen | PR/release; thật từ T2 |
+| UI | 1440/1280/390/360 px, keyboard/focus/reduced motion, không tab trùng, warning không modal spam, fast-entry | PR/UAT |
+| Offline | pre/post COMMIT, retry, stale price/stock, app restart, eviction, account switch, no fake ACK | T2 và mỗi mutation |
+| POS/Ordering/MCP | checkout nhanh, barcode/printer, canonical order, scoped portal và external source idempotency | T6–T8 |
+| Reports/performance | drilldown, ledger rebuild, CSV Việt hóa, đo tải đại diện 1000 đơn/ngày | T9 |
+| Operations | secrets audit, backup thật, restore cô lập, reconciliation, smoke, release SHA | Release |
 
-## Báo cáo
-Phân loại **ĐÃ XÁC MINH / CHƯA XÁC MINH / BỊ BÁC BỎ**. Nêu lệnh chạy, SHA, link log, môi trường, pass/fail/skipped; phân biệt CI, smoke và UAT. Không tự đóng issue khi còn gate chưa đạt.
-
-## Quy trình main-only (owner 18/11/2026)
-- GitHub Actions chỉ tự chạy trên `push main`, không cần CI nhánh/PR trước; Codex preview không thay thế kiểm thử.
-- Sau mỗi push read-back SHA + từng job/log; CI FAIL thì sửa hoặc revert trên `main`, ghi root cause, chưa triển khai lô mới hoặc deploy.
-- Production release vẫn cần CI PASS đúng SHA, backup/restore, reconciliation, smoke/UAT và owner duyệt riêng migration/deploy.
-
-## Backup rehearsal proof (POC)
-- CI `postgres-fresh-schema` phải thực thi `bash backend/scripts/ci-backup-restore.sh` trên PostgreSQL ephemeral, test cả restored schema, migration history, row counts và audit triggers. Nếu script chưa PASS không báo backup rehearsal PASS.
-- Backup thật `erp-demo`, restore vào DB cô lập, retention và migration production vẫn **CHƯA XÁC MINH**, độc lập với CI rehearsal.
+## Quy trình
+Repo phụ branch/PR → exact final head CI PASS và Codex sạch → owner cho phép merge → read-back → sync scope sang repo chính, so sánh blob/tree, ghi rõ repo chính hết quota và mapping CI, không giả PASS. Docs-only không deploy. Vercel deploy thủ công; backend/migration Codespace exact SHA/target khi owner giao. Auto OFF. Không dùng lịch sử direct-main làm gate hiện hành.
+Backup CI: postgres-fresh-schema chạy bash backend/scripts/ci-backup-restore.sh ephemeral và kiểm restore schema/history/count/triggers. Không thay cho encrypted backup thật + read-back + isolated restore/reconciliation + owner approval production.
+Báo ĐÃ XÁC MINH / CHƯA XÁC MINH / BỊ BÁC BỎ, link SHA/log/môi trường; phân biệt CI/smoke/UAT; không đóng issue nếu acceptance chưa đạt.
