@@ -307,6 +307,50 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
             Text('Đã chọn ${selected.length} SKU',
               style:const TextStyle(fontWeight:FontWeight.w700)),
           ]),
+        if(brands.isNotEmpty||groups.isNotEmpty||categories.isNotEmpty)
+          Padding(padding:const EdgeInsets.only(top:8),child:Wrap(
+            spacing:8,runSpacing:8,children:[
+              SizedBox(width:178,child:DropdownButtonFormField<String?>(
+                key:ValueKey('price-brand-filter-$brandId'),
+                initialValue:brandId,isExpanded:true,
+                decoration:const InputDecoration(labelText:'Nhãn hàng',isDense:true),
+                items:[
+                  const DropdownMenuItem<String?>(value:null,child:Text('Tất cả nhãn hàng')),
+                  ...brands.where((b)=>b['active']!=false).map((b)=>
+                    DropdownMenuItem<String?>(value:b['id'] as String,
+                      child:Text(b['name'].toString(),overflow:TextOverflow.ellipsis))),
+                ],
+                onChanged:saving?null:(v){setState((){
+                  brandId=v;groupId=null;categoryId=null;
+                });load();})),
+              SizedBox(width:178,child:DropdownButtonFormField<String?>(
+                key:ValueKey('price-group-filter-$brandId-$groupId'),
+                initialValue:groupId,isExpanded:true,
+                decoration:const InputDecoration(labelText:'Nhóm sản phẩm',isDense:true),
+                items:[
+                  const DropdownMenuItem<String?>(value:null,child:Text('Tất cả nhóm')),
+                  ...groups.where((g)=>g['active']!=false&&
+                    (brandId==null||g['brandId']==brandId)).map((g)=>
+                    DropdownMenuItem<String?>(value:g['id'] as String,
+                      child:Text(g['name'].toString(),overflow:TextOverflow.ellipsis))),
+                ],
+                onChanged:saving?null:(v){setState((){
+                  groupId=v;categoryId=null;
+                });load();})),
+              SizedBox(width:178,child:DropdownButtonFormField<String?>(
+                key:ValueKey('price-category-filter-$groupId-$categoryId'),
+                initialValue:categoryId,isExpanded:true,
+                decoration:const InputDecoration(labelText:'Danh mục cha/con',isDense:true),
+                items:[
+                  const DropdownMenuItem<String?>(value:null,child:Text('Tất cả danh mục')),
+                  ...categories.where((c)=>c['active']!=false&&
+                    (groupId==null||c['groupId']==groupId)).map((c)=>
+                    DropdownMenuItem<String?>(value:c['id'] as String,
+                      child:Text('${c['code']} · ${c['name']}',
+                        overflow:TextOverflow.ellipsis))),
+                ],
+                onChanged:saving?null:(v){setState(()=>categoryId=v);load();})),
+            ])),
         if(loading)const Padding(padding:EdgeInsets.only(top:8),
           child:LinearProgressIndicator()),
         if(error!=null)Padding(padding:const EdgeInsets.symmetric(vertical:8),
