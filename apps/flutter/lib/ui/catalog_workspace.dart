@@ -294,13 +294,27 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
         }
         body['categoryId']=categoryId;
       }
+      final stored=pending?.payload??<String,dynamic>{
+        ...body,'_erpExpectedRevision':product['revision'] as int,
+      };
+      final outgoing=Map<String,dynamic>.from(stored)..remove('_erpExpectedRevision');
+      if(pending!=null&&outgoing.toString()!=body.toString()){
+        failed++;continue; // Unresolved command must not silently change its body.
+      }
+      final expected=(stored['_erpExpectedRevision'] as int?)??product['revision'] as int;
       final key=pending?.key??'batch-product-${DateTime.now().microsecondsSinceEpoch}-$id';
-      if(pending==null)widget.client.retainR1(widget.session.actorId,branchId!,kind,body,key);
+      if(pending==null)widget.client.retainR1(widget.session.actorId,branchId!,kind,stored,key);
       try{
         await widget.client.updateCatalogWithKey(widget.session.token,'products',id,
-          product['revision'] as int,pending?.payload??body,key:key);
+          expected,outgoing,key:key);
         widget.client.clearR1(widget.session.actorId,branchId!,kind);
         selectedProducts.remove(id);done++;
+      }on ErpApiError catch(e){
+        if([400,403,404,409,422].contains(e.status)){
+          widget.client.clearR1(widget.session.actorId,branchId!,kind);
+          selectedProducts.remove(id); // Force reselection with a fresh revision.
+        }
+        failed++;
       }catch(_){failed++;}
     }
     if(!mounted)return;
