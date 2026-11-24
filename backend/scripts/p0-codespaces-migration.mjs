@@ -405,7 +405,7 @@ async function main(mode){
  let tmp,container;
  try{
   const v=await versions(pool);
-  if(v.length===19){await validateSchema(pool,"after");
+  if(v.length===19){await validateSchema(pool,"after");await verifyP0Schema(pool);
     // Existing assignments may now contain live rows; a completed migration
     // is not expected to remain empty on subsequent read-only checks.
     console.log("ERP_P0_ALREADY_MIGRATED_19");return;}
