@@ -3,6 +3,8 @@ Chi tiết chính sách vận hành: [Master Plan V4](MASTER_PLAN.md) mục 3. �
 
 ## Hard invariants
 1. Canonical server ID, lifecycle hợp lệ; order, fulfillment, delivery, payment là aggregate riêng có lineage. POS nhận ngay dùng luồng ngắn, không duplicate core.
+   - MANUAL/TRIP là mode giao, PICKUP là giao tại quầy POS, MCP là nguồn đơn. Không ép qua bước kho/giao không cần; direct issue/completion/settlement dùng chung cho MANUAL/PICKUP. TRIP gom soạn và đóng trên một quy trình UX, vẫn giữ fact thực tế.
+   - Tồn trừ lúc xuất thực; AR theo lượng thực nhận sau trừ hàng chưa giao đã nhập trả; thu đủ/thu phần/ghi nợ 0 đều dùng payment/AR canonical, không sinh payment 0. Thu tiền dư xử lý ứng trước/hoàn tiền hợp lệ, không phân bổ vượt khoản phải thu. Không post lại khi chuyển mode hoặc retry.
 2. Posted ledger/facts không UPDATE/DELETE. Cho người dùng thao tác Sửa/Điều chỉnh; backend tạo correction/reversal có chứng từ gốc, actor, số lượng/tiền đúng và audit.
 3. Mutation nhạy cảm: scope, actor, request ID, revision, Idempotency-Key; cùng key/body replay receipt, khác body conflict; lost ACK read-before-retry, reconcile trước khi sửa payload.
 4. Inventory ledger append-only quyết định tồn; AR/AP ledger quyết định nợ, payment allocation quyết định thu/chi/đối trừ. Không suy nợ từ order chưa giao; ứng trước có fact riêng. Snapshot kiểm chứng/rebuild được.
