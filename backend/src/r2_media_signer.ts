@@ -27,7 +27,19 @@ export function resolveR2Config(values:Record<string,string|undefined>=process.e
 export function presignR2(config:R2Config,
   method:"PUT"|"GET"|"HEAD",objectKey:string,
   contentType?:string,now=new Date(),ttlSeconds=300,contentLength?:number):string{
-  if(!KEY.test(objectKey)||ttlSeconds<1||ttlSeconds>600)
+  if(!KEY.test(objectKey))throw new Error("R2_SIGN_INPUT_INVALID");
+  return presignObject(config,method,objectKey,contentType,now,ttlSeconds,contentLength);
+}
+
+/** Separate read-only APK namespace. Never widen the product media signing API. */
+export function presignReleaseRead(config:R2Config,method:"GET"|"HEAD",objectKey:string,now=new Date(),ttlSeconds=300):string{
+  if(method!=="GET"&&method!=="HEAD"||!/^releases\/(?:latest\.json|([1-9][0-9]{0,8})\/erp-\1\.apk)$/.test(objectKey))
+    throw new Error("R2_RELEASE_PATH_INVALID");
+  return presignObject(config,method,objectKey,undefined,now,ttlSeconds);
+}
+function presignObject(config:R2Config,method:"PUT"|"GET"|"HEAD",objectKey:string,
+  contentType?:string,now=new Date(),ttlSeconds=300,contentLength?:number):string{
+  if(!Number.isSafeInteger(ttlSeconds)||ttlSeconds<1||ttlSeconds>600)
     throw new Error("R2_SIGN_INPUT_INVALID");
   if(method==="PUT"&&!["image/png","image/jpeg","image/webp"].includes(contentType??""))
     throw new Error("R2_SIGN_TYPE_INVALID");

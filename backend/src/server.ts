@@ -11,6 +11,7 @@ import { handleInventoryHttp } from "./inventory_http.ts";
 import { handleTransferHttp } from "./transfer_http.ts";
 import { handleStocktakeHttp } from "./stocktake_http.ts";
 import { handlePurchasingHttp } from "./purchasing_http.ts";
+import { handleAppReleaseHttp } from "./app_release_http.ts";
 
 declare const ERP_RELEASE_SHA:string|undefined;
 const releaseSha=typeof ERP_RELEASE_SHA==="string"&&/^[0-9a-f]{40}$/.test(ERP_RELEASE_SHA)?ERP_RELEASE_SHA:null;
@@ -80,6 +81,10 @@ export function buildApp(
     // This applies before login/session, admin, catalog, and future business modules.
     if (maintenanceMode && !["GET","HEAD","OPTIONS"].includes(req.method ?? "")) {
       writeJson(res, 503, errorEnvelope("MAINTENANCE", id, "ERP đang chuyển cơ sở dữ liệu"), id);
+      return;
+    }
+    if (url.pathname.startsWith("/v1/app/releases/")) {
+      void handleAppReleaseHttp(req,res,id,url,identityOptions,checkReady);
       return;
     }
     if (url.pathname.startsWith("/v1/auth/") || url.pathname.startsWith("/v1/admin/")) {
