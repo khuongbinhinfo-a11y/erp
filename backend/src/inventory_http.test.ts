@@ -385,12 +385,15 @@ test("R3 real PostgreSQL: on-hand, hold, release, no oversell, exact replay, RBA
   assert.equal(zeroHold.status,201,JSON.stringify(zeroHold.body));
   assert.equal(zeroHold.body.quantityBase,"0.000000");
   assert.equal(zeroHold.body.backorderedBase,"1.000000");
-  const noStock=await call("/v1/inventory/balances?branchId="+b+"&warehouseId="+w,
-   "GET",undefined,token);
-  const heldItem=(noStock.body.items as Record<string,string>[]).find(x=>x.productId===productId);
-  assert.equal(heldItem?.onHand,"5.000000");
-  assert.equal(heldItem?.reserved,"5.000000");
-  assert.equal(heldItem?.available,"0.000000");
+  // Read the exact product: list pagination can place this SKU on page two.
+  const nowHeld=await pool.query<{onHand:string;reserved:string;available:string}>(`
+   SELECT on_hand::text AS "onHand",reserved::text AS reserved,
+     available::text AS available FROM inventory_stock_balance
+   WHERE installation_id=$1 AND branch_id=$2 AND warehouse_id=$3 AND product_id=$4`,
+   [t,b,w,productId]);
+  assert.equal(nowHeld.rows[0]?.onHand,"5.000000");
+  assert.equal(nowHeld.rows[0]?.reserved,"5.000000");
+  assert.equal(nowHeld.rows[0]?.available,"0.000000");
   await assert.rejects(pool.query(
    `INSERT INTO inventory_reservation(installation_id,branch_id,warehouse_id,
      product_id,order_id,version_no,line_no,quantity_base,backordered_base,
