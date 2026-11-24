@@ -305,6 +305,37 @@ test("B1: real PostgreSQL order lifecycle, immutable versions, RBAC, replay and 
     assert.equal((await call("/v1/sales/quote","POST",{...docQuoteInput,
       lines:[{...docQuoteInput.lines[0],discountRate:"10"}]},token)).status,400);
     assert.equal((await write("/v1/sales/orders",{...docPayload,documentDiscount:{...docDiscount,reason:""}},0,"t1-doc-reason-"+randomUUID())).status,400);
+    // T1 legacy commercial modes: no price override required to apply a line discount.
+    const quoteMode=async(line:Record<string,unknown>)=>call("/v1/sales/quote","POST",
+      {...r2QuotePayload,lines:[{sellSkuId,quantity:"2",...line}]},token);
+    const fixed=await quoteMode({unitPrice:"10000",discountMode:"PER_UNIT",discountValue:"1000",
+      taxRate:"10",taxMode:"INCLUSIVE"});
+    assert.equal(fixed.status,200,JSON.stringify(fixed.body));
+    assert.equal(fixed.body.quote.grandTotal,"18000");
+    assert.equal(fixed.body.quote.taxTotal,"1636");
+    assert.equal(fixed.body.quote.lines[0].rawDiscount,"2000");
+    const modeOrder=await write("/v1/sales/orders",{...r2QuotePayload,note:"",
+      lines:[{sellSkuId,quantity:"2",unitPrice:"10000",discountMode:"PER_UNIT",discountValue:"1000",
+        taxRate:"10",taxMode:"INCLUSIVE",expectedPriceSignature:fixed.body.quote.lines[0].priceSignature}]},
+      0,"t1-mode-"+randomUUID());
+    assert.equal(modeOrder.status,201,JSON.stringify(modeOrder.body));
+    assert.equal(modeOrder.body.total,"18000");
+    assert.equal((await write("/v1/sales/orders/"+modeOrder.body.id+"/confirm",{branchId:b},0,"t1-mode-confirm-"+randomUUID())).status,200);
+    const lineFixed=await quoteMode({unitPrice:"10000",discountMode:"TOTAL_AMOUNT",discountValue:"1001"});
+    assert.equal(lineFixed.status,200,JSON.stringify(lineFixed.body));
+    assert.equal(lineFixed.body.quote.grandTotal,"18999");
+    const discountOnly=await quoteMode({discountRate:"10"});
+    assert.equal(discountOnly.status,200,JSON.stringify(discountOnly.body));
+    assert.equal(discountOnly.body.quote.lines[0].manualPriceOverride,false);
+    const zero=await quoteMode({unitPrice:"0"});
+    assert.equal(zero.status,200,JSON.stringify(zero.body));
+    assert.equal(zero.body.quote.grandTotal,"0");
+    assert.equal((await quoteMode({unitPrice:"10000",discountMode:"TOTAL_AMOUNT",discountValue:"20001"})).status,400);
+    // Removal of one override grant must not remove the unrelated discount grant.
+    await pool.query("DELETE FROM role_permission WHERE installation_id=$1 AND permission_code='orders.price.override'",[root.installationId]);
+    assert.equal((await quoteMode({unitPrice:"10000"})).status,403);
+    assert.equal((await quoteMode({discountRate:"10"})).status,200);
+    await pool.query("INSERT INTO role_permission(installation_id,role_id,permission_code) SELECT installation_id,id,'orders.price.override' FROM app_role WHERE installation_id=$1 AND code='PRIMARY_OWNER_MAIN'",[root.installationId]);
     // R1-C: the legacy productId path must enforce the same list window
     // at both create and confirmation; existing posted documents stay intact.
     const pendingExpiry=await write("/v1/sales/orders",payload,0,

@@ -15,3 +15,11 @@ test("discount conserves integer VND, ties follow line order and taxes follow al
  assert.throws(()=>parseDocumentDiscount({...input,reason:""},true),/REASON/);
  assert.throws(()=>parseDocumentDiscount({...input,value:"1.2"},true),/INVALID/);
 });
+
+test("inclusive VAT document discount preserves raw commercial discount and net equation",()=>{
+ const result=allocateDocumentDiscount([{subtotal:"10000",discountAmount:"0",taxRate:"10",
+  taxAmount:"1000",lineTotal:"11000",taxMode:"INCLUSIVE",grossBeforeTaxMode:"11000"}],
+  {mode:"TOTAL_AMOUNT",value:"1100",reason:"test"});
+ assert.deepEqual(result[0],{subtotal:"10000",discountAmount:"1000",taxAmount:"900",
+  allocatedAmount:"1100",lineTotal:"9900"});
+});
