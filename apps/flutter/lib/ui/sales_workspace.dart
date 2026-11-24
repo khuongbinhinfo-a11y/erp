@@ -48,11 +48,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   // A lost response must be replayed with exactly the same request, never a new form.
   Map<String,dynamic>? pendingCreate,pendingConfirm,pendingUpdate;
   String? pendingCreateKey,pendingConfirmKey,pendingUpdateKey;
-  bool pendingCreateAutoConfirm=false,localRecoveryBusy=false;
+  bool pendingCreateAutoConfirm=false,localRecoveryBusy=false,localRecoveryBlocked=false;
   LocalScope? get _localScope=>branchId==null?null:widget.client.localScope(widget.session,branchId!);
   bool get _localConfigured=>widget.client.localStore!=null&&widget.session.installationId.isNotEmpty;
   bool _lastNavigationLock=false;
-  bool get _navigationLocked=>saving||localRecoveryBusy||pendingCreate!=null||
+  bool get _navigationLocked=>saving||localRecoveryBusy||localRecoveryBlocked||pendingCreate!=null||
     pendingUpdate!=null||pendingConfirm!=null;
   @override void setState(VoidCallback fn){
     super.setState(fn);
@@ -69,7 +69,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     final scope=_localScope,store=widget.client.localStore;
     if(scope==null||store==null)return;
     final token=widget.session.token,branch=scope.branch;
-    setState(()=>localRecoveryBusy=true);
+    setState((){localRecoveryBusy=true;localRecoveryBlocked=false;});
     try{
       final data=await store.salesRecovery(scope);
       if(!_sameScope(token,branch)||data==null)return;
@@ -85,7 +85,10 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       });
       inform('Có yêu cầu bán hàng chưa được đối chiếu. Hãy kiểm tra lại khi có kết nối.');
     }catch(_){
-      if(_sameScope(token,branch))inform('Không đọc được dữ liệu chờ trên máy. Không tự gửi lại.',error:true);
+      if(_sameScope(token,branch)){
+        setState(()=>localRecoveryBlocked=true);
+        inform('Không đọc được dữ liệu chờ trên máy. Không tự gửi lại.',error:true);
+      }
     }finally{if(_sameScope(token,branch))setState(()=>localRecoveryBusy=false);}
   }
   Future<void> _persistPending(LocalScope? scope,String? kind,String? key,Map<String,dynamic>? body,{bool auto=false})async{
@@ -112,7 +115,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       generation++;branches=[];orders=[];branchId=null;retryKeys.clear();
       pendingCreate=null;pendingCreateKey=null;pendingConfirm=null;
       pendingConfirmKey=null;pendingUpdate=null;pendingUpdateKey=null;
-      pendingCreateAutoConfirm=false;localRecoveryBusy=false;loadBranches();
+      pendingCreateAutoConfirm=false;localRecoveryBusy=false;localRecoveryBlocked=false;loadBranches();
     }
   }
   @override void dispose(){generation++;search.dispose();super.dispose();}
@@ -158,10 +161,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   }
   Future<Map<String,dynamic>?> editForm({Map<String,dynamic>? order,bool copying=false,bool localDraft=false})async{
     final branch=branchId;if(branch==null)return null;
-    final formScope=_localScope,formToken=widget.session.token;
+    final formScope=_localScope,formToken=widget.session.token,formSession=widget.session;
     bool cachedCatalog=false;
     Future<List<Map<String,dynamic>>> catalog(String resource,{String? query})async{
-      final value=await widget.client.salesCatalog(widget.session,resource,branchId:branch,query:query??'');
+      if(!_sameScope(formToken,branch))throw const ErpApiError(401,'Phiên đã thay đổi.');
+      final value=await widget.client.salesCatalog(formSession,resource,branchId:branch,query:query??'');
       if(value.cached)cachedCatalog=true;
       return value.items;
     }
@@ -181,7 +185,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     catch(_){inform('Không tải được danh mục bán hàng.',error:true);return null;}
     Map<String,dynamic>? entrySettings;
     try{
-      final result=await widget.client.localSalesEntrySettings(widget.session,branch);
+      final result=await widget.client.localSalesEntrySettings(formSession,branch);
       entrySettings=result.settings;if(result.cached)cachedCatalog=true;
     }on ErpApiError catch(e){
       if(e.status!=404&&e.status!=405){inform(e.message,error:true);return null;}
@@ -265,6 +269,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     final note=TextEditingController(text:order?['note'] as String? ?? '');
     final lines=<_OrderLine>[];
     var documentDiscountMode='NONE',documentDiscountValue='0',documentDiscountReason='',overrideReason='';
+    if(localDraft&&(!customers.any((x)=>x['id']==customer)||!lists.any((x)=>x['id']==list))){
+      note.dispose();inform('Khách hàng hoặc bảng giá trong giỏ không còn khả dụng. Hãy kiểm tra danh mục.',error:true);return null;
+    }
     if(order?['lines'] is List){
       for(final v in order!['lines'] as List<dynamic>){
         final row=Map<String,dynamic>.from(v as Map);
@@ -968,6 +975,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       finally{if(ctx.mounted)refresh(()=>draftSaving=false);}
     }
     void submitForm(BuildContext ctx,StateSetter refresh,{required bool confirm}){
+      if(!_sameScope(formToken,branch)||draftSaving)return;
       if(customer==null||list==null||!validLines()){
         refresh(()=>formError='Kiểm tra khách hàng, SKU và số lượng từng dòng.');
         return;
@@ -1949,7 +1957,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     }
   }
   Future<void> createOrder({Map<String,dynamic>? source})async{
-    if(saving||localRecoveryBusy||pendingConfirm!=null||pendingUpdate!=null||
+    if(saving||localRecoveryBusy||localRecoveryBlocked||pendingConfirm!=null||pendingUpdate!=null||
       !can('orders.create'))return;
     if(pendingCreate==null){
       Map<String,dynamic>? draft;
@@ -1958,7 +1966,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         try{draft=await widget.client.localStore!.loadCart(scope);}catch(_){inform('Không đọc được giỏ trên máy.',error:true);return;}
         if(!_sameScope(token,scope.branch))return;
       }
-      final form=await editForm(order:source??draft,copying:source!=null,localDraft:draft!=null);if(form==null||!mounted)return;
+      final form=await editForm(order:source??draft,copying:source!=null,localDraft:draft!=null);if(form==null||!mounted||widget.session.token!=token)return;
       final auto=form.remove('_confirmAfterSave')==true;
       setState((){
         pendingCreate=Map<String,dynamic>.from(form);
@@ -1973,6 +1981,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     setState(()=>saving=true);
     try{
       await _persistPending(scope,'create',key,body,auto:pendingCreateAutoConfirm);
+      if(!_sameScope(token,body['branchId'] as String))return;
       // This exact body+key also recovers a lost acknowledgment after COMMIT.
       final created=await widget.client.createSalesOrder(token,body,key:key);
       if(!_sameScope(token,body['branchId'] as String))return;
@@ -2024,19 +2033,20 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   }
   Future<void> _resolveSavedConfirm()async{
     final cmd=pendingConfirm,key=pendingConfirmKey,scope=_localScope,token=widget.session.token;
-    if(cmd==null||key==null||saving)return;
+    if(cmd==null||key==null||saving||!can('orders.confirm'))return;
     final id=cmd['id'] as String,branch=cmd['branchId'] as String,
       revision=cmd['revision'] as int;
     setState(()=>saving=true);
     try{
       await _persistPending(scope,'confirm',key,cmd);
+      if(!_sameScope(token,branch))return;
       // Lost confirmation ACK: check canonical server state before retrying.
       // Orders may be created and confirmed without the separate orders.read
       // grant. Use read-before-retry only when this actor is allowed to read;
       // otherwise replay the SAME idempotent confirm key and body.
       Map<String,dynamic>? existing;
       if(can('orders.read')){
-        existing=await widget.client.salesOrder(widget.session.token,id,branch);
+        existing=await widget.client.salesOrder(token,id,branch);
       }
       if(existing?['versionStatus']=='CONFIRMED'&&
           existing?['revision'] is int&&(existing!['revision'] as int)>revision){
@@ -2045,9 +2055,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         if(_sameScope(token,branch))setState((){pendingConfirm=null;pendingConfirmKey=null;});
         inform('Đơn hàng đã được máy chủ xác nhận.');
       }else{
-        await widget.client.salesOrderAction(widget.session.token,id,'confirm',
-          branch,revision,key:key);
-        if(mounted)setState((){pendingConfirm=null;pendingConfirmKey=null;});
+        if(!_sameScope(token,branch))return;
+        await widget.client.salesOrderAction(token,id,'confirm',branch,revision,key:key);
+        if(!_sameScope(token,branch))return;
+        await _persistPending(scope,null,null,null);
+        if(_sameScope(token,branch))setState((){pendingConfirm=null;pendingConfirmKey=null;});
         inform('Đã lưu và xác nhận đơn hàng.');
       }
       await reload();
@@ -2077,7 +2089,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   Future<void> updateOrder(Map<String,dynamic> order)async{
     // The previous create/confirm must reach a recoverable server outcome
     // before another edit can replace any pending idempotency command.
-    if(saving||pendingConfirm!=null||pendingCreate!=null)return;
+    if(saving||localRecoveryBusy||localRecoveryBlocked||pendingConfirm!=null||pendingCreate!=null)return;
     if(pendingUpdate!=null){await _resolvePendingUpdate();return;}
     final form=await editForm(order:order);if(form==null||!mounted)return;
     final auto=form.remove('_confirmAfterSave')==true;
@@ -2097,6 +2109,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     setState(()=>saving=true);
     try{
       await _persistPending(scope,'update',key,cmd);
+      if(!_sameScope(token,body['branchId'] as String))return;
       // Replays the exact original body+key after a lost COMMIT acknowledgment.
       final updated=await widget.client.updateSalesOrder(token,id,rev,body,key:key);
       if(!_sameScope(token,body['branchId'] as String))return;
@@ -2156,7 +2169,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   }
   Future<void> action(Map<String,dynamic> order,String action)async{
     final branch=branchId;
-    if(branch==null||saving||pendingCreate!=null||
+    if(branch==null||saving||localRecoveryBusy||localRecoveryBlocked||pendingCreate!=null||
        pendingUpdate!=null||pendingConfirm!=null)return;
     String? reason;
     if(action=='confirm'){
@@ -2403,7 +2416,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
               style:TextStyle(color:ErpTokens.ink,fontSize:18,fontWeight:FontWeight.w800)),
             FilledButton.icon(
               key:const ValueKey('sales-create'),
-              onPressed:saving||localRecoveryBusy?null:pendingConfirm!=null?_resolveSavedConfirm:
+              onPressed:saving||localRecoveryBusy||localRecoveryBlocked?null:pendingConfirm!=null?_resolveSavedConfirm:
                 pendingUpdate!=null?_resolvePendingUpdate:
                 !can('orders.create')?null:createOrder,
               icon:Icon(pendingConfirm!=null||pendingCreate!=null||
@@ -2434,6 +2447,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                   missingCatalog=='products'?'Sản phẩm':'Bảng giá'))),
             ]),
         ),
+        if(localRecoveryBlocked)OutlinedButton(onPressed:_restorePending,child:const Text('Thử đọc lại dữ liệu chờ trên máy')),
         if(branchId!=null)DropdownButtonFormField<String>(
           key:ValueKey('sales-branch-'+branchId!),initialValue:branchId,isExpanded:true,
           decoration:const InputDecoration(labelText:'Chi nhánh'),
