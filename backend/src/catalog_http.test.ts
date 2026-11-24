@@ -360,8 +360,8 @@ test("Issue #7: catalog HTTP uses real PostgreSQL with tenant/branch RBAC, decim
       const audit=await pool.query<{total:string}>(
         "SELECT count(*)::text AS total FROM audit_event WHERE installation_id=$1 AND action_code LIKE 'catalog.%'",
         [root.installationId]);
-      assert.equal(audit.rows[0]!.total,"17",
-        "10 creations and 7 distinct PATCH mutations audited once; replay not double counted");
+      assert.equal(audit.rows[0]!.total,"19",
+        "11 creations and 8 distinct PATCH mutations audited once, including the large assignment transaction; replay not double counted");
     }finally{await new Promise<void>((ok,fail)=>app.close(e=>e?fail(e):ok()));}
   }finally{
     if(pool)await pool.end();
