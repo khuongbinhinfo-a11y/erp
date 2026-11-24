@@ -1254,6 +1254,9 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     var deliveryAddress=(row['deliveryAddress']??'').toString();
     var paymentTermsDays=(row['paymentTermsDays']??0).toString();
     var listPriority=(row['priority']??0).toString();
+    bool assignDefault=false,priceScopesLoaded=false;
+    final selectedChannels=<String>{},selectedGroups=<String>{},selectedCustomers=<String>{};
+    List<Map<String,dynamic>> priceChannels=[],priceGroups=[],priceCustomers=[];
     DateTime? listStart=DateTime.tryParse(row['effectiveFrom']?.toString()??'');
     DateTime? listEnd=DateTime.tryParse(row['effectiveTo']?.toString()??'')
       ?.toLocal().subtract(const Duration(microseconds:1));
@@ -1274,6 +1277,30 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
         ]);
         customerGroups=lookup[0];
         customerRegions=lookup[1];
+      }else if(resource=='price-lists'){
+        try{
+          final loaded=await Future.wait([
+            widget.client.r1CatalogItems(widget.session.token,'channels',branchId:branch),
+            widget.client.catalogDirectoryAll(widget.session.token,
+              'customer-groups',branchId:branch),
+            widget.client.catalogItems(widget.session.token,'customers',branchId:branch),
+            widget.client.priceListAssignments(widget.session.token,branch,priceListId:id),
+          ]);
+          priceChannels=loaded[0];priceGroups=loaded[1];priceCustomers=loaded[2];
+          for(final assignment in loaded[3].where((x)=>x['active']==true)){
+            final target=assignment['scopeKind'];
+            if(target=='DEFAULT')assignDefault=true;
+            if(target=='CHANNEL')selectedChannels.add(assignment['channelId'].toString());
+            if(target=='CUSTOMER_GROUP')selectedGroups.add(assignment['customerGroupId'].toString());
+            if(target=='CUSTOMER')selectedCustomers.add(assignment['customerId'].toString());
+          }
+          priceScopesLoaded=true;
+        }catch(_){
+          priceScopesLoaded=false;
+          if(mounted)ErpToast.show(context,
+            'Không tải được phân bổ. Đang giữ nguyên các phạm vi hiện có.',
+            isError:true);
+        }
       }else if(resource=='products'){
         productGroups=await widget.client.catalogItems(
           widget.session.token,'groups',branchId:branch);
@@ -1346,6 +1373,24 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                         onPressed:()=>refresh(()=>listEnd=null),
                         icon:const Icon(Icons.close,size:16)),
                     ]),
+                    if(priceScopesLoaded)...[
+                      const SizedBox(height:8),
+                      SwitchListTile(
+                        key:const ValueKey('price-edit-default'),
+                        contentPadding:EdgeInsets.zero,
+                        title:const Text('Áp dụng mặc định'),
+                        value:assignDefault,
+                        onChanged:(v)=>refresh(()=>assignDefault=v)),
+                      _priceScopeChips('Kênh bán','price-edit-channel',
+                        priceChannels,selectedChannels,refresh),
+                      _priceScopeChips('Nhóm khách','price-edit-group',
+                        priceGroups,selectedGroups,refresh),
+                      _priceScopeChips('Khách hàng riêng','price-edit-customer',
+                        priceCustomers,selectedCustomers,refresh),
+                      const Padding(padding:EdgeInsets.only(top:8),
+                        child:Text('Kênh bán VÀ nhóm khách phải cùng khớp.',
+                          style:TextStyle(fontSize:12,color:ErpTokens.muted))),
+                    ],
                   ],
                   if(resource=='products')...[
                     const SizedBox(height:12),
@@ -1438,6 +1483,12 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                 'effectiveFrom':listStart?.toIso8601String(),
                 'effectiveTo':_priceListEndExclusive(listEnd)?.toIso8601String(),
                 'priority':int.parse(listPriority.trim()),
+                if(priceScopesLoaded)...{
+                  'channelIds':selectedChannels.toList(),
+                  'customerGroupIds':selectedGroups.toList(),
+                  'customerIds':selectedCustomers.toList(),
+                  'defaultAssignment':assignDefault,
+                },
               },
               if(resource=='products'&&productGroupId!=oldProductGroupId)
                 'groupId':productGroupId,
