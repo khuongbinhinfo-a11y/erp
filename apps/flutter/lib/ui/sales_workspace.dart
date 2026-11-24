@@ -9,7 +9,53 @@ import 'erp_display.dart';
 import 'erp_number_input.dart';
 import 'erp_toast.dart';
 import 'identity_client.dart';
+import '../local/local_store.dart';
 
+/// Overlay an explicitly rejected or never-submitted edit onto the fresh
+/// canonical order. No old quote signatures are reused.
+Map<String,dynamic> erpSalesReconciliationOrder(
+  Map<String,dynamic> latest,Map<String,dynamic> command){
+  final body=Map<String,dynamic>.from(command['body'] as Map);
+  final edits=body['lines'] as List<dynamic>;
+  final previous=latest['lines'] is List?latest['lines'] as List:const <dynamic>[];
+  final result=<Map<String,dynamic>>[];
+  for(var i=0;i<edits.length;i++){
+    final src=Map<String,dynamic>.from(edits[i] as Map);
+    final sku=src['sellSkuId'];
+    final old=previous.where((x)=>x is Map&&x['sellSkuId']==sku).firstOrNull;
+    final former=old is Map?Map<String,dynamic>.from(old):<String,dynamic>{};
+    final manual=src.containsKey('unitPrice');
+    final discount=src.containsKey('discountRate')||src.containsKey('discountMode');
+    final tax=src.containsKey('taxRate')||src.containsKey('taxMode');
+    result.add({
+      ...former,
+      'sellSkuId':sku,'quantity':src['quantity'],
+      'unitPrice':manual?src['unitPrice']:former['unitPrice']??'0',
+      'discountRate':src['discountRate']??former['discountRate']??'0',
+      'taxRate':src['taxRate']??former['taxRate']??'0',
+      'priceSnapshot':{
+        'manualOverride':manual||discount||tax,
+        'manualPriceOverride':manual,
+        'discountOverride':discount,
+        'taxOverride':tax,
+        'restoreOverride':true,
+        'discountMode':src['discountMode']??'PERCENT',
+        'discountValue':src['discountValue']??src['discountRate']??'0',
+        'taxMode':src['taxMode']??'EXCLUSIVE',
+        'overrideReason':src['overrideReason']??'',
+        if(i==0&&body['documentDiscount'] is Map)
+          'documentDiscount':body['documentDiscount'],
+      },
+    });
+  }
+  return {
+    ...latest,
+    'customerId':body['customerId'],'priceListId':body['priceListId'],
+    'channelId':body['channelId'],'note':body['note'],
+    if(body['shipping'] is Map)'shipping':body['shipping'],
+    'lines':result,
+  };
+}
 class SalesWorkspace extends StatefulWidget {
   final ErpIdentityClient client;
   final IdentitySession session;
@@ -47,10 +93,32 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   // A lost response must be replayed with exactly the same request, never a new form.
   Map<String,dynamic>? pendingCreate,pendingConfirm,pendingUpdate;
   String? pendingCreateKey,pendingConfirmKey,pendingUpdateKey;
-  bool pendingCreateAutoConfirm=false;
+  bool pendingCreateAutoConfirm=false,localRecoveryBusy=false,localRecoveryBlocked=false;
+  String? pendingCreateCartId,pendingCreateCartOwner;
+  LocalScope? get _localScope=>branchId==null?null:widget.client.localScope(widget.session,branchId!);
+  bool get _localConfigured=>widget.client.localStore!=null&&widget.session.installationId.isNotEmpty;
   bool _lastNavigationLock=false;
-  bool get _navigationLocked=>saving||pendingCreate!=null||
-    pendingUpdate!=null||pendingConfirm!=null;
+  bool pendingNeedsReceipt=false;
+  Timer? _syncTimer;
+  AppLifecycleListener? _syncLifecycle;
+  int _syncDelay=15;
+  bool _foreground=true;
+  void _scheduleRecovery(){
+    _syncTimer?.cancel();
+    if(!mounted||!_localConfigured||!_foreground)return;
+    _syncTimer=Timer(Duration(seconds:_syncDelay),()async{
+      if(!mounted||!_foreground)return;
+      if(!saving&&!localRecoveryBusy&&!localRecoveryBlocked&&widget.session.expiresAt.isAfter(DateTime.now())){
+        // Only retry previously submitted save-only commands; confirmations remain explicit.
+        if(pendingCreate!=null&&!pendingCreateAutoConfirm){await _resolveCreate();}
+        else if(pendingUpdate!=null&&pendingUpdate!['auto']!=true){await _resolvePendingUpdate();}
+      }
+      _syncDelay=(pendingCreate!=null||pendingUpdate!=null)?(_syncDelay*2).clamp(15,120).toInt():15;
+      _scheduleRecovery();
+    });
+  }
+  bool get _navigationLocked=>saving||localRecoveryBusy||
+    (!localRecoveryBlocked&&(pendingCreate!=null||pendingUpdate!=null||pendingConfirm!=null));
   @override void setState(VoidCallback fn){
     super.setState(fn);
     final locked=_navigationLocked;
@@ -60,6 +128,56 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         if(mounted)widget.onNavigationLockChanged?.call(locked);
       });
     }
+  }
+  bool _sameScope(String token,String branch)=>mounted&&widget.session.token==token&&branchId==branch&&widget.session.expiresAt.isAfter(DateTime.now())&&widget.session.grants.any((g)=>g.branchId==branch&&g.permission.startsWith('orders.'));
+  Future<void> _restorePending()async{
+    final scope=_localScope,store=widget.client.localStore;
+    if(scope==null||store==null)return;
+    final token=widget.session.token,branch=scope.branch;
+    setState((){
+      localRecoveryBusy=true;localRecoveryBlocked=false;pendingNeedsReceipt=false;
+      // Do not carry in-memory pending commands across branches or grants.
+      // The durable slot remains intact until an authenticated server ACK.
+      pendingCreate=null;pendingCreateKey=null;pendingCreateAutoConfirm=false;pendingCreateCartId=null;pendingCreateCartOwner=null;
+      pendingUpdate=null;pendingUpdateKey=null;
+      pendingConfirm=null;pendingConfirmKey=null;
+    });
+    try{
+      final data=await store.salesRecovery(scope);
+      if(!_sameScope(token,branch)||data==null)return;
+      final kind=data['kind'],key=data['key'],body=data['body'];
+      if(key is! String||key.isEmpty||body is! Map<String,dynamic>)throw const FormatException();
+      final nested=body['body'];
+      final actualBranch=kind=='update' ? (nested is Map ? nested['branchId'] : null) : body['branchId'];
+      if(actualBranch!=branch)throw const FormatException();
+      final command=kind=='update'?nested:body;
+      if(command is Map&&command['shipping'] is Map){
+        final warehouse=(command['shipping'] as Map)['warehouseId'];
+        if(warehouse is String&&!widget.session.grants.any((g)=>g.branchId==branch&&g.warehouseId==warehouse&&g.permission=='inventory.read'))throw const FormatException();
+      }
+      final requiredPermission=switch(kind){
+        'create'=>'orders.create','update'=>'orders.update','confirm'=>'orders.confirm',
+        _=>null,
+      };
+      if(requiredPermission==null||!can(requiredPermission))throw const FormatException();
+      setState((){
+        pendingNeedsReceipt=true;
+        if(kind=='create'){pendingCreate=body;pendingCreateKey=key;pendingCreateAutoConfirm=data['auto']==true;pendingCreateCartId=data['cartId'] is String ? data['cartId'] as String : null;pendingCreateCartOwner=data['cartOwner'] is String ? data['cartOwner'] as String:null;}
+        if(kind=='update'){pendingUpdate=body;pendingUpdateKey=key;}
+        if(kind=='confirm'){pendingConfirm=body;pendingConfirmKey=key;}
+      });
+      inform('Có yêu cầu bán hàng chưa được đối chiếu. Hãy kiểm tra lại khi có kết nối.');
+    }catch(_){
+      if(_sameScope(token,branch)){
+        setState(()=>localRecoveryBlocked=true);
+        inform('Không đọc được dữ liệu chờ trên máy. Không tự gửi lại.',error:true);
+      }
+    }finally{if(_sameScope(token,branch))setState(()=>localRecoveryBusy=false);}
+  }
+  Future<void> _persistPending(LocalScope? scope,String? kind,String? key,Map<String,dynamic>? body,{bool auto=false,String? previousKey,String? cartId,String? cartOwner})async{
+    if(!_localConfigured)return;
+    if(scope==null)throw StateError('Thiếu phạm vi lưu yêu cầu');
+    await widget.client.localStore!.saveSalesRecovery(scope,kind==null?null:{'kind':kind,'key':key,'body':body,'auto':auto,if(kind=='create'&&cartId!=null)'cartId':cartId,if(kind=='create'&&cartOwner!=null)'cartOwner':cartOwner},expectedKey:previousKey);
   }
   String newKey()=>'sales-'+DateTime.now().microsecondsSinceEpoch.toString()+'-'+(++sequence).toString();
   bool can(String permission)=>widget.session.grants.any(
@@ -73,22 +191,33 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   void inform(String text,{bool error=false}){
     if(mounted)ErpToast.show(context,text,isError:error);
   }
-  @override void initState(){super.initState();loadBranches();}
+  @override void initState(){
+    super.initState();loadBranches();
+    if(widget.client.localStore!=null){
+      _syncLifecycle=AppLifecycleListener(onStateChange:(state){
+        _foreground=state==AppLifecycleState.resumed;
+        _syncDelay=15;_scheduleRecovery();
+      });
+      _scheduleRecovery();
+    }
+  }
   @override void didUpdateWidget(covariant SalesWorkspace old){
     super.didUpdateWidget(old);
     if(old.session.token!=widget.session.token||old.client!=widget.client){
       generation++;branches=[];orders=[];branchId=null;retryKeys.clear();
       pendingCreate=null;pendingCreateKey=null;pendingConfirm=null;
       pendingConfirmKey=null;pendingUpdate=null;pendingUpdateKey=null;
-      pendingCreateAutoConfirm=false;loadBranches();
+      pendingCreateAutoConfirm=false;localRecoveryBusy=false;localRecoveryBlocked=false;pendingNeedsReceipt=false;loadBranches();_syncDelay=15;_scheduleRecovery();
     }
   }
-  @override void dispose(){generation++;search.dispose();super.dispose();}
+  @override void dispose(){generation++;_syncTimer?.cancel();_syncLifecycle?.dispose();search.dispose();super.dispose();}
   Future<void> loadBranches()async{
     final id=++generation;
     setState((){loading=true;error=null;});
     try{
-      final values=await widget.client.catalogItems(widget.session.token,'branches');
+      final result=await widget.client.salesCatalog(widget.session,'branches');
+      final values=result.items;
+      if(result.cached)inform('Đang dùng danh mục chi nhánh lưu trên máy; dữ liệu có thể cũ.');
       if(!mounted||generation!=id)return;
       final permitted=values.where((x)=>widget.session.grants.any((g)=>
         g.branchId==x['id']&&g.permission.startsWith('orders.'))).toList();
@@ -98,7 +227,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       });
       if(branchId==null){
         setState((){error='Tài khoản chưa có quyền xem đơn hàng.';loading=false;});
-      }else{await reload();}
+      }else{await _restorePending();await reload();}
     }on ErpApiError catch(e){
       if(mounted&&generation==id)setState((){loading=false;error=e.message;});
     }catch(_){
@@ -122,15 +251,23 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       });
     }
   }
-  Future<Map<String,dynamic>?> editForm({Map<String,dynamic>? order,bool copying=false})async{
+  Future<Map<String,dynamic>?> editForm({Map<String,dynamic>? order,bool copying=false,bool localDraft=false})async{
     final branch=branchId;if(branch==null)return null;
+    final formScope=_localScope,formToken=widget.session.token,formSession=widget.session;
+    bool cachedCatalog=false;
+    Future<List<Map<String,dynamic>>> catalog(String resource,{String? query,String? itemId})async{
+      if(!_sameScope(formToken,branch))throw const ErpApiError(401,'Phiên đã thay đổi.');
+      final value=await widget.client.salesCatalog(formSession,resource,branchId:branch,query:query??'',itemId:itemId);
+      if(value.cached)cachedCatalog=true;
+      return value.items;
+    }
     List<Map<String,dynamic>> customers,skus,lists,channels;
     try{
       final items=await Future.wait([
-        widget.client.catalogItems(widget.session.token,'customers',branchId:branch),
-        widget.client.catalogItems(widget.session.token,'r1/skus',branchId:branch),
-        widget.client.catalogItems(widget.session.token,'price-lists',branchId:branch),
-        widget.client.catalogItems(widget.session.token,'r1/channels',branchId:branch),
+        catalog('customers'),
+        catalog('r1/skus'),
+        catalog('price-lists'),
+        catalog('r1/channels'),
       ]);
       customers=items[0].where((x)=>x['active']==true).toList();
       skus=items[1].where((x)=>x['active']==true).toList();
@@ -140,7 +277,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     catch(_){inform('Không tải được danh mục bán hàng.',error:true);return null;}
     Map<String,dynamic>? entrySettings;
     try{
-      entrySettings=await widget.client.salesEntrySettings(widget.session.token,branch);
+      final result=await widget.client.localSalesEntrySettings(formSession,branch);
+      entrySettings=result.settings;if(result.cached)cachedCatalog=true;
     }on ErpApiError catch(e){
       if(e.status!=404&&e.status!=405){inform(e.message,error:true);return null;}
     }catch(_){inform('Không tải được thiết lập lập đơn.',error:true);return null;}
@@ -184,13 +322,13 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     List<Map<String,dynamic>> stockWarehouses=[];
     if(can('inventory.read')){
       try{
-        stockWarehouses=await widget.client.catalogItems(
-          widget.session.token,'warehouses',branchId:branch);
+        stockWarehouses=await catalog('warehouses');
       }catch(_){
         // An unavailable inventory service does not block order drafting.
       }
     }
-    if(!mounted)return null;
+    if(!_sameScope(formToken,branch))return null;
+    if(cachedCatalog)inform('Danh mục trên máy có thể cũ. Chỉ máy chủ mới xác nhận giá và đơn hàng.');
     if(modern&&stockWarehouses.isEmpty){
       inform('Tài khoản chưa có quyền kho xuất hàng.',error:true);return null;
     }
@@ -205,24 +343,47 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     var deliveryDate=(savedShipping['requestedDeliveryDate']??'').toString();
     var walkInName=(savedShipping['walkInName']??'').toString();
     var walkInPhone=(savedShipping['walkInPhone']??'').toString();
-    var rememberDelivery=false,walkInBusy=false,locationBusy=false;
+    var rememberDelivery=savedShipping['rememberDeliveryChoice']==true,walkInBusy=false,locationBusy=false;
     int locationGeneration=0,addressGeneration=0,addressEditGeneration=0,customerChoiceGeneration=0;
     List<Map<String,dynamic>> locations=[];
     Map<String,dynamic>? walkInCustomer=entrySettings['walkInCustomer'] is Map
       ?Map<String,dynamic>.from(entrySettings['walkInCustomer'] as Map):null;
-    String? customer=order?['customerId'] as String? ??
-      (customers.length==1?customers.single['id'] as String:null);
+    String? customer=(order?['customerId'] as String?) ??
+      (localDraft?null:(customers.length==1?customers.single['id'] as String:null));
     if(savedShipping.isEmpty&&customer!=null){
       deliveryAddress=(customers.where((x)=>x['id']==customer).firstOrNull?['deliveryAddress']??'').toString();
     }
-    String? list=order?['priceListId'] as String? ??
-      (lists.length==1?lists.single['id'] as String:null);
+    String? list=(order?['priceListId'] as String?) ??
+      (localDraft?null:(lists.length==1?lists.single['id'] as String:null));
     String? channel=order?['channelId'] as String?;
-    bool listManuallySelected=order!=null;
+    bool listManuallySelected=localDraft ? (order?['localListManuallySelected']==true) : order!=null;
     int listResolveGeneration=0;
     final note=TextEditingController(text:order?['note'] as String? ?? '');
     final lines=<_OrderLine>[];
-    var documentDiscountMode='NONE',documentDiscountValue='0',documentDiscountReason='',overrideReason='';
+    final localDiscount=localDraft&&order?['localDocumentDiscount'] is Map?order!['localDocumentDiscount'] as Map:const {};
+    var documentDiscountMode=(localDiscount['mode']??'NONE').toString(),documentDiscountValue=(localDiscount['value']??'0').toString(),documentDiscountReason=(localDiscount['reason']??'').toString(),overrideReason=localDraft?(order?['localOverrideReason']??'').toString():'';
+    if(localDraft&&savedShipping['warehouseId']!=null&&!stockWarehouses.any((w)=>w['id']==savedShipping['warehouseId'])){
+      note.dispose();inform('Kho của giỏ đã lưu không còn trong phạm vi được cấp. Không tự đổi kho.',error:true);return null;
+    }
+    if(localDraft){
+      // Resolve persisted IDs against authorized server data, not a truncated first page.
+      Future<bool> resolveSaved(String resource,String? id,List<Map<String,dynamic>> target)async{
+        if(id==null||target.any((x)=>x['id']==id))return true;
+        final matches=(await catalog(resource,itemId:id)).where((x)=>x['id']==id&&x['active']==true).toList();
+        if(matches.length!=1)return false;
+        target.add(matches.single);return true;
+      }
+      try{
+        final validCustomer=customerMode=='WALK_IN'
+          ? (customer!=null && walkInCustomer?['id']==customer && walkInCustomer?['active']!=false)
+          : await resolveSaved('customers',customer,customers);
+        final validList=await resolveSaved('price-lists',list,lists);
+        if(!_sameScope(formToken,branch)){note.dispose();return null;}
+        if(!validCustomer||!validList){
+          note.dispose();inform('Khách hàng hoặc bảng giá đã lưu không còn khả dụng. Giỏ vẫn được giữ trên máy.',error:true);return null;
+        }
+      }catch(_){note.dispose();inform('Chưa đối chiếu được khách hàng hoặc bảng giá đã lưu. Giỏ vẫn được giữ trên máy.',error:true);return null;}
+    }
     if(order?['lines'] is List){
       for(final v in order!['lines'] as List<dynamic>){
         final row=Map<String,dynamic>.from(v as Map);
@@ -237,8 +398,12 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         if(matching.length!=1){
           // The initial page contains only 100 SKUs. Resolve a historical
           // line by its exact persisted SKU instead of silently replacing it.
-          final found=await widget.client.catalogItems(widget.session.token,
-            'r1/skus',branchId:branch,query:(row['sku']??'').toString());
+          List<Map<String,dynamic>> found;
+          try{
+            found=priorSku==null
+              ?await catalog('r1/skus',query:(row['sku']??row['code']??'').toString())
+              :await catalog('r1/skus',itemId:priorSku);
+          }catch(_){found=[];}
           matching=found.where((x)=>priorSku!=null
             ? x['id']==priorSku
             : x['productId']==legacyProduct&&x['isBase']==true&&
@@ -267,10 +432,10 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           line.taxMode=(snapshot['taxMode']??'EXCLUSIVE').toString();
           line.discountRate.text=erpGroupedDecimalText(line.discountMode=='PERCENT'?row['discountRate']:snapshot['discountValue']);
           line.taxRate.text=erpGroupedDecimalText(row['taxRate']);
-          line.discountEdited=snapshot['discountOverride']==true&&
-            (line.discountMode!='PERCENT'||RegExp('[1-9]').hasMatch(line.discountRate.text));
-          line.taxEdited=snapshot['taxOverride']==true&&
-            (line.taxMode!='EXCLUSIVE'||RegExp('[1-9]').hasMatch(line.taxRate.text));
+          line.discountEdited=snapshot['discountOverride']==true&&(localDraft||snapshot['restoreOverride']==true||
+            (line.discountMode!='PERCENT'||RegExp('[1-9]').hasMatch(line.discountRate.text)));
+          line.taxEdited=snapshot['taxOverride']==true&&(localDraft||snapshot['restoreOverride']==true||
+            (line.taxMode!='EXCLUSIVE'||RegExp('[1-9]').hasMatch(line.taxRate.text)));
           if(snapshot['discountOverride']==null)line.discountEdited=RegExp('[1-9]').hasMatch(line.discountRate.text);
           if(snapshot['taxOverride']==null)line.taxEdited=RegExp('[1-9]').hasMatch(line.taxRate.text);
           line.overrideReason=(snapshot['overrideReason']??'').toString();
@@ -425,7 +590,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     int selectedCustomerIndex=0,customerSearchGeneration=0;
     String? skuResultsFor,skuSearchError;
     bool skuBusy=false,customerBusy=false,starterUntouched=order==null;
-    bool skuPriceBusy=false,stockBusy=false,stockLoaded=false,stockComplete=false;
+    bool skuPriceBusy=false,stockBusy=false,stockLoaded=false,stockComplete=false,stockCached=false;
     String? stockError,warehouseId=stockWarehouses.any((w)=>w['id']==savedShipping['warehouseId'])
       ?savedShipping['warehouseId'] as String:stockWarehouses.length==1
       ?stockWarehouses.single['id'] as String:null;
@@ -471,8 +636,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           variantLoading.contains(productId)||variantFailed.contains(productId))return;
       variantLoading.add(productId);
       try{
-        final all=await widget.client.catalogProductSkusAll(widget.session.token,
-          branchId:branch,productId:productId);
+        final variantResult=await widget.client.localProductVariants(formSession,branch,productId);
+        final all=variantResult.items;
+        if(variantResult.cached)cachedCatalog=true;
         if(!ctx.mounted)return;
         refresh((){
           variantsByProduct[productId]=all.where((x)=>x['active']==true).toList();
@@ -541,22 +707,22 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       final run=++stockGeneration;
       if(warehouse==null)return;
       refresh((){
-        stockBusy=true;stockLoaded=false;stockComplete=false;stockError=null;
+        stockBusy=true;stockLoaded=false;stockComplete=false;stockError=null;stockCached=false;
         stockByProduct={};
       });
       final found=<String,Map<String,dynamic>>{};
       try{
-        var complete=false;
+        var complete=false,cached=false;
         for(var offset=0;offset<2000;offset+=100){
-          final page=await widget.client.inventoryPage(widget.session.token,
-            'balances',branchId:branch,warehouseId:warehouse,offset:offset);
+          final page=await widget.client.localStockPage(formSession,branch,warehouse,offset);
+          cached=cached||page.cached;
           for(final row in page.items){found[row['productId'].toString()]=row;}
           if(!page.hasMore){complete=true;break;}
         }
         if(!ctx.mounted||run!=stockGeneration||warehouseId!=warehouse)return;
         refresh((){
-          stockByProduct=found;stockComplete=complete;
-          stockLoaded=true;stockBusy=false;
+          stockByProduct=found;stockComplete=complete&&!cached;
+          stockCached=cached;stockLoaded=true;stockBusy=false;
           if(!complete)stockError='Tồn kho chưa được tải đầy đủ.';
         });
       }on ErpApiError catch(e){
@@ -708,8 +874,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         skuPriceBusy=false;skuResultsFor=null;selectedSkuIndex=0;
       });
       try{
-        final found=await widget.client.catalogItems(widget.session.token,
-          'r1/skus',branchId:branch,query:term);
+        final found=await catalog('r1/skus',query:term);
         if(!ctx.mounted||skuSearch.text.trim()!=term||
             request!=skuSearchGeneration)return;
         final available=found.where((sku)=>sku['active']==true).toList();
@@ -872,8 +1037,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       final run=++customerSearchGeneration;
       refresh(()=>customerBusy=true);
       try{
-        final values=await widget.client.catalogItems(widget.session.token,'customers',
-          branchId:branch,query:term);
+        final values=await catalog('customers',query:term);
         if(!ctx.mounted||run!=customerSearchGeneration||
           term!=customerSearch.text.trim())return;
         refresh((){
@@ -891,7 +1055,75 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       }
     }
     String totalQuoted()=>previewGrandTotal??'0';
-    void submitForm(BuildContext ctx,StateSetter refresh,{required bool confirm}){
+    bool draftSaving=false,finishDraft=false,draftWriteFailed=false;
+    final autoDraft=formScope!=null&&(order==null||copying||localDraft);
+    final cartId=autoDraft?(localDraft&&(order?['localCartId'] is String)?order!['localCartId'] as String:newKey()):null;
+    final cartOwner=autoDraft?(localDraft&&(order?['localCartOwner'] is String)?order!['localCartOwner'] as String:newKey()):null;
+
+    Map<String,dynamic> draftSnapshot(){
+      return <String,dynamic>{
+          if(cartId!=null)'localCartId':cartId,
+          if(cartOwner!=null)'localCartOwner':cartOwner,
+          'customerId':customer,'priceListId':list,'channelId':channel,'note':note.text,
+          'localDocumentDiscount':{'mode':documentDiscountMode,'value':documentDiscountValue,'reason':documentDiscountReason},
+          'localOverrideReason':overrideReason,'localListManuallySelected':listManuallySelected,
+          'shipping':{'warehouseId':warehouseId,'deliveryChoice':deliveryChoice,
+            'collectionPolicy':collectionPolicy,'customerMode':customerMode,'customerLocationId':locationId,
+            'deliveryAddress':deliveryAddress,'requestedDeliveryDate':deliveryDate,
+            'walkInName':walkInName,'walkInPhone':walkInPhone,'rememberDeliveryChoice':rememberDelivery},
+          'lines':lines.map((line){
+            final sku=skus.where((x)=>x['id']==line.sellSkuId).firstOrNull;
+            return <String,dynamic>{'sellSkuId':line.sellSkuId,'sku':sku?['code']??sku?['sku'],
+              'quantity':erpNumberCanonical(line.quantity.text),
+              'unitPrice':erpNumberCanonical(line.unitPrice.text),
+              'discountRate':erpNumberCanonical(line.discountRate.text),'taxRate':erpNumberCanonical(line.taxRate.text),
+              'priceSnapshot':{'manualOverride':adjusted(line),'manualPriceOverride':line.unitPrice.text.isNotEmpty,
+                'discountMode':line.discountMode,'taxMode':line.taxMode,'discountOverride':line.discountEdited,
+                'taxOverride':line.taxEdited,'discountValue':erpNumberCanonical(line.discountRate.text),
+                'overrideReason':overrideReason.trim().isNotEmpty?overrideReason:line.overrideReason,
+                if(documentDiscountActive())'documentDiscount':documentDiscount()}};
+          }).toList(),
+        };
+    }
+    final writer=formScope!=null&&cartId!=null?LocalCartWriter(widget.client.localStore!,formScope,cartId,cartOwner):null;
+    String? lastSnapshot=autoDraft?jsonEncode(draftSnapshot()):null;
+    Future<void> persistDraft({bool force=false})async{
+      if(writer==null||finishDraft||!_sameScope(formToken,branch))return;
+      final snapshot=draftSnapshot(),encoded=jsonEncode(snapshot);
+      if(!force&&encoded==lastSnapshot&&!draftWriteFailed)return;
+      lastSnapshot=encoded;
+      try{
+        await writer.save(snapshot);
+        draftWriteFailed=false;
+      }catch(_){draftWriteFailed=true;}
+    }
+    var cartPulse=0;
+    final autoTimer=writer==null?null:Timer.periodic(const Duration(milliseconds:600),(_){
+      if(!draftSaving)unawaited(persistDraft(force:(++cartPulse%7)==0));
+    });
+    final lifecycle=writer==null?null:AppLifecycleListener(onStateChange:(_){
+      if(!draftSaving)unawaited(persistDraft());
+    });
+    Future<void> saveLocalDraft(BuildContext ctx,StateSetter refresh)async{
+      if(writer==null||draftSaving||!_sameScope(formToken,branch))return;
+      if(quickCustomerBusy||walkInBusy||pendingQuickCustomer!=null){
+        refresh(()=>formError='Hãy đối chiếu yêu cầu tạo khách trước khi lưu trên máy.');return;
+      }
+      refresh(()=>draftSaving=true);
+      try{
+        await persistDraft(force:true);
+        if(draftWriteFailed)throw StateError('Không lưu được giỏ');
+        await writer.release();
+        if(ctx.mounted&&_sameScope(formToken,branch)){
+          finishDraft=true;
+          inform('Đã lưu giỏ trên máy; chưa tạo đơn, chưa xuất kho.');
+          Navigator.pop(ctx);
+        }
+      }catch(_){if(ctx.mounted)refresh(()=>formError='Không lưu được giỏ trên máy. Hãy giữ màn hình và thử lại.');}
+      finally{if(ctx.mounted)refresh(()=>draftSaving=false);}
+    }
+    Future<void> submitForm(BuildContext ctx,StateSetter refresh,{required bool confirm})async{
+      if(!_sameScope(formToken,branch)||draftSaving||quickCustomerBusy||pendingQuickCustomer!=null)return;
       if(customer==null||list==null||!validLines()){
         refresh(()=>formError='Kiểm tra khách hàng, SKU và số lượng từng dòng.');
         return;
@@ -908,6 +1140,18 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           !RegExp(r'^\+?[0-9]{9,15}$').hasMatch(walkInPhone.trim())))){
         refresh(()=>formError='Chọn kho xuất và kiểm tra số điện thoại khách lẻ.');return;
       }
+      if(writer!=null){
+        final before=jsonEncode(draftSnapshot());
+        refresh(()=>draftSaving=true);
+        await persistDraft(force:true);
+        if(!ctx.mounted||!_sameScope(formToken,branch))return;
+        refresh(()=>draftSaving=false);
+        if(draftWriteFailed){refresh(()=>formError='Không lưu được giỏ trước khi gửi. Vui lòng thử lại.');return;}
+        if(before!=jsonEncode(draftSnapshot())||quotes==null||quotedStamp!=stamp()){
+          refresh(()=>formError='Đơn vừa thay đổi. Hãy kiểm tra và lưu lại.');return;
+        }
+        finishDraft=true;
+      }
       Navigator.pop(ctx,{
         'branchId':branch,'customerId':customer,'priceListId':list,
         if(modern)'shipping':{
@@ -918,7 +1162,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           if(deliveryDate.isNotEmpty)'requestedDeliveryDate':deliveryDate,
           if(customerMode=='WALK_IN'&&walkInName.trim().isNotEmpty)'walkInName':walkInName.trim(),
           if(customerMode=='WALK_IN'&&walkInPhone.trim().isNotEmpty)'walkInPhone':walkInPhone.trim(),
-          if((order==null||copying)&&rememberDelivery)'rememberDeliveryChoice':true,
+          if((order==null||copying||localDraft)&&rememberDelivery)'rememberDeliveryChoice':true,
         },
         if(channel!=null)'channelId':channel,
         if(modern&&documentDiscountActive())'documentDiscount':documentDiscount(),
@@ -932,9 +1176,12 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
             'overrideReason':overrideReason.trim().isNotEmpty?overrideReason.trim():entry.value.overrideReason,
         }).toList(),
         '_confirmAfterSave':confirm,
+        if(cartId!=null)'_localCartId':cartId,
+        if(cartOwner!=null)'_localCartOwner':cartOwner,
       });
     }
     Future<void> requestClose(BuildContext ctx)async{
+      if(draftSaving)return;
       if(quickCustomerBusy||walkInBusy){
         inform('Đang gửi yêu cầu tạo khách. Hãy kiểm tra kết quả trước khi đóng.',error:true);
         return;
@@ -947,25 +1194,34 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         return;
       }
       if(stamp()==originalStamp&&note.text.trim()==originalNote&&shippingStamp()==originalShippingStamp&&overrideReason.isEmpty){
-        Navigator.pop(ctx);return;
+        if(writer!=null){await persistDraft(force:true);if(draftWriteFailed){inform('Chưa lưu được giỏ.',error:true);return;}await writer.release();finishDraft=true;}
+        if(ctx.mounted)Navigator.pop(ctx);return;
       }
-      final discard=await showDialog<bool>(context:ctx,builder:(confirmCtx)=>
+      final discard=await showDialog<String>(context:ctx,builder:(confirmCtx)=>
         AlertDialog(
           title:const Text('Bỏ thay đổi đơn hàng?'),
-          content:const Text('Thông tin vừa nhập chưa được lưu.'),
+          content:Text(writer!=null?'Giỏ được lưu trên máy. Anh/chị muốn giữ hay bỏ giỏ?':'Thông tin vừa nhập chưa được lưu.'),
           actions:[
-            TextButton(onPressed:()=>Navigator.pop(confirmCtx,false),
+            TextButton(onPressed:()=>Navigator.pop(confirmCtx,'continue'),
               child:const Text('Tiếp tục nhập')),
-            FilledButton(onPressed:()=>Navigator.pop(confirmCtx,true),
+            if(writer!=null)TextButton(onPressed:()=>Navigator.pop(confirmCtx,'keep'),child:const Text('Giữ giỏ trên máy')),
+            FilledButton(onPressed:()=>Navigator.pop(confirmCtx,'discard'),
               child:const Text('Bỏ thay đổi')),
           ],
         ));
-      if(discard==true&&ctx.mounted)Navigator.pop(ctx);
+      if(!ctx.mounted)return;
+      if(writer!=null&&discard=='keep'){await persistDraft(force:true);if(!ctx.mounted)return;if(draftWriteFailed){inform('Không lưu được giỏ.',error:true);return;}try{await writer.release();}catch(_){inform('Giỏ đang mở ở cửa sổ khác.',error:true);return;}finishDraft=true;Navigator.pop(ctx);return;}
+      if(discard=='discard'){
+        if(writer!=null){finishDraft=true;try{await writer.clear();}catch(_){finishDraft=false;inform('Không xóa được giỏ.',error:true);return;}}
+        if(ctx.mounted)Navigator.pop(ctx);
+      }
     }
     var firstQuoteScheduled=false;
     try{
-      return await showDialog<Map<String,dynamic>>(
+      final navigator=Navigator.of(context,rootNavigator:true);
+      final route=DialogRoute<Map<String,dynamic>>(
         context:context,barrierDismissible:false,
+        themes:InheritedTheme.capture(from:context,to:navigator.context),
         builder:(dialog)=>StatefulBuilder(builder:(ctx,refresh){
           final media=MediaQuery.sizeOf(ctx);
           // Editable SKU unit adds 32px to the desktop row: stack before overflow.
@@ -1021,7 +1277,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                     const Icon(Icons.receipt_long_outlined,color:Colors.white),
                     const SizedBox(width:10),
                     Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-                      Text(order==null||copying?'Lập đơn bán hàng':'Điều chỉnh đơn bán hàng',
+                      Text(order==null||copying||localDraft?'Lập đơn bán hàng':'Điều chỉnh đơn bán hàng',
                         style:TextStyle(color:Colors.white,fontSize:narrow?16:21,
                           fontWeight:FontWeight.w800)),
                     ])),
@@ -1032,6 +1288,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                 Expanded(child:SingleChildScrollView(
                   padding:EdgeInsets.all(narrow?10:14),
                   child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+                    if(cachedCatalog)const Text('Danh mục lưu trên máy có thể cũ. Phải tra giá máy chủ trước khi lưu đơn.',style:TextStyle(color:ErpTokens.warning)),
                     Wrap(
                       key:const ValueKey('sales-order-context'),
                       spacing:12,runSpacing:12,children:[
@@ -1418,7 +1675,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                                   :stockBusy?'Đang tra tồn…'
                                   :stockError!=null?'Chưa xác định tồn'
                                   :stock!=null
-                                    ?erpGroupedDecimalText(stock['available'])+' '+(stock['baseUnit']??'đv gốc').toString()
+                                    ?(stockCached?'Tồn cũ: ':'')+erpGroupedDecimalText(stock['available'])+' '+(stock['baseUnit']??'đv gốc').toString()
                                     :stockComplete?'0 đv gốc':'Chưa xác định tồn';
                                 return Material(
                                   color:i==selectedSkuIndex
@@ -1512,16 +1769,25 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         if(variants==null||
                             !variants.any((x)=>x['id']==entry.sellSkuId))sku,
                       ];
+                      // Every editor uses the same text metrics and underline box.
+                      // Keep mobile labels floating so the selected unit and quantity align.
+                      final lineStyle=Theme.of(ctx).textTheme.bodyLarge;
+                      InputDecoration lineDecoration(String label,{String? hint,
+                          TextStyle? hintStyle})=>InputDecoration(
+                        isDense:true,filled:false,labelText:narrow?label:null,
+                        floatingLabelBehavior:narrow?FloatingLabelBehavior.always:FloatingLabelBehavior.never,
+                        hintText:hint,hintStyle:hintStyle,
+                        constraints:BoxConstraints.tightFor(height:narrow?56:48),
+                        border:const UnderlineInputBorder(),enabledBorder:const UnderlineInputBorder(),
+                        disabledBorder:const UnderlineInputBorder(),focusedBorder:const UnderlineInputBorder(),
+                        contentPadding:const EdgeInsets.symmetric(horizontal:3,vertical:8));
                       final unitField=SizedBox(width:narrow?128:92,
                         child:DropdownButtonFormField<String>(
                           key:ValueKey('sales-unit-$i-${entry.sellSkuId}'),
                           initialValue:entry.sellSkuId,
                           focusNode:entry.unitFocus,isDense:true,isExpanded:true,
-                          menuMaxHeight:240,
-                          decoration:InputDecoration(
-                            isDense:true,filled:false,labelText:narrow?'ĐVT':null,
-                            border:const UnderlineInputBorder(),enabledBorder:const UnderlineInputBorder(),disabledBorder:const UnderlineInputBorder(),focusedBorder:const UnderlineInputBorder(),
-                            contentPadding:const EdgeInsets.symmetric(horizontal:3,vertical:4)),
+                          menuMaxHeight:240,style:lineStyle,
+                          decoration:lineDecoration('ĐVT'),
                           items:unitChoices.map((variant)=>DropdownMenuItem<String>(
                             value:variant['id'] as String,
                             child:Text((variant['unitCode']??'').toString(),
@@ -1570,11 +1836,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           keyboardType:const TextInputType.numberWithOptions(decimal:true),
                           inputFormatters:const [ErpGroupedNumberFormatter(maxIntegerDigits:9,maxFractionDigits:3)],
                           textInputAction:TextInputAction.next,
-                          textAlign:TextAlign.center,
-                          decoration:InputDecoration(
-                            isDense:true,filled:false,labelText:narrow?'Số lượng':null,
-                            border:const UnderlineInputBorder(),enabledBorder:const UnderlineInputBorder(),disabledBorder:const UnderlineInputBorder(),focusedBorder:const UnderlineInputBorder(),
-                            contentPadding:const EdgeInsets.symmetric(horizontal:4,vertical:8)),
+                          textAlign:TextAlign.center,style:lineStyle,
+                          textAlignVertical:TextAlignVertical.center,
+                          decoration:lineDecoration('Số lượng'),
                         ));
                       final unitPriceField=SizedBox(width:124,child:TextField(
                         key:ValueKey('sales-price-$i'),
@@ -1585,16 +1849,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         keyboardType:const TextInputType.numberWithOptions(decimal:true),
                         inputFormatters:const [ErpGroupedNumberFormatter(maxIntegerDigits:13,maxFractionDigits:4)],
                         onChanged:(v){entry.unitPrice.text=v;pricingChanged(ctx,refresh);},
-                        textAlign:TextAlign.right,
-                        decoration:InputDecoration(
-                          isDense:true,filled:false,
-                          hintText:price=='—'?'—':erpGroupedDecimalText(quote!['unitPrice']),
-                          hintStyle:const TextStyle(color:ErpTokens.ink,fontWeight:FontWeight.w600),
-                          labelText:narrow?'Đơn giá':null,
-                          floatingLabelBehavior:narrow?FloatingLabelBehavior.always:FloatingLabelBehavior.never,
-                          enabledBorder:const UnderlineInputBorder(),disabledBorder:const UnderlineInputBorder(),focusedBorder:const UnderlineInputBorder(),
-                          contentPadding:const EdgeInsets.symmetric(horizontal:3,vertical:8),
-                          border:const UnderlineInputBorder())));
+                        textAlign:TextAlign.right,style:lineStyle,
+                        textAlignVertical:TextAlignVertical.center,
+                        decoration:lineDecoration('Đơn giá',
+                          hint:price=='—'?'—':erpGroupedDecimalText(quote!['unitPrice']),
+                          hintStyle:const TextStyle(color:ErpTokens.ink,fontWeight:FontWeight.w600))));
                       Widget percentField(String title,TextEditingController controller,
                           String fieldKey)=>SizedBox(width:76,child:TextField(
                         key:ValueKey('sales-'+fieldKey+'-$i'),
@@ -1611,11 +1870,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           else entry.taxEdited=true;
                           pricingChanged(ctx,refresh);
                         },
-                        textAlign:TextAlign.right,
-                        decoration:InputDecoration(labelText:narrow?title:null,hintText:narrow?null:title,isDense:true,filled:false,
-                          enabledBorder:const UnderlineInputBorder(),disabledBorder:const UnderlineInputBorder(),focusedBorder:const UnderlineInputBorder(),
-                          border:const UnderlineInputBorder(),
-                          contentPadding:const EdgeInsets.symmetric(horizontal:2,vertical:8))));
+                        textAlign:TextAlign.right,style:lineStyle,
+                        textAlignVertical:TextAlignVertical.center,
+                        decoration:lineDecoration(title,hint:narrow?null:title)));
                       final discountField=percentField(entry.discountMode=='PERCENT'?'CK %':'CK ₫',entry.discountRate,'discount');
                       final taxField=percentField('Thuế %',entry.taxRate,'tax');
                       final modes=Wrap(spacing:4,runSpacing:2,alignment:WrapAlignment.end,children:[
@@ -1834,6 +2091,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           fontWeight:FontWeight.w800)),
                       Wrap(spacing:8,runSpacing:7,children:[
                         TextButton(onPressed:()=>requestClose(ctx),child:const Text('Đóng')),
+                        if(formScope!=null&&(order==null||copying||localDraft))OutlinedButton.icon(
+                          key:const ValueKey('sales-save-local'),onPressed:draftSaving?null:()=>saveLocalDraft(ctx,refresh),
+                          icon:const Icon(Icons.save_outlined),label:const Text('Lưu trên máy')),
                         OutlinedButton.icon(
                           key:const ValueKey('sales-quote'),
                           onPressed:quoteBusy?null:()=>preview(ctx,refresh),
@@ -1841,11 +2101,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           label:Text(quoteBusy?'Đang cập nhật…':'Làm mới giá')),
                         FilledButton(
                           key:const ValueKey('sales-save'),
-                          onPressed:quoteBusy||!ready?null:()=>submitForm(ctx,refresh,confirm:false),
+                          onPressed:draftSaving||quoteBusy||!ready?null:()=>submitForm(ctx,refresh,confirm:false),
                           child:const Text('Lưu đơn hàng')),
                         if(can('orders.confirm'))FilledButton.icon(
                           key:const ValueKey('sales-save-confirm'),
-                          onPressed:quoteBusy||!ready?null:()=>submitForm(ctx,refresh,confirm:true),
+                          onPressed:draftSaving||quoteBusy||!ready?null:()=>submitForm(ctx,refresh,confirm:true),
                           icon:const Icon(Icons.verified_outlined),
                           label:const Text('Lưu và xác nhận')),
                       ]),
@@ -1855,7 +2115,16 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           ));
         }),
       );
+      final result=await navigator.push(route);
+      autoTimer?.cancel();
+      quoteDebounce?.cancel();skuDebounce?.cancel();customerDebounce?.cancel();
+      // The popped route remains mounted during its exit animation. Never dispose
+      // focus nodes/controllers until the overlay has actually been removed.
+      await route.completed;
+      return result;
     }finally{
+      autoTimer?.cancel();lifecycle?.dispose();
+      await persistDraft();
       quoteDebounce?.cancel();
       quoteGeneration++;
       skuDebounce?.cancel();customerDebounce?.cancel();
@@ -1869,37 +2138,197 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     }
   }
   Future<void> createOrder({Map<String,dynamic>? source})async{
-    if(saving||pendingConfirm!=null||pendingUpdate!=null||
+    if(saving||localRecoveryBusy||localRecoveryBlocked||pendingConfirm!=null||pendingUpdate!=null||
       !can('orders.create'))return;
     if(pendingCreate==null){
-      final form=await editForm(order:source,copying:source!=null);if(form==null||!mounted)return;
+      Map<String,dynamic>? draft;
+      final scope=_localScope,token=widget.session.token;
+      if(scope!=null){
+        List<({String id,Map<String,dynamic> draft})> carts;
+        try{carts=await widget.client.localStore!.savedCarts(scope);}
+        catch(_){inform('Không đọc được giỏ đang lưu trên máy.',error:true);return;}
+        if(!_sameScope(token,scope.branch))return;
+        if(carts.isNotEmpty&&source==null){
+          final decision=await showDialog<String>(context:context,builder:(ctx)=>AlertDialog(
+            title:const Text('Giỏ hàng trên máy'),
+            content:SizedBox(width:440,height:((carts.length*74)+48).clamp(130,375).toDouble(),
+              child:ListView(children:[
+                const Text('Mỗi cửa sổ lưu giỏ riêng. Chọn giỏ để tiếp tục.'),
+                for(var i=0;i<carts.length;i++)
+                  ListTile(
+                    title:Text('Giỏ '+(i+1).toString()),
+                    subtitle:Text('Dòng hàng: '+((carts[i].draft['lines'] as List?)?.length??0).toString()+
+                      ' · '+carts[i].id.substring(carts[i].id.length>13?carts[i].id.length-13:0)),
+                    onTap:()=>Navigator.pop(ctx,'resume:'+carts[i].id),
+                    trailing:IconButton(tooltip:'Bỏ giỏ này',
+                      onPressed:()=>Navigator.pop(ctx,'discard:'+carts[i].id),
+                      icon:const Icon(Icons.delete_outline)),
+                  ),
+              ])),
+            actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Đóng'))],
+          ));
+          if(!_sameScope(token,scope.branch)||decision==null)return;
+          final picked=decision.substring(decision.indexOf(':')+1);
+          final target=carts.where((e)=>e.id==picked).firstOrNull;
+          if(target==null)return;
+          if(decision.startsWith('discard:')){
+            final yes=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(
+              title:const Text('Xóa giỏ trên máy?'),
+              content:const Text('Chỉ xóa giỏ được chọn, không xóa giỏ cửa sổ khác hoặc chứng từ.'),
+              actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Giữ lại')),
+                FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Xóa giỏ'))]));
+            if(yes==true&&_sameScope(token,scope.branch)){
+              try{
+                final claimId=newKey(),claimOwner=newKey();
+                await widget.client.localStore!.claimScopedCart(scope,picked,claimId,owner:claimOwner);
+                await widget.client.localStore!.clearScopedCart(scope,claimId,owner:claimOwner);
+              }
+              catch(_){inform('Không thể xóa giỏ trên máy.',error:true);}
+            }
+            return;
+          }
+          try{
+            final claimedId=newKey();
+            final claimedOwner=newKey();
+            draft=await widget.client.localStore!.claimScopedCart(scope,picked,claimedId,owner:claimedOwner);
+            draft['localCartId']=claimedId;
+            draft['localCartOwner']=claimedOwner;
+          }catch(_){inform('Giỏ đã được mở trong cửa sổ khác. Không tạo trùng đơn.',error:true);return;}
+        }
+      }
+      final form=await editForm(order:source??draft,copying:source!=null,localDraft:draft!=null);if(form==null||!mounted||widget.session.token!=token)return;
       final auto=form.remove('_confirmAfterSave')==true;
+      final selectedCartId=form.remove('_localCartId') as String?;
+      final selectedCartOwner=form.remove('_localCartOwner') as String?;
       setState((){
+        pendingCreateCartId=selectedCartId;
+        pendingCreateCartOwner=selectedCartOwner;
         pendingCreate=Map<String,dynamic>.from(form);
-        pendingCreateKey=newKey();pendingCreateAutoConfirm=auto;
+        pendingCreateKey=newKey();pendingCreateAutoConfirm=auto;pendingNeedsReceipt=false;
       });
     }
     await _resolveCreate();
   }
   Future<void> _resolveCreate()async{
-    final body=pendingCreate,key=pendingCreateKey;
-    if(saving||body==null||key==null)return;
+    final body=pendingCreate,key=pendingCreateKey,scope=_localScope,token=widget.session.token;
+    if(saving||body==null||key==null||!can('orders.create'))return;
+    final recoveredAttempt=pendingNeedsReceipt;
+    var serverMayHaveSeenCommand=recoveredAttempt;
+    Future<String> cartDisposition()async{
+      if(scope==null||pendingCreateCartId==null||pendingCreateCartOwner==null)return 'unknown';
+      return widget.client.localStore!.cartCreateDisposition(scope,pendingCreateCartId!,
+        owner:pendingCreateCartOwner!,commandKey:key);
+    }
     setState(()=>saving=true);
     try{
-      // This exact body+key also recovers a lost acknowledgment after COMMIT.
-      final created=await widget.client.createSalesOrder(widget.session.token,body,key:key);
-      if(!mounted)return;
+      // Always reconcile a lost acknowledgment before consulting mutable local
+      // cart state. Another tab may have already retired the cart after ACK.
+      final recovered=_localConfigured&&recoveredAttempt
+        ?await widget.client.salesRecovery(token,'create',body,key:key,revision:0):null;
+      if(!_sameScope(token,body['branchId'] as String))return;
+      Map<String,dynamic> created;
+      if(recovered!=null){
+        created=recovered;
+      }else{
+        if(recoveredAttempt&&scope!=null&&pendingCreateCartId!=null){
+          final status=await cartDisposition();
+          if(status=='rejected'||status=='never-submitted'){
+            // Stale tab whose original command was either definitively
+            // rejected or never submitted before the cart changed ownership.
+            // Only clear the exact matching key; never change the new cart.
+            try{await _persistPending(scope,null,null,null,previousKey:key);}catch(_){}
+            if(_sameScope(token,body['branchId'] as String)){
+              setState((){
+                pendingCreate=null;pendingCreateKey=null;pendingCreateAutoConfirm=false;
+                pendingCreateCartId=null;pendingCreateCartOwner=null;
+                localRecoveryBlocked=false;
+              });
+              inform(status=='rejected'
+                ?'Đơn đã bị máy chủ từ chối. Mở giỏ để sửa và tra giá lại.'
+                :'Giỏ đã được mở ở cửa sổ khác trước khi gửi đơn. Không tạo trùng.',error:true);
+            }
+            return;
+          }
+          // Crash between the durable intent write and cart submission:
+          // the same owner may still atomically mark the cart submitted,
+          // then retry the exact original command key and body.
+          if(status!='submitted'&&status!='editing')throw const LocalRecoveryConflict();
+        }
+        if(scope!=null&&pendingCreateCartId!=null&&pendingCreateCartOwner==null){
+          throw const LocalRecoveryConflict();
+        }
+        await _persistPending(scope,'create',key,body,auto:pendingCreateAutoConfirm,
+          cartId:pendingCreateCartId,cartOwner:pendingCreateCartOwner);
+        if(scope!=null&&pendingCreateCartId!=null&&pendingCreateCartOwner!=null){
+          await widget.client.localStore!.markCartSubmitting(scope,pendingCreateCartId!,
+            owner:pendingCreateCartOwner!,commandKey:key);
+        }
+        if(!_sameScope(token,body['branchId'] as String))return;
+        serverMayHaveSeenCommand=true;
+        pendingNeedsReceipt=true;
+        created=await widget.client.createSalesOrder(token,body,key:key);
+      }
+      if(!_sameScope(token,body['branchId'] as String))return;
       final auto=pendingCreateAutoConfirm;
+      final next=auto?<String,dynamic>{
+        'id':created['id'],'branchId':body['branchId'],'revision':created['revision'],
+      }:null;
+      if(auto&&created['revision'] is! int)throw const LocalRecoveryConflict();
+      var nextKey=auto?newKey():null;
+      // A received ACK is final even when another PWA tab already cleared its
+      // local source slot. Reuse its pending confirm key, never generate two.
+      try{
+        await _persistPending(scope,auto?'confirm':null,nextKey,next,previousKey:key);
+      }on LocalRecoveryConflict{
+        final active=scope!=null?await widget.client.localStore!.salesRecovery(scope):null;
+        if(active==null){
+          if(auto)await _persistPending(scope,'confirm',nextKey,next);
+        }else if(auto&&active['kind']=='confirm'&&active['body'] is Map&&
+          (active['body'] as Map)['id']==created['id']&&
+          (active['body'] as Map)['revision']==created['revision']&&
+          active['key'] is String){
+          nextKey=active['key'] as String;
+        }else{
+          throw const LocalRecoveryConflict();
+        }
+      }
+      if(scope!=null){
+        if(pendingCreateCartId!=null&&pendingCreateCartOwner!=null){
+          try{
+            await widget.client.localStore!.clearScopedCart(scope,pendingCreateCartId!,
+              owner:pendingCreateCartOwner!,commandKey:key);
+          }catch(_){ /* Receipt proves COMMIT; the other tab may have retired the cart. */ }
+        }else if(recoveredAttempt) {
+          // Never delete a different tab's new cart as part of a legacy ACK.
+        }else{
+          await widget.client.localStore!.clearCart(scope);
+        }
+      }
+      if(!_sameScope(token,body['branchId'] as String))return;
       setState((){
         pendingCreate=null;pendingCreateKey=null;pendingCreateAutoConfirm=false;
-        if(auto){
-          pendingConfirm={'id':created['id'],'branchId':body['branchId'],
-            'revision':created['revision']};
-          pendingConfirmKey=newKey();
-        }
+        pendingCreateCartId=null;pendingCreateCartOwner=null;
+        if(auto){pendingConfirm=next;pendingConfirmKey=nextKey;pendingNeedsReceipt=false;}
       });
       if(!auto)inform('Đã lưu đơn hàng.');
       await reload();
+    }on LocalRecoveryConflict catch(_){
+      // Terminal rejection is durable even if another tab already released
+      // and reopened the cart. Remove only this command's stranded slot.
+      String status='unknown';
+      try{status=await cartDisposition();}catch(_){}
+      if(!serverMayHaveSeenCommand||status=='rejected'||status=='never-submitted'){
+        try{await _persistPending(scope,null,null,null,previousKey:key);}catch(_){}
+      }
+      if(_sameScope(token,body['branchId'] as String))setState((){
+        pendingCreate=null;pendingCreateKey=null;pendingCreateAutoConfirm=false;
+        pendingCreateCartId=null;pendingCreateCartOwner=null;
+        localRecoveryBlocked=status!='rejected'&&status!='never-submitted';
+      });
+      inform(status=='rejected'
+        ?'Đơn đã bị từ chối. Mở lại giỏ để kiểm tra giá và nhập lại.'
+        :status=='never-submitted'?'Giỏ đã đổi cửa sổ trước khi gửi. Không tạo trùng.'
+        :'Yêu cầu đang chờ ở cửa sổ khác. Không gửi trùng.',error:true);
     }on ErpApiError catch(e){
       // Only explicit validation failures prove that the request was rolled back.
       // Unknown 409, timeout, 502/503/504 and transport errors stay replayable.
@@ -1912,9 +2341,19 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         e.code=='SKU_HAS_NO_EFFECTIVE_BASE_PRICE'||
         e.code=='PRICE_LIST_UNAVAILABLE'||e.code=='CHANNEL_UNAVAILABLE'||
         e.code=='CUSTOMER_UNAVAILABLE'||e.code=='INVALID_LINE_IDENTITY';
-      if(rejected&&mounted){
+      if(rejected&&_sameScope(token,body['branchId'] as String)){
+        try{
+          if(scope!=null&&pendingCreateCartId!=null&&pendingCreateCartOwner!=null){
+            // Persist terminal rejection FIRST; a second tab may be restoring
+            // the same command while the recovery slot is still occupied.
+            await widget.client.localStore!.releaseRejectedCart(scope,pendingCreateCartId!,
+              owner:pendingCreateCartOwner!,commandKey:key);
+          }
+          await _persistPending(scope,null,null,null,previousKey:key);
+        }catch(_){inform('Chưa ghi xong kết quả đơn bị từ chối trên máy.',error:true);return;}
+        if(!_sameScope(token,body['branchId'] as String))return;
         setState((){
-          pendingCreate=null;pendingCreateKey=null;pendingCreateAutoConfirm=false;
+          pendingCreate=null;pendingCreateKey=null;pendingCreateAutoConfirm=false;pendingCreateCartId=null;pendingCreateCartOwner=null;
         });
         inform('Không lưu được với thông tin đã chọn. Anh/chị hãy kiểm tra và lập lại đơn.',error:true);
       }else if(mounted){
@@ -1930,37 +2369,54 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     if(mounted&&pendingConfirm!=null)await _resolveSavedConfirm();
   }
   Future<void> _resolveSavedConfirm()async{
-    final cmd=pendingConfirm,key=pendingConfirmKey;
-    if(cmd==null||key==null||saving)return;
+    final cmd=pendingConfirm,key=pendingConfirmKey,scope=_localScope,token=widget.session.token;
+    if(cmd==null||key==null||saving||!can('orders.confirm'))return;
     final id=cmd['id'] as String,branch=cmd['branchId'] as String,
       revision=cmd['revision'] as int;
     setState(()=>saving=true);
     try{
+      await _persistPending(scope,'confirm',key,cmd);
+      if(!_sameScope(token,branch))return;
       // Lost confirmation ACK: check canonical server state before retrying.
       // Orders may be created and confirmed without the separate orders.read
       // grant. Use read-before-retry only when this actor is allowed to read;
       // otherwise replay the SAME idempotent confirm key and body.
       Map<String,dynamic>? existing;
       if(can('orders.read')){
-        existing=await widget.client.salesOrder(widget.session.token,id,branch);
+        existing=await widget.client.salesOrder(token,id,branch);
       }
       if(existing?['versionStatus']=='CONFIRMED'&&
           existing?['revision'] is int&&(existing!['revision'] as int)>revision){
-        if(mounted)setState((){pendingConfirm=null;pendingConfirmKey=null;});
+        if(!_sameScope(token,branch))return;
+        await _persistPending(scope,null,null,null,previousKey:key);
+        if(_sameScope(token,branch))setState((){pendingConfirm=null;pendingConfirmKey=null;});
         inform('Đơn hàng đã được máy chủ xác nhận.');
       }else{
-        await widget.client.salesOrderAction(widget.session.token,id,'confirm',
-          branch,revision,key:key);
-        if(mounted)setState((){pendingConfirm=null;pendingConfirmKey=null;});
+        if(!_sameScope(token,branch))return;
+        final receipt=_localConfigured&&pendingNeedsReceipt
+          ?await widget.client.salesRecovery(token,'confirm',{'branchId':branch},key:key,revision:revision,orderId:id):null;
+        if(!_sameScope(token,branch))return;
+        pendingNeedsReceipt=true;
+        if(receipt==null)await widget.client.salesOrderAction(token,id,'confirm',branch,revision,key:key);
+        if(!_sameScope(token,branch))return;
+        await _persistPending(scope,null,null,null,previousKey:key);
+        if(_sameScope(token,branch))setState((){pendingConfirm=null;pendingConfirmKey=null;});
         inform('Đã lưu và xác nhận đơn hàng.');
       }
       await reload();
+    }on LocalRecoveryConflict catch(_){
+      if(_sameScope(token,branch))setState((){
+        pendingConfirm=null;pendingConfirmKey=null;localRecoveryBlocked=true;
+      });
+      inform('Xác nhận đang xử lý ở cửa sổ khác. Kiểm tra trạng thái máy chủ.',error:true);
     }on ErpApiError catch(e){
       if({'PRICE_STALE','REVISION_CONFLICT','ORDER_CANCELLED',
           'VERSION_ALREADY_CONFIRMED','CUSTOMER_OR_PRICE_LIST_UNAVAILABLE',
           'CHANNEL_UNAVAILABLE','PRICE_LIST_UNAVAILABLE','CUSTOMER_UNAVAILABLE',
           'SKU_UNAVAILABLE','SKU_HAS_NO_EFFECTIVE_BASE_PRICE',
-          'INVALID_REFERENCE'}.contains(e.code)&&mounted){
+          'INVALID_REFERENCE'}.contains(e.code)&&_sameScope(token,branch)){
+        try{await _persistPending(scope,null,null,null,previousKey:key);}catch(_){inform('Chưa xóa được yêu cầu đã từ chối trên máy.',error:true);return;}
+        if(!_sameScope(token,branch))return;
         setState((){pendingConfirm=null;pendingConfirmKey=null;});
         inform('Không thể xác nhận do đơn hoặc giá đã thay đổi. Đơn vẫn được lưu; hãy kiểm tra và cập nhật lại.',
           error:true);
@@ -1977,40 +2433,279 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     }
   }
   Future<void> updateOrder(Map<String,dynamic> order)async{
-    // The previous create/confirm must reach a recoverable server outcome
-    // before another edit can replace any pending idempotency command.
-    if(saving||pendingConfirm!=null||pendingCreate!=null)return;
+    if(saving||localRecoveryBusy||pendingConfirm!=null||pendingCreate!=null||!can('orders.update'))return;
     if(pendingUpdate!=null){await _resolvePendingUpdate();return;}
-    final form=await editForm(order:order);if(form==null||!mounted)return;
+    final scope=_localScope,id=order['id'] as String,token=widget.session.token;
+    var editSource=order;
+    String? supersededKey,supersededOwner;
+    if(scope!=null){
+      List<Map<String,dynamic>> saved;
+      try{saved=await widget.client.localStore!.unsentSalesUpdates(scope,id);}
+      catch(_){inform('Không đọc được bản sửa đã lưu; chưa mở đơn mới.',error:true);return;}
+      if(!_sameScope(token,scope.branch))return;
+      if(saved.isNotEmpty){
+        final selected=await showDialog<String>(context:context,builder:(ctx)=>AlertDialog(
+          title:const Text('Bản sửa đơn chưa gửi'),
+          content:SizedBox(width:510,height:((saved.length*76)+68).clamp(140,390).toDouble(),
+            child:ListView(children:[
+              const Text('Chọn bản sửa để xem nội dung trước khi gửi hoặc bỏ.'),
+              const SizedBox(height:8),
+              for(var index=0;index<saved.length;index++)
+                ListTile(
+                  title:Text('Bản sửa '+(index+1).toString()+' · '+
+                    (saved[index]['key'] as String).split('-').skip(1).join('-')),
+                  subtitle:Text('Số dòng '+(((saved[index]['command'] as Map)['body'] as Map)['lines'] as List).length.toString()+
+                    ' · '+(saved[index]['status']=='rejected'?'Cần đối chiếu':
+                      saved[index]['status']=='unsent'?'Chưa gửi':'Cần xác minh máy chủ')),
+                  onTap:()=>Navigator.pop(ctx,saved[index]['key'] as String),
+                ),
+            ])),
+          actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Đóng'))],
+        ));
+        if(!_sameScope(token,scope.branch)||selected==null)return;
+        final item=saved.where((x)=>x['key']==selected).firstOrNull;
+        if(item==null)return;
+        Map<String,dynamic> cmd,body;
+        try{
+          cmd=Map<String,dynamic>.from(item['command'] as Map);
+          body=Map<String,dynamic>.from(cmd['body'] as Map);
+          if(cmd['id']!=id||body['branchId']!=scope.branch||body['lines'] is! List)throw const FormatException();
+        }catch(_){inform('Bản sửa trên máy không hợp lệ, không gửi lại.',error:true);return;}
+        final lines=body['lines'] as List;
+        final status=item['status'];
+        final canReconcile=status=='rejected'||status=='reconciling';
+        final decision=await showDialog<String>(context:context,builder:(ctx)=>AlertDialog(
+          title:Text('Kiểm tra bản sửa · '+selected.split('-').skip(1).join('-')),
+          content:SizedBox(width:520,height:350,
+            child:SingleChildScrollView(child:Column(
+              crossAxisAlignment:CrossAxisAlignment.start,children:[
+                Text('Khách hàng: '+(body['customerId']??'—').toString()),
+                Text('Bảng giá: '+(body['priceListId']??'—').toString()),
+                Text('Ghi chú: '+(body['note']??'—').toString()),
+                Text('Trạng thái: '+(status=='rejected'?'Đã bị máy chủ từ chối':
+                  status=='unsent'?'Chưa gửi':status=='reconciling'?'Đang sửa ở cửa sổ khác':'Chưa rõ kết quả, phải đối soát bản gốc')),
+                const SizedBox(height:10),
+                for(var index=0;index<lines.length;index++)...[
+                  Text('Dòng '+(index+1).toString()+' · SKU '+((lines[index] as Map)['sellSkuId']??'').toString(),
+                    style:const TextStyle(fontWeight:FontWeight.w700)),
+                  Text('SL: '+((lines[index] as Map)['quantity']??'').toString()+
+                    ' · Giá sửa: '+((lines[index] as Map)['unitPrice']??'Theo bảng giá').toString()),
+                  if((lines[index] as Map)['discountRate']!=null)
+                    Text('CK: '+((lines[index] as Map)['discountRate']).toString()),
+                  if((lines[index] as Map)['taxRate']!=null)
+                    Text('Thuế: '+((lines[index] as Map)['taxRate']).toString()),
+                ],
+              ],
+            ))),
+          actions:[
+            TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Đóng')),
+            if(status=='rejected')TextButton(onPressed:()=>Navigator.pop(ctx,'discard'),
+              child:const Text('Bỏ bản sửa')),
+            if(canReconcile)OutlinedButton(onPressed:()=>Navigator.pop(ctx,'reconcile'),
+              child:const Text('Đối chiếu và sửa')),
+            if(status!='rejected')FilledButton(onPressed:()=>Navigator.pop(ctx,'retry'),
+              child:const Text('Kiểm tra/gửi bản gốc')),
+          ],
+        ));
+        if(!_sameScope(token,scope.branch)||decision==null)return;
+        if(decision=='discard'){
+          final approved=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(
+            title:const Text('Xóa bản sửa chưa gửi?'),
+            content:const Text('Thao tác chỉ xóa thay đổi lưu trên máy; không sửa hoặc hủy đơn máy chủ.'),
+            actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Giữ lại')),
+              FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Xóa bản sửa'))]));
+          if(approved==true&&_sameScope(token,scope.branch)){
+            try{await widget.client.localStore!.clearUnsentSalesUpdate(scope,id,selected,requiredStatus:'rejected');}
+            catch(_){inform('Không xóa được bản sửa lưu trên máy.',error:true);}
+          }
+          return;
+        }
+        if(decision=='retry'){
+          if(status=='rejected')return;
+          setState((){
+            pendingUpdate=cmd;pendingUpdateKey=selected;pendingNeedsReceipt=true;
+            localRecoveryBlocked=false;
+          });
+          await _resolvePendingUpdate();return;
+        }
+        if(decision!='reconcile'||!canReconcile)return;
+        final claimId=newKey();
+        try{
+          await widget.client.localStore!.claimRejectedSalesUpdate(scope,id,selected,claimId);
+        }catch(_){
+          inform('Bản sửa đang được xử lý ở cửa sổ khác. Không được tự gửi lại.',error:true);
+          return;
+        }
+        try{
+          final latest=await widget.client.salesOrder(token,id,scope.branch);
+          if(!_sameScope(token,scope.branch)){
+            try{await widget.client.localStore!.releaseRejectedSalesClaim(scope,id,selected,claimId);}catch(_){}
+            return;
+          }
+          editSource=erpSalesReconciliationOrder(latest,cmd);
+          supersededKey=selected;
+          supersededOwner=claimId;
+          inform('Đang đối chiếu bản sửa với đơn mới nhất. Giá phải tra lại trên máy chủ.');
+        }catch(_){
+          try{await widget.client.localStore!.releaseRejectedSalesClaim(scope,id,selected,claimId);}catch(_){}
+          inform('Chưa tải được đơn mới nhất để đối chiếu. Bản sửa được giữ nguyên.',error:true);return;
+        }
+      }
+    }
+    final form=await editForm(order:editSource);
+    if(form==null||!mounted||widget.session.token!=token){
+      if(scope!=null&&supersededKey!=null&&supersededOwner!=null){
+        try{await widget.client.localStore!.releaseRejectedSalesClaim(scope,id,supersededKey,supersededOwner);}catch(_){}
+      }
+      return;
+    }
     final auto=form.remove('_confirmAfterSave')==true;
+    final command=<String,dynamic>{'id':id,'revision':editSource['revision'],
+      'body':Map<String,dynamic>.from(form),'auto':auto};
+    final key=newKey();
+    if(scope!=null){
+      try{
+        if(supersededKey!=null&&supersededOwner!=null){
+          await widget.client.localStore!.replaceReconciledSalesUpdate(
+            scope,id,supersededKey,supersededOwner,key,command);
+        }else{
+          await widget.client.localStore!.saveUnsentSalesUpdate(scope,id,key,command);
+        }
+      }catch(_){
+        // An expired claim may have been taken by another tab. Preserve the
+        // operator's entered new quote separately; never send it automatically.
+        try{await widget.client.localStore!.saveUnsentSalesUpdate(scope,id,key,command);}catch(_){}
+        inform('Bản sửa mới chưa được đối chiếu an toàn. Đã giữ bản gốc; không gửi yêu cầu.',error:true);
+        return;
+      }
+    }
+    if(!_sameScope(token,scope?.branch??branchId??''))return;
     setState((){
-      pendingUpdate={'id':order['id'],'revision':order['revision'],
-        'body':Map<String,dynamic>.from(form),'auto':auto};
-      pendingUpdateKey=newKey();
+      pendingUpdate=command;pendingUpdateKey=key;pendingNeedsReceipt=false;
+      localRecoveryBlocked=false;
     });
     await _resolvePendingUpdate();
   }
   Future<void> _resolvePendingUpdate()async{
-    final cmd=pendingUpdate,key=pendingUpdateKey;
-    if(cmd==null||key==null||saving)return;
+    final cmd=pendingUpdate,key=pendingUpdateKey,scope=_localScope,token=widget.session.token;
+    if(cmd==null||key==null||saving||!can('orders.update'))return;
     final id=cmd['id'] as String,rev=cmd['revision'] as int;
     final body=Map<String,dynamic>.from(cmd['body'] as Map);
     final auto=cmd['auto']==true;
     setState(()=>saving=true);
     try{
-      // Replays the exact original body+key after a lost COMMIT acknowledgment.
-      final updated=await widget.client.updateSalesOrder(widget.session.token,id,rev,body,key:key);
-      if(!mounted)return;
+      // Original key receipt is authoritative after COMMIT, even if another
+      // tab already cleared its local unsent record.
+      if(_localConfigured&&pendingNeedsReceipt){
+        final prior=await widget.client.salesRecovery(token,'update',body,
+          key:key,revision:rev,orderId:id);
+        if(!_sameScope(token,body['branchId'] as String))return;
+        if(prior!=null){
+          // The update has committed. Never replay it. Save-and-confirm must
+          // transition atomically to a durable confirm intent, not be forgotten.
+          final next=auto?<String,dynamic>{
+            'id':id,'branchId':body['branchId'],'revision':prior['revision'],
+          }:null;
+          if(auto&&prior['revision'] is! int)throw const LocalRecoveryConflict();
+          final nextKey=auto?newKey():null;
+          try{
+            await _persistPending(scope,auto?'confirm':null,nextKey,next,previousKey:key);
+          }on LocalRecoveryConflict{
+            if(!auto){
+              // This slot now belongs to another tab; never delete their command.
+            }else if(scope!=null&&await widget.client.localStore!.salesRecovery(scope)==null){
+              await _persistPending(scope,'confirm',nextKey,next);
+            }else{
+              throw const LocalRecoveryConflict();
+            }
+          }
+          if(scope!=null){
+            try{await widget.client.localStore!.clearUnsentSalesUpdate(scope,id,key);}
+            catch(_){ /* Original ACK is authoritative, old cache remains visible. */ }
+          }
+          if(_sameScope(token,body['branchId'] as String)){
+            setState((){
+              pendingUpdate=null;pendingUpdateKey=null;localRecoveryBlocked=false;
+              if(auto){pendingConfirm=next;pendingConfirmKey=nextKey;pendingNeedsReceipt=false;}
+            });
+            inform(auto?'Đã lưu đơn, đang xác nhận trên máy chủ.':
+              'Máy chủ đã lưu bản sửa. Không gửi trùng.');
+            await reload();
+            if(auto&&mounted)unawaited(Future<void>.delayed(Duration.zero,()async{
+              if(mounted)await _resolveSavedConfirm();
+            }));
+          }
+          return;
+        }
+      }
+      if(_localConfigured&&pendingNeedsReceipt&&scope!=null){
+        final saved=await widget.client.localStore!.unsentSalesUpdates(scope,id);
+        final same=saved.where((x)=>x['key']==key).toList();
+        if(same.length!=1){
+          setState(()=>localRecoveryBlocked=true);
+          inform('Không còn bản sửa trên máy và chưa có xác nhận. Không tự gửi lại.',error:true);
+          return;
+        }
+        if(same.single['status']=='rejected'){
+          // Another tab received a definitive server rejection. Do not
+          // recreate a stranded recovery slot for this terminal command.
+          try{await _persistPending(scope,null,null,null,previousKey:key);}
+          on LocalRecoveryConflict{ /* Never touch a different tab's key. */ }
+          if(_sameScope(token,body['branchId'] as String)){
+            setState((){pendingUpdate=null;pendingUpdateKey=null;localRecoveryBlocked=true;});
+            inform('Máy chủ đã từ chối bản sửa. Mở Sửa để đối chiếu và tra giá lại.',error:true);
+          }
+          return;
+        }
+        if(!{'unsent','inflight',null}.contains(same.single['status'])){
+          setState(()=>localRecoveryBlocked=true);
+          inform('Bản sửa đang được xử lý ở cửa sổ khác. Không tự gửi lại.',error:true);
+          return;
+        }
+      }
+      await _persistPending(scope,'update',key,cmd);
+      if(scope!=null)await widget.client.localStore!.markUnsentSalesUpdate(scope,id,key,'inflight');
+      if(!_sameScope(token,body['branchId'] as String))return;
+      // Only server can accept the original idempotent mutation.
+      pendingNeedsReceipt=true;
+      final updated=await widget.client.updateSalesOrder(token,id,rev,body,key:key);
+      if(!_sameScope(token,body['branchId'] as String))return;
+      final next=auto?<String,dynamic>{'id':id,'branchId':body['branchId'],'revision':updated['revision']}:null;
+      final nextKey=auto?newKey():null;
+      await _persistPending(scope,auto?'confirm':null,nextKey,next,previousKey:key);
+      if(scope!=null)await widget.client.localStore!.clearUnsentSalesUpdate(scope,id,key);
+      if(!_sameScope(token,body['branchId'] as String))return;
       setState((){
         pendingUpdate=null;pendingUpdateKey=null;
         if(auto){
-          pendingConfirm={'id':id,'branchId':body['branchId'],
-            'revision':updated['revision']};
-          pendingConfirmKey=newKey();
+          pendingConfirm=next;
+          pendingConfirmKey=nextKey;
         }
       });
       if(!auto)inform('Đã cập nhật đơn hàng.');
       await reload();
+    }on LocalRecoveryConflict catch(_){
+      // A peer tab may have rejected/rebased this exact request between our
+      // receipt preflight and the CAS. Release only our original key, never
+      // another command, so a stranded slot cannot lock the whole branch.
+      var terminal=false;
+      if(scope!=null){
+        try{
+          final items=await widget.client.localStore!.unsentSalesUpdates(scope,id);
+          final matching=items.where((x)=>x['key']==key).toList();
+          terminal=matching.isEmpty||matching.any((x)=>
+            {'rejected','reconciling'}.contains(x['status']));
+          if(terminal){
+            try{await _persistPending(scope,null,null,null,previousKey:key);}catch(_){}
+          }
+        }catch(_){}
+      }
+      if(_sameScope(token,body['branchId'] as String))setState((){
+        pendingUpdate=null;pendingUpdateKey=null;localRecoveryBlocked=!terminal;
+      });
+      inform(terminal
+        ?'Bản sửa cũ đã bị từ chối hoặc thay thế. Mở lại đơn để đối chiếu.'
+        :'Bản sửa chưa gửi đã được giữ riêng trên máy. Mở Sửa để kiểm tra.',error:true);
     }on ErpApiError catch(e){
       final rejected={'PRICE_STALE','SKU_UNAVAILABLE','INVALID_QUANTITY',
         'DUPLICATE_PRODUCT','INVALID_LINES','VERSION_ALREADY_CONFIRMED',
@@ -2018,8 +2713,14 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         'CUSTOMER_OR_PRICE_LIST_UNAVAILABLE','INVALID_REFERENCE',
         'CHANNEL_UNAVAILABLE','PRICE_LIST_UNAVAILABLE','CUSTOMER_UNAVAILABLE',
         'SKU_HAS_NO_EFFECTIVE_BASE_PRICE'}.contains(e.code);
-      if(rejected&&mounted){
-        setState((){pendingUpdate=null;pendingUpdateKey=null;});
+      if(rejected&&_sameScope(token,body['branchId'] as String)){
+        try{
+          await _persistPending(scope,null,null,null,previousKey:key);
+          if(scope!=null)await widget.client.localStore!.markUnsentSalesUpdate(scope,id,key,'rejected');
+        }catch(_){inform('Chưa lưu được kết quả từ chối trên máy.',error:true);return;}
+        if(!_sameScope(token,body['branchId'] as String))return;
+        // Keep the rejected edit available for an explicitly reviewed new quote.
+        setState((){pendingUpdate=null;pendingUpdateKey=null;localRecoveryBlocked=true;});
         inform('Không thể cập nhật vì dữ liệu hoặc giá đã thay đổi. Hãy mở lại đơn và tra giá.',
           error:true);
         await reload();
@@ -2052,7 +2753,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   }
   Future<void> action(Map<String,dynamic> order,String action)async{
     final branch=branchId;
-    if(branch==null||saving||pendingCreate!=null||
+    if(branch==null||saving||localRecoveryBusy||localRecoveryBlocked||pendingCreate!=null||
        pendingUpdate!=null||pendingConfirm!=null)return;
     String? reason;
     if(action=='confirm'){
@@ -2299,7 +3000,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
               style:TextStyle(color:ErpTokens.ink,fontSize:18,fontWeight:FontWeight.w800)),
             FilledButton.icon(
               key:const ValueKey('sales-create'),
-              onPressed:saving?null:pendingConfirm!=null?_resolveSavedConfirm:
+              onPressed:saving||localRecoveryBusy||localRecoveryBlocked?null:pendingConfirm!=null?_resolveSavedConfirm:
                 pendingUpdate!=null?_resolvePendingUpdate:
                 !can('orders.create')?null:createOrder,
               icon:Icon(pendingConfirm!=null||pendingCreate!=null||
@@ -2330,12 +3031,13 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                   missingCatalog=='products'?'Sản phẩm':'Bảng giá'))),
             ]),
         ),
+        if(localRecoveryBlocked)OutlinedButton(onPressed:_restorePending,child:const Text('Thử đọc lại dữ liệu chờ trên máy')),
         if(branchId!=null)DropdownButtonFormField<String>(
           key:ValueKey('sales-branch-'+branchId!),initialValue:branchId,isExpanded:true,
           decoration:const InputDecoration(labelText:'Chi nhánh'),
           items:branches.map((x)=>DropdownMenuItem<String>(
             value:x['id'] as String,child:Text(x['name'] as String))).toList(),
-          onChanged:(value){setState(()=>branchId=value);reload();}),
+          onChanged:_navigationLocked?null:(value)async{setState(()=>branchId=value);await _restorePending();await reload();}),
         const SizedBox(height:12),
         TextField(key:const ValueKey('sales-search'),controller:search,
           onSubmitted:(_)=>reload(),

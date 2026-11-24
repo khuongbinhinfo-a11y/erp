@@ -31,3 +31,7 @@ build/
 .prisma/
 .prisma-composer/
 .alchemy/
+
+# Native platform templates are generated from the pinned Flutter SDK by platform/prepare_native.py.
+/apps/flutter/android/
+/apps/flutter/windows/

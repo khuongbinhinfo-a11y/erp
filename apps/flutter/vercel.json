@@ -6,6 +6,20 @@
   "cleanUrls": true,
   "trailingSlash": false,
   "rewrites": [
-    { "source": "/((?!assets/|canvaskit/|icons/|flutter_service_worker.js|flutter_bootstrap.js|flutter.js|main.dart.js|manifest.json).*)", "destination": "/index.html" }
+    {
+      "source": "/((?!assets/|canvaskit/|icons/|erp-sw.js|flutter_service_worker.js|flutter_bootstrap.js|flutter.js|main.dart.js|manifest.json).*)",
+      "destination": "/index.html"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/erp-sw.js",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache, no-store, must-revalidate"
+        }
+      ]
+    }
   ]
 }

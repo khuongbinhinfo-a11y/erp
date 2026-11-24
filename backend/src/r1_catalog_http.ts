@@ -369,6 +369,8 @@ async function listing(db:PoolClient,t:string,b:string,kind:Kind,q:string,skuId?
   // Filter before the LIMIT, not on the client: large catalogs remain reachable.
   const {filters,values}=buildSkuTaxonomyFilters(scope);
   const params=[t,b,"%"+q+"%",...values];
+  const skuFilter=skuId ? 'AND s.id=$' + (params.length+1) : '';
+  if(skuId)params.push(skuId);
   const r=await db.query(`SELECT s.id,s.product_id AS "productId",s.sku AS code,
    p.name AS "productName",s.unit_code AS "unitCode",
    s.conversion_to_base::text AS "toBase",s.is_base AS "isBase",s.active,s.revision::integer,
@@ -385,6 +387,7 @@ async function listing(db:PoolClient,t:string,b:string,kind:Kind,q:string,skuId?
      WHERE bc.installation_id=s.installation_id AND bc.branch_id=s.branch_id
       AND bc.sell_sku_id=s.id AND bc.active AND bc.barcode ILIKE $3))
     ${filters.length?'AND '+filters.join(' AND '):''}
+    ${skuFilter}
    ORDER BY ${scope?.productId?'s.id':'s.sku,s.id'}
    LIMIT ${scope?.productId?'101':'100'}`,params);
   return r.rows;

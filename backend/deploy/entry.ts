@@ -10,6 +10,12 @@ const r2Inputs = {
   ERP_R2_BUCKET: serviceInput.r2Bucket?.expose(),
   ERP_R2_ACCESS_KEY_ID: serviceInput.r2AccessKeyId?.expose(),
   ERP_R2_SECRET_ACCESS_KEY: serviceInput.r2SecretAccessKey?.expose(),
+  ERP_RELEASE_R2_ACCOUNT_ID: serviceInput.releaseR2AccountId?.expose(),
+  ERP_RELEASE_R2_BUCKET: serviceInput.releaseR2Bucket?.expose(),
+  ERP_RELEASE_R2_ACCESS_KEY_ID: serviceInput.releaseR2AccessKeyId?.expose(),
+  ERP_RELEASE_R2_SECRET_ACCESS_KEY: serviceInput.releaseR2SecretAccessKey?.expose(),
+  ERP_ANDROID_CERT_SHA256: serviceInput.androidCertSha256?.expose(),
+  ERP_RELEASE_TICKET_SECRET: serviceInput.releaseTicketSecret?.expose(),
 };
 for (const [key,value] of Object.entries(r2Inputs)) {
   if (value) process.env[key] = value;

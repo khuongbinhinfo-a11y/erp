@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:material_ui/material_ui.dart';
 
 import 'erp_tokens.dart';
@@ -6,6 +7,7 @@ import 'company_workspace.dart';
 import 'admin_workspace.dart';
 import 'identity_client.dart';
 import 'erp_toast.dart';
+import 'app_update.dart';
 
 class ErpFeature {
   final String title;
@@ -40,6 +42,8 @@ class _ErpShellState extends State<ErpShell> {
   bool collapsed = false;
   bool showIntroToast = true;
   bool companyNavigationLocked = false;
+  String? _checkedUpdateSession;
+
 
   @override
   void initState() {
@@ -48,6 +52,7 @@ class _ErpShellState extends State<ErpShell> {
     visibleModules=List<int>.generate(erpFeatures.length,(i)=>i)
       .where((i)=>widget.previewOnly||hasModuleAccess(i)).toList();
     if(visibleModules.isNotEmpty) selected=visibleModules.first;
+    _scheduleQuietUpdateCheck();
   }
 
   @override
@@ -56,6 +61,7 @@ class _ErpShellState extends State<ErpShell> {
     if(oldWidget.session?.token!=widget.session?.token||
        oldWidget.previewOnly!=widget.previewOnly)companyNavigationLocked=false;
     if(oldWidget.session!=widget.session||oldWidget.previewOnly!=widget.previewOnly){
+      _scheduleQuietUpdateCheck();
       visibleModules=List<int>.generate(erpFeatures.length,(i)=>i)
         .where((i)=>widget.previewOnly||hasModuleAccess(i)).toList();
       if(visibleModules.isNotEmpty&&!visibleModules.contains(selected)){
@@ -64,6 +70,22 @@ class _ErpShellState extends State<ErpShell> {
     }
   }
 
+  void _scheduleQuietUpdateCheck(){
+    if(!_canUpdate)return;
+    final session=widget.session!;
+    if(_checkedUpdateSession==session.token)return;
+    _checkedUpdateSession=session.token;
+    WidgetsBinding.instance.addPostFrameCallback((_){
+      if(!mounted||widget.session?.token!=session.token||!_canUpdate)return;
+      unawaited(erpAndroidQuietUpdateVersion(widget.client!,session).then((version){
+        if(mounted&&version!=null&&widget.session?.token==session.token&&
+          !companyNavigationLocked){
+          ErpToast.show(context,'Có bản cập nhật ERP '+version+
+            '. Mở menu Cập nhật ứng dụng để xem và cài đặt.');
+        }
+      }));
+    });
+  }
   void protectedLogout(){
     if(companyNavigationLocked){
       ErpToast.show(context,
@@ -72,6 +94,18 @@ class _ErpShellState extends State<ErpShell> {
       return;
     }
     widget.onLogout?.call();
+  }
+  bool get _canUpdate=>erpAndroidUpdateSupported&&widget.session!=null&&
+    widget.client!=null&&!widget.previewOnly;
+  Future<void> openUpdate()async{
+    if(!_canUpdate)return;
+    if(companyNavigationLocked){
+      ErpToast.show(context,'Hãy kiểm tra đơn hàng đang xử lý trước khi cập nhật.',isError:true);
+      return;
+    }
+    final session=widget.session!;
+    await showErpAndroidUpdate(context,widget.client!,session,
+      ()=>mounted&&widget.session?.token==session.token&&widget.session?.actorId==session.actorId&&!companyNavigationLocked);
   }
   void dismissToast() {
     if (showIntroToast) setState(() => showIntroToast = false);
@@ -106,6 +140,7 @@ class _ErpShellState extends State<ErpShell> {
           selected:selected,visibleModules:visibleModules,
           onLogout:widget.onLogout==null?null:protectedLogout,
           loginName:widget.session?.loginName,
+          onUpdate:_canUpdate?openUpdate:null,
           collapsed:false,
           onSelect:(value){
             Navigator.of(context).pop();
@@ -136,6 +171,7 @@ class _ErpShellState extends State<ErpShell> {
               visibleModules:visibleModules,
               onLogout:widget.onLogout==null?null:protectedLogout,
               loginName:widget.session?.loginName,
+          onUpdate:_canUpdate?openUpdate:null,
               collapsed:collapsed,
               onToggle:()=>setState(()=>collapsed=!collapsed)),
           ),
@@ -353,11 +389,12 @@ class _Navigation extends StatelessWidget {
   final List<int> visibleModules;
   final VoidCallback? onLogout;
   final String? loginName;
+  final VoidCallback? onUpdate;
   final bool collapsed;
   final VoidCallback? onToggle;
   const _Navigation({required this.selected, required this.onSelect,
     required this.visibleModules, required this.collapsed, this.onToggle,
-    this.onLogout,this.loginName});
+    this.onLogout,this.loginName,this.onUpdate});
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(builder:(context,limits){
@@ -417,6 +454,11 @@ class _Navigation extends StatelessWidget {
             compact:compact,onSelect:onSelect);
         },
       )),
+      if(onUpdate!=null)ListTile(
+        key:const ValueKey('erp-android-update'),
+        leading:const Icon(Icons.system_update,color:ErpTokens.lime),
+        title:compact?null:const Text('Cập nhật ứng dụng',style:TextStyle(color:ErpTokens.sidebarText)),
+        onTap:onUpdate),
       const Divider(color: Color(0xFF4F7860), height: 1),
       if(onLogout!=null)
         Padding(

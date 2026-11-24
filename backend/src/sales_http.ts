@@ -10,7 +10,7 @@ import { userAccess } from "./identity_admin.ts";
 import { OrderContextFault,parseOrderContext,type OrderContextInput,hasOrderContextSchema,
   saveOrderContext,authorizeOrderContext,copyOrderContext,
   lockContextWarehouses,readEntrySettings,ensureWalkInCustomer } from "./sales_order_context.ts";
-import { executeMutation, MutationFault, requireRevision, type MutationContext } from "./mutation.ts";
+import { executeMutation, readCommittedMutation, MutationFault, requireRevision, type MutationContext, type MutationHandlers } from "./mutation.ts";
 import { validIdempotencyKey } from "./contracts.ts";
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -642,6 +642,24 @@ async function detail(db:PoolClient,t:string,b:string,id:string,actor:string){
     ORDER BY v.version_no DESC`,[t,b,id,...(modern?[warehouseIds]:[])]);
   return {...item,...(shipping?{shipping}:{}),lines:lines.rows,history:versions.rows};
 }
+const authorizeCreate=async(db:PoolClient,c:MutationContext,input:OrderInput)=>
+  await hasPermission(db,{installationId:c.installationId,actorId:c.actorId,
+    permission:"orders.create",branchId:input.branchId})&&
+  await adjustmentAllowed(db,c.installationId,c.actorId,input)&&
+  (!input.shipping||await hasPermission(db,{installationId:c.installationId,actorId:c.actorId,
+    permission:"inventory.read",branchId:input.branchId,warehouseId:input.shipping.warehouseId}));
+const authorizeUpdate=async(db:PoolClient,c:MutationContext,orderId:string,input:OrderInput)=>
+  await hasPermission(db,{installationId:c.installationId,actorId:c.actorId,
+    permission:"orders.update",branchId:input.branchId})&&
+  await orderWarehouseAllowed(db,c.installationId,input.branchId,orderId,c.actorId)&&
+  await adjustmentAllowed(db,c.installationId,c.actorId,input)&&
+  (!input.shipping||await hasPermission(db,{installationId:c.installationId,actorId:c.actorId,
+    permission:"inventory.read",branchId:input.branchId,warehouseId:input.shipping.warehouseId}));
+const authorizeAction=async(db:PoolClient,c:MutationContext,orderId:string,branchId:string,action:string)=>
+  await hasPermission(db,{installationId:c.installationId,actorId:c.actorId,
+    permission:"orders."+action,branchId})&&
+  await orderWarehouseAllowed(db,c.installationId,branchId,orderId,c.actorId);
+
 export async function handleSalesHttp(req:IncomingMessage,res:ServerResponse,
   id:string,url:URL,opts:IdentityOptions,ready:()=>Promise<boolean>):Promise<void>{
   const origin=typeof req.headers.origin==="string"?req.headers.origin:undefined;
@@ -772,17 +790,33 @@ export async function handleSalesHttp(req:IncomingMessage,res:ServerResponse,
       }finally{db.release();}
       return;
     }
+    if(url.pathname==="/v1/sales/recovery"&&req.method==="POST"){
+      const raw=await bodyOf(req);allowKeys(raw,["action","orderId","body"]);
+      const action=raw.action,body=asRecord(raw.body);
+      let ctx:MutationContext,authorize:MutationHandlers["authorize"];
+      if(action==="create"){
+        if(raw.orderId!==undefined)throw new SalesError(400,"INVALID_ID");
+        const input=parseOrder(body);
+        ctx=mutation(req,id,tenant,actorId,"sales.order.create",input,true);
+        authorize=(db,c)=>authorizeCreate(db,c,input);
+      }else if(action==="update"){
+        const orderId=uuid(raw.orderId),input=parseOrder(body);
+        ctx=mutation(req,id,tenant,actorId,"sales.order.update",{id:orderId,...input});
+        authorize=(db,c)=>authorizeUpdate(db,c,orderId,input);
+      }else if(action==="confirm"){
+        const orderId=uuid(raw.orderId);allowKeys(body,["branchId"]);
+        const branchId=uuid(body.branchId);
+        ctx=mutation(req,id,tenant,actorId,"sales.order.confirm",{id:orderId,branchId});
+        authorize=(db,c)=>authorizeAction(db,c,orderId,branchId,"confirm");
+      }else throw new SalesError(400,"INVALID_ACTION");
+      const receipt=await readCommittedMutation(pool,ctx,authorize);
+      send(res,200,{receipt:receipt?.body??null,requestId:id},id,cors);return;
+    }
     if(url.pathname==="/v1/sales/orders"&&req.method==="POST"){
       const input=parseOrder(await bodyOf(req));
       const ctx=mutation(req,id,tenant,actorId,"sales.order.create",input,true);
       const out=await executeMutation(pool,ctx,{
-        authorize:async(db,c)=>
-          await hasPermission(db,{installationId:c.installationId,
-            actorId:c.actorId,permission:"orders.create",branchId:input.branchId})&&
-          await adjustmentAllowed(db,c.installationId,c.actorId,input)&&
-          (!input.shipping||await hasPermission(db,{installationId:c.installationId,
-            actorId:c.actorId,permission:"inventory.read",branchId:input.branchId,
-            warehouseId:input.shipping.warehouseId})),
+        authorize:(db,c)=>authorizeCreate(db,c,input),
         execute:(db,c)=>create(db,c,input),
       });
       send(res,out.status,out.body,id,cors);return;
@@ -791,13 +825,7 @@ export async function handleSalesHttp(req:IncomingMessage,res:ServerResponse,
       const orderId=uuid(orderPath[1]),input=parseOrder(await bodyOf(req));
       const ctx=mutation(req,id,tenant,actorId,"sales.order.update",{id:orderId,...input});
       const out=await executeMutation(pool,ctx,{
-        authorize:async(db,c)=>await hasPermission(db,{installationId:c.installationId,
-          actorId:c.actorId,permission:"orders.update",branchId:input.branchId})&&
-          await orderWarehouseAllowed(db,c.installationId,input.branchId,orderId,c.actorId)&&
-          await adjustmentAllowed(db,c.installationId,c.actorId,input)&&
-          (!input.shipping||await hasPermission(db,{installationId:c.installationId,
-            actorId:c.actorId,permission:"inventory.read",branchId:input.branchId,
-            warehouseId:input.shipping.warehouseId})),
+        authorize:(db,c)=>authorizeUpdate(db,c,orderId,input),
         execute:(db,c)=>edit(db,c,orderId,input),
       });
       send(res,out.status,out.body,id,cors);return;
@@ -812,9 +840,7 @@ export async function handleSalesHttp(req:IncomingMessage,res:ServerResponse,
       const ctx=mutation(req,id,tenant,actorId,"sales.order."+action,{
         id:orderId,branchId:b,...(reason?{reason}:{})});
       const out=await executeMutation(pool,ctx,{
-        authorize:async(db,c)=>await hasPermission(db,{installationId:c.installationId,
-          actorId:c.actorId,permission:"orders."+action,branchId:b})&&
-          await orderWarehouseAllowed(db,c.installationId,b,orderId,c.actorId),
+        authorize:(db,c)=>authorizeAction(db,c,orderId,b,action),
         execute:(db,c)=>action==="confirm"?confirm(db,c,orderId,b):
           action==="amend"?amend(db,c,orderId,b,reason):cancel(db,c,orderId,b,reason),
       });

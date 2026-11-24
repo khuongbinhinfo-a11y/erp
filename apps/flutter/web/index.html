@@ -7,6 +7,10 @@
   <meta name="description" content="ERP - Nền tảng phân phối với sáu phân hệ">
   <meta name="theme-color" content="#176B46">
   <title>ERP phân phối</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icons/erp-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <!-- Login CORS is restricted to the canonical ERP origin on the current
        Prisma Compute backend. Move verified Vercel aliases there *before*
        the Flutter app starts; keep URL path/query/hash, never touch credentials. -->
@@ -26,5 +30,10 @@
 </head>
 <body>
   <script src="flutter_bootstrap.js" async></script>
+  <script>
+    if ("serviceWorker" in navigator && location.protocol === "https:") {
+      window.addEventListener("load", () => navigator.serviceWorker.register("/erp-sw.js").catch(() => {}));
+    }
+  </script>
 </body>
 </html>

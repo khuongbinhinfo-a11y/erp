@@ -5,23 +5,25 @@ import 'ui/erp_tokens.dart';
 import 'ui/erp_login.dart';
 import 'ui/identity_client.dart';
 import 'ui/session_store.dart';
+import 'local/local_store.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   String? token;
   try {token=await ErpSessionStore.load();}catch(_){/* Storage unavailable: login normally. */}
-  runApp(ErpApp(initialToken:token));
+  runApp(ErpApp(initialToken:token,localStore:ErpLocalStore.platform()));
 }
 
 class ErpApp extends StatefulWidget {
   final bool previewMode;
   final String? initialToken;
   final ErpIdentityClient? client;
-  const ErpApp({super.key,this.previewMode=false,this.initialToken,this.client});
+  final ErpLocalStore? localStore;
+  const ErpApp({super.key,this.previewMode=false,this.initialToken,this.client,this.localStore});
   @override State<ErpApp> createState()=>_ErpAppState();
 }
 class _ErpAppState extends State<ErpApp>{
-  late final ErpIdentityClient _identity=widget.client??ErpIdentityClient();
+  late final ErpIdentityClient _identity=widget.client??ErpIdentityClient(localStore:widget.localStore);
   IdentitySession? _session;
   bool _preview=false;
   bool _restoring=false;

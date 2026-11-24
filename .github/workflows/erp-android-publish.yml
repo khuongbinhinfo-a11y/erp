@@ -1,0 +1,85 @@
+name: ERP Android R2 publish
+on:
+  workflow_dispatch:
+    inputs:
+      build_run_id:
+        description: 'Successful protected signed build run ID'
+        required: true
+        type: string
+      approved_sha:
+        description: 'Exact approved main SHA'
+        required: true
+        type: string
+      build_number:
+        description: 'Verified APK versionCode'
+        required: true
+        type: number
+      version_name:
+        description: 'Verified APK versionName'
+        required: true
+        type: string
+      notes:
+        description: 'Vietnamese release notes'
+        required: true
+        type: string
+      owner_approval:
+        description: 'Owner approval evidence URL'
+        required: true
+        type: string
+      uat_evidence:
+        description: 'Android signed device UAT evidence URL'
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: erp-android-release
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main' && github.repository == 'khuongbinhinfo-a11y/erp'
+    runs-on: ubuntu-latest
+    environment: android-r2-publish
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RUN_ID: ${{ inputs.build_run_id }}
+      APPROVED_SHA: ${{ inputs.approved_sha }}
+      BUILD_NUMBER: ${{ inputs.build_number }}
+      VERSION_NAME: ${{ inputs.version_name }}
+      NOTES: ${{ inputs.notes }}
+      OWNER_APPROVAL: ${{ inputs.owner_approval }}
+      UAT_EVIDENCE: ${{ inputs.uat_evidence }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify release source and successful signed build
+        run: |
+          set -euo pipefail
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$APPROVED_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$GITHUB_SHA" = "$APPROVED_SHA"
+          [[ "$OWNER_APPROVAL" =~ ^https://github.com/khuongbinhinfo-a11y/erp/ ]]
+          [[ "$UAT_EVIDENCE" =~ ^https://github.com/khuongbinhinfo-a11y/erp/ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" > /tmp/erp-build.json
+          jq -e --arg sha "$APPROVED_SHA" '.head_sha == $sha and .head_branch == "main" and .event == "workflow_dispatch" and .conclusion == "success" and .path == ".github/workflows/erp-android-release.yml"' /tmp/erp-build.json
+          gh run download "$RUN_ID" -n erp-android-signed -D signed
+          test "$(cat signed/commit.txt)" = "$APPROVED_SHA"
+          (cd signed && sed 's|signed/||g' SHA256SUMS | sha256sum -c -)
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Publish only after protected approval and exact byte verification
+        env:
+          ERP_RELEASE_R2_ACCOUNT_ID: ${{ vars.ERP_RELEASE_R2_ACCOUNT_ID }}
+          ERP_RELEASE_R2_BUCKET: ${{ vars.ERP_RELEASE_R2_BUCKET }}
+          ERP_R2_BUCKET: ${{ vars.ERP_R2_BUCKET }}
+          ERP_ANDROID_CERT_SHA256: ${{ vars.ERP_ANDROID_CERT_SHA256 }}
+          ERP_RELEASE_R2_WRITE_ACCESS_KEY_ID: ${{ secrets.ERP_RELEASE_R2_WRITE_ACCESS_KEY_ID }}
+          ERP_RELEASE_R2_WRITE_SECRET_ACCESS_KEY: ${{ secrets.ERP_RELEASE_R2_WRITE_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          python -m pip install 'boto3>=1.36,<2'
+          tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          python apps/flutter/platform/publish_android_release.py --apk signed/erp.apk --tools "$tools" --sha "$APPROVED_SHA" --code "$BUILD_NUMBER" --version "$VERSION_NAME" --notes "$NOTES" --approval "$OWNER_APPROVAL" --uat "$UAT_EVIDENCE"

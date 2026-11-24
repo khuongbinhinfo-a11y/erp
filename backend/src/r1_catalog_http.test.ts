@@ -149,6 +149,15 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
     toBase:"11.000000"})).status,409,"conversion must match canonical product unit");
   assert.equal((await r1("skus",cartonPayload)).status,409,"one active SKU per product unit");
   const skuId=carton.body.id as string;
+  // T2: exact SKU lookup is tenant/branch-scoped and bypasses global LIMIT 100.
+  const exactSku=await request("/v1/catalog/r1/skus?branchId="+b+
+    "&sellSkuId="+skuId,"GET",undefined,token);
+  assert.equal(exactSku.status,200);
+  assert.deepEqual(exactSku.body.items.map((x:{id:string})=>x.id),[skuId]);
+  const unknownSku=await request("/v1/catalog/r1/skus?branchId="+b+
+    "&sellSkuId="+randomUUID(),"GET",undefined,token);
+  assert.deepEqual(unknownSku.body.items,[]);
+
   const code=await r1("barcodes",{sellSkuId:skuId,barcode:"BC-0001",isPrimary:true});
   assert.equal(code.status,201,JSON.stringify(code.body));
   assert.equal((await r1("barcodes",{sellSkuId:baseSku,barcode:"BC-0001"})).status,409);
