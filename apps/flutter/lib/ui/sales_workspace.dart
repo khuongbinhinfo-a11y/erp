@@ -71,7 +71,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       _scheduleRecovery();
     });
   }
-  bool get _navigationLocked=>saving||localRecoveryBusy||localRecoveryBlocked||pendingCreate!=null||
+  bool get _navigationLocked=>saving||localRecoveryBusy||pendingCreate!=null||
     pendingUpdate!=null||pendingConfirm!=null;
   @override void setState(VoidCallback fn){
     super.setState(fn);
@@ -291,15 +291,15 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     List<Map<String,dynamic>> locations=[];
     Map<String,dynamic>? walkInCustomer=entrySettings['walkInCustomer'] is Map
       ?Map<String,dynamic>.from(entrySettings['walkInCustomer'] as Map):null;
-    String? customer=localDraft?order?['customerId'] as String?:order?['customerId'] as String? ??
-      (customers.length==1?customers.single['id'] as String:null);
+    String? customer=(order?['customerId'] as String?) ??
+      (localDraft?null:(customers.length==1?customers.single['id'] as String:null));
     if(savedShipping.isEmpty&&customer!=null){
       deliveryAddress=(customers.where((x)=>x['id']==customer).firstOrNull?['deliveryAddress']??'').toString();
     }
-    String? list=localDraft?order?['priceListId'] as String?:order?['priceListId'] as String? ??
-      (lists.length==1?lists.single['id'] as String:null);
+    String? list=(order?['priceListId'] as String?) ??
+      (localDraft?null:(lists.length==1?lists.single['id'] as String:null));
     String? channel=order?['channelId'] as String?;
-    bool listManuallySelected=localDraft?order?['localListManuallySelected']==true:order!=null;
+    bool listManuallySelected=localDraft ? (order?['localListManuallySelected']==true) : order!=null;
     int listResolveGeneration=0;
     final note=TextEditingController(text:order?['note'] as String? ?? '');
     final lines=<_OrderLine>[];
@@ -318,8 +318,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       }
       try{
         final validCustomer=customerMode=='WALK_IN'
-          ?customer!=null&&walkInCustomer?['id']==customer&&walkInCustomer?['active']!=false
-          :await resolveSaved('customers',customer,customers);
+          ? (customer!=null && walkInCustomer?['id']==customer && walkInCustomer?['active']!=false)
+          : await resolveSaved('customers',customer,customers);
         final validList=await resolveSaved('price-lists',list,lists);
         if(!_sameScope(formToken,branch)){note.dispose();return null;}
         if(!validCustomer||!validList){
