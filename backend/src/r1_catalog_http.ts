@@ -326,6 +326,29 @@ async function retireRule(db:PoolClient,tenant:string,actorId:string,branchId:st
  if(!r.rows[0])throw new R1Error(404,"RULE_NOT_FOUND");
  return {status:200,body:{id:ruleId,branchId,retiredAt:r.rows[0].retiredAt.toISOString()}};
 }
+export function buildSkuTaxonomyFilters(scope?:{brandId?:string;groupId?:string;categoryId?:string}){
+  const filters:string[]=[];
+  const values:string[]=[];
+  const add=(id:string)=>{
+    values.push(id);
+    return "$"+(values.length+3)+"::uuid";
+  };
+  if(scope?.groupId)filters.push(`p.group_id=${add(scope.groupId)}`);
+  if(scope?.categoryId)filters.push(`p.category_id IN (
+    WITH RECURSIVE descendants(id) AS (
+      SELECT id FROM catalog_product_category
+       WHERE installation_id=p.installation_id AND branch_id=p.branch_id
+         AND id=${add(scope.categoryId)}
+      UNION ALL
+      SELECT c.id FROM catalog_product_category c JOIN descendants d
+        ON c.parent_id=d.id
+       WHERE c.installation_id=p.installation_id AND c.branch_id=p.branch_id
+    ) SELECT id FROM descendants)`);
+  if(scope?.brandId)filters.push(`EXISTS (SELECT 1 FROM catalog_product_group g WHERE
+      g.installation_id=p.installation_id AND g.branch_id=p.branch_id
+      AND g.id=p.group_id AND g.brand_id=${add(scope.brandId)})`);
+  return {filters,values};
+}
 async function listing(db:PoolClient,t:string,b:string,kind:Kind,q:string,skuId?:string,
   scope?:{brandId?:string;groupId?:string;categoryId?:string}){
  if(kind==="units"){
@@ -340,23 +363,8 @@ async function listing(db:PoolClient,t:string,b:string,kind:Kind,q:string,skuId?
  }
  if(kind==="skus"){
   // Filter before the LIMIT, not on the client: large catalogs remain reachable.
-  const filters:string[]=[];
-  const params:(string|null)[]=[t,b,"%"+q+"%"];
-  if(scope?.groupId){params.push(scope.groupId);filters.push(`p.group_id=${params.length}::uuid`);}
-  if(scope?.categoryId){params.push(scope.categoryId);filters.push(`p.category_id IN (
-    WITH RECURSIVE descendants(id) AS (
-      SELECT id FROM catalog_product_category
-       WHERE installation_id=p.installation_id AND branch_id=p.branch_id
-         AND id=${params.length}::uuid
-      UNION ALL
-      SELECT c.id FROM catalog_product_category c JOIN descendants d
-        ON c.parent_id=d.id
-       WHERE c.installation_id=p.installation_id AND c.branch_id=p.branch_id
-    ) SELECT id FROM descendants)`);}
-  if(scope?.brandId){params.push(scope.brandId);
-    filters.push(`EXISTS (SELECT 1 FROM catalog_product_group g WHERE
-      g.installation_id=p.installation_id AND g.branch_id=p.branch_id
-      AND g.id=p.group_id AND g.brand_id=${params.length}::uuid)`);}
+  const {filters,values}=buildSkuTaxonomyFilters(scope);
+  const params=[t,b,"%"+q+"%",...values];
   const r=await db.query(`SELECT s.id,s.product_id AS "productId",s.sku AS code,
    p.name AS "productName",s.unit_code AS "unitCode",
    s.conversion_to_base::text AS "toBase",s.is_base AS "isBase",s.active,s.revision::integer,
