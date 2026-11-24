@@ -1,4 +1,5 @@
 import { resolveR1Price,R1QuoteError,r1QuoteSignature } from "./r1_pricing.ts";
+import { quoteManualSku,manualPriceFields,ManualPriceFault } from "./order_manual_price.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Pool, PoolClient } from "pg";
 import { resolveSession } from "./auth.ts";
@@ -72,7 +73,8 @@ function bearer(req:IncomingMessage):string|null{
   const v=req.headers.authorization;
   return typeof v==="string"?/^Bearer ([A-Za-z0-9_-]{43})$/.exec(v)?.[1]??null:null;
 }
-type LineInput={productId?:string;sellSkuId?:string;quantity:string;expectedPriceSignature?:string};
+type LineInput={productId?:string;sellSkuId?:string;quantity:string;expectedPriceSignature?:string;
+ unitPrice?:string;discountRate?:string;taxRate?:string};
 type OrderInput={branchId:string;customerId:string;priceListId:string;
   channelId?:string;note:string;lines:LineInput[]};
 function parseOrder(raw:Record<string,unknown>):OrderInput{
@@ -84,7 +86,8 @@ function parseOrder(raw:Record<string,unknown>):OrderInput{
     throw new SalesError(400,"INVALID_LINES");
   const used=new Set<string>();
   const lines:LineInput[]=raw.lines.map((rawItem:unknown)=>{
-    const item=asRecord(rawItem);allowKeys(item,["productId","sellSkuId","quantity","expectedPriceSignature"]);
+    const item=asRecord(rawItem);allowKeys(item,["productId","sellSkuId","quantity","expectedPriceSignature",
+      "unitPrice","discountRate","taxRate"]);
     const hasProduct=item.productId!==undefined,hasSku=item.sellSkuId!==undefined;
     if(hasProduct===hasSku)throw new SalesError(400,"INVALID_LINE_IDENTITY");
     const productId=hasProduct?uuid(item.productId):undefined;
@@ -93,23 +96,29 @@ function parseOrder(raw:Record<string,unknown>):OrderInput{
     if(typeof quantity!=="string"||!QTY.test(quantity)||!/[1-9]/.test(quantity))
       throw new SalesError(400,"INVALID_QUANTITY");
     const key=productId?"PRODUCT:"+productId:"SKU:"+sellSkuId;
-    if(used.has(key))throw new SalesError(400,"DUPLICATE_PRODUCT");
+    if(productId&&used.has(key))throw new SalesError(400,"DUPLICATE_PRODUCT");
     used.add(key);
     if(productId){
+      if(item.unitPrice!==undefined||item.discountRate!==undefined||item.taxRate!==undefined)
+        throw new SalesError(400,"INVALID_MANUAL_PRICE_CONTEXT");
       if(item.expectedPriceSignature!==undefined)throw new SalesError(400,"INVALID_PRICE_CONTEXT");
       return {productId,quantity};
     }
     const expected=item.expectedPriceSignature;
     if(typeof expected!=="string"||!/^[0-9a-f]{64}$/.test(expected))
       throw new SalesError(400,"PRICE_QUOTE_REQUIRED");
-    return {sellSkuId,quantity,expectedPriceSignature:expected};
+    const manual=item.unitPrice===undefined?{}:manualPriceFields(item);
+    if(item.unitPrice===undefined&&(item.discountRate!==undefined||item.taxRate!==undefined))
+      throw new SalesError(400,"MANUAL_PRICE_REQUIRED");
+    return {sellSkuId,quantity,expectedPriceSignature:expected,...manual};
   });
   if(channelId&&lines.some(line=>!line.sellSkuId))
     throw new SalesError(400,"CHANNEL_REQUIRES_SELL_SKU");
   return {branchId,customerId,priceListId,...(channelId?{channelId}:{}),note,lines};
 }
 type QuoteInput={branchId:string;customerId:string;priceListId:string;
-  channelId?:string;lines:{sellSkuId:string;quantity:string}[]};
+  channelId?:string;lines:{sellSkuId:string;quantity:string;
+   unitPrice?:string;discountRate?:string;taxRate?:string}[]};
 function parseQuote(raw:Record<string,unknown>):QuoteInput{
   allowKeys(raw,["branchId","customerId","priceListId","channelId","lines"]);
   const branchId=uuid(raw.branchId),customerId=uuid(raw.customerId);
@@ -119,13 +128,14 @@ function parseQuote(raw:Record<string,unknown>):QuoteInput{
     throw new SalesError(400,"INVALID_LINES");
   const seen=new Set<string>();
   const lines=raw.lines.map(value=>{
-    const item=asRecord(value);allowKeys(item,["sellSkuId","quantity"]);
+    const item=asRecord(value);allowKeys(item,["sellSkuId","quantity","unitPrice","discountRate","taxRate"]);
     const sellSkuId=uuid(item.sellSkuId),quantity=item.quantity;
     if(typeof quantity!=="string"||!QTY.test(quantity)||!/[1-9]/.test(quantity))
       throw new SalesError(400,"INVALID_QUANTITY");
-    if(seen.has(sellSkuId.toLowerCase()))throw new SalesError(400,"DUPLICATE_PRODUCT");
-    seen.add(sellSkuId.toLowerCase());
-    return {sellSkuId,quantity};
+    if(item.unitPrice===undefined&&(item.discountRate!==undefined||item.taxRate!==undefined))
+      throw new SalesError(400,"MANUAL_PRICE_REQUIRED");
+    const manual=item.unitPrice===undefined?{}:manualPriceFields(item);
+    return {sellSkuId,quantity,...manual};
   });
   return {branchId,customerId,priceListId,...(channelId?{channelId}:{}),lines};
 }
@@ -135,22 +145,38 @@ async function previewOrder(db:PoolClient,t:string,input:QuoteInput){
   const at=new Date().toISOString();
   const lines=[];
   for(const line of input.lines){
-    const quote=await resolveR1Price(db,{
-      installationId:t,branchId:b,customerId,priceListId,channelId,
-      sellSkuId:line.sellSkuId,quantity:line.quantity,priceAt:at,
-    });
-    lines.push({...quote,priceSignature:r1QuoteSignature(quote)});
+    if(line.unitPrice!==undefined){
+      const quote=await quoteManualSku(db,{installationId:t,branchId:b,
+        customerId,priceListId,channelId,sellSkuId:line.sellSkuId,
+        quantity:line.quantity,unitPrice:line.unitPrice,
+        discountRate:line.discountRate??"0",taxRate:line.taxRate??"0"});
+      lines.push(quote);
+    }else{
+      const quote=await resolveR1Price(db,{
+        installationId:t,branchId:b,customerId,priceListId,channelId,
+        sellSkuId:line.sellSkuId,quantity:line.quantity,priceAt:at,
+      });
+      lines.push({...quote,priceSignature:r1QuoteSignature(quote)});
+    }
   }
   // Single server-side NUMERIC aggregation, never a client JS/Flutter float.
   const summed=await db.query<{total:string}>(
     "SELECT coalesce(sum(x),0)::text AS total FROM unnest($1::numeric[]) AS x",
     [lines.map(line=>line.lineTotal)]);
   const total=summed.rows[0]!.total;
-  // Scoped pricing is already reflected in net sale prices. An explicit
-  // canonical tax policy is not yet configured: do not fabricate tax.
+  const sums=await db.query<{subtotal:string;discount:string;tax:string}>(
+    `SELECT coalesce(sum(x.subtotal),0)::text AS subtotal,
+      coalesce(sum(x.discount),0)::text AS discount,
+      coalesce(sum(x.tax),0)::text AS tax FROM unnest(
+        $1::numeric[],$2::numeric[],$3::numeric[]
+      ) AS x(subtotal,discount,tax)`,
+    [lines.map(line=>"subtotal" in line?line.subtotal:line.lineTotal),
+     lines.map(line=>"discountAmount" in line?line.discountAmount:"0"),
+     lines.map(line=>"taxAmount" in line?line.taxAmount:"0")]);
   return {branchId:b,customerId,priceListId,channelId:channelId??null,
-    priceAt:at,lines,subtotal:total,discountTotal:"0",taxTotal:"0",
-    grandTotal:total,currency:"VND",taxPolicy:"NOT_CONFIGURED",
+    priceAt:at,lines,subtotal:sums.rows[0]!.subtotal,
+    discountTotal:sums.rows[0]!.discount,taxTotal:sums.rows[0]!.tax,
+    grandTotal:total,currency:"VND",taxPolicy:"USER_ENTERED",
     fulfillmentStatus:"NOT_ALLOCATED",deliveryStatus:"NOT_DISPATCHED",
     paymentStatus:"NOT_DUE"};
 }
@@ -538,6 +564,10 @@ export async function handleSalesHttp(req:IncomingMessage,res:ServerResponse,
           await hasPermission(db,{installationId:tenant,actorId,
             permission:"orders.update",branchId:input.branchId});
         if(!allowed)throw new SalesError(403,"ORDERS_QUOTE_DENIED");
+        if(input.lines.some(line=>line.unitPrice!==undefined)&&
+          !await hasPermission(db,{installationId:tenant,actorId,
+            permission:"orders.update",branchId:input.branchId}))
+          throw new SalesError(403,"MANUAL_PRICE_PERMISSION_REQUIRED");
         const quote=await previewOrder(db,tenant,input);
         send(res,200,{quote,requestId:id},id,cors);
       }finally{db.release();}
@@ -605,6 +635,7 @@ export async function handleSalesHttp(req:IncomingMessage,res:ServerResponse,
   }catch(err){
     if(err instanceof SalesError){fail(res,err.httpStatus,err.code,id,cors);return;}
     if(err instanceof R1QuoteError){fail(res,err.status,err.code,id,cors);return;}
+    if(err instanceof ManualPriceFault){fail(res,err.status,err.code,id,cors);return;}
     if(err instanceof MutationFault){fail(res,err.httpStatus,err.code,id,cors);return;}
     if(typeof err==="object"&&err!==null&&"code" in err){
       if(err.code==="23505"){fail(res,409,"DUPLICATE_ORDER",id,cors);return;}
