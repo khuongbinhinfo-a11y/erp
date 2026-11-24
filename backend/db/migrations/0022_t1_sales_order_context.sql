@@ -129,3 +129,10 @@ END;
 $$;
 CREATE TRIGGER sales_reservation_warehouse_guard BEFORE INSERT ON inventory_reservation
  FOR EACH ROW EXECUTE FUNCTION erp_sales_reservation_warehouse_guard();
+
+-- Distinct branch permissions; only primary owners inherit these capabilities.
+-- Other roles require explicit delegation, not automatic privilege expansion.
+INSERT INTO role_permission(installation_id,role_id,permission_code)
+ SELECT r.installation_id,r.id,p.code FROM app_role r
+ CROSS JOIN (VALUES ('orders.price.override'),('orders.discount.override'),('orders.tax.override')) p(code)
+ WHERE r.code='PRIMARY_OWNER_MAIN' ON CONFLICT DO NOTHING;

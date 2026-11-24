@@ -285,6 +285,16 @@ async function versions(pool){
  return (await pool.query("SELECT version FROM public.schema_migrations ORDER BY version"))
    .rows.map(x=>x.version);
 }
+const T1_OVERRIDE_PERMISSIONS=["orders.price.override","orders.discount.override","orders.tax.override"];
+async function verifyOverrideGrants(pool,stage){
+ const current=(await pool.query(`SELECT rp.installation_id::text,rp.role_id::text,rp.permission_code
+  FROM role_permission rp WHERE rp.permission_code=ANY($1::text[])
+  ORDER BY rp.installation_id,rp.role_id,rp.permission_code`,[T1_OVERRIDE_PERMISSIONS])).rows;
+ const expected=stage==="before"?[]:(await pool.query(`SELECT r.installation_id::text,r.id::text AS role_id,p.code AS permission_code
+  FROM app_role r CROSS JOIN unnest($1::text[]) p(code) WHERE r.code='PRIMARY_OWNER_MAIN'
+  ORDER BY r.installation_id,r.id,p.code`,[T1_OVERRIDE_PERMISSIONS])).rows;
+ if(JSON.stringify(current)!==JSON.stringify(expected))fail("T1_OVERRIDE_GRANT_RECONCILIATION_FAILED");
+}
 async function signature(pool,exclusions=[]){
  const tables=(await pool.query(
  "SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE' ORDER BY table_name"
@@ -295,8 +305,8 @@ async function signature(pool,exclusions=[]){
   const sql='SELECT count(*)::text AS n,'+
    'COALESCE(bit_xor(hashtextextended(to_jsonb(x)::text,0))::text,\'0\') AS xor,'+
    'COALESCE(sum(hashtextextended(to_jsonb(x)::text,1)::numeric)::text,\'0\') AS total '+
-   'FROM public."'+safe+'" x';
-  result[table]=(await pool.query(sql)).rows[0];
+   'FROM public."'+safe+'" x'+(table==="role_permission"?" WHERE NOT (permission_code=ANY($1::text[]))":"");
+  result[table]=(await pool.query(sql,table==="role_permission"?[T1_OVERRIDE_PERMISSIONS]:[])).rows[0];
  }
  return result;
 }
@@ -388,6 +398,7 @@ async function main(mode){
   await validateSchema(pool,"before");
   // Only migration history changes; reconcile every existing business table.
   const excluded=["schema_migrations"];
+  await verifyOverrideGrants(pool,"before");
   const initial=await signature(pool,excluded);
   console.log("ERP_T1_BASE_0021_CHECKSUM_AND_DATA_PREFLIGHT_PASS "+sha.slice(0,12));
   if(mode==="--check"){console.log("ERP_T1_CHECK_ONLY_NO_DATABASE_WRITES");return;}
@@ -475,12 +486,14 @@ async function main(mode){
      password,database:env.PGDATABASE,max:1,statement_timeout:300000,query_timeout:300000});
    try{
     await validateSchema(testPool,"before");
+    await verifyOverrideGrants(testPool,"before");
     checkPreserved(initial,await signature(testPool,excluded),"RESTORE");
     const rehearsal=await applyMigrations(testPool,resolve("db/migrations"));
     if(JSON.stringify(rehearsal.applied)!==JSON.stringify(RELEASE)||rehearsal.skipped.length!==21)
       fail("REHEARSAL_MIGRATION_SET_INVALID");
     await validateSchema(testPool,"after");
     await verifyT1Schema(testPool,true);
+    await verifyOverrideGrants(testPool,"after");
     checkPreserved(initial,await signature(testPool,excluded),
      "REHEARSAL");
    }finally{await testPool.end();}
@@ -491,6 +504,7 @@ async function main(mode){
   await maintenance();
   await checkpoint();
   await validateSchema(pool,"before");
+  await verifyOverrideGrants(pool,"before");
   checkPreserved(initial,await signature(pool,excluded),"PRODUCTION_PRECOMMIT");
   await checkpoint();
   const result=await applyMigrations(pool,resolve("db/migrations"));
@@ -499,6 +513,7 @@ async function main(mode){
   await checkpoint();
   await validateSchema(pool,"after");
   await verifyT1Schema(pool,true);
+  await verifyOverrideGrants(pool,"after");
   checkPreserved(initial,await signature(pool,excluded),
    "PRODUCTION");
   console.log("ERP_T1_0022_MIGRATION_PASS_AND_RECONCILED");

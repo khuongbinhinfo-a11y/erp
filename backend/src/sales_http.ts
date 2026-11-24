@@ -1,5 +1,5 @@
 import { resolveR1Price,R1QuoteError,r1QuoteSignature } from "./r1_pricing.ts";
-import { quoteManualSku,manualPriceFields,ManualPriceFault } from "./order_manual_price.ts";
+import { quoteManualSku,manualPriceFields,hasManualAdjustments,type ManualAdjustments,ManualPriceFault } from "./order_manual_price.ts";
 import { DiscountFault,parseDocumentDiscount,allocateDocumentDiscount,applyDocumentDiscount,type DocumentDiscount } from "./sales_document_discount.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Pool, PoolClient } from "pg";
@@ -79,7 +79,7 @@ function bearer(req:IncomingMessage):string|null{
   return typeof v==="string"?/^Bearer ([A-Za-z0-9_-]{43})$/.exec(v)?.[1]??null:null;
 }
 type LineInput={productId?:string;sellSkuId?:string;quantity:string;expectedPriceSignature?:string;
- unitPrice?:string;discountRate?:string;taxRate?:string;overrideReason?:string};
+ overrideReason?:string}&ManualAdjustments;
 type OrderInput={branchId:string;customerId:string;priceListId:string;
   channelId?:string;note:string;lines:LineInput[];shipping?:OrderContextInput;documentDiscount?:DocumentDiscount};
 function parseOrder(raw:Record<string,unknown>):OrderInput{
@@ -94,7 +94,7 @@ function parseOrder(raw:Record<string,unknown>):OrderInput{
   const used=new Set<string>();
   const lines:LineInput[]=raw.lines.map((rawItem:unknown)=>{
     const item=asRecord(rawItem);allowKeys(item,["productId","sellSkuId","quantity","expectedPriceSignature",
-      "unitPrice","discountRate","taxRate","overrideReason"]);
+      "unitPrice","discountRate","taxRate","discountMode","discountValue","taxMode","overrideReason"]);
     const hasProduct=item.productId!==undefined,hasSku=item.sellSkuId!==undefined;
     if(hasProduct===hasSku)throw new SalesError(400,"INVALID_LINE_IDENTITY");
     const productId=hasProduct?uuid(item.productId):undefined;
@@ -106,7 +106,7 @@ function parseOrder(raw:Record<string,unknown>):OrderInput{
     if(productId&&used.has(key))throw new SalesError(400,"DUPLICATE_PRODUCT");
     used.add(key);
     if(productId){
-      if(item.unitPrice!==undefined||item.discountRate!==undefined||item.taxRate!==undefined||item.overrideReason!==undefined)
+      if(hasManualAdjustments(manualPriceFields(item))||item.overrideReason!==undefined)
         throw new SalesError(400,"INVALID_MANUAL_PRICE_CONTEXT");
       if(item.expectedPriceSignature!==undefined)throw new SalesError(400,"INVALID_PRICE_CONTEXT");
       return {productId,quantity};
@@ -114,22 +114,18 @@ function parseOrder(raw:Record<string,unknown>):OrderInput{
     const expected=item.expectedPriceSignature;
     if(typeof expected!=="string"||!/^[0-9a-f]{64}$/.test(expected))
       throw new SalesError(400,"PRICE_QUOTE_REQUIRED");
-    const manual=item.unitPrice===undefined?{}:manualPriceFields(item);
-    if(item.unitPrice===undefined&&(item.discountRate!==undefined||item.taxRate!==undefined))
-      throw new SalesError(400,"MANUAL_PRICE_REQUIRED");
+    const manual=manualPriceFields(item);
     const overrideReason=item.overrideReason===undefined?undefined:requireText(item.overrideReason,500);
-    if(overrideReason&&item.unitPrice===undefined)throw new SalesError(400,"INVALID_MANUAL_PRICE_CONTEXT");
+    if(overrideReason&&!hasManualAdjustments(manual))throw new SalesError(400,"INVALID_MANUAL_PRICE_CONTEXT");
     return {sellSkuId,quantity,expectedPriceSignature:expected,...manual,...(overrideReason?{overrideReason}:{})};
   });
   if(channelId&&lines.some(line=>!line.sellSkuId))
     throw new SalesError(400,"CHANNEL_REQUIRES_SELL_SKU");
   if(documentDiscount&&lines.some(line=>!line.sellSkuId))throw new DiscountFault("DOCUMENT_DISCOUNT_REQUIRES_SKU");
-  if(shipping&&lines.some(line=>line.unitPrice!==undefined&&!line.overrideReason))throw new SalesError(400,"OVERRIDE_REASON_REQUIRED");
   return {branchId,customerId,priceListId,...(channelId?{channelId}:{}),note,lines,...(shipping?{shipping}:{}),...(documentDiscount?{documentDiscount}:{})};
 }
 type QuoteInput={branchId:string;customerId:string;priceListId:string;
-  channelId?:string;lines:{sellSkuId:string;quantity:string;
-   unitPrice?:string;discountRate?:string;taxRate?:string}[];documentDiscount?:DocumentDiscount};
+  channelId?:string;lines:({sellSkuId:string;quantity:string}&ManualAdjustments)[];documentDiscount?:DocumentDiscount};
 function parseQuote(raw:Record<string,unknown>):QuoteInput{
   allowKeys(raw,["branchId","customerId","priceListId","channelId","lines","documentDiscount"]);
   const documentDiscount=parseDocumentDiscount(raw.documentDiscount,false);
@@ -140,16 +136,30 @@ function parseQuote(raw:Record<string,unknown>):QuoteInput{
     throw new SalesError(400,"INVALID_LINES");
   const seen=new Set<string>();
   const lines=raw.lines.map(value=>{
-    const item=asRecord(value);allowKeys(item,["sellSkuId","quantity","unitPrice","discountRate","taxRate"]);
+    const item=asRecord(value);allowKeys(item,["sellSkuId","quantity","unitPrice","discountRate","taxRate","discountMode","discountValue","taxMode"]);
     const sellSkuId=uuid(item.sellSkuId),quantity=item.quantity;
     if(typeof quantity!=="string"||!QTY.test(quantity)||!/[1-9]/.test(quantity))
       throw new SalesError(400,"INVALID_QUANTITY");
-    if(item.unitPrice===undefined&&(item.discountRate!==undefined||item.taxRate!==undefined))
-      throw new SalesError(400,"MANUAL_PRICE_REQUIRED");
-    const manual=item.unitPrice===undefined?{}:manualPriceFields(item);
+    const manual=manualPriceFields(item);
     return {sellSkuId,quantity,...manual};
   });
   return {branchId,customerId,priceListId,...(channelId?{channelId}:{}),lines,...(documentDiscount?{documentDiscount}:{})};
+}
+async function adjustmentAllowed(db:PoolClient,t:string,actor:string,input:OrderInput|QuoteInput){
+  const b=input.branchId,lines=input.lines;
+  if(!input.documentDiscount&&!lines.some(hasManualAdjustments))return true;
+  if(!await hasOrderContextSchema(db))
+    return hasPermission(db,{installationId:t,actorId:actor,branchId:b,permission:"orders.update"});
+  const required=new Set<string>();
+  if(lines.some(x=>x.unitPrice!==undefined))required.add("orders.price.override");
+  if(input.documentDiscount||lines.some(x=>x.discountMode!==undefined||x.discountValue!==undefined||
+    x.discountRate!==undefined&&(x.unitPrice===undefined||/[1-9]/.test(x.discountRate))))
+    required.add("orders.discount.override");
+  if(lines.some(x=>x.taxMode!==undefined||x.taxRate!==undefined&&(x.unitPrice===undefined||/[1-9]/.test(x.taxRate))))
+    required.add("orders.tax.override");
+  for(const permission of required)
+    if(!await hasPermission(db,{installationId:t,actorId:actor,branchId:b,permission}))return false;
+  return true;
 }
 async function previewOrder(db:PoolClient,t:string,input:QuoteInput){
   const {branchId:b,customerId,priceListId,channelId}=input;
@@ -157,11 +167,10 @@ async function previewOrder(db:PoolClient,t:string,input:QuoteInput){
   const at=new Date().toISOString();
   let lines=[];
   for(const line of input.lines){
-    if(line.unitPrice!==undefined){
+    if(hasManualAdjustments(line)){
       const quote=await quoteManualSku(db,{installationId:t,branchId:b,
         customerId,priceListId,channelId,sellSkuId:line.sellSkuId,
-        quantity:line.quantity,unitPrice:line.unitPrice,
-        discountRate:line.discountRate??"0",taxRate:line.taxRate??"0"});
+        quantity:line.quantity,...manualPriceFields(line)});
       lines.push(quote);
     }else{
       const quote=await resolveR1Price(db,{
@@ -269,11 +278,10 @@ async function addLines(db:PoolClient,t:string,b:string,orderId:string,
   version:number,listId:string,customerId:string,channelId:string|undefined,lines:LineInput[],actorId:string){
   let no=0;
   for(const input of lines){
-    if(input.sellSkuId&&input.unitPrice!==undefined){
+    if(input.sellSkuId&&hasManualAdjustments(input)){
       const quote=await quoteManualSku(db,{installationId:t,branchId:b,
         priceListId:listId,customerId,channelId,sellSkuId:input.sellSkuId,
-        quantity:input.quantity,unitPrice:input.unitPrice,
-        discountRate:input.discountRate??"0",taxRate:input.taxRate??"0"});
+        quantity:input.quantity,...manualPriceFields(input)});
       if(quote.priceSignature!==input.expectedPriceSignature)
         throw new SalesError(409,"PRICE_STALE");
       await db.query(`INSERT INTO sales_order_line
@@ -417,7 +425,7 @@ async function confirm(db:PoolClient,ctx:MutationContext,id:string,b:string){
   const lines=await db.query<{
     product_id:string;price_entry_id:string|null;sell_sku_id:string|null;
     price_signature:string|null;pricing_engine:string;quantity:string;
-    price_snapshot:{manualOverride?:boolean}|null;
+    price_snapshot:({manualOverride?:boolean;manualPriceOverride?:boolean}&ManualAdjustments)|null;
     unit_price:string;discount_rate:string;tax_rate:string;
   }>(`SELECT product_id,price_entry_id,sell_sku_id,price_signature,pricing_engine,
     price_snapshot,quantity::text,unit_price::text,discount_rate::text,tax_rate::text
@@ -432,8 +440,12 @@ async function confirm(db:PoolClient,ctx:MutationContext,id:string,b:string){
           const manual=await quoteManualSku(db,{installationId:t,branchId:b,
             sellSkuId:line.sell_sku_id,priceListId:o.price_list_id,
             customerId:o.customer_id,channelId:o.channel_id??undefined,
-            quantity:line.quantity,unitPrice:line.unit_price,
-            discountRate:line.discount_rate,taxRate:line.tax_rate});
+            quantity:line.quantity,
+            ...(line.price_snapshot.manualPriceOverride===false?{}:{unitPrice:line.unit_price}),
+            ...(line.price_snapshot.discountMode&&line.price_snapshot.discountMode!=="PERCENT"
+              ?{discountMode:line.price_snapshot.discountMode,discountValue:line.price_snapshot.discountValue}
+              :{discountRate:line.discount_rate,...(line.price_snapshot.discountMode?{discountMode:line.price_snapshot.discountMode}:{})}),
+            taxRate:line.tax_rate,...(line.price_snapshot.taxMode?{taxMode:line.price_snapshot.taxMode}:{})});
           if(manual.priceSignature!==line.price_signature)
             throw new SalesError(409,"PRICE_STALE");
           continue;
@@ -684,9 +696,7 @@ export async function handleSalesHttp(req:IncomingMessage,res:ServerResponse,
           await hasPermission(db,{installationId:tenant,actorId,
             permission:"orders.update",branchId:input.branchId});
         if(!allowed)throw new SalesError(403,"ORDERS_QUOTE_DENIED");
-        if((input.documentDiscount||input.lines.some(line=>line.unitPrice!==undefined))&&
-          !await hasPermission(db,{installationId:tenant,actorId,
-            permission:"orders.update",branchId:input.branchId}))
+        if(!await adjustmentAllowed(db,tenant,actorId,input))
           throw new SalesError(403,"MANUAL_PRICE_PERMISSION_REQUIRED");
         const quote=await previewOrder(db,tenant,input);
         send(res,200,{quote,requestId:id},id,cors);
@@ -764,9 +774,7 @@ export async function handleSalesHttp(req:IncomingMessage,res:ServerResponse,
         authorize:async(db,c)=>
           await hasPermission(db,{installationId:c.installationId,
             actorId:c.actorId,permission:"orders.create",branchId:input.branchId})&&
-          (!input.documentDiscount&&!input.lines.some(line=>line.unitPrice!==undefined)||
-           await hasPermission(db,{installationId:c.installationId,
-            actorId:c.actorId,permission:"orders.update",branchId:input.branchId}))&&
+          await adjustmentAllowed(db,c.installationId,c.actorId,input)&&
           (!input.shipping||await hasPermission(db,{installationId:c.installationId,
             actorId:c.actorId,permission:"inventory.read",branchId:input.branchId,
             warehouseId:input.shipping.warehouseId})),
@@ -781,6 +789,7 @@ export async function handleSalesHttp(req:IncomingMessage,res:ServerResponse,
         authorize:async(db,c)=>await hasPermission(db,{installationId:c.installationId,
           actorId:c.actorId,permission:"orders.update",branchId:input.branchId})&&
           await orderWarehouseAllowed(db,c.installationId,input.branchId,orderId,c.actorId)&&
+          await adjustmentAllowed(db,c.installationId,c.actorId,input)&&
           (!input.shipping||await hasPermission(db,{installationId:c.installationId,
             actorId:c.actorId,permission:"inventory.read",branchId:input.branchId,
             warehouseId:input.shipping.warehouseId})),
