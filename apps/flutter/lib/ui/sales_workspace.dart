@@ -1219,7 +1219,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           style:TextStyle(fontSize:11,color:ErpTokens.muted))),
                         const SizedBox(width:120,child:Text('THÀNH TIỀN',textAlign:TextAlign.right,
                           style:TextStyle(fontSize:11,color:ErpTokens.muted))),
-                        const SizedBox(width:80),
+                        const SizedBox(width:110),
                       ])),
                     for(var i=0;i<lines.length;i++)Builder(builder:(rowContext){
                       final entry=lines[i];
@@ -1316,7 +1316,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                             Row(children:[
                               Text((i+1).toString()+'. ',style:const TextStyle(color:ErpTokens.muted)),
                               Expanded(child:productName),
-                              split,remove,
+                              previousPrice,split,remove,
                             ]),
                             const SizedBox(height:5),
                             // Keep quantity input on its own line: long
@@ -1347,8 +1347,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                             unitPriceField,discountField,taxField,
                             SizedBox(width:120,child:Text(lineTotal,textAlign:TextAlign.right,
                               style:const TextStyle(fontWeight:FontWeight.w800))),
-                            SizedBox(width:80,child:Row(mainAxisSize:MainAxisSize.min,
-                              children:[split,remove])),
+                            SizedBox(width:110,child:Row(mainAxisSize:MainAxisSize.min,
+                              children:[previousPrice,split,remove])),
                           ]),
                       );
                     }),
@@ -2932,6 +2932,30 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                             border:UnderlineInputBorder(),
                             contentPadding:EdgeInsets.symmetric(horizontal:4,vertical:8)),
                         ));
+                      final previousPrice=IconButton(
+                        key:ValueKey('sales-last-price-$i'),
+                        tooltip:'Lấy giá lần mua trước của khách này',
+                        icon:const Icon(Icons.history,size:18),
+                        onPressed:customer==null||!can('orders.update')?null:()async{
+                          final selectedCustomer=customer!;
+                          try{
+                            final data=await widget.client.salesLastPurchasePrice(
+                              widget.session.token,branchId:branch,
+                              customerId:selectedCustomer,sellSkuId:entry.sellSkuId);
+                            if(!ctx.mounted||customer!=selectedCustomer||
+                                !lines.contains(entry))return;
+                            if(data==null){
+                              refresh(()=>formError='Khách này chưa từng mua SKU này.');
+                              return;
+                            }
+                            entry.unitPrice.text=erpGroupedDecimalText(data['unitPrice']);
+                            entry.discountRate.text=erpGroupedDecimalText(data['discountRate']);
+                            entry.taxRate.text=erpGroupedDecimalText(data['taxRate']);
+                            pricingChanged(ctx,refresh);
+                          }on ErpApiError catch(e){
+                            if(ctx.mounted)refresh(()=>formError=e.message);
+                          }
+                        });
                       final remove=IconButton(
                         key:ValueKey('sales-remove-$i'),
                         tooltip:'Bỏ dòng hàng',
