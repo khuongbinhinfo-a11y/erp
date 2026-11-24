@@ -59,7 +59,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   bool _foreground=true;
   void _scheduleRecovery(){
     _syncTimer?.cancel();
-    if(!_localConfigured||!mounted||!_foreground)return;
+    if(!mounted||!_localConfigured||!_foreground)return;
     _syncTimer=Timer(Duration(seconds:_syncDelay),()async{
       if(!mounted||!_foreground)return;
       if(!saving&&!localRecoveryBusy&&!localRecoveryBlocked&&widget.session.expiresAt.isAfter(DateTime.now())){
@@ -67,7 +67,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         if(pendingCreate!=null&&!pendingCreateAutoConfirm){await _resolveCreate();}
         else if(pendingUpdate!=null&&pendingUpdate!['auto']!=true){await _resolvePendingUpdate();}
       }
-      _syncDelay=(pendingCreate!=null||pendingUpdate!=null)?(_syncDelay*2).clamp(15,120):15;
+      _syncDelay=(pendingCreate!=null||pendingUpdate!=null)?(_syncDelay*2).clamp(15,120).toInt():15;
       _scheduleRecovery();
     });
   }
@@ -83,7 +83,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       });
     }
   }
-  bool _sameScope(String token,String branch)=>mounted&&widget.session.token==token&&branchId==branch;
+  bool _sameScope(String token,String branch)=>mounted&&widget.session.token==token&&branchId==branch&&widget.session.expiresAt.isAfter(DateTime.now())&&widget.session.grants.any((g)=>g.branchId==branch&&g.permission.startsWith('orders.'));
   Future<void> _restorePending()async{
     final scope=_localScope,store=widget.client.localStore;
     if(scope==null||store==null)return;
@@ -97,6 +97,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       final nested=body['body'];
       final actualBranch=kind=='update' ? (nested is Map ? nested['branchId'] : null) : body['branchId'];
       if(actualBranch!=branch)throw const FormatException();
+      final command=kind=='update'?nested:body;
+      if(command is Map&&command['shipping'] is Map){
+        final warehouse=(command['shipping'] as Map)['warehouseId'];
+        if(warehouse is String&&!widget.session.grants.any((g)=>g.branchId==branch&&g.warehouseId==warehouse&&g.permission=='inventory.read'))throw const FormatException();
+      }
       if(!{'create','update','confirm'}.contains(kind))throw const FormatException();
       setState((){
         pendingNeedsReceipt=true;
@@ -300,6 +305,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     final lines=<_OrderLine>[];
     final localDiscount=localDraft&&order?['localDocumentDiscount'] is Map?order!['localDocumentDiscount'] as Map:const {};
     var documentDiscountMode=(localDiscount['mode']??'NONE').toString(),documentDiscountValue=(localDiscount['value']??'0').toString(),documentDiscountReason=(localDiscount['reason']??'').toString(),overrideReason=localDraft?(order?['localOverrideReason']??'').toString():'';
+    if(localDraft&&savedShipping['warehouseId']!=null&&!stockWarehouses.any((w)=>w['id']==savedShipping['warehouseId'])){
+      note.dispose();inform('Kho của giỏ đã lưu không còn trong phạm vi được cấp. Không tự đổi kho.',error:true);return null;
+    }
     if(localDraft&&((customer!=null&&!customers.any((x)=>x['id']==customer))||(list!=null&&!lists.any((x)=>x['id']==list)))){
       note.dispose();inform('Khách hàng hoặc bảng giá trong giỏ không còn khả dụng. Hãy kiểm tra danh mục.',error:true);return null;
     }

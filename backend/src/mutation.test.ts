@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
-import { canonicalPayload, executeMutation, MutationFault, requireRevision, type MutationContext } from "./mutation.ts";
+import { canonicalPayload, executeMutation, readCommittedMutation, MutationFault, requireRevision, type MutationContext } from "./mutation.ts";
 
 test("fingerprints ignore object ordering and reject fractional JS numbers for Decimal safety", () => {
   assert.equal(canonicalPayload({ b: { z: 1, a: "1.20" }, a: true }),
@@ -49,6 +49,12 @@ test("PostgreSQL concurrency, lost ACK replay, cross-payload conflict, revoke an
       executeMutation(pool, context, handlers),
       executeMutation(pool, { ...context, requestId: "qa-mutation-2", payload: { numericQty: "1.250", code: branchCode } }, handlers),
     ]);
+    assert.deepEqual(await readCommittedMutation(pool,context,handlers.authorize),{status:a.status,body:a.body});
+    assert.equal(await readCommittedMutation(pool,{...context,idempotencyKey:"qa-"+randomUUID()},handlers.authorize),null);
+    await assert.rejects(readCommittedMutation(pool,context,async()=>false),
+      (e)=>e instanceof MutationFault&&e.code==="FORBIDDEN");
+    await assert.rejects(readCommittedMutation(pool,{...context,payload:{code:"changed"}},handlers.authorize),
+      (e)=>e instanceof MutationFault&&e.code==="IDEMPOTENCY_CONFLICT");
     assert.equal(writes, 1, "concurrent duplicate executes business once");
     assert.equal(a.replayed !== b.replayed, true);
     assert.deepEqual(a.body, b.body);
