@@ -19,7 +19,7 @@ const DISCOUNT = /^(?:100(?:\.0{1,2})?|(?:[0-9]|[1-9][0-9])(?:\.[0-9]{1,2})?)$/;
 const FACTOR = /^(?:0\.[0-9]{0,5}[1-9]|[1-9][0-9]{0,11}(?:\.[0-9]{1,6})?)$/;
 const BARCODE = /^[A-Za-z0-9._-]{4,64}$/;
 
-class CatalogError extends Error {
+export class CatalogError extends Error {
   readonly status:number;
   readonly code:string;
   constructor(status:number,code:string){super(code);this.status=status;this.code=code;}
@@ -630,12 +630,14 @@ export async function executeCreate(db:PoolClient,context:MutationContext,
     if(!("parentId" in value&&"groupId" in value))throw new CatalogError(400,"INVALID_CATEGORY");
     if(!await hasCatalogHierarchySchema(db))
       throw new CatalogError(503,"CATALOG_HIERARCHY_MIGRATION_REQUIRED");
-    await activeDirectoryCode(db,"catalog_product_group",installationId,branchId,value.groupId);
-    await activeCategory(db,installationId,branchId,value.parentId,value.groupId);
+    const categoryGroupId=requireUuid(value.groupId);
+    const categoryParentId=value.parentId==null?null:requireUuid(value.parentId);
+    await activeDirectoryCode(db,"catalog_product_group",installationId,branchId,categoryGroupId);
+    await activeCategory(db,installationId,branchId,categoryParentId,categoryGroupId);
     const result=await db.query<{id:string}>(`INSERT INTO catalog_product_category
       (installation_id,branch_id,code,name,group_id,parent_id)
       VALUES($1,$2,$3,$4,$5,$6) RETURNING id`,
-      [installationId,branchId,value.code,value.name,value.groupId,value.parentId]);
+      [installationId,branchId,value.code,value.name,categoryGroupId,categoryParentId]);
     return {status:201,body:{id:result.rows[0]!.id,code:value.code,name:value.name,revision:0}};
   }
   if(resource==="products"){
