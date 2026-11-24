@@ -37,6 +37,7 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
     'products':{
       'code':'Mã sản phẩm','name':'Tên sản phẩm',
       'baseUnit':'Mã đơn vị gốc','groupCode':'Mã nhóm hàng',
+      'brandCode':'Mã nhãn hàng','categoryCode':'Mã danh mục',
       'barcode':'Mã vạch gốc','active':'Trạng thái',
     },
     'skus':{

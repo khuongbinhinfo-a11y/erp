@@ -64,6 +64,8 @@ const DEFINITIONS:Record<BulkResource,Record<string,string[]>>={
   name:["Tên sản phẩm","Tên hàng","Product Name","name"],
   baseUnit:["Mã đơn vị gốc","Đơn vị tồn kho","Đơn vị tính","Base Unit","baseUnit"],
   groupCode:["Mã nhóm hàng","Nhóm hàng","Group Code","groupCode"],
+  brandCode:["Mã nhãn hàng","Nhãn hàng","Brand Code","brandCode"],
+  categoryCode:["Mã danh mục","Danh mục sản phẩm","Category Code","categoryCode"],
   barcode:["Mã vạch gốc","Barcode","barcode"],
   active:["Trạng thái","Hoạt động","active"],
  },
@@ -209,10 +211,12 @@ const exactDecimal=(s:string|undefined,rx:RegExp,codeName:string,optional=false)
  if(!s||!rx.test(s))throw new BulkFault("INVALID_"+codeName);
  return s;
 };
-function normalizeRow(
+export function normalizeRow(
  resource:BulkResource,mode:BulkMode,raw:Record<string,string>,
  current:Record<string,any>|undefined,
  refs:{groups:Map<string,Record<string,any>>;regions:Map<string,Record<string,any>>;
+  brands:Map<string,Record<string,any>>;categories:Map<string,Record<string,any>>;
+  taxonomyReady?:boolean;
   units:Map<string,Record<string,any>>;products:Map<string,Record<string,any>>;
   lists:Map<string,Record<string,any>>;productUnits:Map<string,Record<string,any>>},
  branchId:string,
@@ -238,6 +242,43 @@ function normalizeRow(
    if(resource==="customers")assign("customerGroupId",g?.id??null);
    else assign("groupId",g?.id??null);
    after[groupField]=value;
+  }
+  if(resource==="products"){
+   if(raw.categoryCode!==undefined){
+    const value=raw.categoryCode;
+    // Empty mapped columns in exported CSVs must not write category_id on
+    // installations that have not yet applied the guarded taxonomy migration.
+    if(value===""&&refs.taxonomyReady===false){
+      after.categoryCode="";
+    }else{
+    const c=value===""?null:refs.categories.get(value);
+    if(value!==""&&(!c||c.active!==true||c.groupActive!==true))
+      throw new BulkFault("CATEGORY_CODE_NOT_FOUND_OR_INACTIVE");
+    // Explicit group clearing is different from an omitted group column.
+    // Never approve a preview that later writes groupId:null + categoryId:UUID.
+    const groupExplicit=Object.prototype.hasOwnProperty.call(op,"groupId");
+    const effectiveGroup=groupExplicit?op.groupId:(current?.groupId??c?.groupId??null);
+    if(c&&c.groupId!==effectiveGroup)
+      throw new BulkFault("CATEGORY_GROUP_MISMATCH");
+    // Inferred group must also be written for previously ungrouped products.
+    if(c&&!op.groupId&&!(current?.groupId))assign("groupId",c.groupId);
+    assign("categoryId",c?.id??null);after.categoryCode=value;
+    }
+   }else if(!isNew&&op.groupId!==undefined&&
+             op.groupId!==current?.groupId&&current?.categoryId){
+    assign("categoryId",null);
+   }
+   if(raw.brandCode!==undefined&&raw.brandCode!==""){
+    const b=refs.brands.get(raw.brandCode);
+    // An explicit groupCode:'' clears the link to the brand, even when the
+    // product was previously assigned to a group. Never fallback on explicit null.
+    const gid=Object.prototype.hasOwnProperty.call(op,"groupId")
+      ?op.groupId:current?.groupId;
+    const group=[...refs.groups.values()].find(g=>g.id===gid);
+    if(!b||b.active!==true||(group?.brandId??refs.categories.get(raw.categoryCode??"")?.brandId)!==b.id)
+      throw new BulkFault("BRAND_GROUP_MISMATCH");
+    after.brandCode=raw.brandCode;
+   }
   }
   if(resource==="customers"){
    if(raw.customerRegionCode!==undefined){
@@ -441,8 +482,11 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
   return buildSelectedSkuPrices(db,tenant,actor,input,data,file.firstLine);
  const all=(f:string)=>[...new Set(data.map(r=>r[f]).filter(Boolean) as string[])];
  const branch=input.branchId,res=input.resource;
+ const taxonomyReady=(await db.query<{ok:boolean}>(
+  "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version='0020_catalog_hierarchy_locations.sql') AS ok")).rows[0]?.ok===true;
  const products=await db.query<Record<string,any>>(
-  'SELECT id,sku AS code,name,base_unit AS "baseUnit",group_id AS "groupId",active,revision::int,'+
+  'SELECT id,sku AS code,name,base_unit AS "baseUnit",group_id AS "groupId",'+
+  (taxonomyReady?'category_id':'NULL::uuid')+' AS "categoryId",active,revision::int,'+
   '(SELECT b.barcode FROM catalog_sku_barcode b JOIN catalog_sell_sku s ON '+
   's.installation_id=b.installation_id AND s.branch_id=b.branch_id AND s.id=b.sell_sku_id '+
   'WHERE s.installation_id=catalog_product.installation_id AND '+
@@ -502,9 +546,25 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
   'WHERE installation_id=$1 AND branch_id=$2 AND code=ANY($3::text[])',
   [tenant,branch,all("priceListCode")]):{rows:[]};
  const groups=(res==="customers"||res==="products")?await db.query<Record<string,any>>(
-  'SELECT id,code,active FROM '+(res==="customers"?"catalog_customer_group":"catalog_product_group")+
-  ' WHERE installation_id=$1 AND branch_id=$2 AND code=ANY($3::text[])',
-  [tenant,branch,all(res==="customers"?"customerGroupCode":"groupCode")]):{rows:[]};
+  'SELECT id,code,active'+(res==="products"&&taxonomyReady?',brand_id AS "brandId"':'')+
+  ' FROM '+(res==="customers"?"catalog_customer_group":"catalog_product_group")+
+  ' WHERE installation_id=$1 AND branch_id=$2 AND (code=ANY($3::text[])'+
+  (res==="products"?' OR id=ANY($4::uuid[])':'')+')',
+  res==="products"?
+    [tenant,branch,all("groupCode"),
+      [...new Set(products.rows.map(p=>p.groupId).filter(Boolean))]]:
+    [tenant,branch,all("customerGroupCode")]):{rows:[]};
+ const categories=res==="products"&&taxonomyReady?await db.query<Record<string,any>>(
+  'SELECT c.id,c.code,c.group_id AS "groupId",c.active,g.active AS "groupActive",'+
+  'g.brand_id AS "brandId" FROM catalog_product_category c '+
+  'JOIN catalog_product_group g ON g.installation_id=c.installation_id '+
+  'AND g.branch_id=c.branch_id AND g.id=c.group_id '+
+  'WHERE c.installation_id=$1 AND c.branch_id=$2 AND c.code=ANY($3::text[])',
+  [tenant,branch,all("categoryCode")]):{rows:[]};
+ const brands=res==="products"&&taxonomyReady?await db.query<Record<string,any>>(
+  'SELECT id,code,active FROM catalog_brand WHERE installation_id=$1 '+
+  'AND branch_id=$2 AND code=ANY($3::text[])',
+  [tenant,branch,all("brandCode")]):{rows:[]};
  const regions=res==="customers"?await db.query<Record<string,any>>(
   'SELECT id,code,active FROM catalog_customer_region '+
   'WHERE installation_id=$1 AND branch_id=$2 AND code=ANY($3::text[])',
@@ -551,8 +611,11 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
   [tenant,branch,JSON.stringify(requested)]):{rows:[]};
  const occupiedByRow=mapBy(occupied.rows,x=>String(x.rowIndex));
  const refs={
+  taxonomyReady,
   products:mapBy(products.rows,x=>x.code),
   groups:mapBy(groups.rows,x=>x.code),
+  categories:mapBy(categories.rows,x=>x.code),
+  brands:mapBy(brands.rows,x=>x.code),
   regions:mapBy(regions.rows,x=>x.code),
   units:mapBy(units.rows,x=>x.code),
   productUnits:mapBy(productUnits.rows,x=>x.productId+"|"+x.unitCode),

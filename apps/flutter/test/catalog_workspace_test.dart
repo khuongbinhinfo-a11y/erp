@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:erp_distribution/ui/company_workspace.dart';
+import 'package:erp_distribution/ui/catalog_workspace.dart';
 import 'package:erp_distribution/ui/erp_tokens.dart';
 import 'package:erp_distribution/ui/identity_client.dart';
 
@@ -29,6 +30,31 @@ Future<void> openCompanyCatalog(WidgetTester tester,String destination)async{
 }
 
 void main(){
+  test('batch group change retains same-group categories and clears only changed groups',(){
+    final product=<String,dynamic>{
+      'groupId':'TAP','categoryId':'F04NA',
+    };
+    expect(shouldClearCategoryForTargetGroup(product,'TAP'),isFalse);
+    expect(shouldClearCategoryForTargetGroup(product,'PAPER'),isTrue);
+    expect(shouldClearCategoryForTargetGroup(product,null),isTrue);
+    expect(shouldClearCategoryForTargetGroup(
+      {'groupId':'TAP','categoryId':null},'PAPER'),isFalse);
+  });
+
+  test('lost ACK group edit replays original derived category removal',(){
+    final pending=<String,dynamic>{
+      'branchId':branch,'groupId':'new-group','categoryId':null,
+    };
+    final refreshed=<String,dynamic>{'branchId':branch,'groupId':'new-group'};
+    expect(samePendingProductBulkIntent(pending,'group',refreshed),isTrue);
+    expect(samePendingProductBulkIntent(pending,'group',
+      {'branchId':branch,'groupId':'other-group'}),isFalse);
+    expect(samePendingProductBulkIntent(pending,'category',
+      {'branchId':branch,'categoryId':null}),isTrue);
+    expect(samePendingProductBulkIntent(pending,'active',
+      {'branchId':branch,'active':true}),isFalse);
+  });
+
   test('login 503 is a backend problem, never shown as user network or bad password', () async {
     final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
       httpClient:MockClient((request)async{
@@ -452,6 +478,51 @@ void main(){
       expect(tester.takeException(),isNull);
       await tester.pump(const Duration(seconds:5));
       await tester.pumpAndSettle();
+    });
+
+  testWidgets('price list search + selector share a row; editors are opt-in',
+    (tester)async{
+      const priceId='00000000-0000-4000-8000-000000000099';
+      final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+        httpClient:MockClient((request)async{
+          if(request.url.path=='/v1/catalog/branches'){
+            return http.Response(jsonEncode({'items':[
+              {'id':branch,'code':'MAIN','name':'Chi nhánh chính'}]}),200);
+          }
+          if(request.url.path=='/v1/catalog/price-lists'){
+            return http.Response(jsonEncode({'items':[
+              {'id':priceId,'code':'GIATEST','name':'Giá Test',
+                'active':true,'revision':0}]}),200);
+          }
+          return http.Response(jsonEncode({'items':[]}),200,
+            headers:const {'content-type':'application/json; charset=utf-8'});
+        }));
+      addTearDown(client.dispose);
+      tester.view.devicePixelRatio=1;
+      tester.view.physicalSize=const Size(1600,900);
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
+        home:Scaffold(body:CompanyWorkspace(previewOnly:false,grants:grants,
+          session:activeSession(),client:client))));
+      await openCompanyCatalog(tester,'prices');
+      await tester.pumpAndSettle();
+      await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:120)));
+      await tester.pumpAndSettle();
+      final search=find.byKey(const ValueKey('catalog-search'));
+      final picker=find.byKey(const ValueKey('price-workspace-selected-$priceId'));
+      expect(search,findsOneWidget);
+      expect(picker,findsOneWidget);
+      expect((tester.getTopLeft(search).dy-tester.getTopLeft(picker).dy).abs(),
+        lessThan(16),reason:'Desktop search and selected price list occupy one row');
+      final editor=find.byKey(const ValueKey('price-skus-$branch-$priceId'));
+      expect(editor,findsNothing,reason:'Price editor must not appear on its own');
+      final menu=find.byKey(const ValueKey('catalog-price-list-actions-$priceId'));
+      await tester.tap(menu);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Giá bán').last);
+      await tester.pumpAndSettle();
+      expect(editor,findsOneWidget);
     });
 
 }

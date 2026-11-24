@@ -234,11 +234,12 @@ class ErpIdentityClient {
   }
   /// Catalog calls always use the authenticated installation and server-side RBAC.
   Future<List<Map<String,dynamic>>> catalogItems(String token,String resource,{
-    String? branchId,String query='',
+    String? branchId,String query='',String? itemId,
   })async{
     final params=<String,String>{};
     if(branchId!=null)params['branchId']=branchId;
     if(query.trim().isNotEmpty)params['q']=query.trim();
+    if(itemId!=null)params['id']=itemId;
     final suffix=params.isEmpty?'':'?${Uri(queryParameters:params).query}';
     final raw=await _request('GET','/v1/catalog/$resource$suffix',token:token);
     return (raw['items'] as List<dynamic>)
@@ -275,7 +276,7 @@ class ErpIdentityClient {
   /// in customer group / sales region pickers. Codes are never free-form input.
   Future<List<Map<String,dynamic>>> catalogDirectoryAll(
       String token,String resource,{required String branchId,String query=''})async{
-    if(resource!='customer-groups'&&resource!='customer-regions')
+    if(!['customer-groups','customer-regions','brands','groups','categories'].contains(resource))
       throw ArgumentError.value(resource,'resource','Danh mục không hỗ trợ');
     final found=<Map<String,dynamic>>[];
     final seen=<String>{};
@@ -434,9 +435,12 @@ class ErpIdentityClient {
       _request('POST','/v1/catalog/$resource',token:token,
         body:fields,revision:0,idempotencyKey:key);
   Future<List<Map<String,dynamic>>> r1CatalogItems(String token,String kind,{
-      required String branchId,String query=''})async{
+      required String branchId,String query='',String? brandId,String? groupId,String? categoryId})async{
     final q=Uri(queryParameters:{'branchId':branchId,
-      if(query.trim().isNotEmpty)'q':query.trim()}).query;
+      if(query.trim().isNotEmpty)'q':query.trim(),
+      if(brandId!=null)'brandId':brandId,
+      if(groupId!=null)'groupId':groupId,
+      if(categoryId!=null)'categoryId':categoryId}).query;
     final raw=await _request('GET','/v1/catalog/r1/$kind?$q',token:token);
     return (raw['items'] as List<dynamic>).map(
       (x)=>Map<String,dynamic>.from(x as Map)).toList();
@@ -495,12 +499,39 @@ class ErpIdentityClient {
     _request('PATCH','/v1/catalog/price-lists/assignments/$id',
       token:token,body:{'branchId':branchId,'active':active},
       revision:revision,idempotencyKey:key);
+  /// Every delivery location belongs to one canonical customer in the same branch.
+  Future<List<Map<String,dynamic>>> customerLocations(
+    String token,String branchId,String customerId)async{
+    final response=await _request('GET',
+      '/v1/catalog/customers/$customerId/locations?branchId=${Uri.encodeQueryComponent(branchId)}',
+      token:token);
+    return (response['items'] as List<dynamic>).map(
+      (item)=>Map<String,dynamic>.from(item as Map)).toList();
+  }
+  Future<Map<String,dynamic>> createCustomerLocation(
+    String token,String customerId,Map<String,dynamic> body,{required String key})=>
+    _request('POST','/v1/catalog/customers/$customerId/locations',
+      token:token,body:body,revision:0,idempotencyKey:key);
+
+  Future<Map<String,dynamic>> updateCustomerLocation(
+    String token,String customerId,String locationId,int revision,
+    Map<String,dynamic> body,{required String key})=>
+    _request('PATCH','/v1/catalog/customers/$customerId/locations/$locationId',
+      token:token,body:body,revision:revision,idempotencyKey:key);
+
   /// Optimistic catalog edit: the server checks the exact row revision inside its transaction.
   Future<Map<String,dynamic>> updateCatalog(String token,String resource,
     String id,int expectedRevision,Map<String,dynamic> fields)async{
     return _request('PATCH','/v1/catalog/$resource/$id',
       token:token,revision:expectedRevision,body:fields);
   }
+  /// Batch catalog changes keep their per-item idempotency key on ambiguous retries.
+  Future<Map<String,dynamic>> updateCatalogWithKey(
+    String token,String resource,String id,int expectedRevision,
+    Map<String,dynamic> fields,{required String key})=>
+      _request('PATCH','/v1/catalog/$resource/$id',
+        token:token,revision:expectedRevision,body:fields,idempotencyKey:key);
+
   /// Price quote is advisory, never confirms order fulfillment or inventory.
   Future<Map<String,dynamic>> catalogPriceQuote(String token,{
     required String branchId,required String priceListId,required String productId,

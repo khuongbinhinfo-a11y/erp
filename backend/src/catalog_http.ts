@@ -7,6 +7,8 @@ import { executeMutation, MutationFault, requireRevision, type MutationContext }
 import { validIdempotencyKey } from "./contracts.ts";
 import type { IdentityOptions } from "./identity_http.ts";
 import { clonePriceList } from "./r1c_price_list.ts";
+import { CustomerLocationFault,parseCustomerLocation,listCustomerLocations,
+  createCustomerLocation,updateCustomerLocation } from "./catalog_customer_locations.ts";
 import { PriceAssignmentFault,parsePriceAssignment,createPriceAssignment,
   listPriceAssignments,togglePriceAssignment } from "./r1c_price_assignment.ts";
 
@@ -17,7 +19,7 @@ const DISCOUNT = /^(?:100(?:\.0{1,2})?|(?:[0-9]|[1-9][0-9])(?:\.[0-9]{1,2})?)$/;
 const FACTOR = /^(?:0\.[0-9]{0,5}[1-9]|[1-9][0-9]{0,11}(?:\.[0-9]{1,6})?)$/;
 const BARCODE = /^[A-Za-z0-9._-]{4,64}$/;
 
-class CatalogError extends Error {
+export class CatalogError extends Error {
   readonly status:number;
   readonly code:string;
   constructor(status:number,code:string){super(code);this.status=status;this.code=code;}
@@ -138,8 +140,8 @@ function requestMutation(req:IncomingMessage,id:string,actorId:string,tenant:str
   return {installationId:tenant,actorId,requestId:id,action,
     idempotencyKey:key,expectedRevision:parsed,payload};
 }
-type Resource="customers"|"customer-groups"|"customer-regions"|"suppliers"|"groups"|"products"|"price-lists"|"prices"|"warehouses"|"unit-definitions";
-const resources=new Set<Resource>(["customers","customer-groups","customer-regions","suppliers","groups","products","price-lists","prices","warehouses","unit-definitions"]);
+type Resource="customers"|"customer-groups"|"customer-regions"|"suppliers"|"brands"|"groups"|"categories"|"products"|"price-lists"|"prices"|"warehouses"|"unit-definitions";
+const resources=new Set<Resource>(["customers","customer-groups","customer-regions","suppliers","brands","groups","categories","products","price-lists","prices","warehouses","unit-definitions"]);
 function resourceOf(value:string):Resource{
   if(!resources.has(value as Resource))throw new CatalogError(404,"UNKNOWN_RESOURCE");
   return value as Resource;
@@ -168,7 +170,13 @@ const selections:Record<Resource,string>={
   "customer-groups":'SELECT id,code,name,active,revision::integer FROM catalog_customer_group',
   "customer-regions":'SELECT id,code,name,active,revision::integer FROM catalog_customer_region',
   "suppliers":'SELECT id,code,name,active,revision::integer FROM catalog_supplier',
+  "brands":'SELECT id,code,name,active,revision::integer FROM catalog_brand',
   "groups":'SELECT id,code,name,active,revision::integer FROM catalog_product_group',
+  "categories":`SELECT id,code,name,group_id AS "groupId",parent_id AS "parentId",
+    (SELECT p.code FROM catalog_product_category p WHERE
+      p.installation_id=catalog_product_category.installation_id AND
+      p.branch_id=catalog_product_category.branch_id AND p.id=catalog_product_category.parent_id)
+      AS "parentCode",active,revision::integer FROM catalog_product_category`,
   "unit-definitions":'SELECT id,code,name,active,revision::integer FROM catalog_unit_definition',
   "products":`SELECT id,sku AS code,name,base_unit AS "baseUnit",group_id AS "groupId",
     (SELECT g.name FROM catalog_product_group g WHERE
@@ -196,7 +204,9 @@ const tableFor:Record<Exclude<Resource,"warehouses"|"prices">,string>={
   "customer-groups":"catalog_customer_group",
   "customer-regions":"catalog_customer_region",
   "suppliers":"catalog_supplier",
+  "brands":"catalog_brand",
   "groups":"catalog_product_group",
+  "categories":"catalog_product_category",
   "unit-definitions":"catalog_unit_definition",
   "products":"catalog_product",
   "price-lists":"catalog_price_list",
@@ -256,6 +266,22 @@ async function activeDirectoryCode(db:PoolClient,table:"catalog_customer_group"|
   if(r.rows[0]?.active!==true)throw new CatalogError(400,"INVALID_OR_INACTIVE_DIRECTORY");
   return r.rows[0]!.code;
 }
+async function hasCatalogHierarchySchema(db:Pool|PoolClient):Promise<boolean>{
+  try{
+    const r=await db.query<{ok:boolean}>(
+      "SELECT EXISTS(SELECT 1 FROM public.schema_migrations WHERE version='0020_catalog_hierarchy_locations.sql') AS ok");
+    return r.rows[0]?.ok===true;
+  }catch{return false;}
+}
+async function activeCategory(db:PoolClient,installationId:string,branchId:string,
+  categoryId:string|null,groupId:string|null):Promise<void>{
+  if(categoryId===null)return;
+  if(!groupId)throw new CatalogError(400,"CATEGORY_REQUIRES_GROUP");
+  const found=await db.query<{active:boolean}>(`SELECT active
+    FROM catalog_product_category WHERE installation_id=$1 AND branch_id=$2
+    AND id=$3 AND group_id=$4 FOR SHARE`,[installationId,branchId,categoryId,groupId]);
+  if(found.rows[0]?.active!==true)throw new CatalogError(400,"INVALID_OR_INACTIVE_CATEGORY");
+}
 async function hasCatalogSchema(db:Pool):Promise<boolean>{
   try {
     const r=await db.query<{present:boolean}>(
@@ -264,7 +290,7 @@ async function hasCatalogSchema(db:Pool):Promise<boolean>{
   }catch{return false;}
 }
 async function listing(db:PoolClient,tenant:string,actorId:string,branchId:string,
-  resource:Resource,search:string,afterCode=""):Promise<unknown[]>{
+  resource:Resource,search:string,afterCode="",exactId?:string):Promise<unknown[]>{
   if(resource==="warehouses"){
     const grants=await userAccess(db,tenant,actorId);
     const ids=grants.filter(g=>g.branchId===branchId&&g.permission==="inventory.read"&&g.warehouseId)
@@ -283,6 +309,24 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
     throw new CatalogError(503,"CUSTOMER_DICTIONARY_MIGRATION_REQUIRED");
   if(resource==="unit-definitions"&&!await hasUnitDictionary(db))
     throw new CatalogError(503,"UNIT_DICTIONARY_MIGRATION_REQUIRED");
+  if(resource==="groups"||resource==="brands"||resource==="categories"){
+    const taxonomy=await hasCatalogHierarchySchema(db);
+    if(resource!=="groups"&&!taxonomy)
+      throw new CatalogError(503,"CATALOG_HIERARCHY_MIGRATION_REQUIRED");
+    const prefix=resource==="groups"&&taxonomy?"g.":"";
+    const selection=resource==="groups"&&taxonomy
+      ?'SELECT g.id,g.code,g.name,g.brand_id AS "brandId",b.name AS "brandName",g.active,g.revision::integer FROM catalog_product_group g LEFT JOIN catalog_brand b ON b.installation_id=g.installation_id AND b.branch_id=g.branch_id AND b.id=g.brand_id'
+      :selections[resource];
+    const r=await db.query(`${selection}
+      WHERE ${prefix}installation_id=$1 AND ${prefix}branch_id=$2
+      ${exactId?`AND ${prefix}id=$3`:
+        `AND (${prefix}code ILIKE $3 OR ${prefix}name ILIKE $3)
+          AND ${prefix}code>$4`}
+      ORDER BY ${prefix}code,${prefix}id LIMIT ${exactId?1:100}`,
+      exactId?[tenant,branchId,exactId]:
+        [tenant,branchId,"%"+search+"%",afterCode]);
+    return r.rows;
+  }
   if(resource==="unit-definitions"||resource==="customer-groups"||
      resource==="customer-regions"){
     // Keyset cursor ensures every UOM remains reachable, not just the first
@@ -294,11 +338,18 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
       [tenant,branchId,"%"+search+"%",afterCode]);
     return rows.rows;
   }
+  const taxonomyReady=await hasCatalogHierarchySchema(db);
   const values=[tenant,branchId,"%"+search+"%"];
   // Installations staged on catalog 0006/0007 must still list products
   // even before the separate R1 SKU/barcode migration 0009 is applied.
   const r1Ready=resource==="products"&&await hasR1CatalogSchema(db);
-  const productSelection=r1Ready?selections.products:
+  const productSelection=r1Ready?(
+    taxonomyReady?selections.products.replace(
+      'group_id AS "groupId",',
+      'group_id AS "groupId",category_id AS "categoryId",'+
+      '(SELECT c.name FROM catalog_product_category c WHERE c.installation_id=catalog_product.installation_id AND c.branch_id=catalog_product.branch_id AND c.id=catalog_product.category_id) AS "categoryName",'
+    ):selections.products
+  ):
     `SELECT id,sku AS code,name,base_unit AS "baseUnit",
       group_id AS "groupId",
       (SELECT g.name FROM catalog_product_group g WHERE
@@ -338,7 +389,8 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
           WHERE e.installation_id=$1 AND e.branch_id=$2
             AND (p.sku ILIKE $3 OR p.name ILIKE $3 OR l.code ILIKE $3)
           ORDER BY e.effective_at DESC,e.id DESC LIMIT 100`
-      :`${resource==="products"?productSelection:resource==="customers"?customerSelection:resource==="price-lists"?listSelection:selections[resource]} WHERE installation_id=$1 AND branch_id=$2
+      :`${resource==="products"?productSelection:resource==="customers"?customerSelection:resource==="price-lists"?listSelection:selections[resource]}
+          WHERE installation_id=$1 AND branch_id=$2
           AND (${resource==="products"?"sku":"code"} ILIKE $3 OR name ILIKE $3
           ${resource==="customers"?"OR phone ILIKE $3 OR customer_group ILIKE $3":""})
           ORDER BY ${resource==="products"?"sku":"code"},id LIMIT 100`,
@@ -446,17 +498,35 @@ export function checkCreate(resource:Resource,raw:Record<string,unknown>){
     }
     return {branchId,code,name};
   }
+  if(resource==="brands"){
+    if(Object.keys(raw).some(k=>!["branchId","code","name"].includes(k)))
+      throw new CatalogError(400,"UNKNOWN_FIELD");
+    return {branchId,code,name};
+  }
+  if(resource==="groups"){
+    if(Object.keys(raw).some(k=>!["branchId","code","name","brandId"].includes(k)))
+      throw new CatalogError(400,"UNKNOWN_FIELD");
+    const brandId=raw.brandId==null?null:requireUuid(raw.brandId);
+    return {branchId,code,name,brandId};
+  }
+  if(resource==="categories"){
+    if(Object.keys(raw).some(k=>!["branchId","code","name","groupId","parentId"].includes(k)))
+      throw new CatalogError(400,"UNKNOWN_FIELD");
+    return {branchId,code,name,groupId:requireUuid(raw.groupId),
+      parentId:raw.parentId==null?null:requireUuid(raw.parentId)};
+  }
   if(resource==="unit-definitions"){
     if(Object.keys(raw).some(k=>!["branchId","code","name"].includes(k)))
       throw new CatalogError(400,"UNKNOWN_FIELD");
     return {branchId,code,name};
   }
   if(resource==="products"){
-    if(Object.keys(raw).some(x=>!["branchId","code","name","baseUnit","groupId","barcode","units"].includes(x)))
+    if(Object.keys(raw).some(x=>!["branchId","code","name","baseUnit","groupId","categoryId","barcode","units"].includes(x)))
       throw new CatalogError(400,"UNKNOWN_FIELD");
     const baseUnit=requireName(raw.baseUnit,24);
     const barcode=optionalBarcode(raw.barcode);
     const groupId=raw.groupId==null?null:requireUuid(raw.groupId);
+    const categoryId=raw.categoryId==null?null:requireUuid(raw.categoryId);
     const units=raw.units??[];
     if(!Array.isArray(units)||units.length>12)throw new CatalogError(400,"INVALID_UNITS");
     const names=new Set<string>([baseUnit.toUpperCase()]);
@@ -481,7 +551,7 @@ export function checkCreate(resource:Resource,raw:Record<string,unknown>){
       if(unitBarcode)barcodes.add(unitBarcode.toUpperCase());
       conversions.push({unitCode,toBase,sku,barcode:unitBarcode});
     }
-    return {branchId,code,name,baseUnit,groupId,barcode,units:conversions};
+    return {branchId,code,name,baseUnit,groupId,categoryId,barcode,units:conversions};
   }
   if(resource==="customers"){
     if(Object.keys(raw).some(k=>!["branchId","code","name","customerGroupId","customerRegionId","phone","deliveryAddress","paymentTermsDays"].includes(k)))
@@ -550,6 +620,40 @@ export async function executeCreate(db:PoolClient,context:MutationContext,
       effectiveTo:value.effectiveTo,priority:value.priority,
       stackingMode:value.stackingMode,stopProcessing:value.stopProcessing}};
   }
+  if(resource==="groups"){
+    if(!("brandId" in value))throw new CatalogError(400,"INVALID_GROUP");
+    const hierarchy=await hasCatalogHierarchySchema(db);
+    if(value.brandId){
+      if(!hierarchy)throw new CatalogError(503,"CATALOG_HIERARCHY_MIGRATION_REQUIRED");
+      const brand=await db.query<{active:boolean}>(`SELECT active FROM catalog_brand
+        WHERE installation_id=$1 AND branch_id=$2 AND id=$3 FOR SHARE`,
+        [installationId,branchId,value.brandId]);
+      if(brand.rows[0]?.active!==true)throw new CatalogError(400,"BRAND_UNAVAILABLE");
+    }
+    const result=await db.query<{id:string}>(
+      hierarchy?
+        `INSERT INTO catalog_product_group(installation_id,branch_id,code,name,brand_id)
+          VALUES($1,$2,$3,$4,$5) RETURNING id`:
+        `INSERT INTO catalog_product_group(installation_id,branch_id,code,name)
+          VALUES($1,$2,$3,$4) RETURNING id`,
+      hierarchy?[installationId,branchId,value.code,value.name,value.brandId]:
+        [installationId,branchId,value.code,value.name]);
+    return {status:201,body:{id:result.rows[0]!.id,code:value.code,name:value.name,revision:0}};
+  }
+  if(resource==="categories"){
+    if(!("parentId" in value&&"groupId" in value))throw new CatalogError(400,"INVALID_CATEGORY");
+    if(!await hasCatalogHierarchySchema(db))
+      throw new CatalogError(503,"CATALOG_HIERARCHY_MIGRATION_REQUIRED");
+    const categoryGroupId=requireUuid(value.groupId);
+    const categoryParentId=value.parentId==null?null:requireUuid(value.parentId);
+    await activeDirectoryCode(db,"catalog_product_group",installationId,branchId,categoryGroupId);
+    await activeCategory(db,installationId,branchId,categoryParentId,categoryGroupId);
+    const result=await db.query<{id:string}>(`INSERT INTO catalog_product_category
+      (installation_id,branch_id,code,name,group_id,parent_id)
+      VALUES($1,$2,$3,$4,$5,$6) RETURNING id`,
+      [installationId,branchId,value.code,value.name,categoryGroupId,categoryParentId]);
+    return {status:201,body:{id:result.rows[0]!.id,code:value.code,name:value.name,revision:0}};
+  }
   if(resource==="products"){
     if(!("baseUnit" in value))throw new CatalogError(400,"INVALID_PRODUCT");
     // Preserve older catalog clients while maintaining the new shared
@@ -568,12 +672,21 @@ export async function executeCreate(db:PoolClient,context:MutationContext,
           throw new CatalogError(400,"UNIT_DISABLED");
       }
     }
+    const hierarchy=await hasCatalogHierarchySchema(db);
+    if(value.categoryId&&!hierarchy)
+      throw new CatalogError(503,"CATALOG_HIERARCHY_MIGRATION_REQUIRED");
+    if(value.categoryId)await activeCategory(db,installationId,branchId,
+      value.categoryId,value.groupId);
     if(value.groupId!==null)
       await activeDirectoryCode(db,"catalog_product_group",installationId,branchId,value.groupId??null);
     const r=await db.query<{id:string}>(
-      `INSERT INTO catalog_product(installation_id,branch_id,sku,name,group_id,base_unit)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-      [installationId,branchId,value.code,value.name,value.groupId,value.baseUnit]);
+      hierarchy?
+        `INSERT INTO catalog_product(installation_id,branch_id,sku,name,group_id,base_unit,category_id)
+          VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`:
+        `INSERT INTO catalog_product(installation_id,branch_id,sku,name,group_id,base_unit)
+          VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+      [installationId,branchId,value.code,value.name,value.groupId,value.baseUnit,
+        ...(hierarchy?[value.categoryId]:[])]);
     const id=r.rows[0]!.id;
     await db.query(`INSERT INTO catalog_unit
       (installation_id,branch_id,product_id,unit_code,to_base) VALUES ($1,$2,$3,$4,1)`,
@@ -612,7 +725,7 @@ export async function executeCreate(db:PoolClient,context:MutationContext,
       }
     }
     return {status:201,body:{id,code:value.code,name:value.name,
-      baseUnit:value.baseUnit,groupId:value.groupId,revision:0,variants}};
+      baseUnit:value.baseUnit,groupId:value.groupId,categoryId:value.categoryId,revision:0,variants}};
   }
   if(!("code" in value))throw new CatalogError(400,"INVALID_RESOURCE");
   const table=tableFor[resource];
@@ -642,12 +755,12 @@ export async function executeCreate(db:PoolClient,context:MutationContext,
   return {status:201,body:{id:r.rows[0]!.id,code:value.code,name:value.name,revision:0}};
 }
 
-type Editable = "customers"|"customer-groups"|"customer-regions"|"suppliers"|"groups"|"products"|"price-lists"|"unit-definitions";
-const editable = new Set<Editable>(["customers","customer-groups","customer-regions","suppliers","groups","products","price-lists","unit-definitions"]);
+type Editable = "customers"|"customer-groups"|"customer-regions"|"suppliers"|"brands"|"groups"|"categories"|"products"|"price-lists"|"unit-definitions";
+const editable = new Set<Editable>(["customers","customer-groups","customer-regions","suppliers","brands","groups","categories","products","price-lists","unit-definitions"]);
 const editTables:Record<Editable,string>={
   "customers":"catalog_customer","suppliers":"catalog_supplier",
   "customer-groups":"catalog_customer_group","customer-regions":"catalog_customer_region",
-  "groups":"catalog_product_group","products":"catalog_product",
+  "brands":"catalog_brand","groups":"catalog_product_group","categories":"catalog_product_category","products":"catalog_product",
   "unit-definitions":"catalog_unit_definition",
   "price-lists":"catalog_price_list",
 };
@@ -656,7 +769,9 @@ export function parseEdit(resource:Editable,raw:Record<string,unknown>){
   const columns:Record<string,unknown>={};
   const allow=new Set(["branchId","name","active",
     ...(resource==="customers"?["customerGroupId","customerRegionId","phone","deliveryAddress","paymentTermsDays"]:[]),
-    ...(resource==="products"?["groupId"]:[]),
+    ...(resource==="products"?["groupId","categoryId"]:[]),
+    ...(resource==="groups"?["brandId"]:[]),
+    ...(resource==="categories"?["parentId"]:[]),
     ...(resource==="price-lists"?["effectiveFrom","effectiveTo","priority",
       "stackingMode","stopProcessing",...PRICE_SCOPE_KEYS]:[])]);
   if(Object.keys(raw).some(key=>!allow.has(key)))throw new CatalogError(400,"UNKNOWN_FIELD");
@@ -699,6 +814,12 @@ export function parseEdit(resource:Editable,raw:Record<string,unknown>){
   if(resource==="products"&&Object.prototype.hasOwnProperty.call(raw,"groupId")){
     columns.group_id=raw.groupId===null?null:requireUuid(raw.groupId);
   }
+  if(resource==="groups"&&Object.prototype.hasOwnProperty.call(raw,"brandId"))
+    columns.brand_id=raw.brandId===null?null:requireUuid(raw.brandId);
+  if(resource==="categories"&&Object.prototype.hasOwnProperty.call(raw,"parentId"))
+    columns.parent_id=raw.parentId===null?null:requireUuid(raw.parentId);
+  if(resource==="products"&&Object.prototype.hasOwnProperty.call(raw,"categoryId"))
+    columns.category_id=raw.categoryId===null?null:requireUuid(raw.categoryId);
   const scopes=resource==="price-lists"?priceScopes(raw):null;
   if(Object.keys(columns).length===0&&scopes===null)throw new CatalogError(400,"EMPTY_UPDATE");
   return {branchId,columns,scopes};
@@ -732,9 +853,47 @@ export async function applyEdit(db:PoolClient,context:MutationContext,
       await activeDirectoryCode(db,"catalog_customer_region",
         installationId,value.branchId,value.columns.customer_region_id as string|null);
   }
-  if(resource==="products"&&Object.prototype.hasOwnProperty.call(value.columns,"group_id"))
-    await activeDirectoryCode(db,"catalog_product_group",
-      installationId,value.branchId,value.columns.group_id as string|null);
+  if(resource==="products"){
+    if(Object.prototype.hasOwnProperty.call(value.columns,"group_id"))
+      await activeDirectoryCode(db,"catalog_product_group",
+        installationId,value.branchId,value.columns.group_id as string|null);
+    if(Object.prototype.hasOwnProperty.call(value.columns,"category_id")||
+       Object.prototype.hasOwnProperty.call(value.columns,"group_id")){
+      const hierarchy=await hasCatalogHierarchySchema(db);
+      if(!hierarchy&&Object.prototype.hasOwnProperty.call(value.columns,"category_id"))
+        throw new CatalogError(503,"CATALOG_HIERARCHY_MIGRATION_REQUIRED");
+      if(hierarchy){
+        const current=await db.query<{group_id:string|null;category_id:string|null}>(
+          'SELECT group_id,category_id FROM catalog_product WHERE installation_id=$1 AND branch_id=$2 AND id=$3',
+          [installationId,value.branchId,targetId]);
+        const category=Object.prototype.hasOwnProperty.call(value.columns,"category_id")?
+          value.columns.category_id as string|null:current.rows[0]?.category_id??null;
+        const group=Object.prototype.hasOwnProperty.call(value.columns,"group_id")?
+          value.columns.group_id as string|null:current.rows[0]?.group_id??null;
+        await activeCategory(db,installationId,value.branchId,category,group);
+      }
+    }
+  }
+  if(resource==="groups"&&Object.prototype.hasOwnProperty.call(value.columns,"brand_id")){
+    if(!await hasCatalogHierarchySchema(db))
+      throw new CatalogError(503,"CATALOG_HIERARCHY_MIGRATION_REQUIRED");
+    const brand=value.columns.brand_id as string|null;
+    if(brand){
+      const check=await db.query<{active:boolean}>(
+        'SELECT active FROM catalog_brand WHERE installation_id=$1 AND branch_id=$2 AND id=$3 FOR SHARE',
+        [installationId,value.branchId,brand]);
+      if(check.rows[0]?.active!==true)throw new CatalogError(400,"BRAND_UNAVAILABLE");
+    }
+  }
+  if(resource==="categories"&&Object.prototype.hasOwnProperty.call(value.columns,"parent_id")){
+    if(!await hasCatalogHierarchySchema(db))
+      throw new CatalogError(503,"CATALOG_HIERARCHY_MIGRATION_REQUIRED");
+    const existing=await db.query<{group_id:string}>(
+      'SELECT group_id FROM catalog_product_category WHERE installation_id=$1 AND branch_id=$2 AND id=$3',
+      [installationId,value.branchId,targetId]);
+    await activeCategory(db,installationId,value.branchId,
+      value.columns.parent_id as string|null,existing.rows[0]!.group_id);
+  }
   if(resource==="price-lists"&&value.scopes)
     await syncPriceScopes(db,installationId,value.branchId,targetId,value.scopes);
   const columnEntries=Object.entries(value.columns);
@@ -940,13 +1099,46 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
       });
       send(res,outcome.status,outcome.body,requestId,corsOrigin);return;
     }
-    const updatePath=/^\/v1\/catalog\/(customers|customer-groups|customer-regions|suppliers|groups|products|price-lists|unit-definitions)\/([0-9a-f-]{36})$/.exec(url.pathname);
+    const locationPath=/^\/v1\/catalog\/customers\/([0-9a-f-]{36})\/locations(?:\/([0-9a-f-]{36}))?$/.exec(url.pathname);
+    if(locationPath){
+      if(!await hasCatalogHierarchySchema(pool))
+        throw new CatalogError(503,"CATALOG_HIERARCHY_MIGRATION_REQUIRED");
+      const customerId=requireUuid(locationPath[1]);
+      const locationId=locationPath[2]?requireUuid(locationPath[2]):null;
+      if(req.method==="GET"&&!locationId){
+        const branch=requireUuid(url.searchParams.get("branchId"));
+        const db=await pool.connect();
+        try{
+          const items=await listCustomerLocations(db,tenant,actorId,branch,customerId);
+          send(res,200,{items,requestId},requestId,corsOrigin);
+        }finally{db.release();}
+        return;
+      }
+      if((req.method==="POST"&&!locationId)||(req.method==="PATCH"&&locationId)){
+        const input=parseCustomerLocation(await payloadFrom(req),req.method==="PATCH");
+        const ctx=requestMutation(req,requestId,actorId,tenant,
+          req.method==="POST"?"catalog.customer_location.create":"catalog.customer_location.update",
+          {customerId,locationId,...input},req.method==="PATCH");
+        const outcome=await executeMutation(pool,ctx,{
+          authorize:(db,c)=>hasPermission(db,{installationId:c.installationId,
+            actorId:c.actorId,permission:"catalog.write",branchId:input.branchId}),
+          execute:(db,c)=>req.method==="POST"?
+            createCustomerLocation(db,c,customerId,input):
+            updateCustomerLocation(db,c,customerId,locationId!,input),
+        });
+        send(res,outcome.status,outcome.body,requestId,corsOrigin);return;
+      }
+      throw new CatalogError(405,"METHOD_NOT_ALLOWED");
+    }
+    const updatePath=/^\/v1\/catalog\/(customers|customer-groups|customer-regions|suppliers|brands|groups|categories|products|price-lists|unit-definitions)\/([0-9a-f-]{36})$/.exec(url.pathname);
     if(updatePath&&req.method==="PATCH"){
       const resource=updatePath[1] as Editable;
       if(!editable.has(resource))throw new CatalogError(404,"UNKNOWN_RESOURCE");
       if((resource==="customers"||resource==="customer-groups"||
         resource==="customer-regions")&&!await hasCustomerDirectories(pool))
         throw new CatalogError(503,"CUSTOMER_DICTIONARY_MIGRATION_REQUIRED");
+      if((resource==="brands"||resource==="categories")&&!await hasCatalogHierarchySchema(pool))
+        throw new CatalogError(503,"CATALOG_HIERARCHY_MIGRATION_REQUIRED");
       const targetId=requireUuid(updatePath[2]);
       const input=parseEdit(resource,await payloadFrom(req));
       const payload={id:targetId,branchId:input.branchId,...input.columns};
@@ -960,6 +1152,9 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
       send(res,outcome.status,outcome.body,requestId,corsOrigin);return;
     }
     const resource=resourceOf(url.pathname.slice("/v1/catalog/".length));
+    if((resource==="brands"||resource==="categories")&&
+       !await hasCatalogHierarchySchema(pool))
+      throw new CatalogError(503,"CATALOG_HIERARCHY_MIGRATION_REQUIRED");
     if((resource==="customer-groups"||resource==="customer-regions")&&
        !await hasCustomerDirectories(pool))
       throw new CatalogError(503,"CUSTOMER_DICTIONARY_MIGRATION_REQUIRED");
@@ -970,16 +1165,19 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
       const search=(url.searchParams.get("q")??"").trim();
       if(search.length>64)throw new CatalogError(400,"SEARCH_TOO_LONG");
       const paged=resource==="unit-definitions"||resource==="customer-groups"||
-        resource==="customer-regions";
+        resource==="customer-regions"||resource==="groups"||
+        resource==="brands"||resource==="categories";
       const afterCode=paged?(url.searchParams.get("after")??""):"";
       // Cursor comes from existing stored data, including legacy display
       // strings such as "Hộp 12". New-code validation must not reject it.
       if(afterCode&&([...afterCode].length>(resource==="unit-definitions"?24:64)||
         afterCode.trim().length===0||/[\u0000-\u001f\u007f]/.test(afterCode)))
         throw new CatalogError(400,"INVALID_UNIT_CURSOR");
+      const exactId=["groups","brands","categories"].includes(resource)&&
+        url.searchParams.has("id")?requireUuid(url.searchParams.get("id")):undefined;
       const client=await pool.connect();
       try{
-        const rows=await listing(client,tenant,actorId,branchId,resource,search,afterCode);
+        const rows=await listing(client,tenant,actorId,branchId,resource,search,afterCode,exactId);
         const nextAfter=paged&&rows.length===100
           ?(rows[rows.length-1] as {code:string}).code:null;
         send(res,200,{items:rows,
@@ -1010,7 +1208,7 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
     }
     fail(res,405,"METHOD_NOT_ALLOWED",requestId,corsOrigin);
   }catch(error){
-    if(error instanceof CatalogError||error instanceof PriceAssignmentFault){fail(res,error.status,error.code,requestId,corsOrigin);return;}
+    if(error instanceof CatalogError||error instanceof PriceAssignmentFault||error instanceof CustomerLocationFault){fail(res,error.status,error.code,requestId,corsOrigin);return;}
     if(error instanceof MutationFault){fail(res,error.httpStatus,error.code,requestId,corsOrigin);return;}
     if(typeof error==="object"&&error!==null&&"code" in error){
       if(error.code==="23505"){fail(res,409,"DUPLICATE",requestId,corsOrigin);return;}

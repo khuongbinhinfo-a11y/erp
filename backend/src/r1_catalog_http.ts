@@ -326,7 +326,31 @@ async function retireRule(db:PoolClient,tenant:string,actorId:string,branchId:st
  if(!r.rows[0])throw new R1Error(404,"RULE_NOT_FOUND");
  return {status:200,body:{id:ruleId,branchId,retiredAt:r.rows[0].retiredAt.toISOString()}};
 }
-async function listing(db:PoolClient,t:string,b:string,kind:Kind,q:string,skuId?:string){
+export function buildSkuTaxonomyFilters(scope?:{brandId?:string;groupId?:string;categoryId?:string}){
+  const filters:string[]=[];
+  const values:string[]=[];
+  const add=(id:string)=>{
+    values.push(id);
+    return "$"+(values.length+3)+"::uuid";
+  };
+  if(scope?.groupId)filters.push(`p.group_id=${add(scope.groupId)}`);
+  if(scope?.categoryId)filters.push(`p.category_id IN (
+    WITH RECURSIVE descendants(id) AS (
+      SELECT id FROM catalog_product_category
+       WHERE installation_id=p.installation_id AND branch_id=p.branch_id
+         AND id=${add(scope.categoryId)}
+      UNION ALL
+      SELECT c.id FROM catalog_product_category c JOIN descendants d
+        ON c.parent_id=d.id
+       WHERE c.installation_id=p.installation_id AND c.branch_id=p.branch_id
+    ) SELECT id FROM descendants)`);
+  if(scope?.brandId)filters.push(`EXISTS (SELECT 1 FROM catalog_product_group g WHERE
+      g.installation_id=p.installation_id AND g.branch_id=p.branch_id
+      AND g.id=p.group_id AND g.brand_id=${add(scope.brandId)})`);
+  return {filters,values};
+}
+async function listing(db:PoolClient,t:string,b:string,kind:Kind,q:string,skuId?:string,
+  scope?:{brandId?:string;groupId?:string;categoryId?:string}){
  if(kind==="units"){
   const r=await db.query(`SELECT u.product_id AS "productId",p.sku AS "productCode",
     p.name AS "productName",u.unit_code AS "unitCode",u.to_base::text AS "toBase"
@@ -338,6 +362,9 @@ async function listing(db:PoolClient,t:string,b:string,kind:Kind,q:string,skuId?
   return r.rows;
  }
  if(kind==="skus"){
+  // Filter before the LIMIT, not on the client: large catalogs remain reachable.
+  const {filters,values}=buildSkuTaxonomyFilters(scope);
+  const params=[t,b,"%"+q+"%",...values];
   const r=await db.query(`SELECT s.id,s.product_id AS "productId",s.sku AS code,
    p.name AS "productName",s.unit_code AS "unitCode",
    s.conversion_to_base::text AS "toBase",s.is_base AS "isBase",s.active,s.revision::integer,
@@ -353,7 +380,8 @@ async function listing(db:PoolClient,t:string,b:string,kind:Kind,q:string,skuId?
      SELECT 1 FROM catalog_sku_barcode bc
      WHERE bc.installation_id=s.installation_id AND bc.branch_id=s.branch_id
       AND bc.sell_sku_id=s.id AND bc.active AND bc.barcode ILIKE $3))
-   ORDER BY s.sku,s.id LIMIT 100`,[t,b,"%"+q+"%"]);
+    ${filters.length?'AND '+filters.join(' AND '):''}
+   ORDER BY s.sku,s.id LIMIT 100`,params);
   return r.rows;
  }
  if(kind==="barcodes"){
@@ -575,11 +603,21 @@ export async function handleR1Http(req:IncomingMessage,res:ServerResponse,
    const branchId=id(url.searchParams.get("branchId")),q=(url.searchParams.get("q")??"").trim();
    if(q.length>80)throw new R1Error(400,"SEARCH_TOO_LONG");
    const skuId=optionalId(url.searchParams.get("sellSkuId"));
+   const brandId=optionalId(url.searchParams.get("brandId"));
+   const groupId=optionalId(url.searchParams.get("groupId"));
+   const categoryId=optionalId(url.searchParams.get("categoryId"));
+   if((brandId||categoryId)&&type==="skus"){
+     const schema=await pool.query<{ready:boolean}>(
+       "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version='0020_catalog_hierarchy_locations.sql') AS ready");
+     if(schema.rows[0]?.ready!==true)throw new R1Error(503,"CATALOG_HIERARCHY_MIGRATION_REQUIRED");
+   }
    const db=await pool.connect();
    try{
     if(!await hasPermission(db,{installationId:t,actorId,branchId,permission:"catalog.read"}))
      throw new R1Error(403,"DENIED");
-    send(res,200,{items:await listing(db,t,branchId,type,q,skuId),requestId},requestId,cors);
+    send(res,200,{items:await listing(db,t,branchId,type,q,skuId,
+      type==="skus"?{brandId:brandId??undefined,groupId:groupId??undefined,
+        categoryId:categoryId??undefined}:undefined),requestId},requestId,cors);
    }finally{db.release();}
    return;
   }

@@ -25,7 +25,8 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
   final selected=<String,Map<String,dynamic>>{};
   final inputs=<String,TextEditingController>{};
   final current=<String,String>{};
-  List<Map<String,dynamic>> rows=[];
+  List<Map<String,dynamic>> rows=[],brands=[],groups=[],categories=[];
+  String? brandId,groupId,categoryId;
   int page=0;
   static const pageSize=12;
   final reading=<String>{};
@@ -35,14 +36,25 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
   int generation=0;
   String get listId=>widget.priceList['id'].toString();
   String get token=>widget.session.token;
-  @override void initState(){super.initState();load();}
+  @override void initState(){super.initState();loadTaxonomy();load();}
+  Future<void> loadTaxonomy()async{
+    try{
+      final data=await Future.wait([
+        widget.client.catalogDirectoryAll(token,'brands',branchId:widget.branchId),
+        widget.client.catalogDirectoryAll(token,'groups',branchId:widget.branchId),
+        widget.client.catalogDirectoryAll(token,'categories',branchId:widget.branchId),
+      ]);
+      if(mounted)setState((){brands=data[0];groups=data[1];categories=data[2];});
+    }on ErpApiError catch(e){if(e.status!=503&&mounted)setState(()=>error=e.message);}
+  }
   @override void didUpdateWidget(covariant PriceSkuBatchPanel old){
     super.didUpdateWidget(old);
     if(old.branchId!=widget.branchId||old.priceList['id']!=listId||
         old.session.token!=token){
       generation++;query.clear();selected.clear();current.clear();reading.clear();page=0;
       for(final field in inputs.values){field.dispose();}
-      inputs.clear();rows=[];load();
+      inputs.clear();rows=[];brandId=null;groupId=null;categoryId=null;
+      brands=[];groups=[];categories=[];loadTaxonomy();load();
     }
   }
   @override void dispose(){
@@ -55,7 +67,8 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
     setState((){loading=true;error=null;current.clear();reading.clear();page=0;});
     try{
       final found=await widget.client.r1CatalogItems(token,'skus',
-        branchId:widget.branchId,query:query.text.trim());
+        branchId:widget.branchId,query:query.text.trim(),
+        brandId:brandId,groupId:groupId,categoryId:categoryId);
       if(mounted&&run==generation)setState((){
         rows=found.where((x)=>x['active']!=false).toList();
         loading=false;
@@ -294,6 +307,50 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
             Text('Đã chọn ${selected.length} SKU',
               style:const TextStyle(fontWeight:FontWeight.w700)),
           ]),
+        if(brands.isNotEmpty||groups.isNotEmpty||categories.isNotEmpty)
+          Padding(padding:const EdgeInsets.only(top:8),child:Wrap(
+            spacing:8,runSpacing:8,children:[
+              SizedBox(width:178,child:DropdownButtonFormField<String?>(
+                key:ValueKey('price-brand-filter-$brandId'),
+                initialValue:brandId,isExpanded:true,
+                decoration:const InputDecoration(labelText:'Nhãn hàng',isDense:true),
+                items:[
+                  const DropdownMenuItem<String?>(value:null,child:Text('Tất cả nhãn hàng')),
+                  ...brands.where((b)=>b['active']!=false).map((b)=>
+                    DropdownMenuItem<String?>(value:b['id'] as String,
+                      child:Text(b['name'].toString(),overflow:TextOverflow.ellipsis))),
+                ],
+                onChanged:saving?null:(v){setState((){
+                  brandId=v;groupId=null;categoryId=null;
+                });load();})),
+              SizedBox(width:178,child:DropdownButtonFormField<String?>(
+                key:ValueKey('price-group-filter-$brandId-$groupId'),
+                initialValue:groupId,isExpanded:true,
+                decoration:const InputDecoration(labelText:'Nhóm sản phẩm',isDense:true),
+                items:[
+                  const DropdownMenuItem<String?>(value:null,child:Text('Tất cả nhóm')),
+                  ...groups.where((g)=>g['active']!=false&&
+                    (brandId==null||g['brandId']==brandId)).map((g)=>
+                    DropdownMenuItem<String?>(value:g['id'] as String,
+                      child:Text(g['name'].toString(),overflow:TextOverflow.ellipsis))),
+                ],
+                onChanged:saving?null:(v){setState((){
+                  groupId=v;categoryId=null;
+                });load();})),
+              SizedBox(width:178,child:DropdownButtonFormField<String?>(
+                key:ValueKey('price-category-filter-$groupId-$categoryId'),
+                initialValue:categoryId,isExpanded:true,
+                decoration:const InputDecoration(labelText:'Danh mục cha/con',isDense:true),
+                items:[
+                  const DropdownMenuItem<String?>(value:null,child:Text('Tất cả danh mục')),
+                  ...categories.where((c)=>c['active']!=false&&
+                    (groupId==null||c['groupId']==groupId)).map((c)=>
+                    DropdownMenuItem<String?>(value:c['id'] as String,
+                      child:Text('${c['code']} · ${c['name']}',
+                        overflow:TextOverflow.ellipsis))),
+                ],
+                onChanged:saving?null:(v){setState(()=>categoryId=v);load();})),
+            ])),
         if(loading)const Padding(padding:EdgeInsets.only(top:8),
           child:LinearProgressIndicator()),
         if(error!=null)Padding(padding:const EdgeInsets.symmetric(vertical:8),
