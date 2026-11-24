@@ -346,6 +346,8 @@ async function legacySignature(pool){
  reservation:`SELECT installation_id,branch_id,warehouse_id,id,product_id,order_id,
     version_no,line_no,quantity_base,state,revision,actor_id,request_id,
     created_at,released_at FROM inventory_reservation`,
+ roleGrants:`SELECT installation_id,role_id,permission_code FROM role_permission
+    WHERE permission_code <> 'inventory.policy.manage'`,
  priceList:`SELECT installation_id,branch_id,id,code,name,currency,active,
    revision,created_at FROM catalog_price_list`
  };
@@ -409,6 +411,25 @@ async function verifyT0Schema(pool){
  assertT0SchemaState(result.rows[0]);
 }
 
+/** Exactly the new owner permission may be introduced by migration 0021.
+ * All pre-existing permissions are independently fingerprinted by legacySignature.
+ */
+export function assertT0OwnerPermissionState(row){
+ if(!row||row.primary_roles!==row.owner_grants||
+   row.all_policy_grants!==row.owner_grants)
+  fail("T0_POLICY_PERMISSION_GRANT_RECONCILIATION_FAILED");
+}
+async function verifyT0OwnerPermissionGrants(pool){
+ const r=await pool.query(`SELECT
+  (SELECT count(*)::text FROM app_role WHERE code='PRIMARY_OWNER_MAIN') AS primary_roles,
+  (SELECT count(*)::text FROM role_permission rp JOIN app_role ar
+   ON ar.installation_id=rp.installation_id AND ar.id=rp.role_id
+   WHERE rp.permission_code='inventory.policy.manage'
+     AND ar.code='PRIMARY_OWNER_MAIN') AS owner_grants,
+  (SELECT count(*)::text FROM role_permission
+   WHERE permission_code='inventory.policy.manage') AS all_policy_grants`);
+ assertT0OwnerPermissionState(r.rows[0]);
+}
 async function main(mode){
  const e=process.env;
  assertExactOperatorMigrationFiles(readdirSync(resolve("db/migrations")));
@@ -437,7 +458,7 @@ async function main(mode){
  let tmp,container;
  try{
   const v=await versions(pool);
-  if(v.length===21){await validateSchema(pool,"after");await verifyT0Schema(pool);
+  if(v.length===21){await validateSchema(pool,"after");await verifyCatalogBaseSchema(pool);await verifyT0Schema(pool);await verifyT0OwnerPermissionGrants(pool);
     // Existing assignments may now contain live rows; a completed migration
     // is not expected to remain empty on subsequent read-only checks.
     console.log("ERP_T0_ALREADY_MIGRATED_21");return;}
@@ -445,7 +466,7 @@ async function main(mode){
   await validateLegacyInputs(pool);
   // 0021 adds inventory reserve shortage/backorder policy; all existing business columns
   // must match the baseline byte-for-byte after restore and migration.
-  const excluded=["schema_migrations","inventory_reservation","inventory_guard_policy"];
+  const excluded=["schema_migrations","inventory_reservation","inventory_guard_policy","role_permission"];
   const initial=await signature(pool,excluded);
   const oldColumns=await legacySignature(pool);
   console.log("ERP_T0_BASE_0020_CHECKSUM_AND_DATA_PREFLIGHT_PASS "+sha.slice(0,12));
@@ -540,7 +561,7 @@ async function main(mode){
     if(JSON.stringify(rehearsal.applied)!==JSON.stringify(RELEASE)||rehearsal.skipped.length!==20)
       fail("REHEARSAL_MIGRATION_SET_INVALID");
     await validateSchema(testPool,"after");
-    await verifyT0Schema(testPool);
+    await verifyCatalogBaseSchema(testPool);await verifyT0Schema(testPool);await verifyT0OwnerPermissionGrants(testPool);
     checkPreserved(oldColumns,await legacySignature(testPool),"REHEARSAL_OLD_COLUMNS");
     checkPreserved(initial,await signature(testPool,excluded),
      "REHEARSAL");
