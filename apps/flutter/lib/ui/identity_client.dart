@@ -245,6 +245,36 @@ class ErpIdentityClient {
     return (raw['items'] as List<dynamic>)
       .map((v)=>Map<String,dynamic>.from(v as Map)).toList();
   }
+  /// Every selling unit for the exact product, scoped by branch on the server
+  /// before pagination. A global SKU page is not safe for changing order UOM.
+  Future<List<Map<String,dynamic>>> catalogProductSkusAll(
+      String token,{required String branchId,required String productId})async{
+    final collected=<Map<String,dynamic>>[];
+    final seen=<String>{};
+    String? after;
+    while(true){
+      final suffix=Uri(queryParameters:{
+        'branchId':branchId,'productId':productId,
+        if(after!=null)'after':after,
+      }).query;
+      final raw=await _request('GET','/v1/catalog/r1/skus?$suffix',token:token);
+      final items=(raw['items'] as List<dynamic>)
+        .map((v)=>Map<String,dynamic>.from(v as Map)).toList();
+      for(final sku in items){
+        if(sku['productId']!=productId){
+          throw const ErpApiError(502,'Máy chủ trả về SKU sai sản phẩm.');
+        }
+        collected.add(sku);
+      }
+      final next=raw['nextAfter'];
+      if(next is! String||next.isEmpty)break;
+      if(items.isEmpty||items.last['id']!=next||!seen.add(next)){
+        throw const ErpApiError(502,'Trang SKU bị lặp hoặc sai thứ tự.');
+      }
+      after=next;
+    }
+    return collected;
+  }
   /// Load the whole UOM dictionary by branch-scoped keyset pages. A single
   /// catalogItems() request intentionally returns at most 100 records.
   Future<List<Map<String,dynamic>>> catalogUnitDefinitionsAll(
