@@ -30,8 +30,8 @@ test("R3.2 PostgreSQL: multi-receipt, concurrent arrivals, exact replay, RBAC, r
   const uri=new URL(source!);uri.pathname="/"+dbName;
   db=new Pool({connectionString:uri.toString(),max:8,query_timeout:12000});
   db.on("error",()=>{});
-  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).applied.length,18);
-  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).skipped.length,18);
+  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).applied.length,19);
+  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).skipped.length,19);
   const password="Synthetic-PO-"+randomUUID();
   const root=await bootstrapInstallation(db,{code:"purchase-r3",displayName:"R3 Purchase tests",
    adminLogin:"owner",adminPassword:password});
