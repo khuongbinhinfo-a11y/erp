@@ -65,8 +65,8 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
   pool=new Pool({connectionString:target.toString(),max:7,query_timeout:15000});
   pool.on("error",()=>{});
   const applied=await applyMigrations(pool,resolve(process.cwd(),"db/migrations"));
-  assert.equal(applied.applied.length,21);
-  assert.equal((await applyMigrations(pool,resolve(process.cwd(),"db/migrations"))).skipped.length,21);
+  assert.equal(applied.applied.length,22);
+  assert.equal((await applyMigrations(pool,resolve(process.cwd(),"db/migrations"))).skipped.length,22);
   const password="R1-test-"+randomUUID();
   const root=await bootstrapInstallation(pool,{
    code:"r1-test",displayName:"Synthetic R1 integration",
@@ -173,6 +173,30 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
   assert.equal(foreign.body.items.length,0);
   assert.equal((await request("/v1/catalog/r1/skus?branchId="+b+
     "&productId=invalid","GET",undefined,token)).status,400);
+  // The product editor must not accidentally offer another product's unit
+  // or barcode, including inactive rows needed for lifecycle correction.
+  const productDetails=async(kind:string,productId:string,after?:string)=>
+    request("/v1/catalog/r1/"+kind+"?"+new URLSearchParams({
+      branchId:b,productId,...(after?{after}:{})}),"GET",undefined,token);
+  const productUnits=await productDetails("units",product.body.id);
+  assert.equal(productUnits.status,200);
+  assert.ok(productUnits.body.items.some((x:any)=>x.unitCode==="thung"));
+  assert.ok(productUnits.body.items.every((x:any)=>x.productId===product.body.id));
+  const unitCursor=productUnits.body.items[0].unitCode;
+  const unitPage=await productDetails("units",product.body.id,unitCursor);
+  assert.equal(unitPage.status,200);
+  assert.ok(unitPage.body.items.every((x:any)=>x.unitCode!==unitCursor));
+  const productBarcodes=await productDetails("barcodes",product.body.id);
+  assert.equal(productBarcodes.status,200);
+  assert.ok(productBarcodes.body.items.some((x:any)=>x.barcode==="BC-0001"));
+  assert.ok(productBarcodes.body.items.every((x:any)=>x.productId===product.body.id));
+  for(const kind of ["units","barcodes"]){
+    const absent=await productDetails(kind,randomUUID());
+    assert.equal(absent.status,200);
+    assert.deepEqual(absent.body.items,[]);
+  }
+  assert.equal((await productDetails("barcodes",product.body.id,"bad-cursor")).status,400);
+
   const list=await legacy("price-lists",{code:"SELL",name:"Giá bán"});
   assert.equal(list.status,201);
   const channel=await r1("channels",{code:"MCP",name:"Kênh nhân viên thị trường"});

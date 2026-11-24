@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:erp_distribution/ui/company_workspace.dart';
+import 'package:erp_distribution/ui/sales_workspace.dart';
 import 'package:erp_distribution/ui/erp_tokens.dart';
 import 'package:erp_distribution/ui/identity_client.dart';
 
@@ -24,6 +25,162 @@ IdentitySession loggedIn()=>IdentitySession(actorId:user,token:'local-test-token
   expiresAt:DateTime.now().add(const Duration(hours:1)),grants:rights);
 
 void main(){
+  testWidgets('T1 modern order saves canonical walk-in and pickup context', (tester)async{
+    const warehouse='00000000-0000-4000-8000-000000000009';
+    const walkId='00000000-0000-4000-8000-000000000010';
+    final grants=[...rights, const IdentityGrant(roleId:'stock',permission:'inventory.read',
+      branchId:branch,warehouseId:warehouse)];
+    Map<String,dynamic>? posted;
+    var prepares=0;
+    final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+      httpClient:MockClient((request)async{
+        http.Response reply(Map<String,dynamic> body,[int status=200])=>
+          http.Response(jsonEncode(body),status,headers:{'content-type':'application/json; charset=utf-8'});
+        final path=request.url.path;
+        if(path=='/v1/catalog/branches')return reply({'items':[{'id':branch,'name':'Chi nhánh chính','code':'MAIN'}]});
+        if(path=='/v1/catalog/customers')return reply({'items':[{'id':customer,'name':'Khách A','code':'KH01','active':true}]});
+        if(path=='/v1/catalog/customers/$customer/locations')return reply({'items':[]});
+        if(path=='/v1/catalog/r1/skus')return reply({'items':[{'id':sellSku,'productId':product,'sku':'P01','code':'P01','productName':'Hàng A','unitCode':'cai','active':true}]});
+        if(path=='/v1/catalog/r1/channels')return reply({'items':[]});
+        if(path=='/v1/catalog/price-lists')return reply({'items':[{'id':priceList,'name':'Giá bán','code':'SELL','active':true}]});
+        if(path=='/v1/catalog/warehouses')return reply({'items':[{'id':warehouse,'name':'Kho chính','code':'MAIN'}]});
+        if(path=='/v1/inventory/balances')return reply({'items':[]});
+        if(path=='/v1/sales/entry-settings')return reply({'settings':{'deliveryChoice':'MANUAL','walkInCustomer':null}});
+        if(path=='/v1/sales/walk-in'){
+          prepares++;
+          expect(request.headers['idempotency-key'],isNotEmpty);
+          return reply({'customer':{'id':walkId,'code':'WALK-IN','name':'Khách lẻ','active':true}});
+        }
+        if(path=='/v1/sales/quote')return reply({'quote':{
+          'lines':[{'sellSkuId':sellSku,'unitPrice':'12000','lineTotal':'12000',
+          'normalizedBaseQuantity':'1.000000','trace':[],
+          'priceSignature':'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'}],
+          'subtotal':'12000','discountTotal':'0','taxTotal':'0','grandTotal':'12000'}});
+        if(path=='/v1/sales/orders'&&request.method=='POST'){
+          posted=jsonDecode(request.body) as Map<String,dynamic>;
+          return reply({'id':order,'status':'DRAFT','versionStatus':'DRAFT','revision':0,'total':'12000'},201);
+        }
+        if(path=='/v1/sales/orders')return reply({'items':[]});
+        return reply({'error':{'code':'NOT_FOUND'}},404);
+      }));
+    addTearDown(client.dispose);
+    tester.view.devicePixelRatio=1;
+    tester.view.physicalSize=const Size(1280,900);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
+      home:Scaffold(body:SalesWorkspace(client:client,session:IdentitySession(
+        actorId:user,token:'test-token',expiresAt:DateTime.now().add(const Duration(hours:1)),grants:grants)))));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('sales-create')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('sales-delivery-MANUAL')),findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('sales-walk-in')));
+    await tester.pumpAndSettle();
+    expect(prepares,1);
+    expect(find.byKey(const ValueKey('sales-delivery-PICKUP')),findsOneWidget);
+    await tester.enterText(find.byKey(const ValueKey('sales-walk-in-name')),'Khách thử');
+    await tester.enterText(find.byKey(const ValueKey('sales-sku-search')),'P01');
+    await tester.testTextInput.receiveAction(TextInputAction.search);
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds:400));
+    await tester.pumpAndSettle();
+    final save=find.byKey(const ValueKey('sales-save'));
+    expect(tester.widget<FilledButton>(save).onPressed,isNotNull);
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    expect(posted, isNotNull);
+    expect(posted!['customerId'],walkId);
+    final context=posted!['shipping'] as Map;
+    expect(context['warehouseId'],warehouse);
+    expect(context['customerMode'],'WALK_IN');
+    expect(context['deliveryChoice'],'PICKUP');
+    expect(context['collectionPolicy'],'COLLECT_ON_DELIVERY');
+    expect(context['walkInName'],'Khách thử');
+  });
+
+  testWidgets('T1 historical inclusive VAT and per-unit discount remain unchanged on save', (tester)async{
+    const warehouse='00000000-0000-4000-8000-000000000009';
+    final grants=[...rights, const IdentityGrant(roleId:'stock',permission:'inventory.read',
+      branchId:branch,warehouseId:warehouse),
+      for(final permission in ['orders.price.override','orders.discount.override','orders.tax.override'])
+        IdentityGrant(roleId:permission,permission:permission,branchId:branch)];
+    Map<String,dynamic>? posted;
+    Map<String,dynamic>? requoted;
+    final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+      httpClient:MockClient((request)async{
+        http.Response reply(Map<String,dynamic> body,[int status=200])=>
+          http.Response(jsonEncode(body),status,headers:{'content-type':'application/json; charset=utf-8'});
+        final path=request.url.path;
+        if(path=='/v1/catalog/branches')return reply({'items':[{'id':branch,'name':'Chi nhánh chính','code':'MAIN'}]});
+        if(path=='/v1/catalog/customers')return reply({'items':[{'id':customer,'name':'Khách A','code':'KH01','active':true}]});
+        if(path=='/v1/catalog/customers/$customer/locations')return reply({'items':[]});
+        if(path=='/v1/catalog/r1/skus')return reply({'items':[{'id':sellSku,'productId':product,'sku':'P01','code':'P01','productName':'Hàng A','unitCode':'cai','active':true}]});
+        if(path=='/v1/catalog/r1/channels')return reply({'items':[]});
+        if(path=='/v1/catalog/price-lists')return reply({'items':[{'id':priceList,'name':'Giá bán','code':'SELL','active':true}]});
+        if(path=='/v1/catalog/warehouses')return reply({'items':[{'id':warehouse,'name':'Kho chính','code':'MAIN'}]});
+        if(path=='/v1/inventory/balances')return reply({'items':[]});
+        if(path=='/v1/sales/entry-settings')return reply({'settings':{'deliveryChoice':'MANUAL','walkInCustomer':null}});
+        if(path=='/v1/sales/last-purchase')return reply({'price':{
+          'unitPrice':'11000','taxRate':'10','taxMode':'INCLUSIVE',
+          'discountMode':'PER_UNIT','discountValue':'1000','discountRate':'0'}});
+        if(path=='/v1/sales/quote'){
+          requoted=(jsonDecode(request.body)['lines'] as List).single as Map<String,dynamic>;
+          return reply({'quote':{
+            'lines':[{'sellSkuId':sellSku,'unitPrice':'11000','lineTotal':'10000',
+            'normalizedBaseQuantity':'1.000000','trace':[],
+            'priceSignature':'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'}],
+            'subtotal':'10000','discountTotal':'0','taxTotal':'0','grandTotal':'10000'}});
+        }
+        if(path=='/v1/sales/orders'&&request.method=='POST'){
+          posted=jsonDecode(request.body) as Map<String,dynamic>;
+          return reply({'id':order,'status':'DRAFT','versionStatus':'DRAFT','revision':0,'total':'12000'},201);
+        }
+        if(path=='/v1/sales/orders')return reply({'items':[]});
+        return reply({'error':{'code':'NOT_FOUND'}},404);
+      }));
+    addTearDown(client.dispose);
+    tester.view.devicePixelRatio=1;
+    tester.view.physicalSize=const Size(1280,900);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
+      home:Scaffold(body:SalesWorkspace(client:client,session:IdentitySession(
+        actorId:user,token:'test-token',expiresAt:DateTime.now().add(const Duration(hours:1)),grants:grants)))));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('sales-create')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('sales-delivery-MANUAL')),findsOneWidget);
+    await tester.enterText(find.byKey(const ValueKey('sales-sku-search')),'P01');
+    await tester.testTextInput.receiveAction(TextInputAction.search);
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds:400));
+    await tester.pumpAndSettle();
+    final previous=find.byKey(const ValueKey('sales-last-price-0'));
+    await tester.ensureVisible(previous);
+    await tester.tap(previous);
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds:400));
+    await tester.pumpAndSettle();
+    expect(requoted?['taxMode'],'INCLUSIVE');
+    expect(requoted?['discountMode'],'PER_UNIT');
+    expect(requoted?['discountValue'],'1000');
+    expect(requoted?['unitPrice'],'11000');
+    final save=find.byKey(const ValueKey('sales-save'));
+    expect(tester.widget<FilledButton>(save).onPressed,isNotNull);
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    expect(posted, isNotNull);
+    final saved=(posted!['lines'] as List).single as Map;
+    expect(saved['taxMode'],'INCLUSIVE');
+    expect(saved['taxRate'],'10');
+    expect(saved['discountMode'],'PER_UNIT');
+    expect(saved['discountValue'],'1000');
+    expect(saved['unitPrice'],'11000');
+  });
+
   testWidgets('Công Ty orders uses authenticated data and plain Vietnamese status', (tester)async{
     var created=false;
     var createRequests=0;

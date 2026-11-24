@@ -3,6 +3,7 @@ import type { Pool, PoolClient } from "pg";
 import { resolveSession } from "./auth.ts";
 import { userAccess } from "./identity_admin.ts";
 import { hasPermission } from "./rbac.ts";
+import { hasOrderContextSchema } from "./sales_order_context.ts";
 import { executeMutation, MutationFault, requireRevision, type MutationContext } from "./mutation.ts";
 import { validIdempotencyKey } from "./contracts.ts";
 import type { IdentityOptions } from "./identity_http.ts";
@@ -358,6 +359,7 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
       AS "groupName",0::integer AS "sellSkuCount",NULL::text AS barcode,
       active,revision::integer FROM catalog_product`;
   const customerReady=resource==="customers"&&await hasCustomerDirectories(db);
+  const hideWalkIn=resource==="customers"&&await hasOrderContextSchema(db);
   const customerSelection=customerReady?selections.customers:
     'SELECT id,code,name,customer_group AS "customerGroup",NULL::uuid AS "customerGroupId",'+
     'NULL::uuid AS "customerRegionId",NULL::text AS "customerGroupCode",'+
@@ -393,6 +395,7 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
           WHERE installation_id=$1 AND branch_id=$2
           AND (${resource==="products"?"sku":"code"} ILIKE $3 OR name ILIKE $3
           ${resource==="customers"?"OR phone ILIKE $3 OR customer_group ILIKE $3":""})
+          ${hideWalkIn?"AND NOT EXISTS (SELECT 1 FROM sales_walk_in_customer w WHERE w.installation_id=catalog_customer.installation_id AND w.branch_id=catalog_customer.branch_id AND w.customer_id=catalog_customer.id)":""}
           ORDER BY ${resource==="products"?"sku":"code"},id LIMIT 100`,
     values);
   return r.rows;

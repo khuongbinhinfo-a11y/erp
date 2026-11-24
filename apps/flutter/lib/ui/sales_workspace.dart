@@ -1,4 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
+import 'package:file_picker/file_picker.dart';
+import 'sales_print_document.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'erp_tokens.dart';
@@ -18,6 +21,8 @@ class SalesWorkspace extends StatefulWidget {
 }
 class _OrderLine {
   String sellSkuId;
+  String overrideReason='',discountMode='PERCENT',taxMode='EXCLUSIVE';
+  bool discountEdited=false,taxEdited=false;
   final TextEditingController quantity,unitPrice,discountRate,taxRate;
   final FocusNode quantityFocus=FocusNode();
   final FocusNode unitFocus=FocusNode();
@@ -115,7 +120,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       });
     }
   }
-  Future<Map<String,dynamic>?> editForm({Map<String,dynamic>? order})async{
+  Future<Map<String,dynamic>?> editForm({Map<String,dynamic>? order,bool copying=false})async{
     final branch=branchId;if(branch==null)return null;
     List<Map<String,dynamic>> customers,skus,lists,channels;
     try{
@@ -131,7 +136,22 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       channels=items[3].where((x)=>x['active']==true).toList();
     }on ErpApiError catch(e){inform(e.message,error:true);return null;}
     catch(_){inform('Không tải được danh mục bán hàng.',error:true);return null;}
-    if((customers.isEmpty&&!can('catalog.write'))||skus.isEmpty||lists.isEmpty){
+    Map<String,dynamic>? entrySettings;
+    try{
+      entrySettings=await widget.client.salesEntrySettings(widget.session.token,branch);
+    }on ErpApiError catch(e){
+      if(e.status!=404&&e.status!=405){inform(e.message,error:true);return null;}
+    }catch(_){inform('Không tải được thiết lập lập đơn.',error:true);return null;}
+    final modern=entrySettings!=null;
+    bool canPrice()=>can(modern?'orders.price.override':'orders.update');
+    bool canDiscount()=>can(modern?'orders.discount.override':'orders.update');
+    bool canTax()=>can(modern?'orders.tax.override':'orders.update');
+    final savedShipping=order?['shipping'] is Map
+      ?Map<String,dynamic>.from(order!['shipping'] as Map):<String,dynamic>{};
+    if(!modern&&savedShipping.isNotEmpty){
+      inform('Không tải được thông tin giao nhận đã lưu.',error:true);return null;
+    }
+    if((customers.isEmpty&&!can('catalog.write')&&!modern)||skus.isEmpty||lists.isEmpty){
       if(mounted)setState(()=>missingCatalog=customers.isEmpty?'customers':
         skus.isEmpty?'products':'prices');
       inform('Hãy bổ sung dữ liệu bắt buộc trước khi lập đơn hàng.',error:true);
@@ -168,8 +188,30 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       }
     }
     if(!mounted)return null;
+    if(modern&&stockWarehouses.isEmpty){
+      inform('Tài khoản chưa có quyền kho xuất hàng.',error:true);return null;
+    }
+    final deliveryLabels={'TRIP':'Giao thường','MANUAL':'Giao thủ công','PICKUP':'Khách lấy tại kho'};
+    final collectionLabels={'COLLECT_ON_DELIVERY':'Thu khi giao','PREPAID':'Trả trước',
+      'COLLECT_AFTER_DELIVERY':'Thu sau giao','CREDIT_TERMS':'Công nợ theo hạn'};
+    var deliveryChoice=(savedShipping['deliveryChoice']??entrySettings?['deliveryChoice']??'TRIP').toString();
+    var collectionPolicy=(savedShipping['collectionPolicy']??'COLLECT_ON_DELIVERY').toString();
+    var customerMode=(savedShipping['customerMode']??'EXISTING').toString();
+    String? locationId=savedShipping['customerLocationId'] as String?;
+    var deliveryAddress=(savedShipping['deliveryAddress']??'').toString();
+    var deliveryDate=(savedShipping['requestedDeliveryDate']??'').toString();
+    var walkInName=(savedShipping['walkInName']??'').toString();
+    var walkInPhone=(savedShipping['walkInPhone']??'').toString();
+    var rememberDelivery=false,walkInBusy=false,locationBusy=false;
+    int locationGeneration=0,addressGeneration=0,addressEditGeneration=0,customerChoiceGeneration=0;
+    List<Map<String,dynamic>> locations=[];
+    Map<String,dynamic>? walkInCustomer=entrySettings?['walkInCustomer'] is Map
+      ?Map<String,dynamic>.from(entrySettings!['walkInCustomer'] as Map):null;
     String? customer=order?['customerId'] as String? ??
       (customers.length==1?customers.single['id'] as String:null);
+    if(savedShipping.isEmpty&&customer!=null){
+      deliveryAddress=(customers.where((x)=>x['id']==customer).firstOrNull?['deliveryAddress']??'').toString();
+    }
     String? list=order?['priceListId'] as String? ??
       (lists.length==1?lists.single['id'] as String:null);
     String? channel=order?['channelId'] as String?;
@@ -177,6 +219,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     int listResolveGeneration=0;
     final note=TextEditingController(text:order?['note'] as String? ?? '');
     final lines=<_OrderLine>[];
+    var documentDiscountMode='NONE',documentDiscountValue='0',documentDiscountReason='',overrideReason='';
     if(order?['lines'] is List){
       for(final v in order!['lines'] as List<dynamic>){
         final row=Map<String,dynamic>.from(v as Map);
@@ -209,10 +252,25 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         }
         final line=_OrderLine(matching.single['id'] as String,row['quantity'].toString());
         final snapshot=row['priceSnapshot'];
-        if(snapshot is Map&&snapshot['manualOverride']==true){
-          line.unitPrice.text=erpGroupedDecimalText(row['unitPrice']);
-          line.discountRate.text=erpGroupedDecimalText(row['discountRate']);
+        if(!copying&&snapshot is Map&&snapshot['documentDiscount'] is Map){
+          final d=snapshot['documentDiscount'] as Map;
+          documentDiscountMode=(d['mode']??'NONE').toString();
+          documentDiscountValue=erpGroupedDecimalText(d['value']);
+          documentDiscountReason=(d['reason']??'').toString();
+        }
+        if(!copying&&snapshot is Map&&snapshot['manualOverride']==true){
+          if(snapshot['manualPriceOverride']!=false)line.unitPrice.text=erpGroupedDecimalText(row['unitPrice']);
+          line.discountMode=(snapshot['discountMode']??'PERCENT').toString();
+          line.taxMode=(snapshot['taxMode']??'EXCLUSIVE').toString();
+          line.discountRate.text=erpGroupedDecimalText(line.discountMode=='PERCENT'?row['discountRate']:snapshot['discountValue']);
           line.taxRate.text=erpGroupedDecimalText(row['taxRate']);
+          line.discountEdited=snapshot['discountOverride']==true&&
+            (line.discountMode!='PERCENT'||RegExp('[1-9]').hasMatch(line.discountRate.text));
+          line.taxEdited=snapshot['taxOverride']==true&&
+            (line.taxMode!='EXCLUSIVE'||RegExp('[1-9]').hasMatch(line.taxRate.text));
+          if(snapshot['discountOverride']==null)line.discountEdited=RegExp('[1-9]').hasMatch(line.discountRate.text);
+          if(snapshot['taxOverride']==null)line.taxEdited=RegExp('[1-9]').hasMatch(line.taxRate.text);
+          line.overrideReason=(snapshot['overrideReason']??'').toString();
         }
         lines.add(line);
       }
@@ -232,13 +290,31 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       RegExp('[1-9]').hasMatch(x.quantity.text)&&
       (x.unitPrice.text.trim().isEmpty||
         RegExp(r'^\d{1,13}(?:\.\d{1,4})?$').hasMatch(erpNumberCanonical(x.unitPrice.text)))&&
-      RegExp(r'^\d{1,3}(?:\.\d{1,2})?$').hasMatch(erpNumberCanonical(x.discountRate.text))&&
+      (x.discountMode=='PERCENT'?RegExp(r'^\d{1,3}(?:\.\d{1,2})?$'):RegExp(r'^\d{1,13}(?:\.\d{1,4})?$')).hasMatch(erpNumberCanonical(x.discountRate.text))&&
       RegExp(r'^\d{1,3}(?:\.\d{1,2})?$').hasMatch(erpNumberCanonical(x.taxRate.text)));
+    bool documentDiscountActive()=>documentDiscountMode!='NONE'&&RegExp('[1-9]').hasMatch(documentDiscountValue);
+    Map<String,dynamic> documentDiscount()=>{'mode':documentDiscountMode,'value':erpNumberCanonical(documentDiscountValue),'reason':documentDiscountReason.trim()};
+    bool adjusted(_OrderLine line)=>line.unitPrice.text.trim().isNotEmpty||line.discountEdited||line.taxEdited;
+    bool hasManualPrice()=>lines.any(adjusted);
+    Map<String,dynamic> adjustments(_OrderLine line){
+      final price=line.unitPrice.text.trim().isNotEmpty;
+      return {
+        if(price)'unitPrice':erpNumberCanonical(line.unitPrice.text),
+        if((!modern&&price)||(modern&&line.discountEdited))...{
+          if(line.discountMode=='PERCENT')'discountRate':erpNumberCanonical(line.discountRate.text)
+          else ...{'discountMode':line.discountMode,'discountValue':erpNumberCanonical(line.discountRate.text)},
+        },
+        if((!modern&&price)||(modern&&line.taxEdited))...{
+          'taxRate':erpNumberCanonical(line.taxRate.text),
+          if(line.taxMode!='EXCLUSIVE')'taxMode':line.taxMode,
+        },
+      };
+    }
     String stamp()=>[
-      customer??'',list??'',channel??'',
+      customer??'',list??'',channel??'',documentDiscountMode,erpNumberCanonical(documentDiscountValue),
       ...lines.map((x)=>[x.sellSkuId,erpNumberCanonical(x.quantity.text),
         erpNumberCanonical(x.unitPrice.text),erpNumberCanonical(x.discountRate.text),
-        erpNumberCanonical(x.taxRate.text)].join(':')),
+        erpNumberCanonical(x.taxRate.text),x.discountMode,x.taxMode,x.discountEdited,x.taxEdited].join(':')),
     ].join('|');
     final originalStamp=stamp(),originalNote=note.text.trim();
     void invalidate(StateSetter refresh){
@@ -262,14 +338,10 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         final basket=await widget.client.salesPricePreview(widget.session.token,{
           'branchId':branch,'customerId':customer,'priceListId':list,
           if(channel!=null)'channelId':channel,
+          if(modern&&documentDiscountActive())'documentDiscount':documentDiscount(),
           'lines':lines.map((line)=>{'sellSkuId':line.sellSkuId,
             'quantity':erpNumberCanonical(line.quantity.text),
-            if(line.unitPrice.text.trim().isNotEmpty)
-              'unitPrice':erpNumberCanonical(line.unitPrice.text),
-            if(line.unitPrice.text.trim().isNotEmpty)
-              'discountRate':erpNumberCanonical(line.discountRate.text),
-            if(line.unitPrice.text.trim().isNotEmpty)
-              'taxRate':erpNumberCanonical(line.taxRate.text)}).toList(),
+            ...adjustments(line)}).toList(),
         });
         if(!context.mounted||request!=quoteGeneration)return;
         final quoted=(basket['lines'] as List<dynamic>)
@@ -340,8 +412,41 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     String? skuResultsFor,skuSearchError;
     bool skuBusy=false,customerBusy=false,starterUntouched=order==null;
     bool skuPriceBusy=false,stockBusy=false,stockLoaded=false,stockComplete=false;
-    String? stockError,warehouseId=stockWarehouses.length==1
+    String? stockError,warehouseId=stockWarehouses.any((w)=>w['id']==savedShipping['warehouseId'])
+      ?savedShipping['warehouseId'] as String:stockWarehouses.length==1
       ?stockWarehouses.single['id'] as String:null;
+    String shippingStamp()=>[warehouseId,deliveryChoice,collectionPolicy,customerMode,
+      locationId,deliveryAddress,deliveryDate,walkInName,walkInPhone,rememberDelivery].join('|');
+    final originalShippingStamp=shippingStamp();
+    Future<void> loadLocations(BuildContext ctx,StateSetter refresh,{bool selectDefault=false})async{
+      final run=++locationGeneration,id=customer,addressRun=addressGeneration,editRun=addressEditGeneration;
+      if(!modern||id==null||customerMode=='WALK_IN')return;
+      refresh(()=>locationBusy=true);
+      try{
+        final found=await widget.client.customerLocations(widget.session.token,branch,id);
+        if(!ctx.mounted||run!=locationGeneration||customer!=id)return;
+        refresh((){
+          locations=found.where((x)=>x['active']!=false).toList();
+          if(locationId!=null&&!locations.any((x)=>x['id']==locationId)){
+            locations.add({'id':locationId,'name':'Địa chỉ đã lưu','address':deliveryAddress});
+          }
+          if(selectDefault&&addressRun==addressGeneration&&editRun==addressEditGeneration&&locationId==null){
+            final preferred=locations.where((x)=>x['isDefault']==true).firstOrNull;
+            if(preferred!=null){
+              locationId=preferred['id'] as String;
+              deliveryAddress=(preferred['address']??'').toString();
+              addressGeneration++;
+            }
+          }
+          locationBusy=false;
+        });
+      }catch(_){
+        if(ctx.mounted&&run==locationGeneration)refresh((){
+          locationBusy=false;
+          if(locationId!=null)locations=[{'id':locationId,'name':'Địa chỉ đã lưu','address':deliveryAddress}];
+        });
+      }
+    }
     int priceGeneration=0,stockGeneration=0;
     Map<String,Map<String,dynamic>> skuQuotes={},stockByProduct={};
     final variantsByProduct=<String,List<Map<String,dynamic>>>{};
@@ -525,7 +630,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     }
     String customerLabel(Map<String,dynamic> x)=>
       (x['code']??'').toString()+' · '+(x['name']??'').toString();
-    String selectedCustomer()=>customers.where((x)=>x['id']==customer).isEmpty
+    String selectedCustomer()=>customerMode=='WALK_IN'?'Khách lẻ':customers.where((x)=>x['id']==customer).isEmpty
       ? 'Chọn khách hàng'
       :customerLabel(customers.firstWhere((x)=>x['id']==customer));
     void chooseSku(BuildContext ctx,Map<String,dynamic> item,StateSetter refresh){
@@ -625,11 +730,46 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     }
     void chooseCustomer(BuildContext ctx,Map<String,dynamic> item,StateSetter refresh){
       if(!customers.any((x)=>x['id']==item['id']))customers.add(item);
+      customerChoiceGeneration++;locationBusy=false;
       customer=item['id'] as String;
+      customerMode='EXISTING';walkInName='';walkInPhone='';
+      locationId=null;locations=[];locationGeneration++;addressGeneration++;
+      deliveryAddress=(item['deliveryAddress']??'').toString();
       customerSearch.clear();customerMatches=[];
       customerSearchGeneration++;
       customerPricingChanged(ctx,refresh);
+      if(modern)loadLocations(ctx,refresh,selectDefault:true);
       skuFocus.requestFocus();
+    }
+    Future<void> chooseWalkIn(BuildContext ctx,StateSetter refresh)async{
+      if(walkInBusy)return;
+      final choice=++customerChoiceGeneration;
+      refresh(()=>walkInBusy=true);
+      const kind='sales.walk-in.prepare';
+      final actor=widget.session.actorId;
+      final pending=widget.client.pendingR1(actor,branch,kind);
+      final key=pending?.key??newKey();
+      try{
+        if(walkInCustomer==null){
+          widget.client.retainR1(actor,branch,kind,{'branchId':branch},key);
+          walkInCustomer=await widget.client.prepareSalesWalkIn(widget.session.token,branch,key:key);
+          widget.client.clearR1(actor,branch,kind);
+        }
+        if(!ctx.mounted||choice!=customerChoiceGeneration||widget.session.actorId!=actor||branchId!=branch)return;
+        locationBusy=false;
+        customer=walkInCustomer!['id'] as String;
+        customerMode='WALK_IN';deliveryChoice='PICKUP';
+        if(!['PREPAID','COLLECT_ON_DELIVERY'].contains(collectionPolicy))collectionPolicy='COLLECT_ON_DELIVERY';
+        locationId=null;locations=[];deliveryAddress='';locationGeneration++;addressGeneration++;
+        customerSearch.clear();customerMatches=[];customerSearchGeneration++;
+        customerPricingChanged(ctx,refresh);skuFocus.requestFocus();
+      }on ErpApiError catch(e){
+        if(ctx.mounted)refresh(()=>formError=e.message);
+      }catch(_){
+        if(ctx.mounted)refresh(()=>formError='Chưa xác minh được khách lẻ. Bấm lại để kiểm tra.');
+      }finally{
+        if(ctx.mounted)refresh(()=>walkInBusy=false);
+      }
     }
     Future<void> createQuickCustomer(BuildContext ctx,StateSetter refresh)async{
       if(!can('catalog.write')||quickCustomerBusy)return;
@@ -746,26 +886,42 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         refresh(()=>formError='Giá chưa cập nhật xong. Kiểm tra kết nối hoặc bấm Làm mới giá.');
         return;
       }
+      if(modern&&documentDiscountActive()&&documentDiscountReason.trim().isEmpty){
+        refresh(()=>formError='Nhập lý do chiết khấu toàn đơn.');return;
+      }
+      if(modern&&(warehouseId==null||walkInBusy||
+        (customerMode=='WALK_IN'&&walkInPhone.trim().isNotEmpty&&
+          !RegExp(r'^\+?[0-9]{9,15}$').hasMatch(walkInPhone.trim())))){
+        refresh(()=>formError='Chọn kho xuất và kiểm tra số điện thoại khách lẻ.');return;
+      }
       Navigator.pop(ctx,{
         'branchId':branch,'customerId':customer,'priceListId':list,
+        if(modern)'shipping':{
+          'warehouseId':warehouseId,'deliveryChoice':deliveryChoice,
+          'collectionPolicy':collectionPolicy,'customerMode':customerMode,
+          if(deliveryChoice!='PICKUP'&&locationId!=null)'customerLocationId':locationId,
+          if(deliveryChoice!='PICKUP'&&deliveryAddress.trim().isNotEmpty)'deliveryAddress':deliveryAddress.trim(),
+          if(deliveryDate.isNotEmpty)'requestedDeliveryDate':deliveryDate,
+          if(customerMode=='WALK_IN'&&walkInName.trim().isNotEmpty)'walkInName':walkInName.trim(),
+          if(customerMode=='WALK_IN'&&walkInPhone.trim().isNotEmpty)'walkInPhone':walkInPhone.trim(),
+          if((order==null||copying)&&rememberDelivery)'rememberDeliveryChoice':true,
+        },
         if(channel!=null)'channelId':channel,
+        if(modern&&documentDiscountActive())'documentDiscount':documentDiscount(),
         'note':note.text.trim(),
         'lines':lines.asMap().entries.map((entry)=>{
           'sellSkuId':entry.value.sellSkuId,
           'quantity':erpNumberCanonical(entry.value.quantity.text),
           'expectedPriceSignature':quotes![entry.key]['priceSignature'],
-          if(entry.value.unitPrice.text.trim().isNotEmpty)
-            'unitPrice':erpNumberCanonical(entry.value.unitPrice.text),
-          if(entry.value.unitPrice.text.trim().isNotEmpty)
-            'discountRate':erpNumberCanonical(entry.value.discountRate.text),
-          if(entry.value.unitPrice.text.trim().isNotEmpty)
-            'taxRate':erpNumberCanonical(entry.value.taxRate.text),
+          ...adjustments(entry.value),
+          if(modern&&adjusted(entry.value)&&(overrideReason.trim().isNotEmpty||entry.value.overrideReason.trim().isNotEmpty))
+            'overrideReason':overrideReason.trim().isNotEmpty?overrideReason.trim():entry.value.overrideReason,
         }).toList(),
         '_confirmAfterSave':confirm,
       });
     }
     Future<void> requestClose(BuildContext ctx)async{
-      if(quickCustomerBusy){
+      if(quickCustomerBusy||walkInBusy){
         inform('Đang gửi yêu cầu tạo khách. Hãy kiểm tra kết quả trước khi đóng.',error:true);
         return;
       }
@@ -776,7 +932,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         Navigator.pop(ctx);
         return;
       }
-      if(stamp()==originalStamp&&note.text.trim()==originalNote){
+      if(stamp()==originalStamp&&note.text.trim()==originalNote&&shippingStamp()==originalShippingStamp&&overrideReason.isEmpty){
         Navigator.pop(ctx);return;
       }
       final discard=await showDialog<bool>(context:ctx,builder:(confirmCtx)=>
@@ -805,7 +961,12 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           if(!firstQuoteScheduled){
             firstQuoteScheduled=true;
             WidgetsBinding.instance.addPostFrameCallback((_){
-              if(ctx.mounted)scheduleQuote(ctx,refresh);
+              if(ctx.mounted){
+                scheduleQuote(ctx,refresh);
+                if(modern&&customer!=null&&customerMode!='WALK_IN'){
+                  loadLocations(ctx,refresh,selectDefault:savedShipping.isEmpty);
+                }
+              }
             });
           }
           return Focus(autofocus:true,onKeyEvent:(node,event){
@@ -846,7 +1007,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                     const Icon(Icons.receipt_long_outlined,color:Colors.white),
                     const SizedBox(width:10),
                     Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-                      Text(order==null?'Lập đơn bán hàng':'Điều chỉnh đơn bán hàng',
+                      Text(order==null||copying?'Lập đơn bán hàng':'Điều chỉnh đơn bán hàng',
                         style:TextStyle(color:Colors.white,fontSize:narrow?16:21,
                           fontWeight:FontWeight.w800)),
                     ])),
@@ -863,11 +1024,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         if(stockWarehouses.isNotEmpty)SizedBox(width:narrow?((width-40)/2).clamp(108.0,240.0).toDouble():200,child:DropdownButtonFormField<String>(
                         key:ValueKey('sales-stock-warehouse-'+warehouseId.toString()),
                         initialValue:warehouseId,isExpanded:true,menuMaxHeight:240,
-                        decoration:const InputDecoration(labelText:'Kho',isDense:true,contentPadding:EdgeInsets.symmetric(horizontal:10,vertical:8),
+                        decoration:const InputDecoration(labelText:'Kho xuất',isDense:true,contentPadding:EdgeInsets.symmetric(horizontal:10,vertical:8),
                           border:UnderlineInputBorder()),
                         items:[
                           const DropdownMenuItem<String>(value:null,
-                            child:Text('Chọn kho để xem khả dụng')),
+                            child:Text('Chọn kho xuất')),
                           ...stockWarehouses.map((w)=>DropdownMenuItem<String>(
                             value:w['id'] as String,
                             child:Text((w['name']??w['code']??'Kho').toString(),
@@ -1071,7 +1232,68 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       ]),
                     ),
                     const SizedBox(height:4),
-                    if(customers.any((x)=>x['id']==customer))
+                    if(modern)...[
+                      Wrap(spacing:8,runSpacing:6,crossAxisAlignment:WrapCrossAlignment.center,children:[
+                        OutlinedButton.icon(key:const ValueKey('sales-walk-in'),
+                          onPressed:walkInBusy||quickCustomerBusy?null:()=>chooseWalkIn(ctx,refresh),
+                          icon:const Icon(Icons.person_outline),label:Text(walkInBusy?'Đang kiểm tra':'Khách lẻ')),
+                        SizedBox(width:190,child:DropdownButtonFormField<String>(
+                          key:ValueKey('sales-delivery-$deliveryChoice'),initialValue:deliveryChoice,
+                          isExpanded:true,decoration:const InputDecoration(labelText:'Giao nhận',isDense:true),
+                          items:deliveryLabels.entries.map((e)=>DropdownMenuItem(value:e.key,child:Text(e.value))).toList(),
+                          onChanged:customerMode=='WALK_IN'?null:(v){if(v!=null)refresh(()=>deliveryChoice=v);})),
+                        SizedBox(width:190,child:DropdownButtonFormField<String>(
+                          key:ValueKey('sales-collection-$collectionPolicy'),initialValue:collectionPolicy,
+                          isExpanded:true,decoration:const InputDecoration(labelText:'Điều kiện thanh toán',isDense:true),
+                          items:collectionLabels.entries.where((e)=>customerMode!='WALK_IN'||
+                            ['PREPAID','COLLECT_ON_DELIVERY'].contains(e.key))
+                            .map((e)=>DropdownMenuItem(value:e.key,child:Text(e.value))).toList(),
+                          onChanged:(v){if(v!=null)refresh(()=>collectionPolicy=v);})),
+                        OutlinedButton.icon(key:const ValueKey('sales-delivery-date'),
+                          onPressed:()async{
+                            final now=DateTime.now(),selected=DateTime.tryParse(deliveryDate)??now;
+                            final date=await showDatePicker(context:ctx,
+                              initialDate:selected,firstDate:DateTime(1900),lastDate:DateTime(2199,12,31));
+                            if(date!=null&&ctx.mounted)refresh(()=>deliveryDate=date.toIso8601String().substring(0,10));
+                          },icon:const Icon(Icons.calendar_today_outlined,size:16),
+                          label:Text(deliveryDate.isEmpty?'Ngày giao dự kiến':deliveryDate)),
+                        if(deliveryDate.isNotEmpty)IconButton(tooltip:'Bỏ ngày giao',
+                          onPressed:()=>refresh(()=>deliveryDate=''),icon:const Icon(Icons.close,size:16)),
+                        if(order==null||copying)
+                          FilterChip(label:const Text('Nhớ hình thức giao'),selected:rememberDelivery,
+                            onSelected:(v)=>refresh(()=>rememberDelivery=v)),
+                      ]),
+                      if(customerMode=='WALK_IN')Wrap(spacing:8,runSpacing:6,children:[
+                        SizedBox(width:205,child:TextFormField(key:const ValueKey('sales-walk-in-name'),
+                          initialValue:walkInName,decoration:const InputDecoration(labelText:'Tên khách (không bắt buộc)',isDense:true),
+                          onChanged:(v)=>walkInName=v)),
+                        SizedBox(width:185,child:TextFormField(key:const ValueKey('sales-walk-in-phone'),
+                          initialValue:walkInPhone,keyboardType:TextInputType.phone,
+                          decoration:const InputDecoration(labelText:'Điện thoại',isDense:true),
+                          onChanged:(v)=>walkInPhone=v)),
+                      ]),
+                      if(customerMode!='WALK_IN'&&deliveryChoice!='PICKUP')...[
+                        if(locationBusy)const LinearProgressIndicator(minHeight:2),
+                        if(locations.isNotEmpty)DropdownButtonFormField<String>(
+                          key:ValueKey('sales-location-$customer-$locationId'),
+                          initialValue:locations.any((x)=>x['id']==locationId)?locationId:null,
+                          isExpanded:true,decoration:const InputDecoration(labelText:'Địa điểm giao hàng',isDense:true),
+                          items:[const DropdownMenuItem<String>(value:null,child:Text('Nhập địa chỉ')),
+                            ...locations.map((x)=>DropdownMenuItem<String>(value:x['id'] as String,
+                              child:Text((x['name']??x['address']??'').toString(),overflow:TextOverflow.ellipsis)))],
+                          onChanged:(v)=>refresh((){
+                            locationId=v;addressGeneration++;
+                            if(v!=null)deliveryAddress=(locations.firstWhere((x)=>x['id']==v)['address']??'').toString();
+                          })),
+                        TextFormField(key:ValueKey('sales-delivery-address-$customer-$addressGeneration'),
+                          initialValue:deliveryAddress,readOnly:locationId!=null,
+                          decoration:const InputDecoration(labelText:'Địa chỉ giao',isDense:true),
+                          onChanged:(v){deliveryAddress=v;addressEditGeneration++;}),
+                      ],
+                      Text('Hạn thanh toán: ${customerMode=='WALK_IN'?0:customers.where((x)=>x['id']==customer).firstOrNull?['paymentTermsDays']??savedShipping['paymentTermsDays']??0} ngày · Chưa ghi nhận thu tiền',
+                        style:const TextStyle(fontSize:12,color:ErpTokens.muted)),
+                    ],
+                    if(!modern&&customers.any((x)=>x['id']==customer))
                       Text('Địa chỉ giao: '+
                         (customers.firstWhere((x)=>x['id']==customer)['deliveryAddress']??'Chưa cập nhật').toString()+
                         ' · Thanh toán: '+
@@ -1303,6 +1525,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                             entry.unitPrice.clear();
                             entry.discountRate.text='0';
                             entry.taxRate.text='0';
+                            entry.discountMode='PERCENT';entry.taxMode='EXCLUSIVE';
+                            entry.discountEdited=false;entry.taxEdited=false;entry.overrideReason='';
                             if(!listManuallySelected&&lists.length>1){
                               listResolveGeneration++;list=null;
                               pricingChanged(ctx,refresh);
@@ -1339,7 +1563,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       final unitPriceField=SizedBox(width:112,child:TextField(
                         key:ValueKey('sales-price-$i'),
                         controller:entry.unitPrice,
-                        enabled:can('orders.update'),
+                        enabled:canPrice(),
                         keyboardType:const TextInputType.numberWithOptions(decimal:true),
                         inputFormatters:const [ErpGroupedNumberFormatter(maxIntegerDigits:13,maxFractionDigits:4)],
                         onChanged:(_)=>pricingChanged(ctx,refresh),
@@ -1352,21 +1576,52 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       Widget percentField(String title,TextEditingController controller,
                           String fieldKey)=>SizedBox(width:60,child:TextField(
                         key:ValueKey('sales-'+fieldKey+'-$i'),
-                        controller:controller,enabled:can('orders.update'),
+                        controller:controller,enabled:fieldKey=='discount'?canDiscount():canTax(),
                         keyboardType:const TextInputType.numberWithOptions(decimal:true),
-                        inputFormatters:const [ErpGroupedNumberFormatter(maxIntegerDigits:3,maxFractionDigits:2)],
+                        inputFormatters:[ErpGroupedNumberFormatter(
+                          maxIntegerDigits:fieldKey=='discount'&&entry.discountMode!='PERCENT'?13:3,
+                          maxFractionDigits:fieldKey=='discount'&&entry.discountMode!='PERCENT'?4:2)],
                         onChanged:(_){
-                          if(entry.unitPrice.text.isEmpty&&quote!=null){
+                          if(!modern&&entry.unitPrice.text.isEmpty&&quote!=null){
                             entry.unitPrice.text=erpGroupedDecimalText(quote['unitPrice']);
                           }
+                          if(fieldKey=='discount')entry.discountEdited=true;
+                          else entry.taxEdited=true;
                           pricingChanged(ctx,refresh);
                         },
                         textAlign:TextAlign.right,
                         decoration:InputDecoration(labelText:title,isDense:true,
                           border:const UnderlineInputBorder(),
                           contentPadding:const EdgeInsets.symmetric(horizontal:2,vertical:8))));
-                      final discountField=percentField('CK %',entry.discountRate,'discount');
+                      final discountField=percentField(entry.discountMode=='PERCENT'?'CK %':'CK ₫',entry.discountRate,'discount');
                       final taxField=percentField('Thuế %',entry.taxRate,'tax');
+                      final modes=Wrap(spacing:4,runSpacing:2,alignment:WrapAlignment.end,children:[
+                        if(canDiscount())PopupMenuButton<String>(tooltip:'Cách tính chiết khấu dòng',
+                          key:ValueKey('sales-discount-mode-$i'),
+                          onSelected:(v){entry.discountMode=v;entry.discountRate.text='0';entry.discountEdited=true;pricingChanged(ctx,refresh);},
+                          itemBuilder:(_)=>const [
+                            PopupMenuItem(value:'PERCENT',child:Text('Chiết khấu %')),
+                            PopupMenuItem(value:'PER_UNIT',child:Text('Chiết khấu mỗi đơn vị')),
+                            PopupMenuItem(value:'TOTAL_AMOUNT',child:Text('Chiết khấu cả dòng')),
+                          ],
+                          child:Text(switch(entry.discountMode){
+                            'PER_UNIT'=>'CK/ĐVT ▾','TOTAL_AMOUNT'=>'CK dòng ▾',_=>'CK % ▾',
+                          },style:const TextStyle(fontSize:11,color:ErpTokens.muted))),
+                        if(canTax())PopupMenuButton<String>(tooltip:'Giá đã gồm hay chưa gồm thuế',
+                          key:ValueKey('sales-tax-mode-$i'),
+                          onSelected:(v){entry.taxMode=v;entry.taxEdited=true;pricingChanged(ctx,refresh);},
+                          itemBuilder:(_)=>const [
+                            PopupMenuItem(value:'EXCLUSIVE',child:Text('Giá chưa gồm thuế')),
+                            PopupMenuItem(value:'INCLUSIVE',child:Text('Giá đã gồm thuế')),
+                          ],child:Text(entry.taxMode=='INCLUSIVE'?'Gồm thuế ▾':'Chưa thuế ▾',
+                            style:const TextStyle(fontSize:11,color:ErpTokens.muted))),
+                        if(adjusted(entry))InkWell(
+                          key:ValueKey('sales-reset-price-$i'),
+                          onTap:(){entry.unitPrice.clear();entry.discountRate.text='0';entry.taxRate.text='0';
+                            entry.discountEdited=false;entry.taxEdited=false;entry.discountMode='PERCENT';
+                            entry.taxMode='EXCLUSIVE';entry.overrideReason='';pricingChanged(ctx,refresh);},
+                          child:const Text('Giá hệ thống',style:TextStyle(fontSize:11,color:ErpTokens.muted))),
+                      ]);
                       final split=IconButton(
                         constraints:const BoxConstraints(minWidth:32,minHeight:32),
                         padding:EdgeInsets.zero,
@@ -1387,7 +1642,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         key:ValueKey('sales-last-price-$i'),
                         tooltip:'Giá lần mua trước của khách này',
                         icon:const Icon(Icons.history,size:18),
-                        onPressed:customer==null||!can('orders.update')?null:()async{
+                        onPressed:customer==null||customerMode=='WALK_IN'||!canPrice()?null:()async{
                           final selectedCustomer=customer!;
                           final requestedSku=entry.sellSkuId;
                           try{
@@ -1404,9 +1659,29 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                               refresh(()=>formError='Khách này chưa từng mua SKU này.');
                               return;
                             }
+                            final historicalTaxMode=(data['taxMode']??'EXCLUSIVE').toString();
+                            final historicalTax=erpGroupedDecimalText(data['taxRate']);
+                            final historicalDiscountMode=(data['discountMode']??'PERCENT').toString();
+                            final historicalDiscount=erpGroupedDecimalText(
+                              historicalDiscountMode=='PERCENT'?data['discountRate']:data['discountValue']);
+                            final needsTax=historicalTaxMode!='EXCLUSIVE'||RegExp('[1-9]').hasMatch(historicalTax);
+                            final needsDiscount=historicalDiscountMode!='PERCENT'||RegExp('[1-9]').hasMatch(historicalDiscount);
+                            if((needsTax&&!canTax())||(needsDiscount&&!canDiscount())||
+                                (!modern&&(historicalTaxMode!='EXCLUSIVE'||historicalDiscountMode!='PERCENT'))){
+                              refresh(()=>formError='Không đủ quyền hoặc phiên bản để áp dụng đúng thuế và chiết khấu của lần mua trước.');
+                              return;
+                            }
                             entry.unitPrice.text=erpGroupedDecimalText(data['unitPrice']);
-                            entry.discountRate.text=erpGroupedDecimalText(data['discountRate']);
-                            entry.taxRate.text=erpGroupedDecimalText(data['taxRate']);
+                            if(canDiscount()){
+                              entry.discountMode=historicalDiscountMode;
+                              entry.discountRate.text=historicalDiscount;
+                              entry.discountEdited=needsDiscount;
+                            }
+                            if(canTax()){
+                              entry.taxMode=historicalTaxMode;
+                              entry.taxRate.text=historicalTax;
+                              entry.taxEdited=needsTax;
+                            }
                             pricingChanged(ctx,refresh);
                           }on ErpApiError catch(e){
                             if(ctx.mounted)refresh(()=>formError=e.message);
@@ -1446,6 +1721,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                             const SizedBox(height:6),
                             Wrap(alignment:WrapAlignment.end,spacing:8,runSpacing:4,
                               children:[unitPriceField,discountField,taxField]),
+                            if(modern)modes,
                             Column(crossAxisAlignment:CrossAxisAlignment.end,children:[
                               Text('Thành tiền: $lineTotal',
                                 textAlign:TextAlign.right,softWrap:true,
@@ -1453,6 +1729,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                                   fontWeight:FontWeight.w800)),
                             ]),
                           ]):
+                          Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
                           Row(children:[
                             Expanded(flex:5,child:productName),
                             unitField,
@@ -1463,6 +1740,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                             SizedBox(width:144,child:Row(mainAxisSize:MainAxisSize.min,
                               children:[previousPrice,split,remove])),
                           ]),
+                          if(modern)modes,
+                          ]),
                       );
                     }),
                     if(lines.isEmpty)const Padding(
@@ -1470,6 +1749,39 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       child:Text('Chưa có dòng hàng. Tìm theo mã, tên hoặc barcode rồi nhấn Enter để thêm.',
                         style:TextStyle(color:ErpTokens.muted))),
                     const Divider(height:12),
+                    if(modern&&canDiscount())...[
+                      Wrap(spacing:8,runSpacing:8,crossAxisAlignment:WrapCrossAlignment.center,children:[
+                        SizedBox(width:210,child:DropdownButtonFormField<String>(
+                          key:ValueKey('sales-document-discount-$documentDiscountMode'),
+                          initialValue:documentDiscountMode,isExpanded:true,
+                          decoration:const InputDecoration(labelText:'Chiết khấu toàn đơn',isDense:true),
+                          items:const [DropdownMenuItem(value:'NONE',child:Text('Không áp dụng')),
+                            DropdownMenuItem(value:'PERCENT',child:Text('Phần trăm')),
+                            DropdownMenuItem(value:'TOTAL_AMOUNT',child:Text('Số tiền VND'))],
+                          onChanged:(v){
+                            if(v==null)return;
+                            refresh((){documentDiscountMode=v;documentDiscountValue='0';});
+                            invalidate(refresh);scheduleQuote(ctx,refresh);
+                          })),
+                        if(documentDiscountMode!='NONE')SizedBox(width:160,child:TextFormField(
+                          key:ValueKey('sales-document-discount-value-$documentDiscountMode'),
+                          initialValue:documentDiscountValue,
+                          keyboardType:const TextInputType.numberWithOptions(decimal:true),
+                          inputFormatters:[ErpGroupedNumberFormatter(maxIntegerDigits:documentDiscountMode=='PERCENT'?3:13,
+                            maxFractionDigits:documentDiscountMode=='PERCENT'?2:0)],
+                          decoration:InputDecoration(labelText:documentDiscountMode=='PERCENT'?'Tỷ lệ %':'Số tiền VND',isDense:true),
+                          onChanged:(v){documentDiscountValue=v;invalidate(refresh);scheduleQuote(ctx,refresh);})),
+                      ]),
+                      if(documentDiscountMode!='NONE')TextFormField(
+                        key:const ValueKey('sales-document-discount-reason'),
+                        initialValue:documentDiscountReason,maxLength:500,
+                        decoration:const InputDecoration(labelText:'Lý do chiết khấu toàn đơn',isDense:true),
+                        onChanged:(v)=>documentDiscountReason=v),
+                    ],
+                    if(modern&&hasManualPrice())TextFormField(
+                      key:const ValueKey('sales-override-reason'),initialValue:overrideReason,maxLength:500,
+                      decoration:const InputDecoration(labelText:'Lý do điều chỉnh (không bắt buộc)',isDense:true),
+                      onChanged:(v)=>overrideReason=v),
                     TextField(controller:note,minLines:1,maxLines:2,
                       decoration:const InputDecoration(labelText:'Ghi chú',isDense:true,border:UnderlineInputBorder())),
                     if(formError!=null)Padding(
@@ -1537,11 +1849,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       for(final line in lines){line.dispose();}
     }
   }
-  Future<void> createOrder()async{
+  Future<void> createOrder({Map<String,dynamic>? source})async{
     if(saving||pendingConfirm!=null||pendingUpdate!=null||
       !can('orders.create'))return;
     if(pendingCreate==null){
-      final form=await editForm();if(form==null||!mounted)return;
+      final form=await editForm(order:source,copying:source!=null);if(form==null||!mounted)return;
       final auto=form.remove('_confirmAfterSave')==true;
       setState((){
         pendingCreate=Map<String,dynamic>.from(form);
@@ -1839,6 +2151,15 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                     Icons.account_balance_wallet_outlined),
                 ]),
                 const SizedBox(height:18),
+                if(item['shipping'] is Map)...[
+                  Text('Kho xuất: ${item['shipping']['warehouseName']??'—'}'),
+                  Text('Giao nhận: ${const {'TRIP':'Giao thường','MANUAL':'Giao thủ công','PICKUP':'Khách lấy tại kho'}[item['shipping']['deliveryChoice']]??'—'}'),
+                  if(item['shipping']['deliveryAddress']!=null)Text('Địa chỉ: ${item['shipping']['deliveryAddress']}'),
+                  if(item['shipping']['requestedDeliveryDate']!=null)Text('Ngày giao: ${item['shipping']['requestedDeliveryDate']}'),
+                  Text('Thanh toán: ${const {'COLLECT_ON_DELIVERY':'Thu khi giao','PREPAID':'Trả trước','COLLECT_AFTER_DELIVERY':'Thu sau giao','CREDIT_TERMS':'Công nợ theo hạn'}[item['shipping']['collectionPolicy']]??'—'} · ${item['shipping']['paymentTermsDays']??0} ngày'),
+                  if(item['shipping']['customerMode']=='WALK_IN')Text('Khách lẻ: ${item['shipping']['walkInName']??''} ${item['shipping']['walkInPhone']??''}'),
+                  const SizedBox(height:12),
+                ],
                 const Text('Hàng hóa và giá đã lưu',style:TextStyle(
                   fontWeight:FontWeight.w800,color:ErpTokens.ink,fontSize:16)),
                 const SizedBox(height:8),
@@ -1859,6 +2180,13 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         Text('Thành tiền: '+money(line['lineTotal']),
                           style:const TextStyle(fontWeight:FontWeight.w700)),
                       ]),
+                      if(line['priceSnapshot'] is Map&&line['priceSnapshot']['overrideReason']!=null)
+                        Text('Lý do điều chỉnh: ${line['priceSnapshot']['overrideReason']}',
+                          style:const TextStyle(fontSize:12,color:ErpTokens.muted)),
+                      if(line['priceSnapshot'] is Map&&line['priceSnapshot']['documentDiscount'] is Map)
+                        Text('CK toàn đơn: '+money(line['priceSnapshot']['documentDiscount']['allocatedAmount'])+
+                          ' · '+(line['priceSnapshot']['documentDiscount']['reason']??'').toString(),
+                          style:const TextStyle(fontSize:12,color:ErpTokens.muted)),
                       if(line['priceSnapshot'] is Map)
                         Padding(padding:const EdgeInsets.only(top:6),
                           child:Text('Đơn vị cơ sở quy đổi: '+
@@ -1906,6 +2234,21 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                 crossAxisAlignment:WrapCrossAlignment.center,
                 spacing:8,runSpacing:8,children:[
                   TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Đóng')),
+                  if(item['status']=='CONFIRMED'&&item['versionStatus']=='CONFIRMED'&&item['documentNo'] is String)
+                    OutlinedButton.icon(key:const ValueKey('sales-print-order'),
+                      onPressed:()async{
+                        try{
+                          final html=confirmedSalesPrintDocument(item);
+                          await FilePicker.platform.saveFile(dialogTitle:'Lưu bản in đơn hàng',
+                            fileName:'${item['documentNo']}.html',type:FileType.custom,
+                            allowedExtensions:const ['html'],bytes:Uint8List.fromList(utf8.encode(html)));
+                          if(mounted)inform('Mở bản in HTML đã lưu để in đơn hàng.');
+                        }catch(_){if(mounted)inform('Không lưu được bản in.',error:true);}
+                      },icon:const Icon(Icons.print_outlined,size:16),label:const Text('Bản in')),
+                  if(can('orders.create'))
+                    OutlinedButton.icon(key:const ValueKey('sales-copy-order'),
+                      onPressed:(){Navigator.pop(ctx);createOrder(source:item);},
+                      icon:const Icon(Icons.copy_outlined,size:16),label:const Text('Sao chép đơn')),
                   if(item['versionStatus']=='DRAFT'&&can('orders.update'))
                     OutlinedButton(onPressed:(){Navigator.pop(ctx);updateOrder(item);},
                       child:const Text('Sửa đơn')),

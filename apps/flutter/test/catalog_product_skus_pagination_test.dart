@@ -54,4 +54,29 @@ void main(){
     await expectLater(client.catalogProductSkusAll('test-token',
       branchId:branch,productId:product),throwsA(isA<ErpApiError>()));
   });
+  for(final kind in ['units','barcodes']){
+    test('Product editor pages $kind without mixing product IDs',()async{
+      final cursorField=kind=='units'?'unitCode':'id';
+      final seen=<String?>[];
+      final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+        httpClient:MockClient((req)async{
+          expect(req.url.path,'/v1/catalog/r1/$kind');
+          expect(req.url.queryParameters['productId'],product);
+          expect(req.url.queryParameters['branchId'],branch);
+          final after=req.url.queryParameters['after'];seen.add(after);
+          return http.Response(jsonEncode({
+            'items':[{
+              cursorField:after==null?'first':'second','productId':product,
+            }],
+            if(after==null)'nextAfter':'first',
+          }),200,headers:{'content-type':'application/json'});
+        }));
+      addTearDown(client.dispose);
+      final rows=await client.catalogProductDetailsAll('test-token',kind,
+        branchId:branch,productId:product);
+      expect(rows.map((x)=>x[cursorField]),['first','second']);
+      expect(seen,[null,'first']);
+    });
+  }
+
 }

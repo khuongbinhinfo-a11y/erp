@@ -248,27 +248,41 @@ class ErpIdentityClient {
   /// Every selling unit for the exact product, scoped by branch on the server
   /// before pagination. A global SKU page is not safe for changing order UOM.
   Future<List<Map<String,dynamic>>> catalogProductSkusAll(
-      String token,{required String branchId,required String productId})async{
+      String token,{required String branchId,required String productId})=>
+    catalogProductDetailsAll(token,'skus',branchId:branchId,productId:productId);
+
+  /// Product-scoped reads for the shared editor. The API filters before LIMIT.
+  Future<List<Map<String,dynamic>>> catalogProductDetailsAll(
+      String token,String kind,{required String branchId,required String productId})async{
+    if(!const {'units','skus','barcodes'}.contains(kind)){
+      throw ArgumentError.value(kind,'kind');
+    }
     final collected=<Map<String,dynamic>>[];
     final seen=<String>{};
+    final seenRows=<String>{};
+    final cursorField=kind=='units'?'unitCode':'id';
     String? after;
     while(true){
       final suffix=Uri(queryParameters:{
         'branchId':branchId,'productId':productId,
         if(after!=null)'after':after,
       }).query;
-      final raw=await _request('GET','/v1/catalog/r1/skus?$suffix',token:token);
+      final raw=await _request('GET','/v1/catalog/r1/$kind?$suffix',token:token);
       final items=(raw['items'] as List<dynamic>)
         .map((v)=>Map<String,dynamic>.from(v as Map)).toList();
       for(final sku in items){
         if(sku['productId']!=productId){
           throw const ErpApiError(502,'Máy chủ trả về SKU sai sản phẩm.');
         }
+        final rowKey=sku[cursorField];
+        if(rowKey is! String||rowKey.isEmpty||!seenRows.add(rowKey)){
+          throw const ErpApiError(502,'Máy chủ trả về dữ liệu danh mục bị lặp.');
+        }
         collected.add(sku);
       }
       final next=raw['nextAfter'];
       if(next is! String||next.isEmpty)break;
-      if(items.isEmpty||items.last['id']!=next||!seen.add(next)){
+      if(items.isEmpty||items.last[cursorField]!=next||!seen.add(next)){
         throw const ErpApiError(502,'Trang SKU bị lặp hoặc sai thứ tự.');
       }
       after=next;
@@ -602,6 +616,16 @@ class ErpIdentityClient {
     return Map<String,dynamic>.from(r['quote'] as Map);
   }
   /// Sales commands retain one idempotency key on lost acknowledgments.
+  Future<Map<String,dynamic>> salesEntrySettings(String token,String branchId)async{
+    final raw=await _request('GET','/v1/sales/entry-settings?'+
+      Uri(queryParameters:{'branchId':branchId}).query,token:token);
+    return Map<String,dynamic>.from(raw['settings'] as Map);
+  }
+  Future<Map<String,dynamic>> prepareSalesWalkIn(String token,String branchId,{required String key})async{
+    final raw=await _request('POST','/v1/sales/walk-in',token:token,
+      body:{'branchId':branchId},revision:0,idempotencyKey:key);
+    return Map<String,dynamic>.from(raw['customer'] as Map);
+  }
   Future<List<Map<String,dynamic>>> salesOrders(String token,String branchId,{String query=''})async{
     final q=Uri(queryParameters:{'branchId':branchId,if(query.trim().isNotEmpty)'q':query.trim()}).query;
     final r=await _request('GET','/v1/sales/orders?$q',token:token);

@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 import 'erp_tokens.dart';
 import 'erp_display.dart';
+import 'erp_number_input.dart';
 import 'erp_toast.dart';
 import 'identity_client.dart';
 
@@ -29,9 +30,11 @@ class R1CatalogWorkspace extends StatefulWidget {
   final IdentitySession session;
   final ErpIdentityClient client;
   final ValueChanged<String> changeBranch;
+  /// When embedded in a product editor, all reads and choices are scoped.
+  final Map<String,dynamic>? product;
   const R1CatalogWorkspace({super.key,required this.kind,required this.branchId,
     required this.branches,required this.session,required this.client,
-    required this.changeBranch});
+    required this.changeBranch,this.product});
   @override State<R1CatalogWorkspace> createState()=>_R1CatalogWorkspaceState();
 }
 class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
@@ -52,6 +55,7 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
   Map<String,dynamic>? pending,quote;
   String? pendingKey;
   bool get isQuote=>widget.kind=='quote';
+  String? get fixedProductId=>widget.product?['id'] as String?;
   bool get canWrite=>widget.session.grants.any((g)=>
     g.permission=='catalog.write'&&g.branchId==widget.branchId);
   String get heading=>switch(widget.kind){
@@ -64,7 +68,8 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
   @override void didUpdateWidget(covariant R1CatalogWorkspace old){
     super.didUpdateWidget(old);
     if(old.branchId!=widget.branchId||old.kind!=widget.kind||
-      old.session.token!=widget.session.token||old.client!=widget.client){
+      old.session.token!=widget.session.token||old.client!=widget.client||
+      old.product?['id']!=widget.product?['id']){
       generation++;quoteSerial++;form=false;pending=null;pendingKey=null;quote=null;
       query.clear();items=[];ruleStartDay=null;ruleEndDay=null;quoteDay=null;reload();
     }
@@ -80,7 +85,9 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
       quoteSerial++;
     });
   }
-  String getField(String key)=>fields[key]!.text.trim();
+  static const numericFields={'toBase','amount','quantity','priority','minQuantity'};
+  String getField(String key)=>numericFields.contains(key)
+    ?erpNumberCanonical(fields[key]!.text):fields[key]!.text.trim();
   String money(dynamic raw)=>erpVndText(raw);
   String errorMessage(ErpApiError e)=>switch(e.code){
     'SKU_HAS_NO_EFFECTIVE_BASE_PRICE'=>'Chưa có giá cơ sở hiệu lực cho SKU này.',
@@ -101,6 +108,8 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
     setState((){loading=true;error=null;});
     try{
       final data=isQuote?<Map<String,dynamic>>[]:
+        fixedProductId!=null?await widget.client.catalogProductDetailsAll(
+          widget.session.token,widget.kind,branchId:branch,productId:fixedProductId!):
         await widget.client.catalogItems(widget.session.token,apiResource,
           branchId:branch,query:query.text);
       if(mounted&&stamp==generation)setState((){items=data;loading=false;});
@@ -117,6 +126,24 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
     final carried=isQuote?null:widget.client.pendingR1(
       widget.session.actorId,widget.branchId!,widget.kind);
     if(carried!=null){
+      final fixed=fixedProductId;
+      if(fixed!=null){
+        // The branch-wide pending intent is shared with the standalone tab.
+        // Never retry another product's command inside this editor.
+        bool matches=carried.payload['productId']==fixed;
+        if(widget.kind=='barcodes'){
+          try{
+            final variants=await widget.client.catalogProductSkusAll(
+              widget.session.token,branchId:widget.branchId!,productId:fixed);
+            matches=variants.any((v)=>v['id']==carried.payload['sellSkuId']);
+          }catch(_){matches=false;}
+        }
+        if(!mounted)return;
+        if(!matches){
+          setState(()=>error='Có yêu cầu chưa xác nhận ở sản phẩm khác. Kiểm tra yêu cầu tại danh mục chung trước.');
+          return;
+        }
+      }
       // A previous COMMIT may have lost its ACK. Never reconstruct its price
       // rule using a new effective timestamp or a different idempotency key.
       setState((){
@@ -135,13 +162,19 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
     final branch=widget.branchId!;
     setState((){busy=true;error=null;quote=null;form=true;});
     try{
-      final fetched=await Future.wait([
+      final fixed=fixedProductId;
+      final fetched=fixed==null?await Future.wait([
         widget.client.catalogItems(widget.session.token,'products',branchId:branch),
         widget.client.catalogItems(widget.session.token,'r1/skus',branchId:branch),
         widget.client.catalogItems(widget.session.token,'price-lists',branchId:branch),
         widget.client.catalogItems(widget.session.token,'customers',branchId:branch),
         widget.client.catalogItems(widget.session.token,'r1/channels',branchId:branch),
-      ]);
+      ]):<List<Map<String,dynamic>>>[
+        [widget.product!],
+        await widget.client.catalogProductSkusAll(widget.session.token,
+          branchId:branch,productId:fixed),
+        [],[],[],
+      ];
       // Auxiliary master directories are optional for legacy R1 scopes.
       // Do not break barcode entry or price quotation when 0017 is pending.
       List<Map<String,dynamic>> groups=[],uoms=[];
@@ -213,7 +246,12 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
     return TextField(
       key:ValueKey('r1-input-'+key),controller:fields[key],
       onChanged:key=='quantity'?(_)=>changeQuoteContext((){}):null,
-      keyboardType:numeric?const TextInputType.numberWithOptions(decimal:true):TextInputType.text,
+      keyboardType:numeric?TextInputType.numberWithOptions(
+        decimal:key!='priority',signed:key=='priority'):TextInputType.text,
+      inputFormatters:numeric?[ErpGroupedNumberFormatter(
+        maxIntegerDigits:key=='priority'?6:key=='amount'?13:12,
+        maxFractionDigits:key=='priority'?0:key=='toBase'?6:key=='amount'?4:3,
+        allowNegative:key=='priority')]:null,
       decoration:InputDecoration(labelText:title,hintText:hint));
   }
   String dayLabel(DateTime? day,String empty)=>day==null?empty:
@@ -488,7 +526,7 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
           if(busy)const LinearProgressIndicator(),
           Wrap(spacing:12,runSpacing:14,children:[
             if(widget.kind=='units'||widget.kind=='skus')...[
-              slot(dropdown('Sản phẩm',productId,products,
+              if(fixedProductId==null)slot(dropdown('Sản phẩm',productId,products,
                 (v)=>setState(()=>productId=v))),
               if(widget.kind=='skus')slot(textField('code','Mã SKU',hint:'SP001-T')),
               slot(DropdownButtonFormField<String>(
@@ -502,7 +540,7 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
                   child:Text("${u['code']} · ${u['name']}",
                     overflow:TextOverflow.ellipsis))).toList(),
                 onChanged:(v)=>setState(()=>fields['unitCode']!.text=v??''))),
-              slot(textField('toBase','Hệ số quy đổi',numeric:true,hint:'12.000000')),
+              slot(textField('toBase','Hệ số quy đổi',numeric:true,hint:'12')),
             ],
             if(widget.kind=='barcodes')...[
               slot(dropdown('SKU bán',skuId,skus,(v)=>changeQuoteContext(()=>skuId=v))),
@@ -672,7 +710,7 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
                 color:ErpTokens.primary)),
             const SizedBox(height:6),
             Text('SKU: ${quote!['sku']} · ${quote!['productName']} · '
-              'ĐVT: ${quote!['unitCode']} · SL: ${quote!['quantity']}',
+              'ĐVT: ${quote!['unitCode']} · SL: ${erpNumberText(quote!['quantity'])}',
               key:const ValueKey('r1-quote-item-context')),
             Text('Bảng giá: ${quote!['priceListCode']??quote!['priceListId']}'),
             Text('${quote!['priceListSelectionReason']??'Bảng giá chỉ định'}',
@@ -698,7 +736,7 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
     'skus'=>const [('code','SKU'),('productName','Sản phẩm'),
       ('unitCode','Đơn vị'),('toBase','Quy đổi'),('barcode','Mã vạch'),
       ('active','Đang dùng')],
-    'barcodes'=>const [('barcode','Mã vạch'),('isPrimary','Mã chính'),
+    'barcodes'=>const [('sku','SKU'),('barcode','Mã vạch'),('isPrimary','Mã chính'),
       ('active','Đang dùng')],
     'channels'=>const [('code','Mã'),('name','Kênh bán'),
       ('active','Đang dùng')],
@@ -790,7 +828,7 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
               crossAxisAlignment:WrapCrossAlignment.center,children:[
                 Text(heading,style:const TextStyle(color:ErpTokens.ink,
                   fontSize:18,fontWeight:FontWeight.w800)),
-                if(widget.branches.isNotEmpty)SizedBox(width:235,child:
+                if(fixedProductId==null&&widget.branches.isNotEmpty)SizedBox(width:235,child:
                   DropdownButtonFormField<String>(
                     key:ValueKey('r1-branch-'+widget.branchId.toString()),
                     initialValue:widget.branchId,
@@ -801,7 +839,7 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
                       child:Text(x['name'].toString(),overflow:TextOverflow.ellipsis))).toList(),
                     onChanged:(v){if(v!=null)widget.changeBranch(v);},
                   )),
-                if(!isQuote)SizedBox(width:260,child:TextField(controller:query,
+                if(!isQuote&&fixedProductId==null)SizedBox(width:260,child:TextField(controller:query,
                   onSubmitted:(_)=>reload(),
                   decoration:InputDecoration(labelText:'Tìm mã, tên, mã vạch',
                     prefixIcon:const Icon(Icons.search),

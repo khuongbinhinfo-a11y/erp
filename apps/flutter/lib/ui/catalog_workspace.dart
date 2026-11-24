@@ -1276,6 +1276,50 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     }
   }
 
+  /// Reuse the existing server-backed SKU/UOM/barcode workflows rather than
+  /// introduce a second mutation path or allow identities to be rewritten.
+  Future<void> _productDetails(Map<String,dynamic> product,String initialKind)async{
+    final branch=branchId;
+    if(branch==null||product['id'] is! String)return;
+    final session=widget.session,client=widget.client;
+    var kind=initialKind;
+    const sections=[('skus','SKU bán hàng'),('units','ĐVT và quy đổi'),
+      ('barcodes','Mã vạch')];
+    await showDialog<void>(context:context,builder:(dialog)=>
+      StatefulBuilder(builder:(ctx,refresh)=>AlertDialog(
+        key:const ValueKey('catalog-product-details-dialog'),
+        insetPadding:const EdgeInsets.symmetric(horizontal:12,vertical:12),
+        title:Text('Chi tiết · ${product['name']}'),
+        content:SizedBox(
+          width:(MediaQuery.sizeOf(ctx).width-56).clamp(220.0,1000.0).toDouble(),
+          height:(MediaQuery.sizeOf(ctx).height-180).clamp(160.0,720.0).toDouble(),
+          child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+            Wrap(spacing:6,runSpacing:6,children:[
+              for(final section in sections)ChoiceChip(
+                label:Text(section.$2),selected:kind==section.$1,
+                onSelected:(_)=>refresh(()=>kind=section.$1)),
+            ]),
+            const SizedBox(height:8),
+            const Text('Mỗi thay đổi được lưu riêng trên máy chủ. '
+              'Mã và hệ số đã tạo được giữ nguyên để bảo toàn chứng từ.',
+              style:TextStyle(color:ErpTokens.muted,fontSize:12)),
+            const SizedBox(height:8),
+            Expanded(child:SingleChildScrollView(
+              child:R1CatalogWorkspace(
+                key:ValueKey('product-details-${product['id']}-$kind'),
+                kind:kind,branchId:branch,branches:const [],
+                session:session,client:client,product:product,
+                changeBranch:(_){},
+              ))),
+          ])),
+        actions:[TextButton(onPressed:()=>Navigator.pop(dialog),
+          child:const Text('Quay lại sản phẩm'))],
+      )));
+    if(mounted&&branchId==branch&&widget.session.token==session.token){
+      await _loadRecords();
+    }
+  }
+
   Future<void> _productImages(Map<String,dynamic> product)async{
     if(branchId==null)return;
     final productId=product['id'] as String;
@@ -1760,8 +1804,36 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                             child:Text('${c['code']} · ${c['name']}'))),
                       ],onChanged:(v)=>refresh(()=>categoryId=v)),
                     const SizedBox(height:8),
-                    const Text('Mã hàng, ĐVT gốc, SKU và mã vạch đã phát sinh là định danh. '+
-                      'Thay đổi SKU/đơn vị qua tab SKU bán hàng và Đơn vị tính; ảnh qua nút ảnh sản phẩm.',
+                    Text('ĐVT tồn kho: ${row['baseUnit']??'—'}',
+                      style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
+                    Text('Nhãn hàng: ${productGroups.where((g)=>g['id']==productGroupId)
+                      .map((g)=>g['brandName']??'Chưa phân nhãn').firstOrNull??'Chưa phân nhãn'}',
+                      style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
+                    const SizedBox(height:8),
+                    Wrap(spacing:8,runSpacing:8,children:[
+                      OutlinedButton.icon(
+                        key:const ValueKey('catalog-edit-product-skus'),
+                        onPressed:()=>_productDetails(row,'skus'),
+                        icon:const Icon(Icons.inventory_2_outlined,size:18),
+                        label:const Text('SKU bán hàng')),
+                      OutlinedButton.icon(
+                        key:const ValueKey('catalog-edit-product-units'),
+                        onPressed:()=>_productDetails(row,'units'),
+                        icon:const Icon(Icons.straighten,size:18),
+                        label:const Text('ĐVT và quy đổi')),
+                      OutlinedButton.icon(
+                        key:const ValueKey('catalog-edit-product-barcodes'),
+                        onPressed:()=>_productDetails(row,'barcodes'),
+                        icon:const Icon(Icons.qr_code,size:18),
+                        label:const Text('Mã vạch')),
+                      OutlinedButton.icon(
+                        key:const ValueKey('catalog-edit-product-images'),
+                        onPressed:()=>_productImages(row),
+                        icon:const Icon(Icons.photo_library_outlined,size:18),
+                        label:const Text('Hình ảnh')),
+                    ]),
+                    const Text('SKU, ĐVT, mã vạch và ảnh được lưu riêng trên máy chủ. '
+                      'Mã hàng và ĐVT gốc đã tạo không bị ghi đè.',
                       style:TextStyle(color:ErpTokens.muted,fontSize:12)),
                   ],
                   if(resource=='customers')...[
