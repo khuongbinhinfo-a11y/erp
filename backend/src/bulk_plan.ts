@@ -270,7 +270,10 @@ export function normalizeRow(
    }
    if(raw.brandCode!==undefined&&raw.brandCode!==""){
     const b=refs.brands.get(raw.brandCode);
-    const gid=op.groupId??current?.groupId;
+    // An explicit groupCode:'' clears the link to the brand, even when the
+    // product was previously assigned to a group. Never fallback on explicit null.
+    const gid=Object.prototype.hasOwnProperty.call(op,"groupId")
+      ?op.groupId:current?.groupId;
     const group=[...refs.groups.values()].find(g=>g.id===gid);
     if(!b||b.active!==true||(group?.brandId??refs.categories.get(raw.categoryCode??"")?.brandId)!==b.id)
       throw new BulkFault("BRAND_GROUP_MISMATCH");
