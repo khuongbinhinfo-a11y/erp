@@ -846,7 +846,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                             value:b['id'] as String,
                             child:Text('${b['code']} · ${b['name']}'))),
                       ],
-                      onChanged:(v)=>refresh((){brandId=v;groupId=null;categoryId=null;}),
+                      onChanged:(v)=>refresh((){brandId=v;groupId=null;categoryId=null;})),
                   ],
                   if(availableGroups.isNotEmpty)...[
                     const SizedBox(height:12),
