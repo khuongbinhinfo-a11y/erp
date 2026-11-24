@@ -270,6 +270,41 @@ class ErpIdentityClient {
       rethrow;
     }
   }
+  Future<({List<Map<String,dynamic>> items,bool cached})> localProductVariants(IdentitySession session,String branch,String product)async{
+    final scope=localScope(session,branch),key=jsonEncode(['variants',_grantStamp(session),product]);
+    try{
+      final items=await catalogProductSkusAll(session.token,branchId:branch,productId:product);
+      if(scope!=null){try{await localStore!.saveCache(scope,key,items,fetchedAt:DateTime.now(),ttl:const Duration(hours:12));}catch(_){}}
+      return (items:items,cached:false);
+    }on ErpApiError catch(e){
+      if(scope==null||!{0,503,504}.contains(e.status))rethrow;
+      try{
+        final value=await localStore!.cache(scope,key,now:DateTime.now());
+        if(value!=null&&!value.stale&&value.value is List){
+          return (items:(value.value as List).map((x)=>Map<String,dynamic>.from(x as Map)).toList(),cached:true);
+        }
+      }catch(_){}
+      rethrow;
+    }
+  }
+  Future<({List<Map<String,dynamic>> items,bool hasMore,bool cached})> localStockPage(IdentitySession session,String branch,String warehouse,int offset)async{
+    final scope=localScope(session,branch,warehouse:warehouse),key=jsonEncode(['stock',_grantStamp(session),offset]);
+    try{
+      final page=await inventoryPage(session.token,'balances',branchId:branch,warehouseId:warehouse,offset:offset);
+      if(scope!=null){try{await localStore!.saveCache(scope,key,{'items':page.items,'hasMore':page.hasMore},fetchedAt:DateTime.now(),ttl:const Duration(minutes:30));}catch(_){}}
+      return (items:page.items,hasMore:page.hasMore,cached:false);
+    }on ErpApiError catch(e){
+      if(scope==null||!{0,503,504}.contains(e.status))rethrow;
+      try{
+        final value=await localStore!.cache(scope,key,now:DateTime.now());
+        if(value!=null&&!value.stale&&value.value is Map){
+          final data=value.value as Map;
+          return (items:(data['items'] as List).map((x)=>Map<String,dynamic>.from(x as Map)).toList(),hasMore:data['hasMore']==true,cached:true);
+        }
+      }catch(_){}
+      rethrow;
+    }
+  }
   Future<({Map<String,dynamic> settings,bool cached})> localSalesEntrySettings(IdentitySession session,String branch)async{
     final scope=localScope(session,branch);
     final key='sales-settings-'+_grantStamp(session);

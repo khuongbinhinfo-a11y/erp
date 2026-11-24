@@ -53,6 +53,24 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   bool get _localConfigured=>widget.client.localStore!=null&&widget.session.installationId.isNotEmpty;
   bool _lastNavigationLock=false;
   bool pendingNeedsReceipt=false;
+  Timer? _syncTimer;
+  AppLifecycleListener? _syncLifecycle;
+  int _syncDelay=15;
+  bool _foreground=true;
+  void _scheduleRecovery(){
+    _syncTimer?.cancel();
+    if(!_localConfigured||!mounted||!_foreground)return;
+    _syncTimer=Timer(Duration(seconds:_syncDelay),()async{
+      if(!mounted||!_foreground)return;
+      if(!saving&&!localRecoveryBusy&&!localRecoveryBlocked&&widget.session.expiresAt.isAfter(DateTime.now())){
+        // Only retry previously submitted save-only commands; confirmations remain explicit.
+        if(pendingCreate!=null&&!pendingCreateAutoConfirm){await _resolveCreate();}
+        else if(pendingUpdate!=null&&pendingUpdate!['auto']!=true){await _resolvePendingUpdate();}
+      }
+      _syncDelay=(pendingCreate!=null||pendingUpdate!=null)?(_syncDelay*2).clamp(15,120):15;
+      _scheduleRecovery();
+    });
+  }
   bool get _navigationLocked=>saving||localRecoveryBusy||localRecoveryBlocked||pendingCreate!=null||
     pendingUpdate!=null||pendingConfirm!=null;
   @override void setState(VoidCallback fn){
@@ -111,17 +129,26 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   void inform(String text,{bool error=false}){
     if(mounted)ErpToast.show(context,text,isError:error);
   }
-  @override void initState(){super.initState();loadBranches();}
+  @override void initState(){
+    super.initState();loadBranches();
+    if(widget.client.localStore!=null){
+      _syncLifecycle=AppLifecycleListener(onStateChange:(state){
+        _foreground=state==AppLifecycleState.resumed;
+        _syncDelay=15;_scheduleRecovery();
+      });
+      _scheduleRecovery();
+    }
+  }
   @override void didUpdateWidget(covariant SalesWorkspace old){
     super.didUpdateWidget(old);
     if(old.session.token!=widget.session.token||old.client!=widget.client){
       generation++;branches=[];orders=[];branchId=null;retryKeys.clear();
       pendingCreate=null;pendingCreateKey=null;pendingConfirm=null;
       pendingConfirmKey=null;pendingUpdate=null;pendingUpdateKey=null;
-      pendingCreateAutoConfirm=false;localRecoveryBusy=false;localRecoveryBlocked=false;pendingNeedsReceipt=false;loadBranches();
+      pendingCreateAutoConfirm=false;localRecoveryBusy=false;localRecoveryBlocked=false;pendingNeedsReceipt=false;loadBranches();_syncDelay=15;_scheduleRecovery();
     }
   }
-  @override void dispose(){generation++;search.dispose();super.dispose();}
+  @override void dispose(){generation++;_syncTimer?.cancel();_syncLifecycle?.dispose();search.dispose();super.dispose();}
   Future<void> loadBranches()async{
     final id=++generation;
     setState((){loading=true;error=null;});
@@ -478,7 +505,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     int selectedCustomerIndex=0,customerSearchGeneration=0;
     String? skuResultsFor,skuSearchError;
     bool skuBusy=false,customerBusy=false,starterUntouched=order==null;
-    bool skuPriceBusy=false,stockBusy=false,stockLoaded=false,stockComplete=false;
+    bool skuPriceBusy=false,stockBusy=false,stockLoaded=false,stockComplete=false,stockCached=false;
     String? stockError,warehouseId=stockWarehouses.any((w)=>w['id']==savedShipping['warehouseId'])
       ?savedShipping['warehouseId'] as String:stockWarehouses.length==1
       ?stockWarehouses.single['id'] as String:null;
@@ -524,8 +551,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           variantLoading.contains(productId)||variantFailed.contains(productId))return;
       variantLoading.add(productId);
       try{
-        final all=await widget.client.catalogProductSkusAll(widget.session.token,
-          branchId:branch,productId:productId);
+        final variantResult=await widget.client.localProductVariants(formSession,branch,productId);
+        final all=variantResult.items;
+        if(variantResult.cached)cachedCatalog=true;
         if(!ctx.mounted)return;
         refresh((){
           variantsByProduct[productId]=all.where((x)=>x['active']==true).toList();
@@ -594,22 +622,22 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       final run=++stockGeneration;
       if(warehouse==null)return;
       refresh((){
-        stockBusy=true;stockLoaded=false;stockComplete=false;stockError=null;
+        stockBusy=true;stockLoaded=false;stockComplete=false;stockError=null;stockCached=false;
         stockByProduct={};
       });
       final found=<String,Map<String,dynamic>>{};
       try{
-        var complete=false;
+        var complete=false,cached=false;
         for(var offset=0;offset<2000;offset+=100){
-          final page=await widget.client.inventoryPage(widget.session.token,
-            'balances',branchId:branch,warehouseId:warehouse,offset:offset);
+          final page=await widget.client.localStockPage(formSession,branch,warehouse,offset);
+          cached=cached||page.cached;
           for(final row in page.items){found[row['productId'].toString()]=row;}
           if(!page.hasMore){complete=true;break;}
         }
         if(!ctx.mounted||run!=stockGeneration||warehouseId!=warehouse)return;
         refresh((){
-          stockByProduct=found;stockComplete=complete;
-          stockLoaded=true;stockBusy=false;
+          stockByProduct=found;stockComplete=complete&&!cached;
+          stockCached=cached;stockLoaded=true;stockBusy=false;
           if(!complete)stockError='Tồn kho chưa được tải đầy đủ.';
         });
       }on ErpApiError catch(e){
@@ -761,8 +789,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         skuPriceBusy=false;skuResultsFor=null;selectedSkuIndex=0;
       });
       try{
-        final found=await widget.client.catalogItems(widget.session.token,
-          'r1/skus',branchId:branch,query:term);
+        final found=await catalog('r1/skus',query:term);
         if(!ctx.mounted||skuSearch.text.trim()!=term||
             request!=skuSearchGeneration)return;
         final available=found.where((sku)=>sku['active']==true).toList();
@@ -925,8 +952,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       final run=++customerSearchGeneration;
       refresh(()=>customerBusy=true);
       try{
-        final values=await widget.client.catalogItems(widget.session.token,'customers',
-          branchId:branch,query:term);
+        final values=await catalog('customers',query:term);
         if(!ctx.mounted||run!=customerSearchGeneration||
           term!=customerSearch.text.trim())return;
         refresh((){
@@ -969,11 +995,10 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           }).toList(),
         };
     }
-    final writer=autoDraft?LocalCartWriter(widget.client.localStore!,formScope!):null;
+    final writer=formScope!=null&&(order==null||copying||localDraft)?LocalCartWriter(widget.client.localStore!,formScope):null;
     String? lastSnapshot=autoDraft?jsonEncode(draftSnapshot()):null;
     Future<void> persistDraft({bool force=false})async{
-      if(writer==null||finishDraft||!_sameScope(formToken,branch)||
-        quickCustomerBusy||walkInBusy||pendingQuickCustomer!=null)return;
+      if(writer==null||finishDraft||!_sameScope(formToken,branch))return;
       final snapshot=draftSnapshot(),encoded=jsonEncode(snapshot);
       if(!force&&encoded==lastSnapshot&&!draftWriteFailed)return;
       lastSnapshot=encoded;
@@ -1004,7 +1029,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       finally{if(ctx.mounted)refresh(()=>draftSaving=false);}
     }
     Future<void> submitForm(BuildContext ctx,StateSetter refresh,{required bool confirm})async{
-      if(!_sameScope(formToken,branch)||draftSaving)return;
+      if(!_sameScope(formToken,branch)||draftSaving||quickCustomerBusy||pendingQuickCustomer!=null)return;
       if(customer==null||list==null||!validLines()){
         refresh(()=>formError='Kiểm tra khách hàng, SKU và số lượng từng dòng.');
         return;
@@ -1022,11 +1047,15 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         refresh(()=>formError='Chọn kho xuất và kiểm tra số điện thoại khách lẻ.');return;
       }
       if(writer!=null){
+        final before=jsonEncode(draftSnapshot());
         refresh(()=>draftSaving=true);
         await persistDraft(force:true);
         if(!ctx.mounted||!_sameScope(formToken,branch))return;
         refresh(()=>draftSaving=false);
         if(draftWriteFailed){refresh(()=>formError='Không lưu được giỏ trước khi gửi. Vui lòng thử lại.');return;}
+        if(before!=jsonEncode(draftSnapshot())||quotes==null||quotedStamp!=stamp()){
+          refresh(()=>formError='Đơn vừa thay đổi. Hãy kiểm tra và lưu lại.');return;
+        }
         finishDraft=true;
       }
       Navigator.pop(ctx,{
@@ -1039,7 +1068,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           if(deliveryDate.isNotEmpty)'requestedDeliveryDate':deliveryDate,
           if(customerMode=='WALK_IN'&&walkInName.trim().isNotEmpty)'walkInName':walkInName.trim(),
           if(customerMode=='WALK_IN'&&walkInPhone.trim().isNotEmpty)'walkInPhone':walkInPhone.trim(),
-          if((order==null||copying)&&rememberDelivery)'rememberDeliveryChoice':true,
+          if((order==null||copying||localDraft)&&rememberDelivery)'rememberDeliveryChoice':true,
         },
         if(channel!=null)'channelId':channel,
         if(modern&&documentDiscountActive())'documentDiscount':documentDiscount(),
@@ -1072,21 +1101,21 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         if(writer!=null)await persistDraft();
         if(ctx.mounted)Navigator.pop(ctx);return;
       }
-      final discard=await showDialog<bool>(context:ctx,builder:(confirmCtx)=>
+      final discard=await showDialog<String>(context:ctx,builder:(confirmCtx)=>
         AlertDialog(
           title:const Text('Bỏ thay đổi đơn hàng?'),
           content:Text(writer!=null?'Giỏ được lưu trên máy. Anh/chị muốn giữ hay bỏ giỏ?':'Thông tin vừa nhập chưa được lưu.'),
           actions:[
-            TextButton(onPressed:()=>Navigator.pop(confirmCtx,false),
+            TextButton(onPressed:()=>Navigator.pop(confirmCtx,'continue'),
               child:const Text('Tiếp tục nhập')),
-            if(writer!=null)TextButton(onPressed:()=>Navigator.pop(confirmCtx,null),child:const Text('Giữ giỏ trên máy')),
-            FilledButton(onPressed:()=>Navigator.pop(confirmCtx,true),
+            if(writer!=null)TextButton(onPressed:()=>Navigator.pop(confirmCtx,'keep'),child:const Text('Giữ giỏ trên máy')),
+            FilledButton(onPressed:()=>Navigator.pop(confirmCtx,'discard'),
               child:const Text('Bỏ thay đổi')),
           ],
         ));
       if(!ctx.mounted)return;
-      if(writer!=null&&discard==null){await persistDraft(force:true);if(!ctx.mounted)return;if(draftWriteFailed){inform('Không lưu được giỏ.',error:true);return;}finishDraft=true;Navigator.pop(ctx);return;}
-      if(discard==true){
+      if(writer!=null&&discard=='keep'){await persistDraft(force:true);if(!ctx.mounted)return;if(draftWriteFailed){inform('Không lưu được giỏ.',error:true);return;}finishDraft=true;Navigator.pop(ctx);return;}
+      if(discard=='discard'){
         if(writer!=null){finishDraft=true;try{await writer.clear();}catch(_){finishDraft=false;inform('Không xóa được giỏ.',error:true);return;}}
         if(ctx.mounted)Navigator.pop(ctx);
       }
@@ -1548,7 +1577,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                                   :stockBusy?'Đang tra tồn…'
                                   :stockError!=null?'Chưa xác định tồn'
                                   :stock!=null
-                                    ?erpGroupedDecimalText(stock['available'])+' '+(stock['baseUnit']??'đv gốc').toString()
+                                    ?(stockCached?'Tồn cũ: ':'')+erpGroupedDecimalText(stock['available'])+' '+(stock['baseUnit']??'đv gốc').toString()
                                     :stockComplete?'0 đv gốc':'Chưa xác định tồn';
                                 return Material(
                                   color:i==selectedSkuIndex
