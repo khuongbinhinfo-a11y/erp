@@ -35,6 +35,18 @@ export function allocateWarehouseDemand<T extends {ordered:bigint}>(
  })};
 }
 
+/** Exact six-decimal minor units for inventory; never use JS float. */
+export function stockDecimalUnits(value:string):bigint{
+ const m=/^(-?)([0-9]{1,18})(?:\.([0-9]{1,6}))?$/.exec(value);
+ if(!m)throw new InventoryFault(409,"INVALID_STOCK_DECIMAL");
+ const unit=BigInt(m[2]!)*1000000n+BigInt((m[3]??"").padEnd(6,"0"));
+ return m[1]==="-"?-unit:unit;
+}
+export function stockUnitsDecimal(units:bigint):string{
+ const neg=units<0n?"-":"",n=units<0n?-units:units;
+ return neg+(n/1000000n).toString()+"."+(n%1000000n).toString().padStart(6,"0");
+}
+
 export type WarehouseScope={branchId:string;warehouseId:string};
 export type OpeningInput=WarehouseScope&{productId:string;quantity:string};
 export type ReserveInput=WarehouseScope&{orderId:string;version:number;lineNo:number};
@@ -90,6 +102,7 @@ export async function reservations(db:PoolClient,t:string,s:WarehouseScope,
   `SELECT r.id,r.product_id AS "productId",p.sku,p.name AS "productName",
     r.order_id AS "orderId",o.document_no AS "documentNo",r.version_no AS version,
     r.line_no AS "lineNo",r.quantity_base::text AS "quantityBase",
+    r.backordered_base::text AS "backorderedBase",
     r.state,r.revision::text,r.created_at AS "createdAt",r.released_at AS "releasedAt"
     FROM inventory_reservation r
     JOIN catalog_product p ON p.installation_id=r.installation_id
@@ -154,18 +167,37 @@ export async function reserveStock(db:PoolClient,ctx:MutationContext,input:Reser
    ?order.price_snapshot?.normalizedBaseQuantity
    :order.unit_code===order.base_unit?order.quantity:null;
  if(!validBaseQty(quantity))throw new InventoryFault(409,"BASE_QUANTITY_SNAPSHOT_REQUIRED");
+ // Policy and allocation are read while holding the warehouse lock.
+ // A rolling backend on pre-0021 schema keeps strict reserve behavior.
+ const ready=await db.query<{ok:boolean}>(
+  "SELECT to_regclass('public.inventory_guard_policy') IS NOT NULL AS ok");
+ let shortageMode:"ALLOW"|"WARN"|"BLOCK"="BLOCK";
+ if(ready.rows[0]?.ok===true){
+  const policy=await db.query<{reserve_shortage_mode:"ALLOW"|"WARN"|"BLOCK"}>(
+   `SELECT reserve_shortage_mode FROM inventory_guard_policy
+    WHERE installation_id=$1 AND branch_id=$2 AND warehouse_id=$3 FOR SHARE`,
+   [t,b,w]);
+  shortageMode=policy.rows[0]?.reserve_shortage_mode??"WARN";
+ }
  const stock=await balance(db,t,input,order.product_id);
- const enough=await db.query<{ok:boolean}>(
-  "SELECT $1::numeric <= $2::numeric AS ok",[quantity,stock.available]);
- if(enough.rows[0]?.ok!==true)throw new InventoryFault(409,"INSUFFICIENT_AVAILABLE_STOCK");
- const r=await db.query<{id:string;qty:string}>(
+ const required=stockDecimalUnits(quantity),available=stockDecimalUnits(stock.available);
+ const result=allocateWarehouseDemand([{ordered:required}],available,shortageMode!=="BLOCK");
+ if(!result.ok)throw new InventoryFault(409,"INSUFFICIENT_AVAILABLE_STOCK");
+ const reserved=stockUnitsDecimal(result.allocations[0]!.reserved);
+ const backordered=stockUnitsDecimal(result.allocations[0]!.backordered);
+ const r=await db.query<{id:string;qty:string;backordered:string}>(
   `INSERT INTO inventory_reservation(installation_id,branch_id,warehouse_id,product_id,
-    order_id,version_no,line_no,quantity_base,actor_id,request_id)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$8::numeric,$9,$10)
-    RETURNING id,quantity_base::text AS qty`,
-  [t,b,w,order.product_id,input.orderId,input.version,input.lineNo,quantity,ctx.actorId,ctx.requestId]);
+    order_id,version_no,line_no,quantity_base,backordered_base,actor_id,request_id)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8::numeric,$9::numeric,$10,$11)
+    RETURNING id,quantity_base::text AS qty,backordered_base::text AS backordered`,
+  [t,b,w,order.product_id,input.orderId,input.version,input.lineNo,
+   reserved,backordered,ctx.actorId,ctx.requestId]);
+ const warnings=result.allocations[0]!.backordered>0n&&shortageMode==="WARN"
+   ?[{code:"INSUFFICIENT_AVAILABLE_STOCK",severity:"WARN",
+      message:"Tồn kho không đủ. Đã giữ phần có và ghi phần chờ hàng."}]:[];
  return {status:201,body:{id:r.rows[0]!.id,orderId:input.orderId,
    warehouseId:w,productId:order.product_id,quantityBase:r.rows[0]!.qty,
+   backorderedBase:r.rows[0]!.backordered,warnings,
    state:"ACTIVE",revision:0,stock:await balance(db,t,input,order.product_id)}};
 }
 export async function releaseStock(db:PoolClient,ctx:MutationContext,scope:WarehouseScope,id:string){
