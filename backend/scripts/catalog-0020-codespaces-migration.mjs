@@ -1,6 +1,6 @@
 /**
  * ERP CAT20 catalog hierarchy and customer locations, Codespaces-only production migration operator.
- * Run from backend with: node --experimental-strip-types scripts/cat20-codespaces-migration.mjs --check|--apply
+ * Run from backend with: node --experimental-strip-types scripts/catalog-0020-codespaces-migration.mjs --check|--apply
  *
  * Production writes are gated by observed Compute maintenance mode.
  * A private, encrypted durable backup and its isolated read-back/restore are
