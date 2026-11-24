@@ -600,6 +600,18 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
   assert.equal(discountedExport.status,200);
   assert.match(discountedExport.body.content,/10000/);
   assert.match(discountedExport.body.content,/10/);
+  const cloned=await request("/v1/catalog/price-lists/"+target.body.id+"/clone",
+   "POST",{branchId,code:"P0-CLONED",name:"Bản giá có chiết khấu",
+    sourceRevision:0},token,{"idempotency-key":"p0-clone-"+randomUUID(),"if-match":"0"});
+  assert.equal(cloned.status,201,JSON.stringify(cloned.body));
+  const cloneExport=await request("/v1/catalog/bulk/export?branchId="+branchId+
+   "&resource=prices&priceListId="+cloned.body.id,"GET",undefined,token);
+  assert.equal(cloneExport.status,200,JSON.stringify(cloneExport.body));
+  assert.match(cloneExport.body.content,/10000/,
+   "cloned list preserves original gross amount");
+  assert.match(cloneExport.body.content,/10/,
+   "cloned list preserves percentage discount");
+
 
 
   const otherBranch=(await db.query<{id:string}>(
