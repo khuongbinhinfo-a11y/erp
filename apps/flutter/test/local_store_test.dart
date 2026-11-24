@@ -151,6 +151,42 @@ void main(){
     final reopened=await store.claimScopedCart(a,'cart','new-cart',owner:'new-editor');
     expect(reopened['lines'],isEmpty);
   });
+  test('reconciliation claims are exclusive across tabs and replacement is atomic',()async{
+    final shared=Memory(),tabOne=ErpLocalStore(shared),tabTwo=ErpLocalStore(shared);
+    const id='00000000-0000-4000-8000-000000000005';
+    final original={'id':id,'body':{'branchId':'b','lines':[{'quantity':'1'}]}};
+    final revised={'id':id,'body':{'branchId':'b','lines':[{'quantity':'2'}]}};
+    await tabOne.saveUnsentSalesUpdate(a,id,'old',original);
+    await tabOne.markUnsentSalesUpdate(a,id,'old','inflight');
+    await tabOne.markUnsentSalesUpdate(a,id,'old','rejected');
+    await tabOne.claimRejectedSalesUpdate(a,id,'old','editor-one');
+    await expectLater(tabTwo.claimRejectedSalesUpdate(a,id,'old','editor-two'),
+      throwsA(isA<LocalRecoveryConflict>()));
+    await expectLater(tabTwo.clearUnsentSalesUpdate(a,id,'old',requiredStatus:'rejected'),
+      throwsA(isA<LocalRecoveryConflict>()));
+    await expectLater(tabTwo.markUnsentSalesUpdate(a,id,'old','inflight'),
+      throwsA(isA<LocalRecoveryConflict>()));
+    await tabOne.replaceReconciledSalesUpdate(a,id,'old','editor-one','new',revised);
+    expect((await tabTwo.unsentSalesUpdates(a,id)).map((e)=>e['key']).toList(),['new']);
+    await expectLater(tabTwo.replaceReconciledSalesUpdate(a,id,'old','editor-two','duplicate',revised),
+      throwsA(isA<LocalRecoveryConflict>()));
+  });
+  test('expired reconciliation transfers claim without allowing old editor to replace',()async{
+    final store=ErpLocalStore(Memory());
+    const id='00000000-0000-4000-8000-000000000005';
+    final original={'id':id,'body':{'branchId':'b','lines':[]}};
+    await store.saveUnsentSalesUpdate(a,id,'old',original);
+    await store.markUnsentSalesUpdate(a,id,'old','inflight');
+    await store.markUnsentSalesUpdate(a,id,'old','rejected');
+    final time=DateTime.utc(2026,11,24,10);
+    await store.claimRejectedSalesUpdate(a,id,'old','editor-one',now:time);
+    await store.claimRejectedSalesUpdate(a,id,'old','editor-two',
+      now:time.add(const Duration(minutes:11)));
+    await expectLater(store.replaceReconciledSalesUpdate(a,id,'old','editor-one','first',original),
+      throwsA(isA<LocalRecoveryConflict>()));
+    await store.releaseRejectedSalesClaim(a,id,'old','editor-two');
+    expect((await store.unsentSalesUpdates(a,id)).single['status'],'rejected');
+  });
   test('cache expiry is explicit, never proof of a current price',()async{
     final store=ErpLocalStore(Memory());
     final time=DateTime.utc(2026,11,24);
