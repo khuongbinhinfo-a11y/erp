@@ -187,6 +187,15 @@ void main(){
     await store.releaseRejectedSalesClaim(a,id,'old','editor-two');
     expect((await store.unsentSalesUpdates(a,id)).single['status'],'rejected');
   });
+  test('retired cart tombstones retain ownership fence but never customer PII',()async{
+    final memory=Memory(),store=ErpLocalStore(memory);
+    await store.saveScopedCart(a,'private',{'customerPhone':'0900000000'},owner:'person');
+    await store.clearScopedCart(a,'private',owner:'person');
+    final jsonBlob=memory.rows.values.join(' ');
+    expect(jsonBlob.contains('0900000000'),false);
+    await expectLater(store.saveScopedCart(a,'private',{'customerPhone':'0900000000'},owner:'person'),
+      throwsA(isA<LocalRecoveryConflict>()));
+  });
   test('cache expiry is explicit, never proof of a current price',()async{
     final store=ErpLocalStore(Memory());
     final time=DateTime.utc(2026,11,24);

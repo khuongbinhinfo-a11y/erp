@@ -120,7 +120,8 @@ class ErpLocalStore {
       }
       final cart=Map<String,dynamic>.from(from['draft'] as Map);
       // Retired tombstones prevent the previous live editor resurrecting an ID.
-      items[sourceId]={...from,'status':'retired','leaseUntil':0};
+      items[sourceId]={'_kind':'erp-cart-lease-v1','draft':<String,dynamic>{},
+        'owner':from['owner'],'status':'retired','leaseUntil':0};
       items[newId]={'_kind':'erp-cart-lease-v1','draft':cart,'status':'editing',
         'owner':owner,'leaseUntil':_cartDeadline()};
       if(await (driver as AtomicLocalDriver).compareAndSwap(key,old,jsonEncode(items)))return cart;
@@ -157,7 +158,8 @@ class ErpLocalStore {
       if(entry['owner']!=owner)throw const LocalRecoveryConflict();
       if(entry['status']=='submitted'&&entry['commandKey']!=commandKey)throw const LocalRecoveryConflict();
       if(!{'submitted','editing','released'}.contains(entry['status']))throw const LocalRecoveryConflict();
-      return {...entry,'status':'retired','leaseUntil':0};
+      return {'_kind':'erp-cart-lease-v1','draft':<String,dynamic>{},
+        'owner':owner,'status':'retired','leaseUntil':0};
     });
   }
   Future<void> _mutateScopedCart(LocalScope scope,String id,
