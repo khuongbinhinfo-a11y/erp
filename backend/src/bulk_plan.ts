@@ -378,7 +378,7 @@ async function buildSelectedSkuPrices(db:PoolClient,tenant:string,actor:string,i
    let previous:string|null=null,sourceId:string|null=null,priority=previousRule?.priority??0;
    try{
     const quoted=await resolveR1Price(db,{installationId:tenant,branchId:branch,
-     priceListId:input.priceListId,sellSkuId:sku.id,quantity:"1",priceAt:at});
+     priceListId:input.priceListId!,sellSkuId:sku.id,quantity:"1",priceAt:at});
     previous=quoted.basePrice;
     sourceId=quoted.trace[0]?.ruleId??null;
     priority=quoted.trace[0]?.priority??priority;
