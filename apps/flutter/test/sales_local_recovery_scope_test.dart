@@ -57,8 +57,8 @@ void main(){
       await tester.pumpAndSettle();
       await tester.pump(const Duration(milliseconds:100));
       expect(locks,isNotEmpty);
-      expect(locks.last,false,'blocked recovery must not trap logout/account switch');
-      expect(mutations,0,'revoked action must not be submitted to the server');
+      expect(locks.last,false,reason:'blocked recovery must not trap logout/account switch');
+      expect(mutations,0,reason:'revoked action must not be submitted to the server');
       expect((await store.salesRecovery(scope))?['key'],'retry-exact-key');
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump();
