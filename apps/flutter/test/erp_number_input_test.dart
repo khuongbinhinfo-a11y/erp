@@ -31,4 +31,16 @@ void main(){
       text:'1,250.12501',selection:TextSelection.collapsed(offset:11))),pasted);
     expect(formatter.formatEditUpdate(pasted,empty).text,'');
   });
+  test('consecutive backspaces across grouping separator keep caret',(){
+    const formatter=ErpGroupedNumberFormatter();
+    final first=formatter.formatEditUpdate(
+      const TextEditingValue(text:'1,234,567',selection:TextSelection.collapsed(offset:6)),
+      const TextEditingValue(text:'1,234567',selection:TextSelection.collapsed(offset:5)));
+    expect(first.text,'123,567');
+    expect(first.selection.extentOffset,3);
+    final second=formatter.formatEditUpdate(first,
+      const TextEditingValue(text:'12,567',selection:TextSelection.collapsed(offset:2)));
+    expect(second.text,'12,567');
+    expect(second.selection.extentOffset,2);
+  });
 }
