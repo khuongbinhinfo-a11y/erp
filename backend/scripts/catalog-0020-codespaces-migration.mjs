@@ -10,7 +10,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { spawnSync, execFileSync } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, readFileSync, writeFileSync, rmSync, statSync, chmodSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, statSync, chmodSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -60,6 +60,12 @@ export function restoreContainerCleanupArgs(name){
  return ["rm","--force","--volumes",name];
 }
 function required(e,names){const missing=names.filter(n=>!e[n]);if(missing.length)fail("REQUIRED_CODESPACES_SECRETS_MISSING: "+missing.join(","));}
+// Prevent a later 0021+ migration from silently being applied by this older operator.
+export function assertExactOperatorMigrationFiles(files){
+ const present=files.filter(x=>/^\\d{4}_[a-z0-9_]+\\.sql$/.test(x)).sort();
+ if(JSON.stringify(present)!==JSON.stringify([...BASE,...RELEASE]))
+  fail("CAT20_OPERATOR_MIGRATION_FILES_MISMATCH");
+}
 export function checkVersions(versions,stage){
  const wanted=stage==="before"?BASE:[...BASE,...RELEASE];
  if(JSON.stringify(versions)!==JSON.stringify(wanted))fail("ERP_DB_MIGRATION_DRIFT_"+stage.toUpperCase());
@@ -378,6 +384,7 @@ async function verifyCAT20Schema(pool){
 
 async function main(mode){
  const e=process.env;
+ assertExactOperatorMigrationFiles(readdirSync(resolve("db/migrations")));
  const sha=git(["rev-parse","HEAD"]),branch=git(["branch","--show-current"]);
  const remote=git(["remote","get-url","origin"]);
  const tracked=git(["status","--porcelain","--untracked-files=all"]);
