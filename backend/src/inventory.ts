@@ -11,6 +11,30 @@ export class InventoryFault extends Error {
     super(code);this.status=status;this.code=code;
   }
 }
+/** Legacy allocateWarehouseDemand, adapted to ERP's exact scaled bigint units.
+ * Source: NPP-Platform d39e8a87, sales-fulfillment.js:178-200.
+ * One warehouse/product scope, ordered in caller-defined stable order.
+ * Negative availability is a shortage, not a negative reservation.
+ * T0 characterization only: wire to transactional demand storage after
+ * migration/lock review; do not weaken existing ledger constraints here.
+ */
+export function allocateWarehouseDemand<T extends {ordered:bigint}>(
+ lines:readonly T[],available:bigint,allowBackorder:boolean,
+){
+ if(lines.some(line=>line.ordered<=0n))throw new InventoryFault(400,"INVALID_QUANTITY");
+ let remaining=available>0n?available:0n;
+ const required=lines.reduce((sum,line)=>sum+line.ordered,0n);
+ if(!allowBackorder&&required>remaining)return {
+   ok:false as const,code:"SALES_ORDER_INSUFFICIENT_STOCK" as const,
+   required,available:remaining,
+ };
+ return {ok:true as const,allocations:lines.map(line=>{
+   const reserved=line.ordered<remaining?line.ordered:remaining;
+   remaining-=reserved;
+   return {...line,reserved,backordered:line.ordered-reserved};
+ })};
+}
+
 export type WarehouseScope={branchId:string;warehouseId:string};
 export type OpeningInput=WarehouseScope&{productId:string;quantity:string};
 export type ReserveInput=WarehouseScope&{orderId:string;version:number;lineNo:number};
