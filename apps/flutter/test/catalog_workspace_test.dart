@@ -30,6 +30,17 @@ Future<void> openCompanyCatalog(WidgetTester tester,String destination)async{
 }
 
 void main(){
+  test('batch group change retains same-group categories and clears only changed groups',(){
+    final product=<String,dynamic>{
+      'groupId':'TAP','categoryId':'F04NA',
+    };
+    expect(shouldClearCategoryForTargetGroup(product,'TAP'),isFalse);
+    expect(shouldClearCategoryForTargetGroup(product,'PAPER'),isTrue);
+    expect(shouldClearCategoryForTargetGroup(product,null),isTrue);
+    expect(shouldClearCategoryForTargetGroup(
+      {'groupId':'TAP','categoryId':null},'PAPER'),isFalse);
+  });
+
   test('lost ACK group edit replays original derived category removal',(){
     final pending=<String,dynamic>{
       'branchId':branch,'groupId':'new-group','categoryId':null,
