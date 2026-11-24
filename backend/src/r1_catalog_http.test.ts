@@ -375,8 +375,8 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
   assert.equal(stacked.status,200,JSON.stringify(stacked.body));
   assert.equal(Number(stacked.body.quote.unitPrice),9310,
     "matching stackable discount on a different list is applied exactly once");
-  assert.equal(Number((await quoteAtomic(c2.body.id,channel.body.id))
-    .body.quote.unitPrice),9800,"nonmatching customer group cannot borrow VIP discount");
+  assert.equal(Number((await quoteAtomic(c1.body.id,anotherChannel.body.id))
+    .body.quote.unitPrice),9800,"nonmatching channel cannot borrow channel-scoped discount");
   const stop=await request("/v1/catalog/price-lists/"+atomicList.body.id,"PATCH",{
     branchId:b,stopProcessing:true},token,{
     "if-match":"0","idempotency-key":"p0-stop-"+randomUUID()});
