@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'sales_print_document.dart';
 import 'package:material_ui/material_ui.dart';
@@ -200,7 +199,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     var walkInName=(savedShipping['walkInName']??'').toString();
     var walkInPhone=(savedShipping['walkInPhone']??'').toString();
     var rememberDelivery=false,walkInBusy=false,locationBusy=false;
-    int locationGeneration=0,addressGeneration=0;
+    int locationGeneration=0,addressGeneration=0,addressEditGeneration=0,customerChoiceGeneration=0;
     List<Map<String,dynamic>> locations=[];
     Map<String,dynamic>? walkInCustomer=entrySettings?['walkInCustomer'] is Map
       ?Map<String,dynamic>.from(entrySettings!['walkInCustomer'] as Map):null;
@@ -398,7 +397,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       locationId,deliveryAddress,deliveryDate,walkInName,walkInPhone,rememberDelivery].join('|');
     final originalShippingStamp=shippingStamp();
     Future<void> loadLocations(BuildContext ctx,StateSetter refresh,{bool selectDefault=false})async{
-      final run=++locationGeneration,id=customer,addressRun=addressGeneration;
+      final run=++locationGeneration,id=customer,addressRun=addressGeneration,editRun=addressEditGeneration;
       if(!modern||id==null||customerMode=='WALK_IN')return;
       refresh(()=>locationBusy=true);
       try{
@@ -409,7 +408,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           if(locationId!=null&&!locations.any((x)=>x['id']==locationId)){
             locations.add({'id':locationId,'name':'Địa chỉ đã lưu','address':deliveryAddress});
           }
-          if(selectDefault&&addressRun==addressGeneration&&locationId==null){
+          if(selectDefault&&addressRun==addressGeneration&&editRun==addressEditGeneration&&locationId==null){
             final preferred=locations.where((x)=>x['isDefault']==true).firstOrNull;
             if(preferred!=null){
               locationId=preferred['id'] as String;
@@ -709,6 +708,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     }
     void chooseCustomer(BuildContext ctx,Map<String,dynamic> item,StateSetter refresh){
       if(!customers.any((x)=>x['id']==item['id']))customers.add(item);
+      customerChoiceGeneration++;locationBusy=false;
       customer=item['id'] as String;
       customerMode='EXISTING';walkInName='';walkInPhone='';
       locationId=null;locations=[];locationGeneration++;addressGeneration++;
@@ -721,6 +721,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     }
     Future<void> chooseWalkIn(BuildContext ctx,StateSetter refresh)async{
       if(walkInBusy)return;
+      final choice=++customerChoiceGeneration;
       refresh(()=>walkInBusy=true);
       const kind='sales.walk-in.prepare';
       final actor=widget.session.actorId;
@@ -732,7 +733,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           walkInCustomer=await widget.client.prepareSalesWalkIn(widget.session.token,branch,key:key);
           widget.client.clearR1(actor,branch,kind);
         }
-        if(!ctx.mounted)return;
+        if(!ctx.mounted||choice!=customerChoiceGeneration||widget.session.actorId!=actor||branchId!=branch)return;
+        locationBusy=false;
         customer=walkInCustomer!['id'] as String;
         customerMode='WALK_IN';deliveryChoice='PICKUP';
         if(!['PREPAID','COLLECT_ON_DELIVERY'].contains(collectionPolicy))collectionPolicy='COLLECT_ON_DELIVERY';
@@ -1273,7 +1275,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         TextFormField(key:ValueKey('sales-delivery-address-$customer-$addressGeneration'),
                           initialValue:deliveryAddress,readOnly:locationId!=null,
                           decoration:const InputDecoration(labelText:'Địa chỉ giao',isDense:true),
-                          onChanged:(v){deliveryAddress=v;}),
+                          onChanged:(v){deliveryAddress=v;addressEditGeneration++;}),
                       ],
                       Text('Hạn thanh toán: ${customerMode=='WALK_IN'?0:customers.where((x)=>x['id']==customer).firstOrNull?['paymentTermsDays']??savedShipping['paymentTermsDays']??0} ngày · Chưa ghi nhận thu tiền',
                         style:const TextStyle(fontSize:12,color:ErpTokens.muted)),
@@ -1594,7 +1596,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         key:ValueKey('sales-last-price-$i'),
                         tooltip:'Giá lần mua trước của khách này',
                         icon:const Icon(Icons.history,size:18),
-                        onPressed:customer==null||!can('orders.update')?null:()async{
+                        onPressed:customer==null||customerMode=='WALK_IN'||!can('orders.update')?null:()async{
                           final selectedCustomer=customer!;
                           final requestedSku=entry.sellSkuId;
                           try{

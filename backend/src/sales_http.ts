@@ -615,10 +615,16 @@ async function detail(db:PoolClient,t:string,b:string,id:string,actor:string){
     tax_amount::text AS "taxAmount",line_total::text AS "lineTotal"
     FROM sales_order_line WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3
       AND version_no=$4 ORDER BY line_no`,[t,b,id,item.version]);
-  const versions=await db.query(`SELECT version_no AS version,state,grand_total::text AS total,
-    amendment_reason AS "amendmentReason",created_at AS "createdAt",confirmed_at AS "confirmedAt"
-    FROM sales_order_version WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3
-    ORDER BY version_no DESC`,[t,b,id]);
+  const modern=await hasOrderContextSchema(db);
+  const warehouseIds=modern?(await userAccess(db,t,actor))
+    .filter(g=>g.branchId===b&&g.permission==="inventory.read"&&g.warehouseId).map(g=>g.warehouseId!):[];
+  const versions=await db.query(`SELECT v.version_no AS version,v.state,v.grand_total::text AS total,
+    v.amendment_reason AS "amendmentReason",v.created_at AS "createdAt",v.confirmed_at AS "confirmedAt"
+    FROM sales_order_version v
+    ${modern?'LEFT JOIN sales_order_version_context sc ON sc.installation_id=v.installation_id AND sc.branch_id=v.branch_id AND sc.order_id=v.order_id AND sc.version_no=v.version_no':''}
+    WHERE v.installation_id=$1 AND v.branch_id=$2 AND v.order_id=$3
+    ${modern?'AND (sc.warehouse_id IS NULL OR sc.warehouse_id=ANY($4::uuid[]))':''}
+    ORDER BY v.version_no DESC`,[t,b,id,...(modern?[warehouseIds]:[])]);
   return {...item,...(shipping?{shipping}:{}),lines:lines.rows,history:versions.rows};
 }
 export async function handleSalesHttp(req:IncomingMessage,res:ServerResponse,
@@ -703,6 +709,12 @@ export async function handleSalesHttp(req:IncomingMessage,res:ServerResponse,
         const customer=await db.query("SELECT id FROM catalog_customer WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active",
           [tenant,branchId,customerId]);
         if(!customer.rowCount)throw new SalesError(409,"CUSTOMER_UNAVAILABLE");
+        const modern=await hasOrderContextSchema(db);
+        if(modern&&(await db.query("SELECT 1 FROM sales_walk_in_customer WHERE installation_id=$1 AND branch_id=$2 AND customer_id=$3",[tenant,branchId,customerId])).rowCount){
+          send(res,200,{price:null,requestId:id},id,cors);return;
+        }
+        const warehouseIds=modern?(await userAccess(db,tenant,actorId))
+          .filter(g=>g.branchId===branchId&&g.permission==="inventory.read"&&g.warehouseId).map(g=>g.warehouseId!):[];
         const found=await db.query<{unitPrice:string;discountRate:string;taxRate:string;confirmedAt:Date}>(
           `SELECT line.unit_price::text AS "unitPrice",
            line.discount_rate::text AS "discountRate",
@@ -713,11 +725,13 @@ export async function handleSalesHttp(req:IncomingMessage,res:ServerResponse,
            AND v.version_no=line.version_no AND v.state='CONFIRMED'
           JOIN sales_order o ON o.installation_id=v.installation_id
            AND o.branch_id=v.branch_id AND o.id=v.order_id
+          ${modern?'LEFT JOIN sales_order_version_context sc ON sc.installation_id=v.installation_id AND sc.branch_id=v.branch_id AND sc.order_id=v.order_id AND sc.version_no=v.version_no':''}
           WHERE line.installation_id=$1 AND line.branch_id=$2
+           ${modern?'AND (sc.warehouse_id IS NULL OR sc.warehouse_id=ANY($5::uuid[]))':''}
            AND o.customer_id=$3 AND line.sell_sku_id=$4
            AND o.status='CONFIRMED'
           ORDER BY v.confirmed_at DESC,o.id DESC,line.line_no DESC LIMIT 1`,
-          [tenant,branchId,customerId,sellSkuId]);
+          [tenant,branchId,customerId,sellSkuId,...(modern?[warehouseIds]:[])]);
         send(res,200,{price:found.rows[0]??null,requestId:id},id,cors);
       }finally{db.release();}
       return;
