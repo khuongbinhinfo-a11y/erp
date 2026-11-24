@@ -326,13 +326,15 @@ async function retireRule(db:PoolClient,tenant:string,actorId:string,branchId:st
  if(!r.rows[0])throw new R1Error(404,"RULE_NOT_FOUND");
  return {status:200,body:{id:ruleId,branchId,retiredAt:r.rows[0].retiredAt.toISOString()}};
 }
-export function buildSkuTaxonomyFilters(scope?:{brandId?:string;groupId?:string;categoryId?:string}){
+export function buildSkuTaxonomyFilters(scope?:{brandId?:string;groupId?:string;categoryId?:string;productId?:string;afterId?:string}){
   const filters:string[]=[];
   const values:string[]=[];
   const add=(id:string)=>{
     values.push(id);
     return "$"+(values.length+3)+"::uuid";
   };
+  if(scope?.productId)filters.push(`s.product_id=${add(scope.productId)}`);
+  if(scope?.afterId)filters.push(`s.id>${add(scope.afterId)}`);
   if(scope?.groupId)filters.push(`p.group_id=${add(scope.groupId)}`);
   if(scope?.categoryId)filters.push(`p.category_id IN (
     WITH RECURSIVE descendants(id) AS (
@@ -350,7 +352,7 @@ export function buildSkuTaxonomyFilters(scope?:{brandId?:string;groupId?:string;
   return {filters,values};
 }
 async function listing(db:PoolClient,t:string,b:string,kind:Kind,q:string,skuId?:string,
-  scope?:{brandId?:string;groupId?:string;categoryId?:string}){
+  scope?:{brandId?:string;groupId?:string;categoryId?:string;productId?:string;afterId?:string}){
  if(kind==="units"){
   const r=await db.query(`SELECT u.product_id AS "productId",p.sku AS "productCode",
     p.name AS "productName",u.unit_code AS "unitCode",u.to_base::text AS "toBase"
@@ -381,7 +383,8 @@ async function listing(db:PoolClient,t:string,b:string,kind:Kind,q:string,skuId?
      WHERE bc.installation_id=s.installation_id AND bc.branch_id=s.branch_id
       AND bc.sell_sku_id=s.id AND bc.active AND bc.barcode ILIKE $3))
     ${filters.length?'AND '+filters.join(' AND '):''}
-   ORDER BY s.sku,s.id LIMIT 100`,params);
+   ORDER BY ${scope?.productId?'s.id':'s.sku,s.id'}
+   LIMIT ${scope?.productId?'101':'100'}`,params);
   return r.rows;
  }
  if(kind==="barcodes"){
@@ -606,6 +609,9 @@ export async function handleR1Http(req:IncomingMessage,res:ServerResponse,
    const brandId=optionalId(url.searchParams.get("brandId"));
    const groupId=optionalId(url.searchParams.get("groupId"));
    const categoryId=optionalId(url.searchParams.get("categoryId"));
+   const productId=optionalId(url.searchParams.get("productId"));
+   const afterId=optionalId(url.searchParams.get("after"));
+   if(afterId&&(!productId||type!=="skus"))throw new R1Error(400,"INVALID_PAGINATION");
    if((brandId||categoryId)&&type==="skus"){
      const schema=await pool.query<{ready:boolean}>(
        "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version='0020_catalog_hierarchy_locations.sql') AS ready");
@@ -615,9 +621,15 @@ export async function handleR1Http(req:IncomingMessage,res:ServerResponse,
    try{
     if(!await hasPermission(db,{installationId:t,actorId,branchId,permission:"catalog.read"}))
      throw new R1Error(403,"DENIED");
-    send(res,200,{items:await listing(db,t,branchId,type,q,skuId,
+    const items=await listing(db,t,branchId,type,q,skuId,
       type==="skus"?{brandId:brandId??undefined,groupId:groupId??undefined,
-        categoryId:categoryId??undefined}:undefined),requestId},requestId,cors);
+        categoryId:categoryId??undefined,productId:productId??undefined,
+        afterId:afterId??undefined}:undefined);
+    // Product-scoped keyset pagination precedes the LIMIT: never use a
+    // global 100-SKU page as the selectable units for a single product.
+    const scoped=type==="skus"&&productId!=null;
+    send(res,200,{items:scoped?items.slice(0,100):items,
+      ...(scoped&&items.length>100?{nextAfter:items[99].id}:{}),requestId},requestId,cors);
    }finally{db.release();}
    return;
   }

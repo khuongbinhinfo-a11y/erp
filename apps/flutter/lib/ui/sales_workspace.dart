@@ -20,13 +20,14 @@ class _OrderLine {
   String sellSkuId;
   final TextEditingController quantity,unitPrice,discountRate,taxRate;
   final FocusNode quantityFocus=FocusNode();
+  final FocusNode unitFocus=FocusNode();
   _OrderLine(this.sellSkuId,String value):
     quantity=TextEditingController(text:erpGroupedDecimalText(value)),
     unitPrice=TextEditingController(),
     discountRate=TextEditingController(text:'0'),
     taxRate=TextEditingController(text:'0');
   void dispose(){quantity.dispose();unitPrice.dispose();
-    discountRate.dispose();taxRate.dispose();quantityFocus.dispose();}
+    discountRate.dispose();taxRate.dispose();quantityFocus.dispose();unitFocus.dispose();}
 }
 class _SalesWorkspaceState extends State<SalesWorkspace> {
   List<Map<String,dynamic>> branches=[],orders=[];
@@ -343,6 +344,36 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       ?stockWarehouses.single['id'] as String:null;
     int priceGeneration=0,stockGeneration=0;
     Map<String,Map<String,dynamic>> skuQuotes={},stockByProduct={};
+    final variantsByProduct=<String,List<Map<String,dynamic>>>{};
+    final variantLoading=<String>{},variantFailed=<String>{};
+    Future<void> loadVariants(BuildContext ctx,StateSetter refresh,
+        String productId)async{
+      if(variantsByProduct.containsKey(productId)||
+          variantLoading.contains(productId)||variantFailed.contains(productId))return;
+      variantLoading.add(productId);
+      try{
+        final all=await widget.client.catalogProductSkusAll(widget.session.token,
+          branchId:branch,productId:productId);
+        if(!ctx.mounted)return;
+        refresh((){
+          variantsByProduct[productId]=all.where((x)=>x['active']==true).toList();
+          for(final variant in all){
+            if(!skus.any((x)=>x['id']==variant['id']))skus.add(variant);
+          }
+          variantLoading.remove(productId);
+        });
+      }on ErpApiError catch(e){
+        if(ctx.mounted)refresh((){
+          variantLoading.remove(productId);variantFailed.add(productId);
+          formError='Không tải đủ đơn vị bán cho sản phẩm: ${e.message}';
+        });
+      }catch(_){
+        if(ctx.mounted)refresh((){
+          variantLoading.remove(productId);variantFailed.add(productId);
+          formError='Chưa tải được các đơn vị bán của sản phẩm.';
+        });
+      }
+    }
     final skuResultScroll=ScrollController();
     String priceContext()=>[customer??'',list??'',channel??'',
       ...lines.map((line)=>line.sellSkuId+':'+erpNumberCanonical(line.quantity.text))].join('|');
@@ -501,6 +532,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       final id=item['id'] as String;
       if(lines.length>=30){refresh(()=>formError='Tối đa 30 dòng hàng.');return;}
       if(!skus.any((x)=>x['id']==id))skus.add(item);
+      loadVariants(ctx,refresh,item['productId'].toString());
       if(lines.any((x)=>x.sellSkuId==id)&&!starterUntouched){
         refresh(()=>formError='SKU đã có trong đơn. Hãy sửa số lượng tại dòng tương ứng.');
         return;
@@ -766,7 +798,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         context:context,barrierDismissible:false,
         builder:(dialog)=>StatefulBuilder(builder:(ctx,refresh){
           final media=MediaQuery.sizeOf(ctx);
-          final narrow=media.width<720;
+          // Editable SKU unit adds 32px to the desktop row: stack before overflow.
+           final narrow=media.width<960;
           final width=media.width*0.96>1440?1440.0:media.width*0.96;
           final ready=quotes!=null&&quotedStamp==stamp();
           if(!firstQuoteScheduled){
@@ -776,7 +809,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
             });
           }
           return Focus(autofocus:true,onKeyEvent:(node,event){
-            if(event is! KeyDownEvent)return KeyEventResult.ignored;
+            if(event is! KeyDownEvent&&event is! KeyRepeatEvent)return KeyEventResult.ignored;
             if(event.logicalKey==LogicalKeyboardKey.f3){
               skuFocus.requestFocus();
               skuSearch.selection=TextSelection(
@@ -879,7 +912,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       constraints:const BoxConstraints(maxWidth:760),
                       child:Row(children:[
                         Expanded(child:Focus(onKeyEvent:(node,event){
-                      if(event is! KeyDownEvent||customerMatches.isEmpty)
+                      if(event is! KeyDownEvent&&event is! KeyRepeatEvent||customerMatches.isEmpty)
                         return KeyEventResult.ignored;
                       if(event.logicalKey==LogicalKeyboardKey.arrowDown){
                         refresh(()=>selectedCustomerIndex=
@@ -1050,7 +1083,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
                     Focus(
                       onKeyEvent:(node,event){
-                        if(event is! KeyDownEvent||skuMatches.isEmpty||
+                        if(event is! KeyDownEvent&&event is! KeyRepeatEvent||skuMatches.isEmpty||
           skuResultsFor!=skuSearch.text.trim())return KeyEventResult.ignored;
                         if(event.logicalKey==LogicalKeyboardKey.arrowDown){
                           refresh((){
@@ -1157,7 +1190,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                                     key:ValueKey('sales-sku-result-'+i.toString()),
                                     onTap:()=>chooseSku(ctx,sku,refresh),
                                     onHover:(hover){
-                                      if(hover&&selectedSkuIndex!=i){
+                                      if(hover&&!skuExplicitSelection&&selectedSkuIndex!=i){
                                         // Hover updates the visual row; only arrow keys signal an
                                         // intentional keyboard override of a scanned exact ID.
                                         refresh(()=>selectedSkuIndex=i);
@@ -1211,7 +1244,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       child:Row(children:[
                         const Expanded(flex:5,child:Text('HÀNG HÓA / SKU',
                           style:TextStyle(fontWeight:FontWeight.w700,fontSize:11,color:ErpTokens.muted))),
-                        const SizedBox(width:60,child:Text('ĐVT',style:TextStyle(fontSize:11,color:ErpTokens.muted))),
+                        const SizedBox(width:92,child:Text('ĐVT',style:TextStyle(fontSize:11,color:ErpTokens.muted))),
                         const SizedBox(width:112,child:Text('SỐ LƯỢNG',style:TextStyle(fontSize:11,color:ErpTokens.muted))),
                         const SizedBox(width:112,child:Text('ĐƠN GIÁ',textAlign:TextAlign.right,
                           style:TextStyle(fontSize:11,color:ErpTokens.muted))),
@@ -1228,7 +1261,55 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       final sku=skus.firstWhere((x)=>x['id']==entry.sellSkuId);
                       final name=(sku['productName']??sku['name']??'Sản phẩm').toString();
                       final code=(sku['code']??sku['sku']??'').toString();
-                      final unit=(sku['unitCode']??'').toString();
+                      final productId=sku['productId'].toString();
+                      if(!variantsByProduct.containsKey(productId)&&
+                          !variantLoading.contains(productId)&&
+                          !variantFailed.contains(productId)){
+                        WidgetsBinding.instance.addPostFrameCallback((_){
+                          if(ctx.mounted)loadVariants(ctx,refresh,productId);
+                        });
+                      }
+                      final variants=variantsByProduct[productId];
+                      final unitChoices=<Map<String,dynamic>>[
+                        if(variants!=null)...variants,
+                        if(variants==null||
+                            !variants.any((x)=>x['id']==entry.sellSkuId))sku,
+                      ];
+                      final unitField=SizedBox(width:narrow?128:92,
+                        child:DropdownButtonFormField<String>(
+                          key:ValueKey('sales-unit-$i-${entry.sellSkuId}'),
+                          initialValue:entry.sellSkuId,
+                          focusNode:entry.unitFocus,isDense:true,isExpanded:true,
+                          menuMaxHeight:240,
+                          decoration:const InputDecoration(
+                            isDense:true,labelText:'ĐVT',
+                            border:UnderlineInputBorder(),
+                            contentPadding:EdgeInsets.symmetric(horizontal:3,vertical:4)),
+                          items:unitChoices.map((variant)=>DropdownMenuItem<String>(
+                            value:variant['id'] as String,
+                            child:Text((variant['unitCode']??'').toString(),
+                              maxLines:1,overflow:TextOverflow.ellipsis))).toList(),
+                          onChanged:variants==null||variants.length<2?null:(next){
+                            if(next==null||next==entry.sellSkuId)return;
+                            final options=variants.where((x)=>x['id']==next&&
+                              x['productId']==productId&&x['active']==true).toList();
+                            if(options.length!=1){
+                              refresh(()=>formError='Đơn vị bán đã chọn không còn hợp lệ.');
+                              return;
+                            }
+                            entry.sellSkuId=next;
+                            // The old unit's manual price, discount and tax
+                            // are not transferable to another exact SKU.
+                            entry.unitPrice.clear();
+                            entry.discountRate.text='0';
+                            entry.taxRate.text='0';
+                            if(!listManuallySelected&&lists.length>1){
+                              listResolveGeneration++;list=null;
+                              pricingChanged(ctx,refresh);
+                              resolveList(ctx,refresh,sellSkuId:next);
+                            }else{pricingChanged(ctx,refresh);}
+                          }));
+
                       final quote=ready&&i<quotes!.length?quotes![i]:null;
                       final price=quote==null?'—':money(quote['unitPrice']);
                       final lineTotal=quote==null?'—':money(quote['lineTotal']);
@@ -1289,27 +1370,16 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       final split=IconButton(
                         constraints:const BoxConstraints(minWidth:32,minHeight:32),
                         padding:EdgeInsets.zero,
-                        key:ValueKey('sales-split-$i'),tooltip:'Tách 1 đơn vị thành dòng riêng',
+                        key:ValueKey('sales-split-$i'),tooltip:'Thêm dòng độc lập, số lượng 1',
                         icon:const Icon(Icons.call_split_outlined,size:18),
-                        onPressed:(){
-                          final value=erpNumberCanonical(entry.quantity.text);
-                          final parts=value.split('.');
-                          final base=int.tryParse(parts.first);
-                          final frac=parts.length>1?int.tryParse(parts[1].padRight(3,'0')):0;
-                          if(base==null||frac==null||base*1000+frac<=1000){
-                            refresh(()=>formError='Số lượng phải lớn hơn 1 để tách dòng.');
-                            return;
-                          }
-                          final remain=base*1000+frac-1000;
-                          final fraction=(remain%1000).toString().padLeft(3,'0')
-                            .replaceFirst(RegExp(r'0+$'),'');
-                          entry.quantity.text=erpGroupedDecimalText(
-                            (remain~/1000).toString()+(fraction.isEmpty?'':'.$fraction'));
+                        onPressed:!(can('orders.create')||can('orders.update'))||lines.length>=30?null:(){
+                          // Do not deduct source quantity or copy stale manual price/discount.
                           final next=_OrderLine(entry.sellSkuId,'1');
-                          next.unitPrice.text=entry.unitPrice.text;
-                          next.discountRate.text=entry.discountRate.text;
-                          next.taxRate.text=entry.taxRate.text;
-                          lines.insert(i+1,next);pricingChanged(ctx,refresh);
+                          lines.insert(i+1,next);
+                          pricingChanged(ctx,refresh);
+                          WidgetsBinding.instance.addPostFrameCallback((_){
+                            if(ctx.mounted)next.unitFocus.requestFocus();
+                          });
                         });
                       final previousPrice=IconButton(
                         constraints:const BoxConstraints(minWidth:32,minHeight:32),
@@ -1319,11 +1389,16 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         icon:const Icon(Icons.history,size:18),
                         onPressed:customer==null||!can('orders.update')?null:()async{
                           final selectedCustomer=customer!;
+                          final requestedSku=entry.sellSkuId;
                           try{
                             final data=await widget.client.salesLastPurchasePrice(
                               widget.session.token,branchId:branch,
-                              customerId:selectedCustomer,sellSkuId:entry.sellSkuId);
+                              customerId:selectedCustomer,sellSkuId:requestedSku);
+                            // Changing UOM makes a previous per-piece price
+                            // inapplicable to the new carton SKU, even if the
+                            // old request returns after the new quote.
                             if(!ctx.mounted||customer!=selectedCustomer||
+                                entry.sellSkuId!=requestedSku||
                                 !lines.contains(entry))return;
                             if(data==null){
                               refresh(()=>formError='Khách này chưa từng mua SKU này.');
@@ -1364,9 +1439,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                             // server-quoted amounts must not compete for
                             // horizontal space on 320px/360px phones.
                             Row(children:[
-                              Flexible(child:Text(unit,maxLines:2,
-                                overflow:TextOverflow.ellipsis,
-                                style:const TextStyle(color:ErpTokens.muted,fontSize:12))),
+                              unitField,
                               const SizedBox(width:12),
                               quantityField,
                             ]),
@@ -1382,8 +1455,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           ]):
                           Row(children:[
                             Expanded(flex:5,child:productName),
-                            SizedBox(width:60,child:Text(unit,
-                              style:const TextStyle(color:ErpTokens.muted))),
+                            unitField,
                             SizedBox(width:112,child:quantityField),
                             unitPriceField,discountField,taxField,
                             SizedBox(width:120,child:Text(lineTotal,textAlign:TextAlign.right,
