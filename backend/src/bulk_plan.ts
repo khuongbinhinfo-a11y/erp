@@ -85,6 +85,9 @@ const DEFINITIONS:Record<BulkResource,Record<string,string[]>>={
  },
 };
 export function bulkColumns(resource:BulkResource){
+ // Keep the legacy all-lists file contract. Selected-list SKU templates
+ // expose their own exact-SKU columns through bulkExport.
+ if(resource==="prices")return ["priceListCode","productCode","amount","discountRate","effectiveAt"];
  return Object.keys(DEFINITIONS[resource]);
 }
 const simplified=(s:string)=>s.normalize("NFD").replace(/[\u0300-\u036f]/g,"")
