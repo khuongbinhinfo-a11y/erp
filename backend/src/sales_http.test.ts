@@ -226,6 +226,56 @@ test("B1: real PostgreSQL order lifecycle, immutable versions, RBAC, replay and 
       "SELECT count(*)::text AS count FROM audit_event WHERE installation_id=$1 AND action_code LIKE 'sales.order.%'",
       [root.installationId]);
     assert.equal(audit.rows[0]?.count,"7");
+    // T1: scoped commercial delivery context is an immutable version snapshot.
+    const settings=await call("/v1/sales/entry-settings?branchId="+b,"GET",undefined,token);
+    assert.equal(settings.status,200,JSON.stringify(settings.body));
+    assert.equal(settings.body.settings.deliveryChoice,null);
+    const shipping={warehouseId:root.warehouseId,deliveryChoice:"MANUAL",
+      collectionPolicy:"CREDIT_TERMS",customerMode:"EXISTING",
+      deliveryAddress:"Địa chỉ kiểm thử",requestedDeliveryDate:"2026-12-01",
+      rememberDeliveryChoice:true};
+    const t1Payload={...payload,shipping};
+    const t1Key="t1-create-"+randomUUID();
+    const t1=await write("/v1/sales/orders",t1Payload,0,t1Key);
+    assert.equal(t1.status,201,JSON.stringify(t1.body));
+    assert.deepEqual((await write("/v1/sales/orders",t1Payload,0,t1Key)).body,t1.body);
+    const t1id=t1.body.id;
+    const readT1=()=>call("/v1/sales/orders/"+t1id+"?branchId="+b,"GET",undefined,token);
+    const t1Detail=await readT1();
+    assert.equal(t1Detail.body.order.shipping.warehouseId,root.warehouseId);
+    assert.equal(t1Detail.body.order.shipping.deliveryChoice,"MANUAL");
+    assert.equal(t1Detail.body.order.shipping.requestedDeliveryDate,"2026-12-01");
+    assert.equal(t1Detail.body.order.shipping.deliveryAddress,"Địa chỉ kiểm thử");
+    assert.equal((await call("/v1/sales/entry-settings?branchId="+b,"GET",undefined,token)).body.settings.deliveryChoice,"MANUAL");
+    assert.equal((await write("/v1/sales/orders",{...t1Payload,
+      shipping:{...shipping,warehouseId:randomUUID()}},0,"t1-badwarehouse-"+randomUUID())).status,403);
+    assert.equal((await write("/v1/sales/orders",{...t1Payload,
+      shipping:{...shipping,requestedDeliveryDate:"2026-02-30"}},0,"t1-baddate-"+randomUUID())).status,400);
+    assert.equal((await write("/v1/sales/orders/"+t1id+"/confirm",{branchId:b},0,"t1-confirm-"+randomUUID())).status,200);
+    assert.equal((await readT1()).body.order.paymentStatus,"NOT_DUE");
+    await assert.rejects(pool.query("UPDATE sales_order_version_context SET delivery_choice='TRIP' WHERE installation_id=$1 AND order_id=$2",
+      [root.installationId,t1id]),/immutable/i);
+    const t1Amend=await write("/v1/sales/orders/"+t1id+"/amend",{branchId:b,reason:"Sửa giao hàng"},1,"t1-amend-"+randomUUID());
+    assert.equal(t1Amend.status,201,JSON.stringify(t1Amend.body));
+    assert.equal((await readT1()).body.order.shipping.deliveryChoice,"MANUAL");
+    const walk=await Promise.all([1,2].map(()=>write("/v1/sales/walk-in",{branchId:b},0,"t1-walk-"+randomUUID())));
+    assert.equal(walk[0]!.status,200,JSON.stringify(walk[0]!.body));
+    assert.equal(walk[1]!.status,200,JSON.stringify(walk[1]!.body));
+    const walkId=walk[0]!.body.customer.id;
+    assert.equal(walk[1]!.body.customer.id,walkId);
+    const customerList=await call("/v1/catalog/customers?branchId="+b,"GET",undefined,token);
+    assert.ok(!customerList.body.items.some((x:any)=>x.id===walkId));
+    const walkPayload={...payload,customerId:walkId,shipping:{warehouseId:root.warehouseId,
+      customerMode:"WALK_IN",deliveryChoice:"PICKUP",collectionPolicy:"COLLECT_ON_DELIVERY",walkInName:"Khách thử"}};
+    assert.equal((await write("/v1/sales/orders",{...walkPayload,
+      shipping:{...walkPayload.shipping,collectionPolicy:"CREDIT_TERMS"}},0,"t1-walk-credit-"+randomUUID())).status,400);
+    const walkOrder=await write("/v1/sales/orders",walkPayload,0,"t1-walk-order-"+randomUUID());
+    assert.equal(walkOrder.status,201,JSON.stringify(walkOrder.body));
+    const walkDetail=await call("/v1/sales/orders/"+walkOrder.body.id+"?branchId="+b,"GET",undefined,token);
+    assert.equal(walkDetail.body.order.shipping.customerMode,"WALK_IN");
+    assert.equal(walkDetail.body.order.shipping.paymentTermsDays,0);
+    assert.equal(walkDetail.body.order.paymentStatus,"NOT_DUE");
+    assert.equal((await call("/v1/sales/entry-settings?branchId="+b,"GET",undefined,token)).body.settings.deliveryChoice,"MANUAL");
     // R1-C: the legacy productId path must enforce the same list window
     // at both create and confirmation; existing posted documents stay intact.
     const pendingExpiry=await write("/v1/sales/orders",payload,0,
