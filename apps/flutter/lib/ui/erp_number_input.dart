@@ -34,6 +34,7 @@ class ErpGroupedNumberFormatter extends TextInputFormatter {
       TextEditingValue newValue) {
     if(newValue.composing.isValid&&!newValue.composing.isCollapsed)return newValue;
     var raw=erpNumberCanonical(newValue.text);
+    int? removedRawIndex;
     // Deleting only a grouping comma should delete the adjacent digit instead
     // of repeatedly reinserting the same separator.
     final previous=erpNumberCanonical(oldValue.text);
@@ -42,7 +43,10 @@ class ErpGroupedNumberFormatter extends TextInputFormatter {
         oldValue.selection.isCollapsed&&offset>=0&&
         offset<oldValue.text.length&&oldValue.text[offset]==','){
       final digitsBefore=oldValue.text.substring(0,offset).replaceAll(',','').length;
-      if(digitsBefore>0)raw=raw.substring(0,digitsBefore-1)+raw.substring(digitsBefore);
+      if(digitsBefore>0&&RegExp(r'\d').hasMatch(raw[digitsBefore-1])){
+        removedRawIndex=digitsBefore-1;
+        raw=raw.substring(0,removedRawIndex)+raw.substring(digitsBefore);
+      }
     }
     final match=RegExp(r'^(-?)(\d*)(?:\.(\d*))?$').firstMatch(raw);
     if(match==null||(!allowNegative&&match.group(1)=='-')||
@@ -52,8 +56,11 @@ class ErpGroupedNumberFormatter extends TextInputFormatter {
     final formatted=_group(raw);
     int mapOffset(int source) {
       if(source<0)return formatted.length;
-      final target=newValue.text.substring(0,source.clamp(0,newValue.text.length).toInt())
-        .replaceAll(',','').length.clamp(0,raw.length).toInt();
+      var target=newValue.text.substring(0,source.clamp(0,newValue.text.length).toInt())
+        .replaceAll(',','').length;
+      final removed=removedRawIndex;
+      if(removed!=null&&target>removed)target--;
+      target=target.clamp(0,raw.length).toInt();
       if(target==0)return 0;
       var count=0;
       for(var i=0;i<formatted.length;i++){
