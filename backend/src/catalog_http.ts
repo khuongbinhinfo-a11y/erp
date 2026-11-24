@@ -290,7 +290,7 @@ async function hasCatalogSchema(db:Pool):Promise<boolean>{
   }catch{return false;}
 }
 async function listing(db:PoolClient,tenant:string,actorId:string,branchId:string,
-  resource:Resource,search:string,afterCode=""):Promise<unknown[]>{
+  resource:Resource,search:string,afterCode="",exactId?:string):Promise<unknown[]>{
   if(resource==="warehouses"){
     const grants=await userAccess(db,tenant,actorId);
     const ids=grants.filter(g=>g.branchId===branchId&&g.permission==="inventory.read"&&g.warehouseId)
@@ -362,6 +362,14 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
   const groupSelection=taxonomyReady?
     'SELECT g.id,g.code,g.name,g.brand_id AS "brandId",b.name AS "brandName",g.active,g.revision::integer FROM catalog_product_group g LEFT JOIN catalog_brand b ON b.installation_id=g.installation_id AND b.branch_id=g.branch_id AND b.id=g.brand_id':
     selections.groups;
+  if(exactId&&["groups","brands","categories"].includes(resource)){
+    const selection=resource==="groups"?groupSelection:selections[resource];
+    const prefix=resource==="groups"&&taxonomyReady?"g.":"";
+    const one=await db.query(`${selection} WHERE ${prefix}installation_id=$1
+      AND ${prefix}branch_id=$2 AND ${prefix}id=$3 LIMIT 1`,
+      [tenant,branchId,exactId]);
+    return one.rows;
+  }
   const r=await db.query(
     resource==="prices"
       ?`SELECT e.id,e.price_list_id AS "priceListId",l.code AS "priceListCode",
@@ -1158,9 +1166,11 @@ export async function handleCatalogHttp(req:IncomingMessage,res:ServerResponse,
       if(afterCode&&([...afterCode].length>(resource==="unit-definitions"?24:64)||
         afterCode.trim().length===0||/[\u0000-\u001f\u007f]/.test(afterCode)))
         throw new CatalogError(400,"INVALID_UNIT_CURSOR");
+      const exactId=["groups","brands","categories"].includes(resource)&&
+        url.searchParams.has("id")?requireUuid(url.searchParams.get("id")):undefined;
       const client=await pool.connect();
       try{
-        const rows=await listing(client,tenant,actorId,branchId,resource,search,afterCode);
+        const rows=await listing(client,tenant,actorId,branchId,resource,search,afterCode,exactId);
         const nextAfter=paged&&rows.length===100
           ?(rows[rows.length-1] as {code:string}).code:null;
         send(res,200,{items:rows,
