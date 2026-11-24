@@ -12,6 +12,19 @@ import 'price_list_assignments_panel.dart';
 import 'price_sku_batch_panel.dart';
 import 'customer_locations_dialog.dart';
 
+/// Compare a retried bulk command by the single field the user chose.
+/// Derived fields such as categoryId:null may change after a COMMIT whose ACK
+/// was lost. The original pending payload and revision must still be replayed.
+bool samePendingProductBulkIntent(
+    Map<String,dynamic> saved, String action, Map<String,dynamic> requested){
+  final key=switch(action){
+    'active'=>'active','group'=>'groupId','category'=>'categoryId',
+    _=>'',
+  };
+  return key.isNotEmpty&&saved.containsKey(key)&&requested.containsKey(key)&&
+    saved['branchId']==requested['branchId']&&saved[key]==requested[key];
+}
+
 /// Live, branch-scoped catalog. No offline confirmation and no fabricated rows.
 class CatalogWorkspace extends StatefulWidget {
   final String area;
@@ -298,9 +311,11 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
         ...body,'_erpExpectedRevision':product['revision'] as int,
       };
       final outgoing=Map<String,dynamic>.from(stored)..remove('_erpExpectedRevision');
-      if(pending!=null&&outgoing.toString()!=body.toString()){
-        failed++;continue; // Unresolved command must not silently change its body.
+      if(pending!=null&&!samePendingProductBulkIntent(outgoing,action,body)){
+        failed++;continue; // Different user intent must not replace unresolved work.
       }
+      // Re-send outgoing unchanged. For example a group change may have
+      // cleared categoryId at COMMIT and it won't appear in the refreshed row.
       final expected=(stored['_erpExpectedRevision'] as int?)??product['revision'] as int;
       final key=pending?.key??'batch-product-${DateTime.now().microsecondsSinceEpoch}-$id';
       if(pending==null)widget.client.retainR1(widget.session.actorId,branchId!,kind,stored,key);
