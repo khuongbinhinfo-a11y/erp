@@ -80,8 +80,8 @@ export async function setInventoryGuardPolicy(db:PoolClient,ctx:MutationContext,
   FOR UPDATE`,[ctx.installationId,s.branchId,s.warehouseId]);
  requireRevision(ctx.expectedRevision,Number(old.rows[0]?.revision??"0"));
  await db.query(`INSERT INTO inventory_guard_policy(
-   installation_id,branch_id,warehouse_id,reserve_shortage_mode,updated_by)
-   VALUES($1,$2,$3,$4,$5)
+   installation_id,branch_id,warehouse_id,reserve_shortage_mode,revision,updated_by)
+   VALUES($1,$2,$3,$4,1,$5)
    ON CONFLICT (installation_id,branch_id,warehouse_id) DO UPDATE SET
    reserve_shortage_mode=EXCLUDED.reserve_shortage_mode,revision=inventory_guard_policy.revision+1,
    updated_by=EXCLUDED.updated_by,updated_at=now()`,
