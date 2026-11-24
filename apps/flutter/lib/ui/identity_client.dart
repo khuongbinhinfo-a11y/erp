@@ -495,6 +495,26 @@ class ErpIdentityClient {
     _request('PATCH','/v1/catalog/price-lists/assignments/$id',
       token:token,body:{'branchId':branchId,'active':active},
       revision:revision,idempotencyKey:key);
+  /// Every delivery location belongs to one canonical customer in the same branch.
+  Future<List<Map<String,dynamic>>> customerLocations(
+    String token,String branchId,String customerId)async{
+    final response=await _request('GET',
+      '/v1/catalog/customers/$customerId/locations?branchId=${Uri.encodeQueryComponent(branchId)}',
+      token:token);
+    return (response['items'] as List<dynamic>).map(
+      (item)=>Map<String,dynamic>.from(item as Map)).toList();
+  }
+  Future<Map<String,dynamic>> createCustomerLocation(
+    String token,String customerId,Map<String,dynamic> body,{required String key})=>
+    _request('POST','/v1/catalog/customers/$customerId/locations',
+      token:token,body:body,revision:0,idempotencyKey:key);
+
+  Future<Map<String,dynamic>> updateCustomerLocation(
+    String token,String customerId,String locationId,int revision,
+    Map<String,dynamic> body,{required String key})=>
+    _request('PATCH','/v1/catalog/customers/$customerId/locations/$locationId',
+      token:token,body:body,revision:revision,idempotencyKey:key);
+
   /// Optimistic catalog edit: the server checks the exact row revision inside its transaction.
   Future<Map<String,dynamic>> updateCatalog(String token,String resource,
     String id,int expectedRevision,Map<String,dynamic> fields)async{
