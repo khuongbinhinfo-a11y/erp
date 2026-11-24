@@ -59,8 +59,8 @@ function resource(v:unknown):BulkResource{
   throw new BulkFault("INVALID_BULK_RESOURCE");
  return v as BulkResource;
 }
-async function exportRows(db:PoolClient,tenant:string,branch:string,kind:BulkResource){
- const fields=bulkColumns(kind);
+async function exportRows(db:PoolClient,tenant:string,branch:string,kind:BulkResource,priceListId?:string){
+ const fields=priceListId&&kind==="prices"?["productCode","name","unitCode","amount","discountRate","effectiveAt"]:bulkColumns(kind);
  let sql:string;
  switch(kind){
  case "customers":
@@ -92,16 +92,17 @@ async function exportRows(db:PoolClient,tenant:string,branch:string,kind:BulkRes
   break;
  case "prices":
   sql='SELECT DISTINCT ON (l.code,p.sku) l.code AS "priceListCode",'+
-   'p.sku AS "productCode",e.amount::text,e.discount_rate::text AS "discountRate",'+
+   'p.sku AS "productCode",p.name,p.base_unit AS "unitCode",e.amount::text,e.discount_rate::text AS "discountRate",'+
    ` to_char(e.effective_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "effectiveAt" FROM catalog_price_entry e `+
    'JOIN catalog_price_list l ON l.installation_id=e.installation_id '+
    'AND l.branch_id=e.branch_id AND l.id=e.price_list_id '+
    'JOIN catalog_product p ON p.installation_id=e.installation_id '+
    'AND p.branch_id=e.branch_id AND p.id=e.product_id '+
    'WHERE e.installation_id=$1 AND e.branch_id=$2 '+
+   (priceListId?'AND l.id=$3::uuid ':'')+
    'ORDER BY l.code,p.sku,e.effective_at DESC,e.id DESC LIMIT 5001';
  }
- const r=await db.query<Record<string,unknown>>(sql,[tenant,branch]);
+ const r=await db.query<Record<string,unknown>>(sql,priceListId?[tenant,branch,priceListId]:[tenant,branch]);
  if(r.rows.length>5000)throw new BulkFault("EXPORT_ROW_LIMIT",413);
  const result=r.rows.map(x=>fields.map(k=>{
   const v=x[k];
@@ -134,18 +135,24 @@ export async function handleBulkHttp(req:IncomingMessage,res:ServerResponse,
   if(req.method==="GET"&&(action==="template"||action==="export")){
    const branch=url.searchParams.get("branchId"),kind=resource(url.searchParams.get("resource"));
    if(!branch||!UUID.test(branch))throw new BulkFault("INVALID_BRANCH");
+   const priceListId=url.searchParams.get("priceListId")??undefined;
+   if(priceListId!==undefined&&(kind!=="prices"||!UUID.test(priceListId)))throw new BulkFault("INVALID_PRICE_LIST");
    const format=url.searchParams.get("format")??"csv";
    if(format!=="csv"&&format!=="xlsx")throw new BulkFault("INVALID_EXPORT_FORMAT");
    const db=await pool.connect();
    try{
     if(!await hasPermission(db,{installationId:tenant,actorId:actor,branchId:branch,
       permission:"catalog.read"}))throw new BulkFault("DENIED",403);
+    if(priceListId){
+     const list=await db.query("SELECT id FROM catalog_price_list WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active",[tenant,branch,priceListId]);
+     if(!list.rows.length)throw new BulkFault("PRICE_LIST_NOT_FOUND_OR_INACTIVE",409);
+    }
     if(action==="template"){
-     const file=bulkExport(kind,[],format,true);
+     const file=bulkExport(kind,[],format,true,new Date(),Boolean(priceListId));
      send(res,200,{...file,requestId},requestId,cors);
     }else{
-     const result=await exportRows(db,tenant,branch,kind);
-     send(res,200,{...bulkExport(kind,result.rows,format),requestId},requestId,cors);
+     const result=await exportRows(db,tenant,branch,kind,priceListId);
+     send(res,200,{...bulkExport(kind,result.rows,format,false,new Date(),Boolean(priceListId)),requestId},requestId,cors);
     }
    }finally{db.release();}
    return;
@@ -193,7 +200,8 @@ export async function handleBulkHttp(req:IncomingMessage,res:ServerResponse,
    installationId:tenant,actorId:actor,requestId,
    action:"catalog.bulk."+kind+".apply",idempotencyKey:key,expectedRevision:0,
    payload:{branchId:input.branchId,resource:kind,mode:input.mode,
-    fileHash,mapping:input.mapping,hasHeader:input.hasHeader,previewHash},
+    fileHash,mapping:input.mapping,hasHeader:input.hasHeader,previewHash,
+    ...(input.priceListId?{priceListId:input.priceListId,defaultEffectiveAt:input.defaultEffectiveAt??null}:{})},
   },{
    authorize:(db,c)=>hasPermission(db,{installationId:c.installationId,
      actorId:c.actorId,branchId:input.branchId,permission:"catalog.write"}),
