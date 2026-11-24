@@ -16,6 +16,10 @@ class LocalScope {
     return sha256.convert(utf8.encode(jsonEncode([origin,installation,actor,branch,warehouse]))).toString();
   }
 }
+class LocalRecoveryConflict implements Exception {
+  const LocalRecoveryConflict();
+  @override String toString()=>'Yêu cầu đang được xử lý trong cửa sổ khác.';
+}
 class ErpLocalStore {
   final LocalDriver driver;
   ErpLocalStore(this.driver);
@@ -38,11 +42,30 @@ class ErpLocalStore {
     final fetched=DateTime.parse(data['fetchedAt'] as String);
     return (value:data['value'],stale:now.isBefore(fetched)||!now.isBefore(fetched.add(Duration(seconds:data['ttlSeconds'] as int))),fetchedAt:fetched);
   }
-  // Single atomic slot holds the full sales recovery state across transitions.
-  // A slot is branch-scoped because the sales permission itself is branch-scoped.
-  Future<void> saveSalesRecovery(LocalScope scope,Map<String,dynamic>? state)=>
-    state==null?driver.remove(_key(scope,'sales-recovery','current')):
-      driver.write(_key(scope,'sales-recovery','current'),jsonEncode(state));
+  // One command per branch, with transactional compare-and-swap across tabs.
+  Future<void> saveSalesRecovery(LocalScope scope,Map<String,dynamic>? state,{String? expectedKey})async{
+    if(driver is! AtomicLocalDriver)throw StateError('Atomic storage required for sales recovery');
+    final key=_key(scope,'sales-recovery','current'),nextKey=state?['key'];
+    if(state!=null&&(nextKey is! String||nextKey.isEmpty))throw const FormatException('Missing recovery key');
+    if(state==null&&(expectedKey==null||expectedKey.isEmpty))throw const FormatException('Unowned recovery clear');
+    final next=state==null?null:jsonEncode(state);
+    for(var attempt=0;attempt<8;attempt++){
+      final old=await driver.read(key);
+      if(old==null){
+        if(expectedKey!=null){
+          if(state==null)return;
+          throw const LocalRecoveryConflict();
+        }
+      }else{
+        Map<String,dynamic> current;
+        try{current=Map<String,dynamic>.from(jsonDecode(old) as Map);}catch(_){throw const LocalRecoveryConflict();}
+        if(current['key']!=(expectedKey??nextKey))throw const LocalRecoveryConflict();
+        if(expectedKey==null&&old!=next)throw const LocalRecoveryConflict();
+      }
+      if(await (driver as AtomicLocalDriver).compareAndSwap(key,old,next))return;
+    }
+    throw const LocalRecoveryConflict();
+  }
   Future<Map<String,dynamic>?> salesRecovery(LocalScope scope)async{
     final raw=await driver.read(_key(scope,'sales-recovery','current'));
     return raw==null?null:Map<String,dynamic>.from(jsonDecode(raw) as Map);

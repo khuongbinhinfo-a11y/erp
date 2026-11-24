@@ -128,10 +128,10 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       }
     }finally{if(_sameScope(token,branch))setState(()=>localRecoveryBusy=false);}
   }
-  Future<void> _persistPending(LocalScope? scope,String? kind,String? key,Map<String,dynamic>? body,{bool auto=false})async{
+  Future<void> _persistPending(LocalScope? scope,String? kind,String? key,Map<String,dynamic>? body,{bool auto=false,String? previousKey})async{
     if(!_localConfigured)return;
     if(scope==null)throw StateError('Thiếu phạm vi lưu yêu cầu');
-    await widget.client.localStore!.saveSalesRecovery(scope,kind==null?null:{'kind':kind,'key':key,'body':body,'auto':auto});
+    await widget.client.localStore!.saveSalesRecovery(scope,kind==null?null:{'kind':kind,'key':key,'body':body,'auto':auto},expectedKey:previousKey);
   }
   String newKey()=>'sales-'+DateTime.now().microsecondsSinceEpoch.toString()+'-'+(++sequence).toString();
   bool can(String permission)=>widget.session.grants.any(
@@ -2131,7 +2131,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       final next=auto?<String,dynamic>{'id':created['id'],'branchId':body['branchId'],'revision':created['revision']}:null;
       final nextKey=auto?newKey():null;
       if(scope!=null)await widget.client.localStore!.clearCart(scope);
-      await _persistPending(scope,auto?'confirm':null,nextKey,next);
+      await _persistPending(scope,auto?'confirm':null,nextKey,next,previousKey:key);
       if(!_sameScope(token,body['branchId'] as String))return;
       setState((){
         pendingCreate=null;pendingCreateKey=null;pendingCreateAutoConfirm=false;
@@ -2143,6 +2143,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       });
       if(!auto)inform('Đã lưu đơn hàng.');
       await reload();
+    }on LocalRecoveryConflict catch(_){
+      if(_sameScope(token,body['branchId'] as String))setState((){
+        pendingCreate=null;pendingCreateKey=null;pendingCreateAutoConfirm=false;localRecoveryBlocked=true;
+      });
+      inform('Yêu cầu đang chờ ở cửa sổ khác. Không gửi trùng.',error:true);
     }on ErpApiError catch(e){
       // Only explicit validation failures prove that the request was rolled back.
       // Unknown 409, timeout, 502/503/504 and transport errors stay replayable.
@@ -2156,7 +2161,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         e.code=='PRICE_LIST_UNAVAILABLE'||e.code=='CHANNEL_UNAVAILABLE'||
         e.code=='CUSTOMER_UNAVAILABLE'||e.code=='INVALID_LINE_IDENTITY';
       if(rejected&&_sameScope(token,body['branchId'] as String)){
-        try{await _persistPending(scope,null,null,null);}catch(_){inform('Chưa xóa được yêu cầu đã từ chối trên máy.',error:true);return;}
+        try{await _persistPending(scope,null,null,null,previousKey:key);}catch(_){inform('Chưa xóa được yêu cầu đã từ chối trên máy.',error:true);return;}
         if(!_sameScope(token,body['branchId'] as String))return;
         setState((){
           pendingCreate=null;pendingCreateKey=null;pendingCreateAutoConfirm=false;
@@ -2194,7 +2199,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       if(existing?['versionStatus']=='CONFIRMED'&&
           existing?['revision'] is int&&(existing!['revision'] as int)>revision){
         if(!_sameScope(token,branch))return;
-        await _persistPending(scope,null,null,null);
+        await _persistPending(scope,null,null,null,previousKey:key);
         if(_sameScope(token,branch))setState((){pendingConfirm=null;pendingConfirmKey=null;});
         inform('Đơn hàng đã được máy chủ xác nhận.');
       }else{
@@ -2205,18 +2210,23 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         pendingNeedsReceipt=true;
         if(receipt==null)await widget.client.salesOrderAction(token,id,'confirm',branch,revision,key:key);
         if(!_sameScope(token,branch))return;
-        await _persistPending(scope,null,null,null);
+        await _persistPending(scope,null,null,null,previousKey:key);
         if(_sameScope(token,branch))setState((){pendingConfirm=null;pendingConfirmKey=null;});
         inform('Đã lưu và xác nhận đơn hàng.');
       }
       await reload();
+    }on LocalRecoveryConflict catch(_){
+      if(_sameScope(token,branch))setState((){
+        pendingConfirm=null;pendingConfirmKey=null;localRecoveryBlocked=true;
+      });
+      inform('Xác nhận đang xử lý ở cửa sổ khác. Kiểm tra trạng thái máy chủ.',error:true);
     }on ErpApiError catch(e){
       if({'PRICE_STALE','REVISION_CONFLICT','ORDER_CANCELLED',
           'VERSION_ALREADY_CONFIRMED','CUSTOMER_OR_PRICE_LIST_UNAVAILABLE',
           'CHANNEL_UNAVAILABLE','PRICE_LIST_UNAVAILABLE','CUSTOMER_UNAVAILABLE',
           'SKU_UNAVAILABLE','SKU_HAS_NO_EFFECTIVE_BASE_PRICE',
           'INVALID_REFERENCE'}.contains(e.code)&&_sameScope(token,branch)){
-        try{await _persistPending(scope,null,null,null);}catch(_){inform('Chưa xóa được yêu cầu đã từ chối trên máy.',error:true);return;}
+        try{await _persistPending(scope,null,null,null,previousKey:key);}catch(_){inform('Chưa xóa được yêu cầu đã từ chối trên máy.',error:true);return;}
         if(!_sameScope(token,branch))return;
         setState((){pendingConfirm=null;pendingConfirmKey=null;});
         inform('Không thể xác nhận do đơn hoặc giá đã thay đổi. Đơn vẫn được lưu; hãy kiểm tra và cập nhật lại.',
@@ -2266,7 +2276,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       if(!_sameScope(token,body['branchId'] as String))return;
       final next=auto?<String,dynamic>{'id':id,'branchId':body['branchId'],'revision':updated['revision']}:null;
       final nextKey=auto?newKey():null;
-      await _persistPending(scope,auto?'confirm':null,nextKey,next);
+      await _persistPending(scope,auto?'confirm':null,nextKey,next,previousKey:key);
       if(!_sameScope(token,body['branchId'] as String))return;
       setState((){
         pendingUpdate=null;pendingUpdateKey=null;
@@ -2277,6 +2287,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       });
       if(!auto)inform('Đã cập nhật đơn hàng.');
       await reload();
+    }on LocalRecoveryConflict catch(_){
+      if(_sameScope(token,body['branchId'] as String))setState((){
+        pendingUpdate=null;pendingUpdateKey=null;localRecoveryBlocked=true;
+      });
+      inform('Yêu cầu ở cửa sổ khác đã thay đổi. Không gửi trùng.',error:true);
     }on ErpApiError catch(e){
       final rejected={'PRICE_STALE','SKU_UNAVAILABLE','INVALID_QUANTITY',
         'DUPLICATE_PRODUCT','INVALID_LINES','VERSION_ALREADY_CONFIRMED',
@@ -2285,7 +2300,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         'CHANNEL_UNAVAILABLE','PRICE_LIST_UNAVAILABLE','CUSTOMER_UNAVAILABLE',
         'SKU_HAS_NO_EFFECTIVE_BASE_PRICE'}.contains(e.code);
       if(rejected&&_sameScope(token,body['branchId'] as String)){
-        try{await _persistPending(scope,null,null,null);}catch(_){inform('Chưa xóa được yêu cầu đã từ chối trên máy.',error:true);return;}
+        try{await _persistPending(scope,null,null,null,previousKey:key);}catch(_){inform('Chưa xóa được yêu cầu đã từ chối trên máy.',error:true);return;}
         if(!_sameScope(token,body['branchId'] as String))return;
         setState((){pendingUpdate=null;pendingUpdateKey=null;});
         inform('Không thể cập nhật vì dữ liệu hoặc giá đã thay đổi. Hãy mở lại đơn và tra giá.',

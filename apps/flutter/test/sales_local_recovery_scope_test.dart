@@ -9,9 +9,14 @@ import 'package:erp_distribution/ui/identity_client.dart';
 import 'package:erp_distribution/ui/sales_workspace.dart';
 import 'package:erp_distribution/ui/erp_tokens.dart';
 
-class _Memory implements LocalDriver {
+class _Memory implements AtomicLocalDriver {
   final data=<String,String>{};
   @override Future<String?> read(String key) async=>data[key];
+  @override Future<bool> compareAndSwap(String key,String? expected,String? next)async{
+    if(data[key]!=expected)return false;
+    if(next==null)data.remove(key);else data[key]=next;
+    return true;
+  }
   @override Future<void> write(String key,String value) async{data[key]=value;}
   @override Future<void> remove(String key) async{data.remove(key);}
 }

@@ -1,9 +1,14 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:erp_distribution/local/local_driver.dart';
 import 'package:erp_distribution/local/local_store.dart';
-class Memory implements LocalDriver{
+class Memory implements AtomicLocalDriver{
   final rows=<String,String>{};
   @override Future<String?> read(String key)async=>rows[key];
+  @override Future<bool> compareAndSwap(String key,String? expected,String? next)async{
+    if(rows[key]!=expected)return false;
+    if(next==null)rows.remove(key);else rows[key]=next;
+    return true;
+  }
   @override Future<void> write(String key,String value)async{rows[key]=value;}
   @override Future<void> remove(String key)async{rows.remove(key);}
 }
@@ -32,6 +37,20 @@ void main(){
     expect(await store.loadCart(a),isNull);
     await writer.save(mutable);
     expect((await store.loadCart(a))?['quantity'],'2');
+  });
+  test('two tabs cannot overwrite or clear each other durable sales command',()async{
+    final aTab=ErpLocalStore(Memory());final bTab=ErpLocalStore(aTab.driver);
+    final first={'kind':'create','key':'first','body':{'quantity':'2'}};
+    await aTab.saveSalesRecovery(a,first);
+    await expectLater(bTab.saveSalesRecovery(a,{'kind':'create','key':'second','body':{'quantity':'3'}}),throwsA(isA<LocalRecoveryConflict>()));
+    await expectLater(bTab.saveSalesRecovery(a,null,expectedKey:'second'),throwsA(isA<LocalRecoveryConflict>()));
+    await aTab.saveSalesRecovery(a,first);
+    await expectLater(aTab.saveSalesRecovery(a,{'kind':'create','key':'first','body':{'quantity':'999'}}),throwsA(isA<LocalRecoveryConflict>()));
+    await aTab.saveSalesRecovery(a,{'kind':'confirm','key':'confirm','body':{'revision':1}},expectedKey:'first');
+    await expectLater(bTab.saveSalesRecovery(a,null,expectedKey:'first'),throwsA(isA<LocalRecoveryConflict>()));
+    expect((await aTab.salesRecovery(a))?['key'],'confirm');
+    await aTab.saveSalesRecovery(a,null,expectedKey:'confirm');
+    expect(await bTab.salesRecovery(a),isNull);
   });
   test('cache expiry is explicit, never proof of a current price',()async{
     final store=ErpLocalStore(Memory());
