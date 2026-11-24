@@ -16,6 +16,8 @@ PASS chỉ dựa trên log thật; [Master Plan V4](MASTER_PLAN.md) là lộ tr�
 | Purchasing/AR/AP/COD | partial receipt/delivery, returns, payments/dedupe, custody, allocations, Decimal/reconciliation | T4/T5 |
 | RBAC | installation, branch, warehouse, deny-by-default | Mỗi lô |
 | Flutter | analyze, widget/integration, Android APK/AAB, Windows/Web build, PWA Safari Home Screen | PR/release; thật từ T2 |
+| Số liệu/nhập số | 9800.000000 → 9,800; 12.500000 → 12.5; -1250 → -1,250; giữ 0.125, số lớn/âm/zero; nhập 9800 tự format 9,800, sửa/xóa/paste/caret/decimal; canonical Decimal round-trip, không round hoặc đổi số tiền; Excel/CSV import-export đúng kiểu | Mọi lô |
+| Ngôn ngữ production | Không DEV/demo/preview/placeholder/raw error/enum hay hướng dẫn thừa; tiếng Việt nghiệp vụ, trạng thái đúng, lỗi có cách xử lý, toast; quét toàn màn liên quan và UAT | Mọi lô |
 | UI | 1440/1280/390/360 px, keyboard/focus/reduced motion, không tab trùng, warning không modal spam, fast-entry | PR/UAT |
 | Offline | pre/post COMMIT, retry, stale price/stock, app restart, eviction, account switch, no fake ACK | T2 và mỗi mutation |
 | POS/Ordering/MCP | checkout nhanh, barcode/printer, canonical order, scoped portal và external source idempotency | T6–T8 |
