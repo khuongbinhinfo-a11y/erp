@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
  BASE,RELEASE,checkVersions,assertExactOperatorMigrationFiles,checkOperator,checkPrimaryMainSha,
- assertT0SchemaState,canonicalRemote,parsePrismaCredential,
+ assertT0SchemaState,assertT0OwnerPermissionState,canonicalRemote,parsePrismaCredential,
  requirePg17Client,BUCKET_S3_NAME,assertNotInterrupted,
  restoreContainerCleanupArgs
 } from "./t0-0021-codespaces-migration.mjs";
@@ -88,6 +88,18 @@ test("T0 verifier requires policy, backorder facts, immutable guards and zero in
     /T0_RESERVATION_POLICY_SCHEMA_RECONCILIATION_FAILED/);
  assert.throws(()=>assertT0SchemaState(null),
   /T0_RESERVATION_POLICY_SCHEMA_RECONCILIATION_FAILED/);
+});
+
+test("T0 authorizes only the expected owner grant; all existing grants are separately fingerprinted",()=>{
+ const valid={primary_roles:"1",owner_grants:"1",all_policy_grants:"1"};
+ assert.doesNotThrow(()=>assertT0OwnerPermissionState(valid));
+ for(const row of [
+  {...valid,owner_grants:"0"},
+  {...valid,all_policy_grants:"2"},
+  {...valid,primary_roles:"2"},
+  null,
+ ])assert.throws(()=>assertT0OwnerPermissionState(row),
+  /T0_POLICY_PERMISSION_GRANT_RECONCILIATION_FAILED/);
 });
 
 test("T0 requires PG17, fixed bucket, and direct short-lived ERP-DB credential",()=>{
