@@ -32,6 +32,28 @@ async function exact(db:PoolClient,amount:string,rule:Rule):Promise<string>{
     "SELECT "+expression+"::text AS result",[amount,rule.amount]);
   return q.rows[0]!.result;
 }
+/** Each configured scope dimension is mandatory; multiple values inside a
+ * dimension are alternatives. Keep legacy unassigned lists available when
+ * explicitly selected. Only active, effective targets may satisfy a scope. */
+function listScopePredicate(at:string,customer:string,group:string,channel:string):string{
+  return ([
+    ["CUSTOMER","customer_id",customer],
+    ["CUSTOMER_GROUP","customer_group_id",group],
+    ["CHANNEL","channel_id",channel],
+  ] as const).map(([kind,column,value])=>`AND (
+    NOT EXISTS (SELECT 1 FROM catalog_price_list_assignment configured
+      WHERE configured.installation_id=l.installation_id
+        AND configured.branch_id=l.branch_id AND configured.price_list_id=l.id
+        AND configured.active AND configured.scope_kind='${kind}')
+    OR EXISTS (SELECT 1 FROM catalog_price_list_assignment matched
+      WHERE matched.installation_id=l.installation_id
+        AND matched.branch_id=l.branch_id AND matched.price_list_id=l.id
+        AND matched.active AND matched.scope_kind='${kind}'
+        AND matched.${column}=${value}::uuid
+        AND (matched.effective_from IS NULL OR matched.effective_from<=${at}::timestamptz)
+        AND (matched.effective_to IS NULL OR matched.effective_to>${at}::timestamptz))
+  )`).join("\n");
+}
 export async function resolveR1Price(db:PoolClient,input:Query){
   const t=input.installationId.toLowerCase(),b=input.branchId.toLowerCase();
   const customerId=input.customerId?.toLowerCase(),channelId=input.channelId?.toLowerCase();
@@ -111,6 +133,7 @@ export async function resolveR1Price(db:PoolClient,input:Query){
           OR (a.scope_kind='CUSTOMER_GROUP'
             AND a.customer_group_id=$5::uuid)
           OR (a.scope_kind='CHANNEL' AND a.channel_id=$6::uuid))
+        ${listScopePredicate('$3','$4','$5','$6')}
       ORDER BY CASE a.scope_kind WHEN 'CUSTOMER' THEN 4
         WHEN 'CUSTOMER_GROUP' THEN 3 WHEN 'CHANNEL' THEN 2 ELSE 1 END DESC,
         a.priority DESC,l.priority DESC,
@@ -126,13 +149,14 @@ export async function resolveR1Price(db:PoolClient,input:Query){
       " theo "+label+" · ưu tiên "+winner.rows[0].priority;
   }
   const list=await db.query<{currency:string;code:string}>(
-    scoped?`SELECT currency,code FROM catalog_price_list
-      WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active
-        AND (effective_from IS NULL OR effective_from<=$4::timestamptz)
-        AND (effective_to IS NULL OR effective_to>$4::timestamptz)`:
+    scoped?`SELECT l.currency,l.code FROM catalog_price_list l
+      WHERE l.installation_id=$1 AND l.branch_id=$2 AND l.id=$3 AND l.active
+        AND (l.effective_from IS NULL OR l.effective_from<=$4::timestamptz)
+        AND (l.effective_to IS NULL OR l.effective_to>$4::timestamptz)
+        ${listScopePredicate('$4','$5','$6','$7')}`:
       `SELECT currency,code FROM catalog_price_list
       WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active`,
-    scoped?[t,b,selectedListId,input.priceAt]:[t,b,selectedListId]);
+    scoped?[t,b,selectedListId,input.priceAt,customerId??null,customerGroupId,channelId??null]:[t,b,selectedListId]);
   if(list.rows[0]?.currency!=="VND")
     throw new R1QuoteError(409,"PRICE_LIST_UNAVAILABLE_OR_EXPIRED");
   const rules=await db.query<Rule>(`SELECT r.id,r.scope_kind,r.adjustment,r.amount::text,
