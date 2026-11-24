@@ -8,6 +8,9 @@ PASS chỉ dựa trên log thật; [Master Plan V4](MASTER_PLAN.md) là lộ tr�
 | PostgreSQL | fresh migration, replay, drift, concurrency, constraints | PR CI |
 | Policy | WARN/ALLOW tiếp tục đúng scope, BLOCK đúng hard invariant, âm kho/lô/vị trí/FEFO override, audit và reconciliation | T0/T3 |
 | Pricing/sales | Một engine search/quote/save/confirm, exact SKU, auto list/override, tax/CK, Decimal, price history, warehouse snapshot, stale/lost ACK | T1 |
+| Sales modes/default | MANUAL/TRIP/PICKUP + MCP source; checkbox lưu mặc định theo user/installation qua phiên và thiết bị, đổi riêng một đơn, không lẫn scope; mode snapshot | T1/T8 |
+| Direct/normal fulfillment | MANUAL/PICKUP direct issue không bắt soạn/chuyến; TRIP một màn Soạn & đóng, partial, đổi lô/vị trí, xuất đúng fact, no duplicate OUT | T3/T5/T6 |
+| Quick payment | Xuất kho/Hoàn thành/Thu đủ/nhập tiền trực tiếp, 0 ghi nợ, partial/thu tiếp, tiền mặt/chuyển khoản, bulk per-order, lost ACK, overpayment đúng allocation; nhập trả trước hoàn thành và customer return sau hoàn thành, AR theo lượng thực nhận | T5/T6 |
 | Documents | post-once, revision, idempotency, correction/reversal, lost ACK | Mỗi vertical slice |
 | Inventory | partial reserve/backorder, actual negative stock by policy, lot/location, FEFO hint, two-device race, ledger rebuild | T3 |
 | Purchasing/AR/AP/COD | partial receipt/delivery, returns, payments/dedupe, custody, allocations, Decimal/reconciliation | T4/T5 |
