@@ -242,8 +242,10 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     Uint8List? selectedImage;
     String? selectedImageType,selectedImageName;
     String? productId,priceListId,groupId,customerGroupId,customerRegionId;
+    String? brandId,categoryId,parentId;
     List<Map<String,dynamic>> availableProducts=[],availableLists=[],availableGroups=[],
-      availableUnits=[],availableCustomerGroups=[],availableCustomerRegions=[];
+      availableUnits=[],availableCustomerGroups=[],availableCustomerRegions=[],
+      availableBrands=[],availableCategories=[];
     ModalRoute<dynamic>? formRoute;
     Future<void> saveCustomerDirectory(String kind,StateSetter refresh)async{
       final group=kind=='customer-groups';
@@ -347,6 +349,18 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
         ]);
         availableCustomerGroups=result[0];
         availableCustomerRegions=result[1];
+      }
+      if((resource=='products'||resource=='groups'||resource=='categories')&&previous==null){
+        try{
+          availableBrands=await widget.client.catalogItems(
+            widget.session.token,'brands',branchId:branchId);
+          availableCategories=await widget.client.catalogItems(
+            widget.session.token,'categories',branchId:branchId);
+        }on ErpApiError catch(e){if(e.status!=503)rethrow;}
+      }
+      if((resource=='products'||resource=='categories')&&previous==null){
+        availableGroups=await widget.client.catalogItems(
+          widget.session.token,'groups',branchId:branchId);
       }
       if(resource=='products'&&previous==null){
         availableGroups=await widget.client.catalogItems(
@@ -568,6 +582,50 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                     keyboardType:TextInputType.number,
                     decoration:const InputDecoration(labelText:'Số ngày thanh toán')),
                 ],
+                if(resource=='groups')...[
+                  const SizedBox(height:10),
+                  DropdownButtonFormField<String?>(
+                    key:const ValueKey('catalog-group-brand'),
+                    initialValue:brandId,isExpanded:true,
+                    decoration:const InputDecoration(labelText:'Nhãn hàng'),
+                    items:[
+                      const DropdownMenuItem<String?>(value:null,child:Text('Chưa gắn nhãn hàng')),
+                      ...availableBrands.where((b)=>b['active']!=false).map(
+                        (b)=>DropdownMenuItem<String?>(value:b['id'] as String,
+                          child:Text('${b['code']} · ${b['name']}'))),
+                    ],
+                    onChanged:(v)=>refresh(()=>brandId=v)),
+                ],
+                if(resource=='categories')...[
+                  const SizedBox(height:10),
+                  DropdownButtonFormField<String?>(
+                    key:const ValueKey('catalog-category-group'),
+                    initialValue:groupId,isExpanded:true,
+                    decoration:const InputDecoration(labelText:'Nhóm sản phẩm *'),
+                    items:availableGroups.where((g)=>g['active']!=false).map(
+                      (g)=>DropdownMenuItem<String?>(
+                        value:g['id'] as String,child:Text('${g['code']} · ${g['name']}'))).toList(),
+                    onChanged:(v)=>refresh((){groupId=v;parentId=null;code.clear();})),
+                  const SizedBox(height:10),
+                  DropdownButtonFormField<String?>(
+                    key:ValueKey('catalog-category-parent-$groupId'),
+                    initialValue:parentId,isExpanded:true,
+                    decoration:const InputDecoration(labelText:'Danh mục cha'),
+                    items:[
+                      const DropdownMenuItem<String?>(value:null,child:Text('Danh mục cấp đầu')),
+                      ...availableCategories.where((c)=>c['groupId']==groupId&&
+                        c['active']!=false).map((c)=>DropdownMenuItem<String?>(
+                          value:c['id'] as String,child:Text('${c['code']} · ${c['name']}'))),
+                    ],
+                    onChanged:(v)=>refresh((){
+                      parentId=v;
+                      final parent=availableCategories.where((c)=>c['id']==v);
+                      if(parent.isNotEmpty)code.text=parent.first['code'].toString();
+                    })),
+                  const SizedBox(height:6),
+                  const Text('Tạo danh mục con: chọn danh mục cha rồi thêm ký tự vào cuối mã gợi ý.',
+                    style:TextStyle(fontSize:12,color:ErpTokens.muted)),
+                ],
                 if(resource=='products')...[
                   const SizedBox(height:18),
                   const Text('1. Thông tin sản phẩm',style:TextStyle(
@@ -691,8 +749,20 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                           value:g['id'] as String,
                           child:Text(g['name'].toString(),overflow:TextOverflow.ellipsis))),
                       ],
-                      onChanged:(v)=>refresh(()=>groupId=v)),
+                      onChanged:(v)=>refresh((){groupId=v;categoryId=null;})),
                   ],
+                  const SizedBox(height:10),
+                  DropdownButtonFormField<String?>(
+                    key:ValueKey('catalog-product-category-$groupId'),
+                    initialValue:categoryId,isExpanded:true,
+                    decoration:const InputDecoration(labelText:'Danh mục sản phẩm'),
+                    items:[
+                      const DropdownMenuItem<String?>(value:null,child:Text('Chưa chọn danh mục')),
+                      ...availableCategories.where((c)=>c['groupId']==groupId&&
+                        c['active']!=false).map((c)=>DropdownMenuItem<String?>(
+                          value:c['id'] as String,child:Text('${c['code']} · ${c['name']}'))),
+                    ],
+                    onChanged:(v)=>refresh(()=>categoryId=v)),
                   const SizedBox(height:6),
                   Wrap(spacing:8,runSpacing:8,children:[
                     SizedBox(width:160,child:TextField(
@@ -943,6 +1013,10 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                       },
                     });
                   }
+                  if(resource=='groups')body['brandId']=brandId;
+                  if(resource=='categories'){
+                    body['groupId']=groupId;body['parentId']=parentId;
+                  }
                   if(resource=='customers'){
                     body.addAll({
                       'customerGroupId':customerGroupId,
@@ -973,7 +1047,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                               'barcode':extra.barcode.text.trim(),
                           },
                     ];
-                    body.addAll({'baseUnit':unit.text.trim(),'groupId':groupId,
+                    body.addAll({'baseUnit':unit.text.trim(),'groupId':groupId,'categoryId':categoryId,
                       if(baseBarcode.text.trim().isNotEmpty)
                         'barcode':baseBarcode.text.trim(),
                       'units':rows});
