@@ -105,6 +105,28 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
         setState(()=>current[id]='Không tra được giá hiện tại');
     }
   }
+  // Read the effective BASE rule, not the final customer/promotion price.
+  // Match its priority so this later version wins without masking future
+  // versions at the same priority. Missing prices start at the standard 0.
+  Future<int> effectiveBasePriority(String id)async{
+    try{
+      final response=await widget.client.r1PriceQuote(token,{
+        'branchId':widget.branchId,'priceListId':listId,
+        'sellSkuId':id,'quantity':'1',
+      });
+      final quote=response['quote'] as Map;
+      final trace=quote['trace'] as List;
+      final base=trace.first as Map;
+      if(base['scope']=='EXISTING_BASE_PRICE')return 0;
+      final priority=base['priority'];
+      if(base['scope']=='BASE_RULE'&&priority is int&&
+          priority>= -100000&&priority<=100000)return priority;
+      throw const ErpApiError(502,'Không xác định được ưu tiên giá cơ sở. Hãy thử lại.');
+    }on ErpApiError catch(e){
+      if(e.code=='SKU_HAS_NO_EFFECTIVE_BASE_PRICE')return 0;
+      rethrow;
+    }
+  }
   void setSharedPrice(){
     final amount=sharedPrice.text.trim();
     if(!RegExp(r'^\d{1,14}(?:\.\d{1,4})?$').hasMatch(amount)){
@@ -171,10 +193,12 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
         final kind=priceKind(id);
         final pending=widget.client.pendingR1(
           widget.session.actorId,widget.branchId,kind);
+        final priority=pending==null?await effectiveBasePriority(id):null;
+        if(!mounted)return;
         final body=pending?.payload??<String,dynamic>{
           'branchId':widget.branchId,'priceListId':listId,
           'sellSkuId':id,'scopeKind':'BASE','adjustment':'FIXED_PRICE',
-          'amount':inputs[id]!.text.trim(),'priority':0,
+          'amount':inputs[id]!.text.trim(),'priority':priority!,
           'stacking':'EXCLUSIVE','stopProcessing':false,
           'minQuantity':'1','effectiveFrom':DateTime.now().toUtc().toIso8601String(),
         };

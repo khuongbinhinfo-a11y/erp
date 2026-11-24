@@ -28,8 +28,12 @@ void main(){
           ]}),200);
         }
         if(request.url.path=='/v1/catalog/r1/resolve'){
+          final body=jsonDecode(request.body) as Map<String,dynamic>;
           return http.Response(jsonEncode({'quote':{
             'unitPrice':'10000','basePrice':'10000',
+            'trace':[if(body['sellSkuId']==skuA)
+              {'scope':'BASE_RULE','priority':27}
+              else {'scope':'EXISTING_BASE_PRICE','priority':null}],
           }}),200);
         }
         if(request.url.path=='/v1/catalog/r1/rules'&&request.method=='POST'){
@@ -71,7 +75,7 @@ void main(){
       expect(row['priceListId'],list);
       expect(row['adjustment'],'FIXED_PRICE');
       expect(row['amount'],'25000');
-      expect(row['priority'],0);
+      expect(row['priority'],row['sellSkuId']==skuA?27:0);
       expect(row['effectiveFrom'],isNotNull);
     }
     expect(keys.length,2);
