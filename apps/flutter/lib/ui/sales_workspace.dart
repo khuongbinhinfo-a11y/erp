@@ -1260,7 +1260,6 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       final sku=skus.firstWhere((x)=>x['id']==entry.sellSkuId);
                       final name=(sku['productName']??sku['name']??'Sản phẩm').toString();
                       final code=(sku['code']??sku['sku']??'').toString();
-                      final unit=(sku['unitCode']??'').toString();
                       final productId=sku['productId'].toString();
                       if(!variantsByProduct.containsKey(productId)&&
                           !variantLoading.contains(productId)&&
