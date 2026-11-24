@@ -265,6 +265,40 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
    priceAt:"2026-11-22T12:00:00Z"})).status,409,
    "product-level price history must not leak into a carton SKU");
 
+  // Combined channel/group scope: OR inside a dimension, AND across them.
+  const combined=await legacy("price-lists",{code:"P0-COMBINED",name:"Kênh và nhóm",
+   effectiveFrom:"2026-11-18T00:00:00Z",effectiveTo:"2026-11-19T00:00:00Z"});
+  assert.equal(combined.status,201,JSON.stringify(combined.body));
+  const anotherChannel=await r1("channels",{code:"P0-OTHER",name:"Kênh thứ hai"});
+  assert.equal(anotherChannel.status,201);
+  assert.equal((await r1("rules",{priceListId:combined.body.id,sellSkuId:baseSku,
+   scopeKind:"BASE",adjustment:"FIXED_PRICE",amount:"9800.0000",
+   effectiveFrom:"2026-11-17T00:00:00Z"})).status,201);
+  for(const target of [
+    {scopeKind:"CHANNEL",channelId:channel.body.id},
+    {scopeKind:"CHANNEL",channelId:anotherChannel.body.id},
+    {scopeKind:"CUSTOMER_GROUP",customerGroupId:vipGroup.body.id},
+    {scopeKind:"CUSTOMER_GROUP",customerGroupId:standardGroup.body.id},
+  ]){
+   const result=await write("/v1/catalog/price-lists/assignments",{
+    priceListId:combined.body.id,priority:77,...target,
+   });
+   assert.equal(result.status,201,JSON.stringify(result.body));
+  }
+  const combinedQuote={sellSkuId:baseSku,quantity:"1",priceAt:"2026-11-18T12:00:00Z"};
+  for(const customerId of [c1.body.id,c2.body.id]){
+   for(const channelId of [channel.body.id,anotherChannel.body.id]){
+    const result=await resolvePrice({...combinedQuote,customerId,channelId});
+    assert.equal(result.status,200,JSON.stringify(result.body));
+    assert.equal(result.body.quote.priceListId,combined.body.id);
+    assert.equal(result.body.quote.unitPrice,"9800.0000");
+   }
+  }
+  assert.equal((await resolvePrice({...combinedQuote,customerId:c1.body.id})).status,409);
+  assert.equal((await resolvePrice({...combinedQuote,channelId:channel.body.id})).status,409);
+  assert.equal((await resolvePrice({...combinedQuote,priceListId:combined.body.id,
+    customerId:c1.body.id})).status,409);
+
   // R1-C.1: selection stays on the existing SKU pricing engine, with
   // strict list windows, scoped priority, concurrency, RBAC, and replay.
   assert.equal((await legacy("price-lists",{code:"BAD-WINDOW",name:"Sai thời hạn",
