@@ -153,17 +153,27 @@ export async function resolveR1Price(db:PoolClient,input:Query){
   let basePrice:string|null=base?.amount??null;
   let sourceId:string|null=base?.id??null;
   let origin="BASE_RULE";
-  // Existing product/base-unit price history remains available to old sales.
-  // Do not infer carton prices from retail price times conversion.
-  if(basePrice===null && item.isBase){
+  // During convergence, both existing append-only base-price histories feed
+  // this resolver. A more recent product price can supersede an ordinary
+  // BASE SKU price, but never a quantity tier or a different sell unit.
+  // Preserve the existing BASE winner for equal timestamps; reconciliation
+  // of conflicting same-time records belongs to the migration preflight.
+  if(item.isBase){
     const q=await db.query<{id:string;amount:string;discount:string}>(`
       SELECT e.id,e.amount::text,e.discount_rate::text AS discount
       FROM catalog_price_entry e
       WHERE e.installation_id=$1 AND e.branch_id=$2
         AND e.price_list_id=$3 AND e.product_id=$4
         AND e.effective_at<=$5::timestamptz
+        AND ($6::uuid IS NULL OR EXISTS (
+          SELECT 1 FROM catalog_sku_price_rule br
+          WHERE br.installation_id=e.installation_id AND br.branch_id=e.branch_id
+            AND br.price_list_id=e.price_list_id AND br.id=$6
+            AND br.sell_sku_id=$7 AND br.min_quantity<=1
+            AND e.effective_at>br.effective_from
+        ))
       ORDER BY e.effective_at DESC,e.id DESC LIMIT 1`,
-      [t,b,selectedListId,item.productId,input.priceAt]);
+      [t,b,selectedListId,item.productId,input.priceAt,base?.id??null,input.sellSkuId]);
     const old=q.rows[0];
     if(old){
       const computed=await db.query<{unit:string}>(
@@ -184,8 +194,9 @@ export async function resolveR1Price(db:PoolClient,input:Query){
     {ruleId:sourceId,scope:origin,adjustment:"FIXED_PRICE",amount:basePrice,
      result:price,reason:origin==="BASE_RULE"?"Giá cơ sở của SKU":
       "Giá hiệu lực từ lịch sử sản phẩm",
-     priority:base?.priority??null,minQuantity:base?.min_quantity??null,
-     effectiveFrom:base?.effective_from?.toISOString()??null,stacking:null},
+     priority:origin==="BASE_RULE"?base?.priority??null:null,
+     minQuantity:origin==="BASE_RULE"?base?.min_quantity??null:null,
+     effectiveFrom:origin==="BASE_RULE"?base?.effective_from?.toISOString()??null:null,stacking:null},
   ];
   for(const rule of rules.rows){
     if(rule.scope_kind==="BASE")continue;
