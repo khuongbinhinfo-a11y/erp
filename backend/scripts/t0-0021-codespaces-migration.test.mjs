@@ -91,11 +91,13 @@ test("T0 verifier requires policy, backorder facts, immutable guards and zero in
 });
 
 test("T0 authorizes only the expected owner grant; all existing grants are separately fingerprinted",()=>{
- const valid={primary_roles:"1",owner_grants:"1",all_policy_grants:"1"};
+ const valid={primary_roles:"1",owner_grants:"1",unexpected_grants:"0"};
  assert.doesNotThrow(()=>assertT0OwnerPermissionState(valid));
+ // Delegated GRANT_* roles are valid after migration and after subsequent user grants.
+ assert.doesNotThrow(()=>assertT0OwnerPermissionState({...valid,all_policy_grants:"3"}));
  for(const row of [
   {...valid,owner_grants:"0"},
-  {...valid,all_policy_grants:"2"},
+  {...valid,unexpected_grants:"1"},
   {...valid,primary_roles:"2"},
   null,
  ])assert.throws(()=>assertT0OwnerPermissionState(row),
