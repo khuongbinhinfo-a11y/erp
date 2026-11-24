@@ -1,4 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
+import 'package:file_picker/file_picker.dart';
+import 'sales_print_document.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'erp_tokens.dart';
@@ -2158,6 +2162,17 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                 crossAxisAlignment:WrapCrossAlignment.center,
                 spacing:8,runSpacing:8,children:[
                   TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Đóng')),
+                  if(item['status']=='CONFIRMED'&&item['versionStatus']=='CONFIRMED'&&item['documentNo'] is String)
+                    OutlinedButton.icon(key:const ValueKey('sales-print-order'),
+                      onPressed:()async{
+                        try{
+                          final html=confirmedSalesPrintDocument(item);
+                          await FilePicker.platform.saveFile(dialogTitle:'Lưu bản in đơn hàng',
+                            fileName:'${item['documentNo']}.html',type:FileType.custom,
+                            allowedExtensions:const ['html'],bytes:Uint8List.fromList(utf8.encode(html)));
+                          if(mounted)inform('Mở bản in HTML đã lưu để in đơn hàng.');
+                        }catch(_){if(mounted)inform('Không lưu được bản in.',error:true);}
+                      },icon:const Icon(Icons.print_outlined,size:16),label:const Text('Bản in')),
                   if(can('orders.create'))
                     OutlinedButton.icon(key:const ValueKey('sales-copy-order'),
                       onPressed:(){Navigator.pop(ctx);createOrder(source:item);},
