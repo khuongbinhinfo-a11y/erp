@@ -377,6 +377,11 @@ function priceScopes(raw:Record<string,unknown>):PriceListScopeTargets|null{
 }
 async function syncPriceScopes(db:PoolClient,installationId:string,
  branchId:string,priceListId:string,desired:PriceListScopeTargets){
+ const selected=await db.query<{priority:number}>(`SELECT priority FROM catalog_price_list
+  WHERE installation_id=$1 AND branch_id=$2 AND id=$3 FOR UPDATE`,
+  [installationId,branchId,priceListId]);
+ if(!selected.rows[0])throw new CatalogError(404,"PRICE_LIST_UNAVAILABLE");
+ const assignmentPriority=selected.rows[0].priority;
  const wanted=new Set<string>();
  const targets:{scopeKind:"DEFAULT"|"CUSTOMER"|"CUSTOMER_GROUP"|"CHANNEL";
   customerId:string|null;customerGroupId:string|null;channelId:string|null;}[]=[];
@@ -407,7 +412,7 @@ async function syncPriceScopes(db:PoolClient,installationId:string,
   const key=target.scopeKind+":"+(target.customerId??target.customerGroupId??target.channelId??"");
   if(already.has(key))continue;
   await createPriceAssignment(db,installationId,{branchId,priceListId,
-   ...target,priority:0,effectiveFrom:null,effectiveTo:null});
+   ...target,priority:assignmentPriority,effectiveFrom:null,effectiveTo:null});
  }
 }
 export function checkCreate(resource:Resource,raw:Record<string,unknown>){
