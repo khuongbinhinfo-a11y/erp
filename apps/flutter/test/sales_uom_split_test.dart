@@ -145,6 +145,12 @@ void main(){
     await tester.pumpAndSettle();
     expect(quotedSkuPairs.any((pair)=>pair.length==2&&pair[0]==base&&pair[1]==carton),isTrue,
       reason:'Changing UOM must requote exact target SKU, not multiply client prices');
+    for(final viewport in const [Size(860,740),Size(960,800),Size(1024,800)]){
+      tester.view.physicalSize=viewport;
+      await tester.pumpAndSettle();
+      expect(tester.takeException(),isNull,
+        reason:'Editable UOM must not overflow at $viewport');
+    }
   });
   }
 }
