@@ -1659,15 +1659,28 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                               refresh(()=>formError='Khách này chưa từng mua SKU này.');
                               return;
                             }
+                            final historicalTaxMode=(data['taxMode']??'EXCLUSIVE').toString();
+                            final historicalTax=erpGroupedDecimalText(data['taxRate']);
+                            final historicalDiscountMode=(data['discountMode']??'PERCENT').toString();
+                            final historicalDiscount=erpGroupedDecimalText(
+                              historicalDiscountMode=='PERCENT'?data['discountRate']:data['discountValue']);
+                            final needsTax=historicalTaxMode!='EXCLUSIVE'||RegExp('[1-9]').hasMatch(historicalTax);
+                            final needsDiscount=historicalDiscountMode!='PERCENT'||RegExp('[1-9]').hasMatch(historicalDiscount);
+                            if((needsTax&&!canTax())||(needsDiscount&&!canDiscount())||
+                                (!modern&&(historicalTaxMode!='EXCLUSIVE'||historicalDiscountMode!='PERCENT'))){
+                              refresh(()=>formError='Không đủ quyền hoặc phiên bản để áp dụng đúng thuế và chiết khấu của lần mua trước.');
+                              return;
+                            }
                             entry.unitPrice.text=erpGroupedDecimalText(data['unitPrice']);
                             if(canDiscount()){
-                              entry.discountMode='PERCENT';
-                              entry.discountRate.text=erpGroupedDecimalText(data['discountRate']);
-                              entry.discountEdited=RegExp('[1-9]').hasMatch(entry.discountRate.text);
+                              entry.discountMode=historicalDiscountMode;
+                              entry.discountRate.text=historicalDiscount;
+                              entry.discountEdited=needsDiscount;
                             }
                             if(canTax()){
-                              entry.taxMode='EXCLUSIVE';entry.taxRate.text=erpGroupedDecimalText(data['taxRate']);
-                              entry.taxEdited=RegExp('[1-9]').hasMatch(entry.taxRate.text);
+                              entry.taxMode=historicalTaxMode;
+                              entry.taxRate.text=historicalTax;
+                              entry.taxEdited=needsTax;
                             }
                             pricingChanged(ctx,refresh);
                           }on ErpApiError catch(e){

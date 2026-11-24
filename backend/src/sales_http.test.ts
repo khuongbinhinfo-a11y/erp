@@ -321,6 +321,15 @@ test("B1: real PostgreSQL order lifecycle, immutable versions, RBAC, replay and 
     assert.equal(modeOrder.status,201,JSON.stringify(modeOrder.body));
     assert.equal(modeOrder.body.total,"18000");
     assert.equal((await write("/v1/sales/orders/"+modeOrder.body.id+"/confirm",{branchId:b},0,"t1-mode-confirm-"+randomUUID())).status,200);
+    const history=await call("/v1/sales/last-purchase?branchId="+b+"&customerId="+customer.body.id+"&sellSkuId="+sellSkuId,"GET",undefined,token);
+    assert.equal(history.status,200);
+    assert.equal(history.body.price.taxMode,"INCLUSIVE");
+    assert.equal(history.body.price.discountMode,"PER_UNIT");
+    assert.equal(history.body.price.discountValue,"1000");
+    const restored=await quoteMode({unitPrice:history.body.price.unitPrice,
+      taxRate:history.body.price.taxRate,taxMode:history.body.price.taxMode,
+      discountMode:history.body.price.discountMode,discountValue:history.body.price.discountValue});
+    assert.equal(restored.body.quote.grandTotal,"18000");
     const lineFixed=await quoteMode({unitPrice:"10000",discountMode:"TOTAL_AMOUNT",discountValue:"1001"});
     assert.equal(lineFixed.status,200,JSON.stringify(lineFixed.body));
     assert.equal(lineFixed.body.quote.grandTotal,"18999");

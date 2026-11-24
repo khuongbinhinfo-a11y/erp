@@ -728,10 +728,12 @@ export async function handleSalesHttp(req:IncomingMessage,res:ServerResponse,
         }
         const warehouseIds=modern?(await userAccess(db,tenant,actorId))
           .filter(g=>g.branchId===branchId&&g.permission==="inventory.read"&&g.warehouseId).map(g=>g.warehouseId!):[];
-        const found=await db.query<{unitPrice:string;discountRate:string;taxRate:string;confirmedAt:Date}>(
+        const found=await db.query<{unitPrice:string;discountRate:string;discountMode:string;discountValue:string|null;taxRate:string;taxMode:string;confirmedAt:Date}>(
           `SELECT line.unit_price::text AS "unitPrice",
            line.discount_rate::text AS "discountRate",
-           line.tax_rate::text AS "taxRate",v.confirmed_at AS "confirmedAt"
+           coalesce(line.price_snapshot->>'discountMode','PERCENT') AS "discountMode",
+           line.price_snapshot->>'discountValue' AS "discountValue",
+           line.tax_rate::text AS "taxRate",coalesce(line.price_snapshot->>'taxMode','EXCLUSIVE') AS "taxMode",v.confirmed_at AS "confirmedAt"
           FROM sales_order_line line
           JOIN sales_order_version v ON v.installation_id=line.installation_id
            AND v.branch_id=line.branch_id AND v.order_id=line.order_id
