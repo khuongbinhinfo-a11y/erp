@@ -327,11 +327,11 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
       ?(row['sku']??'').toString()+' · '+(row['name']??'').toString()
       :tab=='movements'?(row['sku']??'').toString()+' · '+(row['kind']??'').toString()
       :(row['documentNo']??'').toString()+' · '+(row['sku']??'').toString();
-    final details=tab=='balances'?'Tồn: '+erpDecimalText(row['onHand'])+
-        '  |  Đã giữ: '+erpDecimalText(row['reserved'])+
-        '  |  Khả dụng: '+erpDecimalText(row['available'])
-      :tab=='movements'?'Biến động: '+erpDecimalText(row['deltaBase'])
-      :'Số lượng: '+erpDecimalText(row['quantityBase'])+
+    final details=tab=='balances'?'Tồn: '+erpNumberText(row['onHand'])+
+        '  |  Đã giữ: '+erpNumberText(row['reserved'])+
+        '  |  Khả dụng: '+erpNumberText(row['available'])
+      :tab=='movements'?'Biến động: '+erpNumberText(row['deltaBase'])
+      :'Số lượng: '+erpNumberText(row['quantityBase'])+
         ' · '+(row['state']=='ACTIVE'?'Đang giữ':'Đã giải phóng');
     return Column(children:[
       Padding(padding:const EdgeInsets.symmetric(vertical:12),child:Row(children:[
