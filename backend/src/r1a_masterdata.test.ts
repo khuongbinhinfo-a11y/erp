@@ -26,7 +26,8 @@ test("R1-A 0017: real 16→17 upgrade preserves existing customer group strings,
   db.on("error",()=>{});
   const original=resolve(process.cwd(),"db/migrations");
   const names=(await readdir(original)).filter(x=>/^\d{4}_[a-z0-9_]+\.sql$/.test(x)).sort();
-  assert.equal(names.length,19,"exact expected production migration set");
+  assert.ok(names.length>=19,"R1-A legacy upgrade remains available with later additive migrations");
+  assert.equal(names[16],"0017_r1a_customer_directories.sql");
   for(const name of names.slice(0,16))await copyFile(join(original,name),join(dir,name));
   assert.equal((await applyMigrations(db,dir)).applied.length,16);
   const install=(await db.query<{id:string}>(
