@@ -1,3 +1,5 @@
+> **LỊCH SỬ / THAM CHIẾU — từ 24/11/2026:** [MASTER_PLAN V4](MASTER_PLAN.md) là nguồn điều hành hiện hành. Thứ tự B/R, trạng thái provider, direct-main, phạm vi port MCP/Retail và quy trình deploy cũ bên dưới đã được thay thế. Giữ tài liệu này làm bằng chứng lịch sử, không dùng để chạy lệnh production; kiểm target/script/SHA thực tế. Chính sách warning-first và hard invariants theo V4.
+
 # ERP — Kế hoạch chuyển nghiệp vụ app cũ → nền tảng Flutter mới
 
 **Ngày lập:** 20/11/2026 · **Trạng thái:** PORTING PLAN / CHƯA TRIỂN KHAI NGHIỆP VỤ · **Ưu tiên:** Lô nghiệp vụ trước; CORS/production catalog issue #7 được tạm hoãn theo quyết định owner 20/11.
