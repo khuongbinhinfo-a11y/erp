@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 import type { MutationContext } from "./mutation.ts";
 import { requireRevision } from "./mutation.ts";
+import { readOrderContext } from "./sales_order_context.ts";
 
 /** R3.1: warehouse locking serializes all stock/reservation writers in one scope.
  * The ledger is the sole stock authority, never a cached client balance. */
@@ -206,6 +207,8 @@ export async function reserveStock(db:PoolClient,ctx:MutationContext,input:Reser
  if(!order||order.status!=="CONFIRMED"||order.state!=="CONFIRMED"||
     order.current_version!==input.version)
    throw new InventoryFault(409,"CONFIRMED_ORDER_REQUIRED");
+ const context=await readOrderContext(db,t,b,input.orderId,input.version);
+ if(context&&context.warehouseId!==w)throw new InventoryFault(409,"ORDER_WAREHOUSE_MISMATCH");
  const quantity=order.pricing_engine==="R1"
    ?order.price_snapshot?.normalizedBaseQuantity
    :order.unit_code===order.base_unit?order.quantity:null;

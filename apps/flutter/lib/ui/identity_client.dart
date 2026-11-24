@@ -616,6 +616,16 @@ class ErpIdentityClient {
     return Map<String,dynamic>.from(r['quote'] as Map);
   }
   /// Sales commands retain one idempotency key on lost acknowledgments.
+  Future<Map<String,dynamic>> salesEntrySettings(String token,String branchId)async{
+    final raw=await _request('GET','/v1/sales/entry-settings?'+
+      Uri(queryParameters:{'branchId':branchId}).query,token:token);
+    return Map<String,dynamic>.from(raw['settings'] as Map);
+  }
+  Future<Map<String,dynamic>> prepareSalesWalkIn(String token,String branchId,{required String key})async{
+    final raw=await _request('POST','/v1/sales/walk-in',token:token,
+      body:{'branchId':branchId},revision:0,idempotencyKey:key);
+    return Map<String,dynamic>.from(raw['customer'] as Map);
+  }
   Future<List<Map<String,dynamic>>> salesOrders(String token,String branchId,{String query=''})async{
     final q=Uri(queryParameters:{'branchId':branchId,if(query.trim().isNotEmpty)'q':query.trim()}).query;
     final r=await _request('GET','/v1/sales/orders?$q',token:token);
