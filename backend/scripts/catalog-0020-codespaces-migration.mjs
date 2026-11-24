@@ -62,7 +62,7 @@ export function restoreContainerCleanupArgs(name){
 function required(e,names){const missing=names.filter(n=>!e[n]);if(missing.length)fail("REQUIRED_CODESPACES_SECRETS_MISSING: "+missing.join(","));}
 // Prevent a later 0021+ migration from silently being applied by this older operator.
 export function assertExactOperatorMigrationFiles(files){
- const present=files.filter(x=>/^\\d{4}_[a-z0-9_]+\\.sql$/.test(x)).sort();
+ const present=files.filter(x=>/^\d{4}_[a-z0-9_]+\.sql$/.test(x)).sort();
  if(JSON.stringify(present)!==JSON.stringify([...BASE,...RELEASE]))
   fail("CAT20_OPERATOR_MIGRATION_FILES_MISMATCH");
 }
