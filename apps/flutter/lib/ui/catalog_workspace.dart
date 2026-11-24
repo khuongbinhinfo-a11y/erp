@@ -176,7 +176,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
   void _changeResource(String next){
     if(next==resource)return;
     setState((){
-      resource=next;search.clear();items=[];productWriteReady=false;inlinePriceId=null;assignmentListId=null;
+      resource=next;search.clear();items=[];productWriteReady=false;inlinePriceId=null;assignmentListId=null;priceSkuListId=null;
     });
     _loadRecords();
   }
@@ -1571,7 +1571,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                 icon:const Icon(Icons.add,size:18),
                 label:Text(branchId!=null&&widget.client.pendingR1(
                   widget.session.actorId,branchId!,'catalog.create.$resource')!=null
-                  ? 'Kiểm tra yêu cầu trước':'Tạo mới')),
+                  ? 'Kiểm tra yêu cầu trước':resource=='price-lists'?'Tạo bảng giá':'Tạo mới')),
             ]),
             if(resource=='unit-definitions')
               const Padding(padding:EdgeInsets.only(top:8),child:Text(
@@ -1590,6 +1590,22 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                   onPressed:_loadRecords,icon:const Icon(Icons.arrow_forward))),
             ),
             const SizedBox(height:14),
+            if(resource=='price-lists'&&assignmentListId!=null&&
+              branchId!=null&&items.any((e)=>e['id']==assignmentListId))
+              PriceListAssignmentsPanel(
+                key:ValueKey('assign-'+branchId!+'-'+assignmentListId!),
+                client:widget.client,session:widget.session,branchId:branchId!,
+                priceList:items.firstWhere((e)=>e['id']==assignmentListId),
+                canWrite:canWrite,
+                onClose:()=>setState(()=>assignmentListId=null)),
+            if(resource=='price-lists'&&priceSkuListId!=null&&
+                branchId!=null&&items.any((e)=>e['id']==priceSkuListId))
+              PriceSkuBatchPanel(
+                key:ValueKey('price-skus-'+branchId!+'-'+priceSkuListId!),
+                client:widget.client,session:widget.session,branchId:branchId!,
+                priceList:items.firstWhere((e)=>e['id']==priceSkuListId),
+                canWrite:canWrite,
+                onClose:()=>setState(()=>priceSkuListId=null)),
             if(loading)const Center(child:Padding(
               padding:EdgeInsets.all(20),child:CircularProgressIndicator()))
             else if(error!=null)Padding(
@@ -1653,19 +1669,19 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                             icon:const Icon(Icons.edit_outlined,size:18),
                             tooltip:'Sửa/ngừng sử dụng',
                             onPressed:saving?null:()=>_edit(entry)),
-                          if(resource=='price-lists')IconButton(
+                          if(resource=='price-lists')TextButton.icon(
                             key:ValueKey('catalog-price-list-assignment-'+entry['id'].toString()),
-                            icon:const Icon(Icons.groups_outlined,size:18),
-                            tooltip:'Phân bổ bảng giá theo khách, nhóm, kênh',
+                            icon:const Icon(Icons.groups_outlined,size:16),
+                            label:const Text('Áp dụng cho'),
                             onPressed:()=>setState((){
                               assignmentListId=assignmentListId==entry['id']
                                 ?null:entry['id'] as String;
                               priceSkuListId=null;
                             })),
-                          if(resource=='price-lists')IconButton(
+                          if(resource=='price-lists')TextButton.icon(
                             key:ValueKey('catalog-price-list-sku-prices-'+entry['id'].toString()),
-                            icon:const Icon(Icons.price_change_outlined,size:18),
-                            tooltip:'Sửa giá nhiều SKU (giữ lịch sử)',
+                            icon:const Icon(Icons.price_change_outlined,size:16),
+                            label:const Text('Giá bán'),
                             onPressed:saving?null:()=>setState((){
                               priceSkuListId=priceSkuListId==entry['id']
                                 ?null:entry['id'] as String;
@@ -1683,34 +1699,11 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                             onPressed:saving?null:()=>_productImages(entry)),
                         ])),
                 ])).toList())),
-            if(resource=='price-lists'&&assignmentListId!=null&&
-              branchId!=null&&items.any((e)=>e['id']==assignmentListId))
-              PriceListAssignmentsPanel(
-                key:ValueKey('assign-'+branchId!+'-'+assignmentListId!),
-                client:widget.client,session:widget.session,branchId:branchId!,
-                priceList:items.firstWhere((e)=>e['id']==assignmentListId),
-                canWrite:canWrite,
-                onClose:()=>setState(()=>assignmentListId=null)),
-            if(resource=='price-lists'&&priceSkuListId!=null&&
-                branchId!=null&&items.any((e)=>e['id']==priceSkuListId))
-              PriceSkuBatchPanel(
-                key:ValueKey('price-skus-'+branchId!+'-'+priceSkuListId!),
-                client:widget.client,session:widget.session,branchId:branchId!,
-                priceList:items.firstWhere((e)=>e['id']==priceSkuListId),
-                canWrite:canWrite,
-                onClose:()=>setState(()=>priceSkuListId=null)),
             if(resource=='products'&&!productWriteReady&&!loading)
               const Padding(padding:EdgeInsets.only(top:12),
                 child:Text('Đã xem được danh mục, nhưng chưa cập nhật đủ cấu trúc SKU để thêm sản phẩm.',
                   style:TextStyle(fontSize:12,color:ErpTokens.muted))),
-            if(resource=='warehouses')const Padding(
-              padding:EdgeInsets.only(top:12),
-              child:Text('Tồn khả dụng chỉ được xác nhận sau khi Inventory Ledger (#9) hoàn thiện.',
-                style:TextStyle(fontSize:12,color:ErpTokens.muted))),
-            if(resource=='prices')const Padding(
-              padding:EdgeInsets.only(top:12),
-              child:Text('Giá dùng NUMERIC và có lịch sử hiệu lực. Chưa xác nhận tồn kho hay đơn hàng.',
-                style:TextStyle(fontSize:12,color:ErpTokens.muted))),
+
           ]))),
     ]);
   }
