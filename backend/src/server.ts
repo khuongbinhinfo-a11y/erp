@@ -12,6 +12,9 @@ import { handleTransferHttp } from "./transfer_http.ts";
 import { handleStocktakeHttp } from "./stocktake_http.ts";
 import { handlePurchasingHttp } from "./purchasing_http.ts";
 
+declare const ERP_RELEASE_SHA:string|undefined;
+const releaseSha=typeof ERP_RELEASE_SHA==="string"&&/^[0-9a-f]{40}$/.test(ERP_RELEASE_SHA)?ERP_RELEASE_SHA:null;
+
 function requestId(req: IncomingMessage): string {
   const raw = req.headers["x-request-id"];
   const id = Array.isArray(raw) ? raw[0] : raw;
@@ -37,6 +40,10 @@ export function buildApp(
   return createServer((req, res) => {
     const id = requestId(req);
     const url = new URL(req.url ?? "/", "http://localhost");
+    if(req.method==="GET"&&url.pathname==="/health/release"){
+      writeJson(res,200,{service:"erp-api",releaseSha,contract:"T1_UAT",requestId:id},id);
+      return;
+    }
     if (req.method === "GET" && url.pathname === "/health/live") {
       writeJson(res, 200, { status: "live", service: "erp-api", maintenance: maintenanceMode, requestId: id }, id);
       return;

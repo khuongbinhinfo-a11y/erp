@@ -17,7 +17,7 @@
     "db:migrate:approved": "node --experimental-strip-types src/migrate_production.ts",
     "db:migrate:catalog:approved": "node --experimental-strip-types src/migrate_catalog_production.ts",
     "bootstrap:approved": "node --experimental-strip-types src/bootstrap_cli.ts",
-    "build:compute": "bun build deploy/entry.ts --target=bun --outfile dist/compute.mjs",
+    "build:compute": "node scripts/build-compute.mjs",
     "db:migrate:r3:codespaces": "node --experimental-strip-types scripts/r3-codespaces-migration.mjs",
     "test:r3:operator": "node --experimental-strip-types --test scripts/r3-codespaces-migration.test.mjs",
     "db:migrate:r1-media:codespaces": "node --experimental-strip-types scripts/r1-media-codespaces-migration.mjs",

@@ -14,6 +14,9 @@ test("public health is live, but database readiness fails closed", async () => {
     assert.equal(live.status, 200);
     assert.equal(live.headers.get("x-request-id"), "qa-12345678");
     assert.equal((await live.json() as { status: string }).status, "live");
+    const release=await fetch(origin+"/health/release");
+    assert.equal(release.status,200);
+    assert.equal((await release.json() as {contract:string}).contract,"T1_UAT");
     const health = await fetch(origin + "/health");
     assert.equal(health.status, 503, "health fails closed without database connection");
     const ready = await fetch(origin + "/health/ready");
