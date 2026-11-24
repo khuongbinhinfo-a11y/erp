@@ -2477,26 +2477,65 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           key:key,revision:rev,orderId:id);
         if(!_sameScope(token,body['branchId'] as String))return;
         if(prior!=null){
-          try{await _persistPending(scope,null,null,null,previousKey:key);}
-          on LocalRecoveryConflict{ /* The current slot belongs to another tab. */ }
+          // The update has committed. Never replay it. Save-and-confirm must
+          // transition atomically to a durable confirm intent, not be forgotten.
+          final next=auto?<String,dynamic>{
+            'id':id,'branchId':body['branchId'],'revision':prior['revision'],
+          }:null;
+          if(auto&&prior['revision'] is! int)throw const LocalRecoveryConflict();
+          final nextKey=auto?newKey():null;
+          try{
+            await _persistPending(scope,auto?'confirm':null,nextKey,next,previousKey:key);
+          }on LocalRecoveryConflict{
+            if(!auto){
+              // This slot now belongs to another tab; never delete their command.
+            }else if(scope!=null&&await widget.client.localStore!.salesRecovery(scope)==null){
+              await _persistPending(scope,'confirm',nextKey,next);
+            }else{
+              throw const LocalRecoveryConflict();
+            }
+          }
           if(scope!=null){
             try{await widget.client.localStore!.clearUnsentSalesUpdate(scope,id,key);}
-            catch(_){ /* Keep unrelated commands. Server ACK is authoritative. */ }
+            catch(_){ /* Original ACK is authoritative, old cache remains visible. */ }
           }
           if(_sameScope(token,body['branchId'] as String)){
             setState((){
               pendingUpdate=null;pendingUpdateKey=null;localRecoveryBlocked=false;
+              if(auto){pendingConfirm=next;pendingConfirmKey=nextKey;pendingNeedsReceipt=false;}
             });
-            inform('Máy chủ đã lưu bản sửa. Không gửi thêm đơn trùng.');
+            inform(auto?'Đã lưu đơn, đang xác nhận trên máy chủ.':
+              'Máy chủ đã lưu bản sửa. Không gửi trùng.');
             await reload();
+            if(auto&&mounted)unawaited(Future<void>.delayed(Duration.zero,()async{
+              if(mounted)await _resolveSavedConfirm();
+            }));
           }
           return;
         }
       }
       if(_localConfigured&&pendingNeedsReceipt&&scope!=null){
         final saved=await widget.client.localStore!.unsentSalesUpdates(scope,id);
-        if(!saved.any((x)=>x['key']==key)){
-          inform('Không còn bản sửa lưu trên máy và chưa có xác nhận từ máy chủ. Không tự gửi lại.',error:true);
+        final same=saved.where((x)=>x['key']==key).toList();
+        if(same.length!=1){
+          setState(()=>localRecoveryBlocked=true);
+          inform('Không còn bản sửa trên máy và chưa có xác nhận. Không tự gửi lại.',error:true);
+          return;
+        }
+        if(same.single['status']=='rejected'){
+          // Another tab received a definitive server rejection. Do not
+          // recreate a stranded recovery slot for this terminal command.
+          try{await _persistPending(scope,null,null,null,previousKey:key);}
+          on LocalRecoveryConflict{ /* Never touch a different tab's key. */ }
+          if(_sameScope(token,body['branchId'] as String)){
+            setState((){pendingUpdate=null;pendingUpdateKey=null;localRecoveryBlocked=true;});
+            inform('Máy chủ đã từ chối bản sửa. Mở Sửa để đối chiếu và tra giá lại.',error:true);
+          }
+          return;
+        }
+        if(!{'unsent','inflight',null}.contains(same.single['status'])){
+          setState(()=>localRecoveryBlocked=true);
+          inform('Bản sửa đang được xử lý ở cửa sổ khác. Không tự gửi lại.',error:true);
           return;
         }
       }
