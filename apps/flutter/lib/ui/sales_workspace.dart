@@ -1287,6 +1287,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       final discountField=percentField('CK %',entry.discountRate,'discount');
                       final taxField=percentField('Thuế %',entry.taxRate,'tax');
                       final split=IconButton(
+                        constraints:const BoxConstraints(minWidth:32,minHeight:32),
+                        padding:EdgeInsets.zero,
                         key:ValueKey('sales-split-$i'),tooltip:'Tách 1 đơn vị thành dòng riêng',
                         icon:const Icon(Icons.call_split_outlined,size:18),
                         onPressed:(){
@@ -1310,6 +1312,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           lines.insert(i+1,next);pricingChanged(ctx,refresh);
                         });
                       final previousPrice=IconButton(
+                        constraints:const BoxConstraints(minWidth:32,minHeight:32),
+                        padding:EdgeInsets.zero,
                         key:ValueKey('sales-last-price-$i'),
                         tooltip:'Giá lần mua trước của khách này',
                         icon:const Icon(Icons.history,size:18),
@@ -1334,6 +1338,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           }
                         });
                       final remove=IconButton(
+                        constraints:const BoxConstraints(minWidth:32,minHeight:32),
+                        padding:EdgeInsets.zero,
                         key:ValueKey('sales-remove-$i'),
                         tooltip:'Bỏ dòng hàng',
                         onPressed:(){
