@@ -43,9 +43,13 @@ class ErpGroupedNumberFormatter extends TextInputFormatter {
         oldValue.selection.isCollapsed&&offset>=0&&
         offset<oldValue.text.length&&oldValue.text[offset]==','){
       final digitsBefore=oldValue.text.substring(0,offset).replaceAll(',','').length;
-      if(digitsBefore>0&&RegExp(r'\d').hasMatch(raw[digitsBefore-1])){
-        removedRawIndex=digitsBefore-1;
-        raw=raw.substring(0,removedRawIndex)+raw.substring(digitsBefore);
+      final oldOffset=oldValue.selection.extentOffset;
+      final isBackspace=oldOffset==offset+1;
+      final isForwardDelete=oldOffset==offset;
+      final index=isBackspace?digitsBefore-1:isForwardDelete?digitsBefore:-1;
+      if(index>=0&&index<raw.length&&RegExp(r'\d').hasMatch(raw[index])){
+        removedRawIndex=index;
+        raw=raw.substring(0,index)+raw.substring(index+1);
       }
     }
     final match=RegExp(r'^(-?)(\d*)(?:\.(\d*))?$').firstMatch(raw);
