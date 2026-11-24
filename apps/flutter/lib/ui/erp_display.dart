@@ -12,18 +12,24 @@ String erpDecimalText(Object? value) {
   return sign + whole + (fractional.isEmpty ? '' : '.' + fractional);
 }
 
-/// Vietnamese display of VND, preserving any significant fraction rather than
-/// silently truncating it. Calculation authority remains on the server.
+/// Exact human-readable business number: comma thousands, dot decimal.
+/// No floating point and no rounding; only trailing zeros are removed.
+String erpNumberText(Object? value) {
+  final decimal=erpDecimalText(value);
+  final match=RegExp(r'^(-?)(\d+)(?:\.(\d+))?$').firstMatch(decimal);
+  if(match==null)return decimal;
+  final whole=match.group(2)!.replaceAllMapped(
+    RegExp(r'\B(?=(\d{3})+(?!\d))'),(_)=>',');
+  final fractional=match.group(3);
+  return (match.group(1)??'')+whole+
+    (fractional==null?'':'.'+fractional);
+}
+
+/// VND follows the same numerical display as order entry, price workspace,
+/// inventory, purchase and delivery. Never modify exact API decimal strings.
 String erpVndText(Object? value) {
-  if (value == null) return 'Chưa có giá';
-  final decimal = erpDecimalText(value);
-  final match = RegExp(r'^(-?)(\d+)(?:\.(\d+))?$').firstMatch(decimal);
-  if (match == null) return decimal;
-  final whole = match.group(2)!.replaceAllMapped(
-    RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => '.');
-  final fraction = match.group(3);
-  return (match.group(1) ?? '') + whole +
-    (fraction == null ? '' : ',' + fraction) + ' ₫';
+  if(value==null)return 'Chưa có giá';
+  return erpNumberText(value)+' ₫';
 }
 
 const Map<String, String> _priceRuleNames = {
