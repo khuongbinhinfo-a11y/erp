@@ -694,6 +694,14 @@ class ErpIdentityClient {
     final r=await _request('GET','/v1/sales/orders/$id?$q',token:token);
     return Map<String,dynamic>.from(r['order'] as Map);
   }
+  Future<Map<String,dynamic>?> salesRecovery(String token,String action,Map<String,dynamic> fields,{
+    required String key,required int revision,String? orderId})async{
+    final r=await _request('POST','/v1/sales/recovery',token:token,body:{
+      'action':action,'body':fields,if(orderId!=null)'orderId':orderId},
+      revision:revision,idempotencyKey:key);
+    final receipt=r['receipt'];
+    return receipt==null?null:Map<String,dynamic>.from(receipt as Map);
+  }
   Future<Map<String,dynamic>> createSalesOrder(String token,Map<String,dynamic> fields,{
     required String key,
   })=>_request('POST','/v1/sales/orders',token:token,body:fields,

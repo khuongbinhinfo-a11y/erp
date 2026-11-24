@@ -52,6 +52,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   LocalScope? get _localScope=>branchId==null?null:widget.client.localScope(widget.session,branchId!);
   bool get _localConfigured=>widget.client.localStore!=null&&widget.session.installationId.isNotEmpty;
   bool _lastNavigationLock=false;
+  bool pendingNeedsReceipt=false;
   bool get _navigationLocked=>saving||localRecoveryBusy||localRecoveryBlocked||pendingCreate!=null||
     pendingUpdate!=null||pendingConfirm!=null;
   @override void setState(VoidCallback fn){
@@ -80,6 +81,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       if(actualBranch!=branch)throw const FormatException();
       if(!{'create','update','confirm'}.contains(kind))throw const FormatException();
       setState((){
+        pendingNeedsReceipt=true;
         if(kind=='create'){pendingCreate=body;pendingCreateKey=key;pendingCreateAutoConfirm=data['auto']==true;}
         if(kind=='update'){pendingUpdate=body;pendingUpdateKey=key;}
         if(kind=='confirm'){pendingConfirm=body;pendingConfirmKey=key;}
@@ -116,7 +118,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       generation++;branches=[];orders=[];branchId=null;retryKeys.clear();
       pendingCreate=null;pendingCreateKey=null;pendingConfirm=null;
       pendingConfirmKey=null;pendingUpdate=null;pendingUpdateKey=null;
-      pendingCreateAutoConfirm=false;localRecoveryBusy=false;localRecoveryBlocked=false;loadBranches();
+      pendingCreateAutoConfirm=false;localRecoveryBusy=false;localRecoveryBlocked=false;pendingNeedsReceipt=false;loadBranches();
     }
   }
   @override void dispose(){generation++;search.dispose();super.dispose();}
@@ -1984,7 +1986,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       final auto=form.remove('_confirmAfterSave')==true;
       setState((){
         pendingCreate=Map<String,dynamic>.from(form);
-        pendingCreateKey=newKey();pendingCreateAutoConfirm=auto;
+        pendingCreateKey=newKey();pendingCreateAutoConfirm=auto;pendingNeedsReceipt=false;
       });
     }
     await _resolveCreate();
@@ -1997,7 +1999,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       await _persistPending(scope,'create',key,body,auto:pendingCreateAutoConfirm);
       if(!_sameScope(token,body['branchId'] as String))return;
       // This exact body+key also recovers a lost acknowledgment after COMMIT.
-      final created=await widget.client.createSalesOrder(token,body,key:key);
+      final recovered=_localConfigured&&pendingNeedsReceipt
+        ?await widget.client.salesRecovery(token,'create',body,key:key,revision:0):null;
+      if(!_sameScope(token,body['branchId'] as String))return;
+      pendingNeedsReceipt=true;
+      final created=recovered??await widget.client.createSalesOrder(token,body,key:key);
       if(!_sameScope(token,body['branchId'] as String))return;
       final auto=pendingCreateAutoConfirm;
       final next=auto?<String,dynamic>{'id':created['id'],'branchId':body['branchId'],'revision':created['revision']}:null;
@@ -2010,6 +2016,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         if(auto){
           pendingConfirm=next;
           pendingConfirmKey=nextKey;
+          pendingNeedsReceipt=false;
         }
       });
       if(!auto)inform('Đã lưu đơn hàng.');
@@ -2070,7 +2077,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         inform('Đơn hàng đã được máy chủ xác nhận.');
       }else{
         if(!_sameScope(token,branch))return;
-        await widget.client.salesOrderAction(token,id,'confirm',branch,revision,key:key);
+        final receipt=_localConfigured&&pendingNeedsReceipt
+          ?await widget.client.salesRecovery(token,'confirm',{'branchId':branch},key:key,revision:revision,orderId:id):null;
+        if(!_sameScope(token,branch))return;
+        pendingNeedsReceipt=true;
+        if(receipt==null)await widget.client.salesOrderAction(token,id,'confirm',branch,revision,key:key);
         if(!_sameScope(token,branch))return;
         await _persistPending(scope,null,null,null);
         if(_sameScope(token,branch))setState((){pendingConfirm=null;pendingConfirmKey=null;});
@@ -2110,7 +2121,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     setState((){
       pendingUpdate={'id':order['id'],'revision':order['revision'],
         'body':Map<String,dynamic>.from(form),'auto':auto};
-      pendingUpdateKey=newKey();
+      pendingUpdateKey=newKey();pendingNeedsReceipt=false;
     });
     await _resolvePendingUpdate();
   }
@@ -2125,7 +2136,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       await _persistPending(scope,'update',key,cmd);
       if(!_sameScope(token,body['branchId'] as String))return;
       // Replays the exact original body+key after a lost COMMIT acknowledgment.
-      final updated=await widget.client.updateSalesOrder(token,id,rev,body,key:key);
+      final recovered=_localConfigured&&pendingNeedsReceipt
+        ?await widget.client.salesRecovery(token,'update',body,key:key,revision:rev,orderId:id):null;
+      if(!_sameScope(token,body['branchId'] as String))return;
+      pendingNeedsReceipt=true;
+      final updated=recovered??await widget.client.updateSalesOrder(token,id,rev,body,key:key);
       if(!_sameScope(token,body['branchId'] as String))return;
       final next=auto?<String,dynamic>{'id':id,'branchId':body['branchId'],'revision':updated['revision']}:null;
       final nextKey=auto?newKey():null;

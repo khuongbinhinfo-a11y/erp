@@ -82,12 +82,7 @@ export async function executeMutation(
   if (typeof handlers?.authorize !== "function" || typeof handlers?.execute !== "function") {
     throw new MutationFault("FORBIDDEN", 403);
   }
-  const fingerprint = createHash("sha256")
-    .update(canonicalPayload({
-      action: context.action,
-      expectedRevision: context.expectedRevision,
-      payload: context.payload,
-    })).digest("hex");
+  const fingerprint = mutationFingerprint(context);
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -142,4 +137,32 @@ export async function executeMutation(
   } finally {
     client.release();
   }
+}
+
+export function mutationFingerprint(context:MutationContext):string{
+  return createHash("sha256").update(canonicalPayload({
+    action:context.action,expectedRevision:context.expectedRevision,payload:context.payload,
+  })).digest("hex");
+}
+
+/** Read-only reconciliation. A missing committed receipt is NOT proof that
+ * another request is not in flight; a later retry still uses the same key. */
+export async function readCommittedMutation(pool:Pool,context:MutationContext,
+  authorize:MutationHandlers["authorize"]):Promise<MutationResponse|null>{
+  validateContext(context);
+  const db=await pool.connect();
+  try{
+    await db.query("BEGIN READ ONLY");
+    if(await authorize(db,context)!==true)throw new MutationFault("FORBIDDEN",403);
+    const previous=await db.query<{fingerprint:string;response_status:number|null;response_body:unknown}>(
+      `SELECT fingerprint,response_status,response_body FROM mutation_receipt
+       WHERE installation_id=$1 AND actor_id=$2 AND action_code=$3 AND idempotency_key=$4`,
+      [context.installationId,context.actorId,context.action,context.idempotencyKey]);
+    const prior=previous.rows[0];
+    if(prior&&prior.fingerprint!==mutationFingerprint(context))throw new MutationFault("IDEMPOTENCY_CONFLICT",409);
+    const out=prior&&prior.response_status!==null?{status:prior.response_status,body:prior.response_body}:null;
+    await db.query("COMMIT");
+    return out;
+  }catch(e){await db.query("ROLLBACK").catch(()=>undefined);throw e;}
+  finally{db.release();}
 }
