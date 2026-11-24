@@ -24,6 +24,8 @@ class _OrderLine {
   String overrideReason='',discountMode='PERCENT',taxMode='EXCLUSIVE';
   bool discountEdited=false,taxEdited=false;
   final TextEditingController quantity,unitPrice,discountRate,taxRate;
+  final displayedPrice=TextEditingController();
+  final priceFocus=FocusNode();
   final FocusNode quantityFocus=FocusNode();
   final FocusNode unitFocus=FocusNode();
   _OrderLine(this.sellSkuId,String value):
@@ -31,7 +33,7 @@ class _OrderLine {
     unitPrice=TextEditingController(),
     discountRate=TextEditingController(text:'0'),
     taxRate=TextEditingController(text:'0');
-  void dispose(){quantity.dispose();unitPrice.dispose();
+  void dispose(){quantity.dispose();unitPrice.dispose();displayedPrice.dispose();priceFocus.dispose();
     discountRate.dispose();taxRate.dispose();quantityFocus.dispose();unitFocus.dispose();}
 }
 class _SalesWorkspaceState extends State<SalesWorkspace> {
@@ -322,6 +324,10 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       quoteDebounce?.cancel();
       quoteGeneration++;
       refresh((){
+      for(final line in lines){
+        final manual=line.unitPrice.text;
+        if(line.displayedPrice.text!=manual){line.displayedPrice.text=manual;}
+      }
       quotes=null;quotedStamp=null;previewGrandTotal=null;previewSubtotal=null;
       previewDiscountTotal=null;previewTaxTotal=null;formError=null;quoteBusy=false;
       });
@@ -351,6 +357,13 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         refresh((){
           if(before==stamp()){
             quotes=quoted;
+            for(var i=0;i<lines.length;i++){
+              final line=lines[i];
+              final value=line.unitPrice.text.isEmpty?erpGroupedDecimalText(quoted[i]['unitPrice']):line.unitPrice.text;
+              if(line.displayedPrice.text!=value){
+                line.displayedPrice.value=TextEditingValue(text:value,selection:TextSelection(baseOffset:0,extentOffset:value.length));
+              }
+            }
             previewGrandTotal=basket['grandTotal'] as String?;
             previewSubtotal=basket['subtotal'] as String?;
             previewDiscountTotal=basket['discountTotal'] as String?;
@@ -1566,12 +1579,13 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         ));
                       final unitPriceField=SizedBox(width:124,child:TextField(
                         key:ValueKey('sales-price-$i'),
-                        controller:entry.unitPrice,
+                        controller:entry.displayedPrice,focusNode:entry.priceFocus,
                         selectAllOnFocus:true,
+                        onTap:()=>entry.displayedPrice.selection=TextSelection(baseOffset:0,extentOffset:entry.displayedPrice.text.length),
                         readOnly:!canPrice(),
                         keyboardType:const TextInputType.numberWithOptions(decimal:true),
                         inputFormatters:const [ErpGroupedNumberFormatter(maxIntegerDigits:13,maxFractionDigits:4)],
-                        onChanged:(_)=>pricingChanged(ctx,refresh),
+                        onChanged:(v){entry.unitPrice.text=v;pricingChanged(ctx,refresh);},
                         textAlign:TextAlign.right,
                         decoration:InputDecoration(
                           isDense:true,filled:false,
@@ -1584,7 +1598,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       Widget percentField(String title,TextEditingController controller,
                           String fieldKey)=>SizedBox(width:76,child:TextField(
                         key:ValueKey('sales-'+fieldKey+'-$i'),
-                        controller:controller,selectAllOnFocus:true,readOnly:fieldKey=='discount'?!canDiscount():!canTax(),
+                        controller:controller,selectAllOnFocus:true,onTap:()=>controller.selection=TextSelection(baseOffset:0,extentOffset:controller.text.length),readOnly:fieldKey=='discount'?!canDiscount():!canTax(),
                         keyboardType:const TextInputType.numberWithOptions(decimal:true),
                         inputFormatters:[ErpGroupedNumberFormatter(
                           maxIntegerDigits:fieldKey=='discount'&&entry.discountMode!='PERCENT'?13:3,
