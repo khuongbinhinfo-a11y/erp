@@ -2475,7 +2475,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     final form=await editForm(order:editSource);
     if(form==null||!mounted||widget.session.token!=token){
       if(scope!=null&&supersededKey!=null&&supersededOwner!=null){
-        try{await widget.client.localStore!.releaseRejectedSalesClaim(scope,id,supersededKey!,supersededOwner!);}catch(_){}
+        try{await widget.client.localStore!.releaseRejectedSalesClaim(scope,id,supersededKey,supersededOwner);}catch(_){}
       }
       return;
     }
