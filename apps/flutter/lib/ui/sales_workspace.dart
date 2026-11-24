@@ -162,7 +162,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       if(requiredPermission==null||!can(requiredPermission))throw const FormatException();
       setState((){
         pendingNeedsReceipt=true;
-        if(kind=='create'){pendingCreate=body;pendingCreateKey=key;pendingCreateAutoConfirm=data['auto']==true;pendingCreateCartId=data['cartId'] is String?data['cartId'] as String:null;}
+        if(kind=='create'){pendingCreate=body;pendingCreateKey=key;pendingCreateAutoConfirm=data['auto']==true;pendingCreateCartId=data['cartId'] is String ? data['cartId'] as String : null;}
         if(kind=='update'){pendingUpdate=body;pendingUpdateKey=key;}
         if(kind=='confirm'){pendingConfirm=body;pendingConfirmKey=key;}
       });
@@ -1058,7 +1058,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     bool draftSaving=false,finishDraft=false,draftWriteFailed=false;
     final autoDraft=formScope!=null&&(order==null||copying||localDraft);
     final cartId=autoDraft?newKey():null;
-    final sourceCartId=localDraft?order?['localSourceCartId'] as String?:null;
+    final String? sourceCartId=localDraft ? (order?['localSourceCartId'] as String?) : null;
     bool sourceCartCleared=false;
     Map<String,dynamic> draftSnapshot(){
       return <String,dynamic>{
@@ -2148,8 +2148,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         try{carts=await widget.client.localStore!.savedCarts(scope);}
         catch(_){inform('Không đọc được giỏ đang lưu trên máy.',error:true);return;}
         if(!_sameScope(token,scope.branch))return;
-        if(carts.isNotEmpty){
-          if(source!=null){inform('Có giỏ chưa hoàn tất. Xử lý giỏ trước khi sao chép đơn.',error:true);return;}
+        if(carts.isNotEmpty&&source==null){
           final decision=await showDialog<String>(context:context,builder:(ctx)=>AlertDialog(
             title:const Text('Giỏ hàng trên máy'),
             content:SizedBox(width:440,height:((carts.length*74)+48).clamp(130,375).toDouble(),
