@@ -246,7 +246,7 @@ function normalizeRow(
    if(raw.categoryCode!==undefined){
     const value=raw.categoryCode;
     const c=value===""?null:refs.categories.get(value);
-    if(value!==""&&(!c||c.active!==true))
+    if(value!==""&&(!c||c.active!==true||c.groupActive!==true))
       throw new BulkFault("CATEGORY_CODE_NOT_FOUND_OR_INACTIVE");
     const effectiveGroup=op.groupId??current?.groupId??c?.groupId??null;
     if(c&&c.groupId!==effectiveGroup)
@@ -261,7 +261,7 @@ function normalizeRow(
     const b=refs.brands.get(raw.brandCode);
     const gid=op.groupId??current?.groupId;
     const group=[...refs.groups.values()].find(g=>g.id===gid);
-    if(!b||b.active!==true||!group||group.brandId!==b.id)
+    if(!b||b.active!==true||(group?.brandId??refs.categories.get(raw.categoryCode??"")?.brandId)!==b.id)
       throw new BulkFault("BRAND_GROUP_MISMATCH");
     after.brandCode=raw.brandCode;
    }
@@ -537,8 +537,11 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
   ' WHERE installation_id=$1 AND branch_id=$2 AND code=ANY($3::text[])',
   [tenant,branch,all(res==="customers"?"customerGroupCode":"groupCode")]):{rows:[]};
  const categories=res==="products"&&taxonomyReady?await db.query<Record<string,any>>(
-  'SELECT id,code,group_id AS "groupId",active FROM catalog_product_category WHERE '+
-  'installation_id=$1 AND branch_id=$2 AND code=ANY($3::text[])',
+  'SELECT c.id,c.code,c.group_id AS "groupId",c.active,g.active AS "groupActive",'+
+  'g.brand_id AS "brandId" FROM catalog_product_category c '+
+  'JOIN catalog_product_group g ON g.installation_id=c.installation_id '+
+  'AND g.branch_id=c.branch_id AND g.id=c.group_id '+
+  'WHERE c.installation_id=$1 AND c.branch_id=$2 AND c.code=ANY($3::text[])',
   [tenant,branch,all("categoryCode")]):{rows:[]};
  const brands=res==="products"&&taxonomyReady?await db.query<Record<string,any>>(
   'SELECT id,code,active FROM catalog_brand WHERE installation_id=$1 '+
