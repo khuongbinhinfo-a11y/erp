@@ -5,6 +5,7 @@ import { prismaCloud, prismaState } from "@prisma/composer-prisma-cloud/control"
 
 export default definePrismaConfig({
   composer: composer({
+    entry: "./module.ts",
     extensions: [prismaCloud({ region: "ap-southeast-1" }), nodeBuild()],
     state: prismaState(),
   }),
