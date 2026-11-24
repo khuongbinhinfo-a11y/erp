@@ -333,6 +333,60 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
   return r.rows;
 }
 
+type PriceListScopeTargets={
+ channelIds:string[];customerGroupIds:string[];customerIds:string[];
+ defaultAssignment:boolean;
+};
+const PRICE_SCOPE_KEYS=["channelIds","customerGroupIds","customerIds","defaultAssignment"] as const;
+function priceScopes(raw:Record<string,unknown>):PriceListScopeTargets|null{
+ if(!PRICE_SCOPE_KEYS.some(k=>Object.prototype.hasOwnProperty.call(raw,k)))return null;
+ const ids=(key:string):string[]=>{
+  const value=raw[key]??[];
+  if(!Array.isArray(value)||value.length>100)throw new CatalogError(400,"INVALID_PRICE_SCOPE");
+  const result=value.map(requireUuid);
+  if(new Set(result).size!==result.length)throw new CatalogError(400,"DUPLICATE_PRICE_SCOPE");
+  return result;
+ };
+ const defaultAssignment=raw.defaultAssignment??false;
+ if(typeof defaultAssignment!=="boolean")throw new CatalogError(400,"INVALID_PRICE_SCOPE");
+ return {channelIds:ids("channelIds"),customerGroupIds:ids("customerGroupIds"),
+  customerIds:ids("customerIds"),defaultAssignment};
+}
+async function syncPriceScopes(db:PoolClient,installationId:string,
+ branchId:string,priceListId:string,desired:PriceListScopeTargets){
+ const wanted=new Set<string>();
+ const targets:{scopeKind:"DEFAULT"|"CUSTOMER"|"CUSTOMER_GROUP"|"CHANNEL";
+  customerId:string|null;customerGroupId:string|null;channelId:string|null;}[]=[];
+ const add=(scopeKind:"DEFAULT"|"CUSTOMER"|"CUSTOMER_GROUP"|"CHANNEL",id:string|null)=>{
+  wanted.add(scopeKind+":"+(id??""));
+  targets.push({scopeKind,customerId:scopeKind==="CUSTOMER"?id:null,
+    customerGroupId:scopeKind==="CUSTOMER_GROUP"?id:null,
+    channelId:scopeKind==="CHANNEL"?id:null});
+ };
+ if(desired.defaultAssignment)add("DEFAULT",null);
+ for(const id of desired.channelIds)add("CHANNEL",id);
+ for(const id of desired.customerGroupIds)add("CUSTOMER_GROUP",id);
+ for(const id of desired.customerIds)add("CUSTOMER",id);
+ const prior=await db.query<{id:string;scope_kind:string;customer_id:string|null;
+  customer_group_id:string|null;channel_id:string|null;}>(`SELECT id,scope_kind,customer_id,
+    customer_group_id,channel_id FROM catalog_price_list_assignment
+   WHERE installation_id=$1 AND branch_id=$2 AND price_list_id=$3
+    AND active FOR UPDATE`,[installationId,branchId,priceListId]);
+ const already=new Set<string>();
+ for(const old of prior.rows){
+  const key=old.scope_kind+":"+(old.customer_id??old.customer_group_id??old.channel_id??"");
+  if(wanted.has(key)){already.add(key);continue;}
+  await db.query(`UPDATE catalog_price_list_assignment
+   SET active=false,revision=revision+1 WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,
+    [installationId,branchId,old.id]);
+ }
+ for(const target of targets){
+  const key=target.scopeKind+":"+(target.customerId??target.customerGroupId??target.channelId??"");
+  if(already.has(key))continue;
+  await createPriceAssignment(db,installationId,{branchId,priceListId,
+   ...target,priority:0,effectiveFrom:null,effectiveTo:null});
+ }
+}
 export function checkCreate(resource:Resource,raw:Record<string,unknown>){
   if(resource==="warehouses")throw new CatalogError(405,"READ_ONLY_WAREHOUSE");
   const branchId=requireUuid(raw.branchId);
@@ -348,16 +402,17 @@ export function checkCreate(resource:Resource,raw:Record<string,unknown>){
   const name=requireName(raw.name,resource==="unit-definitions"?80:160);
   if(resource==="price-lists"){
     if(Object.keys(raw).some(k=>!["branchId","code","name","effectiveFrom",
-      "effectiveTo","priority"].includes(k)))
+      "effectiveTo","priority",...PRICE_SCOPE_KEYS].includes(k)))
       throw new CatalogError(400,"UNKNOWN_FIELD");
-    const hasWindow=["effectiveFrom","effectiveTo","priority"]
+    const scopes=priceScopes(raw);
+    const hasWindow=["effectiveFrom","effectiveTo","priority",...PRICE_SCOPE_KEYS]
       .some(k=>Object.prototype.hasOwnProperty.call(raw,k));
     if(hasWindow){
       const effectiveFrom=raw.effectiveFrom==null?null:r1cDate(raw.effectiveFrom);
       const effectiveTo=raw.effectiveTo==null?null:r1cDate(raw.effectiveTo);
       const priority=r1cPriority(raw.priority??0);
       r1cRange(effectiveFrom,effectiveTo);
-      return {branchId,code,name,effectiveFrom,effectiveTo,priority};
+      return {branchId,code,name,effectiveFrom,effectiveTo,priority,scopes};
     }
     return {branchId,code,name};
   }
@@ -453,6 +508,7 @@ export async function executeCreate(db:PoolClient,context:MutationContext,
       VALUES($1,$2,$3,$4,$5::timestamptz,$6::timestamptz,$7) RETURNING id`,
       [installationId,branchId,value.code,value.name,
         value.effectiveFrom,value.effectiveTo,value.priority]);
+    if(value.scopes)await syncPriceScopes(db,installationId,branchId,r.rows[0]!.id,value.scopes);
     return {status:201,body:{id:r.rows[0]!.id,code:value.code,
       name:value.name,revision:0,effectiveFrom:value.effectiveFrom,
       effectiveTo:value.effectiveTo,priority:value.priority}};
@@ -564,7 +620,7 @@ export function parseEdit(resource:Editable,raw:Record<string,unknown>){
   const allow=new Set(["branchId","name","active",
     ...(resource==="customers"?["customerGroupId","customerRegionId","phone","deliveryAddress","paymentTermsDays"]:[]),
     ...(resource==="products"?["groupId"]:[]),
-    ...(resource==="price-lists"?["effectiveFrom","effectiveTo","priority"]:[])]);
+    ...(resource==="price-lists"?["effectiveFrom","effectiveTo","priority",...PRICE_SCOPE_KEYS]:[])]);
   if(Object.keys(raw).some(key=>!allow.has(key)))throw new CatalogError(400,"UNKNOWN_FIELD");
   if(Object.prototype.hasOwnProperty.call(raw,"name"))
     columns.name=requireName(raw.name,resource==="unit-definitions"?80:160);
@@ -601,8 +657,9 @@ export function parseEdit(resource:Editable,raw:Record<string,unknown>){
   if(resource==="products"&&Object.prototype.hasOwnProperty.call(raw,"groupId")){
     columns.group_id=raw.groupId===null?null:requireUuid(raw.groupId);
   }
-  if(Object.keys(columns).length===0)throw new CatalogError(400,"EMPTY_UPDATE");
-  return {branchId,columns};
+  const scopes=resource==="price-lists"?priceScopes(raw):null;
+  if(Object.keys(columns).length===0&&scopes===null)throw new CatalogError(400,"EMPTY_UPDATE");
+  return {branchId,columns,scopes};
 }
 export async function applyEdit(db:PoolClient,context:MutationContext,
   resource:Editable,targetId:string,value:ReturnType<typeof parseEdit>){
@@ -632,11 +689,13 @@ export async function applyEdit(db:PoolClient,context:MutationContext,
   if(resource==="products"&&Object.prototype.hasOwnProperty.call(value.columns,"group_id"))
     await activeDirectoryCode(db,"catalog_product_group",
       installationId,value.branchId,value.columns.group_id as string|null);
+  if(resource==="price-lists"&&value.scopes)
+    await syncPriceScopes(db,installationId,value.branchId,targetId,value.scopes);
   const columnEntries=Object.entries(value.columns);
   const sets=columnEntries.map(([key],i)=>key+"=$"+(i+4));
   const args=[installationId,value.branchId,targetId,...columnEntries.map(x=>x[1])];
   const saved=await db.query<{revision:string}>(
-    `UPDATE ${table} SET ${sets.join(",")},revision=revision+1
+    `UPDATE ${table} SET ${[...sets,"revision=revision+1"].join(",")}
       WHERE installation_id=$1 AND branch_id=$2 AND id=$3
       RETURNING revision::text`,args);
   return {status:200,body:{id:targetId,revision:Number(saved.rows[0]!.revision)}};
