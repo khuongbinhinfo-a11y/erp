@@ -40,9 +40,9 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
   Future<void> loadTaxonomy()async{
     try{
       final data=await Future.wait([
-        widget.client.catalogItems(token,'brands',branchId:widget.branchId),
-        widget.client.catalogItems(token,'groups',branchId:widget.branchId),
-        widget.client.catalogItems(token,'categories',branchId:widget.branchId),
+        widget.client.catalogDirectoryAll(token,'brands',branchId:widget.branchId),
+        widget.client.catalogDirectoryAll(token,'groups',branchId:widget.branchId),
+        widget.client.catalogDirectoryAll(token,'categories',branchId:widget.branchId),
       ]);
       if(mounted)setState((){brands=data[0];groups=data[1];categories=data[2];});
     }on ErpApiError catch(e){if(e.status!=503&&mounted)setState(()=>error=e.message);}
