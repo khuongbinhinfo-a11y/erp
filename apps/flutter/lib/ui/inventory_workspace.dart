@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:material_ui/material_ui.dart';
 import 'erp_tokens.dart';
 import 'erp_display.dart';
+import 'erp_number_input.dart';
 import 'erp_toast.dart';
 import 'identity_client.dart';
 
@@ -199,12 +200,13 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
             const SizedBox(height:12),
             TextField(key:const ValueKey('inventory-opening-qty'),controller:qty,
               keyboardType:const TextInputType.numberWithOptions(decimal:true),
+              inputFormatters:const [ErpGroupedNumberFormatter(maxIntegerDigits:12,maxFractionDigits:6)],
               decoration:const InputDecoration(labelText:'Số lượng theo đơn vị gốc',
                 helperText:'Chỉ ghi một lần trước khi kho phát sinh chứng từ.')),
           ])),
           actions:[TextButton(onPressed:()=>Navigator.pop(dctx),child:const Text('Đóng')),
             FilledButton(onPressed:product==null?null:()=>Navigator.pop(dctx,{
-              'product':product!,'quantity':qty.text.trim()}),
+              'product':product!,'quantity':erpNumberCanonical(qty.text)}),
               child:const Text('Xác nhận'))],
         )));
       final selection=await Navigator.of(context,rootNavigator:true).push(route);
@@ -327,11 +329,11 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
       ?(row['sku']??'').toString()+' · '+(row['name']??'').toString()
       :tab=='movements'?(row['sku']??'').toString()+' · '+(row['kind']??'').toString()
       :(row['documentNo']??'').toString()+' · '+(row['sku']??'').toString();
-    final details=tab=='balances'?'Tồn: '+erpDecimalText(row['onHand'])+
-        '  |  Đã giữ: '+erpDecimalText(row['reserved'])+
-        '  |  Khả dụng: '+erpDecimalText(row['available'])
-      :tab=='movements'?'Biến động: '+erpDecimalText(row['deltaBase'])
-      :'Số lượng: '+erpDecimalText(row['quantityBase'])+
+    final details=tab=='balances'?'Tồn: '+erpNumberText(row['onHand'])+
+        '  |  Đã giữ: '+erpNumberText(row['reserved'])+
+        '  |  Khả dụng: '+erpNumberText(row['available'])
+      :tab=='movements'?'Biến động: '+erpNumberText(row['deltaBase'])
+      :'Số lượng: '+erpNumberText(row['quantityBase'])+
         ' · '+(row['state']=='ACTIVE'?'Đang giữ':'Đã giải phóng');
     return Column(children:[
       Padding(padding:const EdgeInsets.symmetric(vertical:12),child:Row(children:[

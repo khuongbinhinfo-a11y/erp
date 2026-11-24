@@ -59,8 +59,8 @@ function resource(v:unknown):BulkResource{
   throw new BulkFault("INVALID_BULK_RESOURCE");
  return v as BulkResource;
 }
-async function exportRows(db:PoolClient,tenant:string,branch:string,kind:BulkResource){
- const fields=bulkColumns(kind);
+async function exportRows(db:PoolClient,tenant:string,branch:string,kind:BulkResource,priceListId?:string){
+ const fields=priceListId&&kind==="prices"?["skuCode","name","unitCode","amount","discountRate","effectiveAt"]:bulkColumns(kind);
  let sql:string;
  switch(kind){
  case "customers":
@@ -91,17 +91,63 @@ async function exportRows(db:PoolClient,tenant:string,branch:string,kind:BulkRes
    'WHERE s.installation_id=$1 AND s.branch_id=$2 ORDER BY s.sku LIMIT 5001';
   break;
  case "prices":
+  if(priceListId){
+   // Export the actual current base price for each exact selling SKU.
+   // A later product-level price may supersede an older BASE SKU rule;
+   // non-base units never inherit the retail price.
+   sql=`SELECT s.sku AS "skuCode",p.name,s.unit_code AS "unitCode",
+    CASE WHEN r.id IS NOT NULL AND (e.id IS NULL OR e.effective_at<=r.effective_from)
+      THEN coalesce(r.imported_gross_amount,r.amount)::text ELSE e.amount::text END AS amount,
+    CASE WHEN r.id IS NOT NULL AND (e.id IS NULL OR e.effective_at<=r.effective_from)
+      THEN coalesce(r.imported_discount_rate,0)::text ELSE e.discount_rate::text END AS "discountRate",
+    to_char((CASE WHEN r.id IS NOT NULL AND
+        (e.id IS NULL OR e.effective_at<=r.effective_from)
+      THEN r.effective_from ELSE e.effective_at END) AT TIME ZONE 'UTC',
+      'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "effectiveAt"
+    FROM catalog_sell_sku s JOIN catalog_product p
+      ON p.installation_id=s.installation_id AND p.branch_id=s.branch_id
+       AND p.id=s.product_id AND p.active
+    JOIN catalog_price_list l
+      ON l.installation_id=s.installation_id AND l.branch_id=s.branch_id
+       AND l.id=$3 AND l.active
+    LEFT JOIN LATERAL (
+      SELECT r.id,r.amount,r.effective_from,r.imported_gross_amount,r.imported_discount_rate
+      FROM catalog_sku_price_rule r
+       WHERE r.installation_id=s.installation_id AND r.branch_id=s.branch_id
+        AND r.sell_sku_id=s.id AND r.price_list_id=l.id
+        AND r.scope_kind='BASE' AND r.min_quantity<=1
+        AND r.effective_from<=transaction_timestamp()
+        AND (r.effective_to IS NULL OR r.effective_to>transaction_timestamp())
+        AND NOT EXISTS (SELECT 1 FROM catalog_sku_price_retirement x
+         WHERE x.installation_id=r.installation_id AND x.branch_id=r.branch_id
+          AND x.rule_id=r.id AND x.retired_at<=transaction_timestamp())
+       ORDER BY r.priority DESC,r.effective_from DESC,r.id DESC LIMIT 1
+    ) r ON true
+    LEFT JOIN LATERAL (
+      SELECT e.id,e.amount,e.discount_rate,e.effective_at
+      FROM catalog_price_entry e
+       WHERE s.is_base AND e.installation_id=s.installation_id
+        AND e.branch_id=s.branch_id AND e.product_id=p.id
+        AND e.price_list_id=l.id AND e.effective_at<=transaction_timestamp()
+       ORDER BY e.effective_at DESC,e.id DESC LIMIT 1
+    ) e ON true
+    WHERE s.installation_id=$1 AND s.branch_id=$2 AND s.active
+     AND (r.id IS NOT NULL OR e.id IS NOT NULL)
+    ORDER BY s.sku LIMIT 5001`;
+   break;
+  }
   sql='SELECT DISTINCT ON (l.code,p.sku) l.code AS "priceListCode",'+
-   'p.sku AS "productCode",e.amount::text,e.discount_rate::text AS "discountRate",'+
+   'p.sku AS "productCode",p.name,p.base_unit AS "unitCode",e.amount::text,e.discount_rate::text AS "discountRate",'+
    ` to_char(e.effective_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "effectiveAt" FROM catalog_price_entry e `+
    'JOIN catalog_price_list l ON l.installation_id=e.installation_id '+
    'AND l.branch_id=e.branch_id AND l.id=e.price_list_id '+
    'JOIN catalog_product p ON p.installation_id=e.installation_id '+
    'AND p.branch_id=e.branch_id AND p.id=e.product_id '+
    'WHERE e.installation_id=$1 AND e.branch_id=$2 '+
+   (priceListId?'AND l.id=$3::uuid ':'')+
    'ORDER BY l.code,p.sku,e.effective_at DESC,e.id DESC LIMIT 5001';
  }
- const r=await db.query<Record<string,unknown>>(sql,[tenant,branch]);
+ const r=await db.query<Record<string,unknown>>(sql,priceListId?[tenant,branch,priceListId]:[tenant,branch]);
  if(r.rows.length>5000)throw new BulkFault("EXPORT_ROW_LIMIT",413);
  const result=r.rows.map(x=>fields.map(k=>{
   const v=x[k];
@@ -134,18 +180,24 @@ export async function handleBulkHttp(req:IncomingMessage,res:ServerResponse,
   if(req.method==="GET"&&(action==="template"||action==="export")){
    const branch=url.searchParams.get("branchId"),kind=resource(url.searchParams.get("resource"));
    if(!branch||!UUID.test(branch))throw new BulkFault("INVALID_BRANCH");
+   const priceListId=url.searchParams.get("priceListId")??undefined;
+   if(priceListId!==undefined&&(kind!=="prices"||!UUID.test(priceListId)))throw new BulkFault("INVALID_PRICE_LIST");
    const format=url.searchParams.get("format")??"csv";
    if(format!=="csv"&&format!=="xlsx")throw new BulkFault("INVALID_EXPORT_FORMAT");
    const db=await pool.connect();
    try{
     if(!await hasPermission(db,{installationId:tenant,actorId:actor,branchId:branch,
       permission:"catalog.read"}))throw new BulkFault("DENIED",403);
+    if(priceListId){
+     const list=await db.query("SELECT id FROM catalog_price_list WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active",[tenant,branch,priceListId]);
+     if(!list.rows.length)throw new BulkFault("PRICE_LIST_NOT_FOUND_OR_INACTIVE",409);
+    }
     if(action==="template"){
-     const file=bulkExport(kind,[],format,true);
+     const file=bulkExport(kind,[],format,true,new Date(),Boolean(priceListId));
      send(res,200,{...file,requestId},requestId,cors);
     }else{
-     const result=await exportRows(db,tenant,branch,kind);
-     send(res,200,{...bulkExport(kind,result.rows,format),requestId},requestId,cors);
+     const result=await exportRows(db,tenant,branch,kind,priceListId);
+     send(res,200,{...bulkExport(kind,result.rows,format,false,new Date(),Boolean(priceListId)),requestId},requestId,cors);
     }
    }finally{db.release();}
    return;
@@ -193,7 +245,8 @@ export async function handleBulkHttp(req:IncomingMessage,res:ServerResponse,
    installationId:tenant,actorId:actor,requestId,
    action:"catalog.bulk."+kind+".apply",idempotencyKey:key,expectedRevision:0,
    payload:{branchId:input.branchId,resource:kind,mode:input.mode,
-    fileHash,mapping:input.mapping,hasHeader:input.hasHeader,previewHash},
+    fileHash,mapping:input.mapping,hasHeader:input.hasHeader,previewHash,
+    ...(input.priceListId?{priceListId:input.priceListId,defaultEffectiveAt:input.defaultEffectiveAt??null}:{})},
   },{
    authorize:(db,c)=>hasPermission(db,{installationId:c.installationId,
      actorId:c.actorId,branchId:input.branchId,permission:"catalog.write"}),

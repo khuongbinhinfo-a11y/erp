@@ -165,8 +165,8 @@ void main(){
     expect(quoteCalls,1,reason:'R1 HTTP calls: '+requests.join(' | ')+
       ' / widgets: '+tester.widgetList<Text>(find.byType(Text))
         .map((e)=>e.data??'').where((e)=>e.isNotEmpty).take(24).join(' / '));
-    expect(find.textContaining('111.150 ₫'),findsWidgets);
-    expect(find.textContaining('222.300 ₫'),findsWidgets);
+    expect(find.textContaining('111,150 ₫'),findsWidgets);
+    expect(find.textContaining('222,300 ₫'),findsWidgets);
   });
   testWidgets('R1 rules: retire promotion after lost ACK without duplicate mutation', (tester)async{
     var attempts=0,retired=false;

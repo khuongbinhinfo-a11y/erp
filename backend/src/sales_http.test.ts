@@ -28,8 +28,8 @@ test("B1: real PostgreSQL order lifecycle, immutable versions, RBAC, replay and 
     pool=new Pool({connectionString:u.toString(),max:8,query_timeout:12000});
     pool.on("error",()=>{});
     const installed=await applyMigrations(pool,resolve(process.cwd(),"db/migrations"));
-    assert.equal(installed.applied.length,18);
-    assert.equal((await applyMigrations(pool,resolve(process.cwd(),"db/migrations"))).skipped.length,18);
+    assert.equal(installed.applied.length,19);
+    assert.equal((await applyMigrations(pool,resolve(process.cwd(),"db/migrations"))).skipped.length,19);
     const password="Sales-Testing-"+randomUUID();
     const root=await bootstrapInstallation(pool,{
       code:"sales-test",displayName:"Order integration test",
@@ -94,8 +94,8 @@ test("B1: real PostgreSQL order lifecycle, immutable versions, RBAC, replay and 
     const duplicate=await call("/v1/sales/quote","POST",{
       ...r2QuotePayload,lines:[...r2QuotePayload.lines,...r2QuotePayload.lines],
     },token);
-    assert.equal(duplicate.status,400);
-    assert.equal(duplicate.body.error.code,"DUPLICATE_PRODUCT");
+    assert.equal(duplicate.status,200);
+    assert.equal(duplicate.body.quote.lines.length,2,"same SKU can be split into two commercial lines");
     assert.equal((await call("/v1/sales/quote","POST",{
       ...r2QuotePayload,lines:[{sellSkuId,quantity:2}],
     },token)).status,400);

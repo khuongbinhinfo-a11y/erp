@@ -14,6 +14,7 @@ type Rule={
   id:string;scope_kind:string;adjustment:string;amount:string;priority:number;min_quantity:string;
   stacking:string;stop_processing:boolean;channel_id:string|null;
   customer_id:string|null;customer_group:string|null;effective_from:Date;
+  price_list_id:string;priceListCode?:string;listStopProcessing?:boolean;
 };
 const percent=new Set(["PERCENT_DISCOUNT","PERCENT_MARKUP"]);
 const deduct=new Set(["PERCENT_DISCOUNT","AMOUNT_DISCOUNT"]);
@@ -31,6 +32,28 @@ async function exact(db:PoolClient,amount:string,rule:Rule):Promise<string>{
   const q=await db.query<{result:string}>(
     "SELECT "+expression+"::text AS result",[amount,rule.amount]);
   return q.rows[0]!.result;
+}
+/** Each configured scope dimension is mandatory; multiple values inside a
+ * dimension are alternatives. Keep legacy unassigned lists available when
+ * explicitly selected. Only active, effective targets may satisfy a scope. */
+function listScopePredicate(at:string,customer:string,group:string,channel:string):string{
+  return ([
+    ["CUSTOMER","customer_id",customer],
+    ["CUSTOMER_GROUP","customer_group_id",group],
+    ["CHANNEL","channel_id",channel],
+  ] as const).map(([kind,column,value])=>`AND (
+    NOT EXISTS (SELECT 1 FROM catalog_price_list_assignment configured
+      WHERE configured.installation_id=l.installation_id
+        AND configured.branch_id=l.branch_id AND configured.price_list_id=l.id
+        AND configured.active AND configured.scope_kind='${kind}')
+    OR EXISTS (SELECT 1 FROM catalog_price_list_assignment matched
+      WHERE matched.installation_id=l.installation_id
+        AND matched.branch_id=l.branch_id AND matched.price_list_id=l.id
+        AND matched.active AND matched.scope_kind='${kind}'
+        AND matched.${column}=${value}::uuid
+        AND (matched.effective_from IS NULL OR matched.effective_from<=${at}::timestamptz)
+        AND (matched.effective_to IS NULL OR matched.effective_to>${at}::timestamptz))
+  )`).join("\n");
 }
 export async function resolveR1Price(db:PoolClient,input:Query){
   const t=input.installationId.toLowerCase(),b=input.branchId.toLowerCase();
@@ -92,6 +115,10 @@ export async function resolveR1Price(db:PoolClient,input:Query){
     SELECT 1 FROM public.schema_migrations
     WHERE version='0018_r1c_price_list_assignment.sql') AS ready`);
   const scoped=gate.rows[0]?.ready===true;
+  const p0=await db.query<{ready:boolean}>(`SELECT EXISTS(
+    SELECT 1 FROM public.schema_migrations
+    WHERE version='0019_p0_price_order_parity.sql') AS ready`);
+  const listStackingAvailable=p0.rows[0]?.ready===true;
   if(!selectedListId){
     if(!scoped)throw new R1QuoteError(503,"PRICE_LIST_ASSIGNMENT_MIGRATION_REQUIRED");
     const winner=await db.query<{
@@ -111,12 +138,33 @@ export async function resolveR1Price(db:PoolClient,input:Query){
           OR (a.scope_kind='CUSTOMER_GROUP'
             AND a.customer_group_id=$5::uuid)
           OR (a.scope_kind='CHANNEL' AND a.channel_id=$6::uuid))
+        ${listScopePredicate('$3','$4','$5','$6')}
+        -- Discount-only price lists are overlays, not starting-price lists.
+        -- Never auto-select one without an effective base SKU or product price.
+        AND (EXISTS (SELECT 1 FROM catalog_sku_price_rule base
+          WHERE base.installation_id=l.installation_id
+            AND base.branch_id=l.branch_id AND base.price_list_id=l.id
+            AND base.sell_sku_id=$7::uuid AND base.scope_kind='BASE'
+            AND base.effective_from<=$3::timestamptz
+            AND (base.effective_to IS NULL OR base.effective_to>$3::timestamptz)
+            AND base.min_quantity<=$10::numeric
+            AND NOT EXISTS(SELECT 1 FROM catalog_sku_price_retirement retired
+              WHERE retired.installation_id=base.installation_id
+                AND retired.branch_id=base.branch_id
+                AND retired.rule_id=base.id
+                AND retired.retired_at<=$3::timestamptz))
+          OR ($8::boolean AND EXISTS (SELECT 1 FROM catalog_price_entry e
+            WHERE e.installation_id=l.installation_id
+              AND e.branch_id=l.branch_id AND e.price_list_id=l.id
+              AND e.product_id=$9::uuid
+              AND e.effective_at<=$3::timestamptz)))
       ORDER BY CASE a.scope_kind WHEN 'CUSTOMER' THEN 4
         WHEN 'CUSTOMER_GROUP' THEN 3 WHEN 'CHANNEL' THEN 2 ELSE 1 END DESC,
         a.priority DESC,l.priority DESC,
         a.effective_from DESC NULLS LAST,l.effective_from DESC NULLS LAST,
         a.id ASC LIMIT 1`,
-      [t,b,input.priceAt,customerId??null,customerGroupId,channelId??null]);
+      [t,b,input.priceAt,customerId??null,customerGroupId,channelId??null,
+        input.sellSkuId,item.isBase,item.productId,input.quantity]);
     if(!winner.rows[0])throw new R1QuoteError(409,"NO_APPLICABLE_PRICE_LIST");
     selectedListId=winner.rows[0].id;
     const label=winner.rows[0].scopeKind==="CUSTOMER"?"khách hàng":
@@ -125,17 +173,22 @@ export async function resolveR1Price(db:PoolClient,input:Query){
     priceListSelectionReason="Tự chọn bảng giá "+winner.rows[0].code+
       " theo "+label+" · ưu tiên "+winner.rows[0].priority;
   }
-  const list=await db.query<{currency:string;code:string}>(
-    scoped?`SELECT currency,code FROM catalog_price_list
-      WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active
-        AND (effective_from IS NULL OR effective_from<=$4::timestamptz)
-        AND (effective_to IS NULL OR effective_to>$4::timestamptz)`:
-      `SELECT currency,code FROM catalog_price_list
-      WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active`,
-    scoped?[t,b,selectedListId,input.priceAt]:[t,b,selectedListId]);
+  const policyColumns=listStackingAvailable
+    ?'l.stacking_mode AS "stackingMode",l.stop_processing AS "stopProcessing"'
+    :"'EXCLUSIVE'::text AS \"stackingMode\",false AS \"stopProcessing\"";
+  const list=await db.query<{currency:string;code:string;
+    stackingMode:string;stopProcessing:boolean}>(
+    scoped?`SELECT l.currency,l.code,${policyColumns} FROM catalog_price_list l
+      WHERE l.installation_id=$1 AND l.branch_id=$2 AND l.id=$3 AND l.active
+        AND (l.effective_from IS NULL OR l.effective_from<=$4::timestamptz)
+        AND (l.effective_to IS NULL OR l.effective_to>$4::timestamptz)
+        AND (($5::uuid IS NULL AND $7::uuid IS NULL) OR (true ${listScopePredicate('$4','$5','$6','$7')}))`:
+      `SELECT l.currency,l.code,${policyColumns} FROM catalog_price_list l
+      WHERE l.installation_id=$1 AND l.branch_id=$2 AND l.id=$3 AND l.active`,
+    scoped?[t,b,selectedListId,input.priceAt,customerId??null,customerGroupId,channelId??null]:[t,b,selectedListId]);
   if(list.rows[0]?.currency!=="VND")
     throw new R1QuoteError(409,"PRICE_LIST_UNAVAILABLE_OR_EXPIRED");
-  const rules=await db.query<Rule>(`SELECT r.id,r.scope_kind,r.adjustment,r.amount::text,
+  const rules=await db.query<Rule>(`SELECT r.id,r.price_list_id,r.scope_kind,r.adjustment,r.amount::text,
       r.priority,r.stacking,r.stop_processing,r.channel_id,r.customer_id,r.customer_group,r.min_quantity::text,r.effective_from
     FROM catalog_sku_price_rule r
     WHERE r.installation_id=$1 AND r.branch_id=$2 AND r.price_list_id=$3
@@ -153,17 +206,27 @@ export async function resolveR1Price(db:PoolClient,input:Query){
   let basePrice:string|null=base?.amount??null;
   let sourceId:string|null=base?.id??null;
   let origin="BASE_RULE";
-  // Existing product/base-unit price history remains available to old sales.
-  // Do not infer carton prices from retail price times conversion.
-  if(basePrice===null && item.isBase){
+  // During convergence, both existing append-only base-price histories feed
+  // this resolver. A more recent product price can supersede an ordinary
+  // BASE SKU price, but never a quantity tier or a different sell unit.
+  // Preserve the existing BASE winner for equal timestamps; reconciliation
+  // of conflicting same-time records belongs to the migration preflight.
+  if(item.isBase){
     const q=await db.query<{id:string;amount:string;discount:string}>(`
       SELECT e.id,e.amount::text,e.discount_rate::text AS discount
       FROM catalog_price_entry e
       WHERE e.installation_id=$1 AND e.branch_id=$2
         AND e.price_list_id=$3 AND e.product_id=$4
         AND e.effective_at<=$5::timestamptz
+        AND ($6::uuid IS NULL OR EXISTS (
+          SELECT 1 FROM catalog_sku_price_rule br
+          WHERE br.installation_id=e.installation_id AND br.branch_id=e.branch_id
+            AND br.price_list_id=e.price_list_id AND br.id=$6
+            AND br.sell_sku_id=$7 AND br.min_quantity<=1
+            AND e.effective_at>br.effective_from
+        ))
       ORDER BY e.effective_at DESC,e.id DESC LIMIT 1`,
-      [t,b,selectedListId,item.productId,input.priceAt]);
+      [t,b,selectedListId,item.productId,input.priceAt,base?.id??null,input.sellSkuId]);
     const old=q.rows[0];
     if(old){
       const computed=await db.query<{unit:string}>(
@@ -175,21 +238,63 @@ export async function resolveR1Price(db:PoolClient,input:Query){
   }
   if(basePrice===null)throw new R1QuoteError(409,"SKU_HAS_NO_EFFECTIVE_BASE_PRICE");
   let price=basePrice,usedExclusive=false,stopped=false;
+  let stopAfterListId:string|null=null;
   const equivalentPolicies=new Set<string>();
   const trace:{
     ruleId:string|null;scope:string;adjustment:string;amount:string;result:string;
     reason:string;priority:number|null;minQuantity:string|null;
+    priceListCode?:string;
     effectiveFrom:string|null;stacking:string|null;
   }[]=[
     {ruleId:sourceId,scope:origin,adjustment:"FIXED_PRICE",amount:basePrice,
      result:price,reason:origin==="BASE_RULE"?"Giá cơ sở của SKU":
       "Giá hiệu lực từ lịch sử sản phẩm",
-     priority:base?.priority??null,minQuantity:base?.min_quantity??null,
-     effectiveFrom:base?.effective_from?.toISOString()??null,stacking:null},
+     priority:base?.priority??null,
+     minQuantity:origin==="BASE_RULE"?base?.min_quantity??null:null,
+     effectiveFrom:origin==="BASE_RULE"?base?.effective_from?.toISOString()??null:null,stacking:null},
   ];
-  for(const rule of rules.rows){
+  let applicableRules=rules.rows;
+  if(scoped&&listStackingAvailable&&list.rows[0]?.stackingMode==="STACKABLE"&&
+      list.rows[0]?.stopProcessing!==true){
+    const supplements=await db.query<Rule>(`SELECT r.id,r.price_list_id,r.scope_kind,
+       r.adjustment,r.amount::text,r.priority,r.stacking,r.stop_processing,
+       r.channel_id,r.customer_id,r.customer_group,r.min_quantity::text,
+       r.effective_from,l.code AS "priceListCode",
+       l.stop_processing AS "listStopProcessing"
+      FROM catalog_sku_price_rule r JOIN catalog_price_list l
+        ON l.installation_id=r.installation_id AND l.branch_id=r.branch_id
+         AND l.id=r.price_list_id
+      WHERE r.installation_id=$1 AND r.branch_id=$2 AND r.sell_sku_id=$3
+        AND r.price_list_id<>$4 AND r.scope_kind<>'BASE'
+        AND l.active AND l.currency='VND' AND l.stacking_mode='STACKABLE'
+        AND (l.effective_from IS NULL OR l.effective_from<=$5::timestamptz)
+        AND (l.effective_to IS NULL OR l.effective_to>$5::timestamptz)
+        AND r.effective_from<=$5::timestamptz
+        AND (r.effective_to IS NULL OR r.effective_to>$5::timestamptz)
+        AND r.min_quantity<=$6::numeric
+        AND NOT EXISTS (SELECT 1 FROM catalog_sku_price_retirement x
+          WHERE x.installation_id=r.installation_id AND x.branch_id=r.branch_id
+            AND x.rule_id=r.id AND x.retired_at<=$5::timestamptz)
+        AND EXISTS (SELECT 1 FROM catalog_price_list_assignment a
+          WHERE a.installation_id=l.installation_id AND a.branch_id=l.branch_id
+            AND a.price_list_id=l.id AND a.active
+            AND (a.effective_from IS NULL OR a.effective_from<=$5::timestamptz)
+            AND (a.effective_to IS NULL OR a.effective_to>$5::timestamptz)
+            AND (a.scope_kind='DEFAULT' OR
+              a.scope_kind='CUSTOMER' AND a.customer_id=$7::uuid OR
+              a.scope_kind='CUSTOMER_GROUP' AND a.customer_group_id=$8::uuid OR
+              a.scope_kind='CHANNEL' AND a.channel_id=$9::uuid))
+        ${listScopePredicate('$5','$7','$8','$9')}
+      ORDER BY l.priority DESC,l.id ASC,r.priority DESC,r.effective_from DESC,r.id DESC
+      LIMIT 251`,
+      [t,b,input.sellSkuId,selectedListId,input.priceAt,input.quantity,
+        customerId??null,customerGroupId,channelId??null]);
+    if(supplements.rows.length>250)throw new R1QuoteError(409,"TOO_MANY_PRICE_POLICIES");
+    applicableRules=[...rules.rows,...supplements.rows];
+  }
+  for(const rule of applicableRules){
     if(rule.scope_kind==="BASE")continue;
-    if(stopped)break;
+    if(stopped||(stopAfterListId!==null&&rule.price_list_id!==stopAfterListId))break;
     const applies=(rule.customer_id===null||rule.customer_id===customerId)&&
       (rule.channel_id===null||rule.channel_id===channelId)&&
       (rule.customer_group===null||customerGroups.has(rule.customer_group))&&
@@ -202,7 +307,7 @@ export async function resolveR1Price(db:PoolClient,input:Query){
     // IDs or effective timestamps must never compound the same discount twice.
     // A distinct promotion/discount is still selected by different price
     // parameters, scope, priority or quantity threshold.
-    const canonical=JSON.stringify([rule.scope_kind,rule.adjustment,rule.amount,
+    const canonical=JSON.stringify([rule.price_list_id,rule.scope_kind,rule.adjustment,rule.amount,
       rule.priority,rule.stacking,rule.stop_processing,rule.channel_id,
       rule.customer_id,
       rule.customer_group!==null&&canonicalGroup!==null&&customerGroups.has(rule.customer_group)
@@ -220,12 +325,14 @@ export async function resolveR1Price(db:PoolClient,input:Query){
       rule.scope_kind==="CHANNEL"?"Theo kênh bán":
       rule.scope_kind==="PROMOTION"?"Khuyến mãi":"Chính sách giá";
     trace.push({ruleId:rule.id,scope:rule.scope_kind,
+      ...(rule.priceListCode?{priceListCode:rule.priceListCode}:{}),
       adjustment:rule.adjustment,amount:rule.amount,result:price,
       reason:ruleName+" · từ "+rule.min_quantity+" đơn vị · ưu tiên "+rule.priority+
         (rule.stacking==="STACKABLE"?" · cộng dồn":" · độc lập"),
       priority:rule.priority,minQuantity:rule.min_quantity,
       effectiveFrom:rule.effective_from.toISOString(),stacking:rule.stacking});
     if(rule.stop_processing)stopped=true;
+    else if(rule.listStopProcessing)stopAfterListId=rule.price_list_id;
   }
   const total=await db.query<{total:string;normalized:string}>(
     `SELECT round($1::numeric*$2::numeric,0)::text AS total,

@@ -19,7 +19,8 @@ const VI:Record<BulkResource,Record<string,string>>={
   toBase:"Hệ số quy đổi",active:"Trạng thái",reason:"Lý do ngừng",
  },
  prices:{
-  priceListCode:"Mã bảng giá",productCode:"Mã sản phẩm",
+  priceListCode:"Mã bảng giá",productCode:"Mã sản phẩm",skuCode:"Mã SKU",
+  name:"Tên hàng",unitCode:"Đơn vị",
   amount:"Đơn giá",discountRate:"Chiết khấu %",effectiveAt:"Hiệu lực từ",
  },
 };
@@ -100,8 +101,8 @@ function excelCell(field:string,value:string,address:string,header=false):string
  return '<c r="'+address+'" t="inlineStr"><is><t xml:space="preserve">'+
    escapeXml(value)+'</t></is></c>';
 }
-export function bulkXlsx(kind:BulkResource,rows:string[][]):Buffer{
- const fields=bulkColumns(kind),headers=bulkVietnameseHeaders(kind);
+export function bulkXlsx(kind:BulkResource,rows:string[][],fields=bulkColumns(kind)):Buffer{
+ const headers=fields.map(field=>VI[kind][field]!);
  if(rows.length>5000)throw new Error("EXPORT_ROW_LIMIT");
  const records=[headers,...rows].map((values,i)=>
   '<row r="'+(i+1)+'"'+(i===0?' ht="27" customHeight="1"':'')+'>'+
@@ -135,11 +136,12 @@ export function bulkXlsx(kind:BulkResource,rows:string[][]):Buffer{
   {path:"xl/worksheets/sheet1.xml",body:sheet},{path:"xl/styles.xml",body:styles}]);
 }
 export function bulkExport(kind:BulkResource,rows:string[][],format:"csv"|"xlsx",
- template=false,at=new Date()){
+ template=false,at=new Date(),selectedList=false){
  const stem=(template?"mau-":"xuat-")+TITLES[kind]+"-"+at.toISOString().slice(0,10);
- const columns=bulkColumns(kind),headers=bulkVietnameseHeaders(kind);
+ const columns=selectedList&&kind==="prices"?["skuCode","name","unitCode","amount","discountRate","effectiveAt"]:bulkColumns(kind);
+ const headers=columns.map(field=>VI[kind][field]!);
  if(format==="xlsx")return {
-  fileName:stem+".xlsx",format,columns,headers,contentBase64:bulkXlsx(kind,rows).toString("base64"),
+  fileName:stem+".xlsx",format,columns,headers,contentBase64:bulkXlsx(kind,rows,columns).toString("base64"),
   total:rows.length,
  };
  return {fileName:stem+".csv",format,columns,headers,

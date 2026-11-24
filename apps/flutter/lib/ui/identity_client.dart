@@ -313,9 +313,20 @@ class ErpIdentityClient {
     _request('POST','/v1/catalog/bulk/apply',token:token,
       body:payload,revision:0,idempotencyKey:key);
 
+  Future<Map<String,dynamic>?> salesLastPurchasePrice(String token,{
+    required String branchId,required String customerId,required String sellSkuId,
+  })async{
+    final query=Uri(queryParameters:{
+      'branchId':branchId,'customerId':customerId,'sellSkuId':sellSkuId,
+    }).query;
+    final response=await _request('GET','/v1/sales/last-purchase?$query',token:token);
+    final price=response['price'];
+    return price is Map?Map<String,dynamic>.from(price):null;
+  }
   Future<Map<String,dynamic>> bulkCsvFile(
-      String token,String resource,String branchId,{bool template=false,String format='csv'})async{
+      String token,String resource,String branchId,{bool template=false,String format='csv',String? priceListId})async{
     final query=Uri(queryParameters:{'resource':resource,'branchId':branchId,
+      if(priceListId!=null)'priceListId':priceListId,
       if(format!='csv')'format':format}).query;
     return _request('GET',
       '/v1/catalog/bulk/${template?'template':'export'}?$query',token:token);

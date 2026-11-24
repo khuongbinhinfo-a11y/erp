@@ -26,7 +26,7 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
   const u=new URL(source!);u.pathname="/"+dbName;
   db=new Pool({connectionString:u.toString(),max:9,query_timeout:20000});
   db.on("error",()=>{});
-  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).applied.length,18);
+  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).applied.length,19);
   const password="Bulk-"+randomUUID();
   const root=await bootstrapInstallation(db,{
    code:"bulk-"+randomUUID().slice(0,8),displayName:"R1-B synthetic bulk test",
@@ -549,6 +549,71 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
    'SELECT code,phone FROM catalog_customer WHERE installation_id=$1 AND branch_id=$2 '+
    "AND code IN ('KH09','KH11') ORDER BY code",[root.installationId,branchId])).rows;
   assert.deepEqual(oneWayRows.map(x=>x.phone),["+84900000023","+84900000022"]);
+  // Selected-list imports do not require a repeated list code in every row.
+  const target=await create("price-lists",{code:"P0-TARGET",name:"Bảng đích mới"});
+  assert.equal(target.status,201,JSON.stringify(target.body));
+  const dest={branchId,resource:"prices",mode:"UPSERT",fileName:"selected.csv",
+   priceListId:target.body.id,defaultEffectiveAt:"2026-11-20T00:00:00Z",
+   contentBase64:Buffer.from("Mã SKU,Giá\nSP01,9800\n").toString("base64"),
+   hasHeader:true,mapping:{skuCode:"Mã SKU",amount:"Giá"}};
+  const destPreview=await preview(dest);
+  assert.equal(destPreview.status,200,JSON.stringify(destPreview.body));
+  assert.equal(destPreview.body.summary.create,1,JSON.stringify(destPreview.body));
+  assert.equal((await apply({...dest,priceListId:priceList.body.id},
+    destPreview.body.hash)).status,409,"preview cannot be replayed against another list");
+  assert.equal((await apply(dest,destPreview.body.hash)).status,200);
+  const destNext={...dest,mode:"UPDATE",defaultEffectiveAt:"2026-11-21T00:00:00Z",
+   contentBase64:Buffer.from("Mã SKU,Giá\nSP01,10500\n").toString("base64")};
+  const nextPreview=await preview(destNext);
+  assert.equal(nextPreview.body.summary.update,1,JSON.stringify(nextPreview.body));
+  assert.equal((await apply(destNext,nextPreview.body.hash)).status,200);
+  const mismatch=await preview({...pricing("9800","2026-11-24T00:00:00Z"),
+   priceListId:target.body.id});
+  assert.equal(mismatch.status,409);
+  const scopedExport=await request("/v1/catalog/bulk/export?branchId="+branchId+
+   "&resource=prices&priceListId="+target.body.id,"GET",undefined,token);
+  assert.equal(scopedExport.status,200,JSON.stringify(scopedExport.body));
+  assert.equal(scopedExport.body.total,1);
+  assert.ok(scopedExport.body.columns.includes("skuCode"));
+  assert.ok(!scopedExport.body.columns.includes("priceListCode"));
+  assert.match(scopedExport.body.content,/10500/);
+  assert.doesNotMatch(scopedExport.body.content,/BANLE/);
+  const scopedTemplate=await request("/v1/catalog/bulk/template?branchId="+branchId+
+   "&resource=prices&priceListId="+target.body.id,"GET",undefined,token);
+  assert.equal(scopedTemplate.status,200);
+  assert.ok(scopedTemplate.body.headers.includes("Mã SKU"));
+  assert.ok(!scopedTemplate.body.headers.includes("Mã bảng giá"));
+  const discounted={...dest,mode:"UPSERT",
+   defaultEffectiveAt:"2026-11-22T00:00:00Z",
+   contentBase64:Buffer.from("Mã SKU,Giá,CK\nSP01,10000,10\n").toString("base64"),
+   mapping:{skuCode:"Mã SKU",amount:"Giá",discountRate:"CK"}};
+  const discountedPreview=await preview(discounted);
+  assert.equal(discountedPreview.status,200,JSON.stringify(discountedPreview.body));
+  assert.equal(discountedPreview.body.summary.update,1);
+  assert.equal((await apply(discounted,discountedPreview.body.hash)).status,200);
+  const discountedAgain=await preview(discounted);
+  assert.equal(discountedAgain.status,200,JSON.stringify(discountedAgain.body));
+  assert.equal(discountedAgain.body.summary.unchanged,1,
+   "identical discounted SKU price reimport must be idempotent");
+  const discountedExport=await request("/v1/catalog/bulk/export?branchId="+branchId+
+   "&resource=prices&priceListId="+target.body.id,"GET",undefined,token);
+  assert.equal(discountedExport.status,200);
+  assert.match(discountedExport.body.content,/10000/);
+  assert.match(discountedExport.body.content,/10/);
+  const cloned=await request("/v1/catalog/price-lists/"+target.body.id+"/clone",
+   "POST",{branchId,code:"P0-CLONED",name:"Bản giá có chiết khấu",
+    sourceRevision:0},token,{"idempotency-key":"p0-clone-"+randomUUID(),"if-match":"0"});
+  assert.equal(cloned.status,201,JSON.stringify(cloned.body));
+  const cloneExport=await request("/v1/catalog/bulk/export?branchId="+branchId+
+   "&resource=prices&priceListId="+cloned.body.id,"GET",undefined,token);
+  assert.equal(cloneExport.status,200,JSON.stringify(cloneExport.body));
+  assert.match(cloneExport.body.content,/10000/,
+   "cloned list preserves original gross amount");
+  assert.match(cloneExport.body.content,/10/,
+   "cloned list preserves percentage discount");
+
+
+
   const otherBranch=(await db.query<{id:string}>(
    "INSERT INTO branch(installation_id,code,name) VALUES($1,'OTHER','Other') RETURNING id",
    [root.installationId])).rows[0]!.id;

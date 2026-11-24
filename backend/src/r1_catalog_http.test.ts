@@ -65,8 +65,8 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
   pool=new Pool({connectionString:target.toString(),max:7,query_timeout:15000});
   pool.on("error",()=>{});
   const applied=await applyMigrations(pool,resolve(process.cwd(),"db/migrations"));
-  assert.equal(applied.applied.length,18);
-  assert.equal((await applyMigrations(pool,resolve(process.cwd(),"db/migrations"))).skipped.length,18);
+  assert.equal(applied.applied.length,19);
+  assert.equal((await applyMigrations(pool,resolve(process.cwd(),"db/migrations"))).skipped.length,19);
   const password="R1-test-"+randomUUID();
   const root=await bootstrapInstallation(pool,{
    code:"r1-test",displayName:"Synthetic R1 integration",
@@ -233,6 +233,201 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
   assert.equal(tooLate.status,409);
   assert.equal((await r1("rules",{...basic,sellSkuId:skuId,
    scopeKind:"BASE",adjustment:"PERCENT_DISCOUNT",amount:"10"})).status,400);
+  // P0 regression: history import and SKU editing must not disagree on the
+  // effective base price. Use a separate list and synthetic product fixture.
+  const recoveryList=await legacy("price-lists",{code:"P0-RECOVERY",name:"Kiểm thử giá đồng nhất"});
+  assert.equal(recoveryList.status,201,JSON.stringify(recoveryList.body));
+  const recoveryListId=recoveryList.body.id;
+  const recoveryContext={priceListId:recoveryListId,sellSkuId:baseSku,quantity:"1"};
+  const staleBase=await r1("rules",{priceListId:recoveryListId,sellSkuId:baseSku,
+   minQuantity:"1",scopeKind:"BASE",adjustment:"FIXED_PRICE",amount:"1.0000",
+   effectiveFrom:"2026-11-20T00:00:00Z"});
+  assert.equal(staleBase.status,201,JSON.stringify(staleBase.body));
+  const imported=await legacy("prices",{priceListId:recoveryListId,
+   productId:product.body.id,amount:"9800.0000",discountRate:"0",
+   effectiveAt:"2026-11-21T00:00:00Z"});
+  assert.equal(imported.status,201,JSON.stringify(imported.body));
+  const beforeImport=await resolvePrice({...recoveryContext,priceAt:"2026-11-20T12:00:00Z"});
+  assert.equal(beforeImport.status,200,JSON.stringify(beforeImport.body));
+  assert.equal(Number(beforeImport.body.quote.unitPrice),1);
+  const afterImport=await resolvePrice({...recoveryContext,priceAt:"2026-11-21T12:00:00Z"});
+  assert.equal(afterImport.status,200,JSON.stringify(afterImport.body));
+  assert.equal(Number(afterImport.body.quote.unitPrice),9800,
+   "later effective base-unit price from history must not be masked by a stale BASE rule");
+  const corrected=await r1("rules",{priceListId:recoveryListId,sellSkuId:baseSku,
+   minQuantity:"1",scopeKind:"BASE",adjustment:"FIXED_PRICE",amount:"10500.0000",
+   effectiveFrom:"2026-11-22T00:00:00Z"});
+  assert.equal(corrected.status,201,JSON.stringify(corrected.body));
+  const afterCorrection=await resolvePrice({...recoveryContext,priceAt:"2026-11-22T12:00:00Z"});
+  assert.equal(afterCorrection.status,200,JSON.stringify(afterCorrection.body));
+  assert.equal(Number(afterCorrection.body.quote.unitPrice),10500);
+  const clonedRecovery=await write(
+    "/v1/catalog/price-lists/"+recoveryListId+"/clone",
+    {code:"P0-PRICE-CLONE",name:"Sao chép nguyên giá hiệu lực",sourceRevision:0},
+    "p0-price-clone-"+randomUUID());
+  assert.equal(clonedRecovery.status,201,JSON.stringify(clonedRecovery.body));
+  const copiedRecovery=await resolvePrice({...recoveryContext,
+    priceListId:clonedRecovery.body.id,priceAt:"2026-11-24T12:00:00Z"});
+  assert.equal(copiedRecovery.status,200,JSON.stringify(copiedRecovery.body));
+  assert.equal(Number(copiedRecovery.body.quote.unitPrice),10500,
+    "clone cannot resurrect an older 9,800 product price over a newer 10,500 SKU rule");
+
+  assert.equal((await resolvePrice({...recoveryContext,sellSkuId:skuId,
+   priceAt:"2026-11-22T12:00:00Z"})).status,409,
+   "product-level price history must not leak into a carton SKU");
+
+  // Combined channel/group scope: OR inside a dimension, AND across them.
+  const combined=await legacy("price-lists",{code:"P0-COMBINED",name:"Kênh và nhóm",
+   effectiveFrom:"2026-11-18T00:00:00Z",effectiveTo:"2026-11-19T00:00:00Z"});
+  assert.equal(combined.status,201,JSON.stringify(combined.body));
+  const anotherChannel=await r1("channels",{code:"P0-OTHER",name:"Kênh thứ hai"});
+  assert.equal(anotherChannel.status,201);
+  assert.equal((await r1("rules",{priceListId:combined.body.id,sellSkuId:baseSku,
+   scopeKind:"BASE",adjustment:"FIXED_PRICE",amount:"9800.0000",
+   effectiveFrom:"2026-11-17T00:00:00Z"})).status,201);
+  for(const target of [
+    {scopeKind:"CHANNEL",channelId:channel.body.id},
+    {scopeKind:"CHANNEL",channelId:anotherChannel.body.id},
+    {scopeKind:"CUSTOMER_GROUP",customerGroupId:vipGroup.body.id},
+    {scopeKind:"CUSTOMER_GROUP",customerGroupId:standardGroup.body.id},
+  ]){
+   const result=await write("/v1/catalog/price-lists/assignments",{
+    priceListId:combined.body.id,priority:77,...target,
+   });
+   assert.equal(result.status,201,JSON.stringify(result.body));
+  }
+  const combinedQuote={sellSkuId:baseSku,quantity:"1",priceAt:"2026-11-18T12:00:00Z"};
+  for(const customerId of [c1.body.id,c2.body.id]){
+   for(const channelId of [channel.body.id,anotherChannel.body.id]){
+    const result=await resolvePrice({...combinedQuote,customerId,channelId});
+    assert.equal(result.status,200,JSON.stringify(result.body));
+    assert.equal(result.body.quote.priceListId,combined.body.id);
+    assert.equal(result.body.quote.unitPrice,"9800.0000");
+   }
+  }
+  assert.equal((await resolvePrice({...combinedQuote,customerId:c1.body.id})).status,409);
+  assert.equal((await resolvePrice({...combinedQuote,channelId:channel.body.id})).status,409);
+  assert.equal((await resolvePrice({...combinedQuote,priceListId:combined.body.id,
+    customerId:c1.body.id})).status,409);
+
+  // P0 manual price: a SKU without configured price can still be sold
+  // with an authorized explicit price, discount, VAT and split line.
+  const manualList=await legacy("price-lists",{code:"P0-MANUAL",name:"Giá nhập trực tiếp"});
+  assert.equal(manualList.status,201);
+  const manualInput={
+   customerId:c1.body.id,priceListId:manualList.body.id,
+   lines:[{sellSkuId:baseSku,quantity:"1",unitPrice:"10500",
+    discountRate:"10",taxRate:"8"},
+    {sellSkuId:baseSku,quantity:"1",unitPrice:"10500",
+    discountRate:"10",taxRate:"8"}],
+  };
+  const manualQuote=await request("/v1/sales/quote","POST",{
+   branchId:b,...manualInput},token);
+  assert.equal(manualQuote.status,200,JSON.stringify(manualQuote.body));
+  assert.equal(manualQuote.body.quote.lines[0].normalizedBaseQuantity,"1.000000",
+    "manual price must never become reserved stock quantity");
+  assert.equal(manualQuote.body.quote.subtotal,"21000");
+  assert.equal(manualQuote.body.quote.discountTotal,"2100");
+  assert.equal(manualQuote.body.quote.taxTotal,"1512");
+  assert.equal(manualQuote.body.quote.grandTotal,"20412");
+  const manualQtyQuote=await request("/v1/sales/quote","POST",{
+    branchId:b,customerId:c1.body.id,priceListId:manualList.body.id,
+    lines:[{sellSkuId:baseSku,quantity:"2.5",unitPrice:"9800",
+      discountRate:"0",taxRate:"0"}]},token);
+  assert.equal(manualQtyQuote.status,200,JSON.stringify(manualQtyQuote.body));
+  assert.equal(manualQtyQuote.body.quote.lines[0].normalizedBaseQuantity,"2.500000",
+    "stock normalization is sold quantity times conversion, not unit price");
+  const manualOrder=await write("/v1/sales/orders",{
+   ...manualInput,note:"Hai dòng cùng SKU",
+   lines:manualInput.lines.map((line,i)=>({...line,
+    expectedPriceSignature:manualQuote.body.quote.lines[i].priceSignature})),
+  });
+  assert.equal(manualOrder.status,201,JSON.stringify(manualOrder.body));
+  assert.equal(Number(manualOrder.body.total),20412);
+  const manualLines=await pool.query<{n:string}>(`SELECT count(*)::text AS n
+   FROM sales_order_line WHERE installation_id=$1 AND branch_id=$2
+    AND order_id=$3 AND pricing_engine='R1'`,
+   [root.installationId,b,manualOrder.body.id]);
+  assert.equal(manualLines.rows[0]!.n,"2");
+  const manualConfirmed=await write(
+   "/v1/sales/orders/"+manualOrder.body.id+"/confirm",
+   {branchId:b},"p0-manual-confirm-"+randomUUID());
+  assert.equal(manualConfirmed.status,200,JSON.stringify(manualConfirmed.body));
+
+  // P0: create/edit multi-scope arrays in ONE audited price-list mutation.
+  const atomicList=await legacy("price-lists",{
+    code:"P0-ATOMIC",name:"Bảng phạm vi kết hợp",
+    effectiveFrom:"2026-11-18T00:00:00Z",
+    effectiveTo:"2026-11-19T00:00:00Z",priority:5,
+    channelIds:[channel.body.id,anotherChannel.body.id],
+    customerGroupIds:[vipGroup.body.id,standardGroup.body.id],
+    customerIds:[c1.body.id],stackingMode:"STACKABLE",stopProcessing:false,
+  });
+  assert.equal(atomicList.status,201,JSON.stringify(atomicList.body));
+  const scopeRead=()=>request("/v1/catalog/price-lists/assignments?branchId="+b+
+    "&priceListId="+atomicList.body.id,"GET",undefined,token);
+  const scopeRows=(await scopeRead()).body.items;
+  assert.equal(scopeRows.filter((x:any)=>x.active).length,5,
+    "one form creates all channel/group/customer assignments atomically");
+  assert.equal((await r1("rules",{priceListId:atomicList.body.id,sellSkuId:baseSku,
+    scopeKind:"BASE",adjustment:"FIXED_PRICE",amount:"9800",
+    effectiveFrom:"2026-11-17T00:00:00Z"})).status,201);
+  const promoList=await legacy("price-lists",{code:"P0-PROMO",
+    name:"Giảm giá thêm",stackingMode:"STACKABLE"});
+  assert.equal(promoList.status,201,JSON.stringify(promoList.body));
+  for(const target of [
+    {scopeKind:"CHANNEL",channelId:channel.body.id},
+    {scopeKind:"CUSTOMER_GROUP",customerGroupId:vipGroup.body.id},
+  ]){
+    const assign=await write("/v1/catalog/price-lists/assignments",{
+      priceListId:promoList.body.id,priority:1,...target});
+    assert.equal(assign.status,201,JSON.stringify(assign.body));
+  }
+  const promotion=await r1("rules",{priceListId:promoList.body.id,
+    sellSkuId:baseSku,scopeKind:"CUSTOMER_GROUP",customerGroup:"VIP",
+    adjustment:"PERCENT_DISCOUNT",amount:"5",
+    priority:15,stacking:"STACKABLE",effectiveFrom:"2026-11-17T00:00:00Z"});
+  assert.equal(promotion.status,201,JSON.stringify(promotion.body));
+  const quoteAtomic=(customerId:string,channelId:string)=>resolvePrice({
+    priceListId:atomicList.body.id,sellSkuId:baseSku,
+    quantity:"1",customerId,channelId,priceAt:"2026-11-18T12:00:00Z"});
+  const stacked=await quoteAtomic(c1.body.id,channel.body.id);
+  assert.equal(stacked.status,200,JSON.stringify(stacked.body));
+  assert.equal(Number(stacked.body.quote.unitPrice),9310,
+    "matching stackable discount on a different list is applied exactly once");
+  const secondPromotion=await r1("rules",{priceListId:promoList.body.id,
+    sellSkuId:baseSku,scopeKind:"PROMOTION",
+    adjustment:"PERCENT_DISCOUNT",amount:"10",
+    priority:10,stacking:"STACKABLE",effectiveFrom:"2026-11-17T00:00:00Z",
+    effectiveTo:"2026-11-19T00:00:00Z"});
+  assert.equal(secondPromotion.status,201,JSON.stringify(secondPromotion.body));
+  const promoStop=await request("/v1/catalog/price-lists/"+promoList.body.id,"PATCH",{
+    branchId:b,stopProcessing:true},token,{
+    "if-match":"0","idempotency-key":"p0-promo-stop-"+randomUUID()});
+  assert.equal(promoStop.status,200,JSON.stringify(promoStop.body));
+  const bothDiscounts=await quoteAtomic(c1.body.id,channel.body.id);
+  assert.equal(bothDiscounts.status,200,JSON.stringify(bothDiscounts.body));
+  assert.equal(Number(bothDiscounts.body.quote.unitPrice),8379,
+    "list-level stop must preserve both 5% and 10% rules from its own list");
+  assert.equal(Number((await quoteAtomic(c1.body.id,anotherChannel.body.id))
+    .body.quote.unitPrice),9800,"nonmatching channel cannot borrow channel-scoped discount");
+  const stop=await request("/v1/catalog/price-lists/"+atomicList.body.id,"PATCH",{
+    branchId:b,stopProcessing:true},token,{
+    "if-match":"0","idempotency-key":"p0-stop-"+randomUUID()});
+  assert.equal(stop.status,200,JSON.stringify(stop.body));
+  assert.equal(Number((await quoteAtomic(c1.body.id,channel.body.id))
+    .body.quote.unitPrice),9800,"stop processing prevents cross-list discount");
+  const narrowed=await request("/v1/catalog/price-lists/"+atomicList.body.id,"PATCH",{
+    branchId:b,stopProcessing:false,
+    channelIds:[channel.body.id],customerGroupIds:[vipGroup.body.id],
+    customerIds:[],defaultAssignment:false},token,{
+    "if-match":"1","idempotency-key":"p0-narrow-"+randomUUID()});
+  assert.equal(narrowed.status,200,JSON.stringify(narrowed.body));
+  assert.equal((await scopeRead()).body.items.filter((x:any)=>x.active).length,2,
+    "scope edit leaves retired assignment history instead of deleting");
+  assert.equal((await quoteAtomic(c2.body.id,channel.body.id)).status,409,
+    "both scoped dimensions must match after scope correction");
+
   // R1-C.1: selection stays on the existing SKU pricing engine, with
   // strict list windows, scoped priority, concurrency, RBAC, and replay.
   assert.equal((await legacy("price-lists",{code:"BAD-WINDOW",name:"Sai thời hạn",

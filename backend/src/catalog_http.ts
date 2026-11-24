@@ -230,6 +230,14 @@ async function hasR1CPriceSchema(db:Pool|PoolClient):Promise<boolean>{
     return r.rows[0]?.ready===true;
   }catch{return false;}
 }
+async function hasP0PriceSchema(db:Pool|PoolClient):Promise<boolean>{
+ try{
+  const r=await db.query<{ready:boolean}>(`SELECT EXISTS(
+    SELECT 1 FROM public.schema_migrations
+    WHERE version='0019_p0_price_order_parity.sql') AS ready`);
+  return r.rows[0]?.ready===true;
+ }catch{return false;}
+}
 async function hasCustomerDirectories(db:Pool|PoolClient):Promise<boolean>{
   try{
     const r=await db.query<{ok:boolean}>(
@@ -305,11 +313,16 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
     'customer_group AS "customerGroupName",NULL::text AS "customerRegionCode",'+
     'NULL::text AS "customerRegionName",phone,delivery_address AS "deliveryAddress",'+
     'payment_terms_days AS "paymentTermsDays",active,revision::integer FROM catalog_customer';
+  const p0Fields=resource==="price-lists"&&await hasP0PriceSchema(db);
   const listSelection=resource==="price-lists"&&await hasR1CPriceSchema(db)
     ?'SELECT id,code,name,currency,active,revision::integer,priority,'
-      +'effective_from AS "effectiveFrom",effective_to AS "effectiveTo" FROM catalog_price_list'
+      +'effective_from AS "effectiveFrom",effective_to AS "effectiveTo",'
+      +(p0Fields?'stacking_mode AS "stackingMode",stop_processing AS "stopProcessing" '
+        :"\'EXCLUSIVE\'::text AS \"stackingMode\",false AS \"stopProcessing\" ")
+      +'FROM catalog_price_list'
     :'SELECT id,code,name,currency,active,revision::integer,0::integer AS priority,'
-      +'NULL::timestamptz AS "effectiveFrom",NULL::timestamptz AS "effectiveTo" '
+      +'NULL::timestamptz AS "effectiveFrom",NULL::timestamptz AS "effectiveTo",'
+      +"'EXCLUSIVE'::text AS \"stackingMode\",false AS \"stopProcessing\" "
       +'FROM catalog_price_list';
   const r=await db.query(
     resource==="prices"
@@ -333,6 +346,75 @@ async function listing(db:PoolClient,tenant:string,actorId:string,branchId:strin
   return r.rows;
 }
 
+function listStackingMode(v:unknown):"EXCLUSIVE"|"STACKABLE"{
+ if(v===undefined)return "EXCLUSIVE";
+ if(v!=="EXCLUSIVE"&&v!=="STACKABLE")throw new CatalogError(400,"INVALID_PRICE_STACKING");
+ return v;
+}
+function listStopProcessing(v:unknown):boolean{
+ if(v===undefined)return false;
+ if(typeof v!=="boolean")throw new CatalogError(400,"INVALID_PRICE_STOP");
+ return v;
+}
+type PriceListScopeTargets={
+ channelIds:string[];customerGroupIds:string[];customerIds:string[];
+ defaultAssignment:boolean;
+};
+const PRICE_SCOPE_KEYS=["channelIds","customerGroupIds","customerIds","defaultAssignment"] as const;
+function priceScopes(raw:Record<string,unknown>):PriceListScopeTargets|null{
+ if(!PRICE_SCOPE_KEYS.some(k=>Object.prototype.hasOwnProperty.call(raw,k)))return null;
+ const ids=(key:string):string[]=>{
+  const value=raw[key]??[];
+  if(!Array.isArray(value)||value.length>100)throw new CatalogError(400,"INVALID_PRICE_SCOPE");
+  const result=value.map(requireUuid);
+  if(new Set(result).size!==result.length)throw new CatalogError(400,"DUPLICATE_PRICE_SCOPE");
+  return result;
+ };
+ const defaultAssignment=raw.defaultAssignment??false;
+ if(typeof defaultAssignment!=="boolean")throw new CatalogError(400,"INVALID_PRICE_SCOPE");
+ return {channelIds:ids("channelIds"),customerGroupIds:ids("customerGroupIds"),
+  customerIds:ids("customerIds"),defaultAssignment};
+}
+async function syncPriceScopes(db:PoolClient,installationId:string,
+ branchId:string,priceListId:string,desired:PriceListScopeTargets){
+ const selected=await db.query<{priority:number}>(`SELECT priority FROM catalog_price_list
+  WHERE installation_id=$1 AND branch_id=$2 AND id=$3 FOR UPDATE`,
+  [installationId,branchId,priceListId]);
+ if(!selected.rows[0])throw new CatalogError(404,"PRICE_LIST_UNAVAILABLE");
+ const assignmentPriority=selected.rows[0].priority;
+ const wanted=new Set<string>();
+ const targets:{scopeKind:"DEFAULT"|"CUSTOMER"|"CUSTOMER_GROUP"|"CHANNEL";
+  customerId:string|null;customerGroupId:string|null;channelId:string|null;}[]=[];
+ const add=(scopeKind:"DEFAULT"|"CUSTOMER"|"CUSTOMER_GROUP"|"CHANNEL",id:string|null)=>{
+  wanted.add(scopeKind+":"+(id??""));
+  targets.push({scopeKind,customerId:scopeKind==="CUSTOMER"?id:null,
+    customerGroupId:scopeKind==="CUSTOMER_GROUP"?id:null,
+    channelId:scopeKind==="CHANNEL"?id:null});
+ };
+ if(desired.defaultAssignment)add("DEFAULT",null);
+ for(const id of desired.channelIds)add("CHANNEL",id);
+ for(const id of desired.customerGroupIds)add("CUSTOMER_GROUP",id);
+ for(const id of desired.customerIds)add("CUSTOMER",id);
+ const prior=await db.query<{id:string;scope_kind:string;customer_id:string|null;
+  customer_group_id:string|null;channel_id:string|null;}>(`SELECT id,scope_kind,customer_id,
+    customer_group_id,channel_id FROM catalog_price_list_assignment
+   WHERE installation_id=$1 AND branch_id=$2 AND price_list_id=$3
+    AND active FOR UPDATE`,[installationId,branchId,priceListId]);
+ const already=new Set<string>();
+ for(const old of prior.rows){
+  const key=old.scope_kind+":"+(old.customer_id??old.customer_group_id??old.channel_id??"");
+  if(wanted.has(key)){already.add(key);continue;}
+  await db.query(`UPDATE catalog_price_list_assignment
+   SET active=false,revision=revision+1 WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,
+    [installationId,branchId,old.id]);
+ }
+ for(const target of targets){
+  const key=target.scopeKind+":"+(target.customerId??target.customerGroupId??target.channelId??"");
+  if(already.has(key))continue;
+  await createPriceAssignment(db,installationId,{branchId,priceListId,
+   ...target,priority:assignmentPriority,effectiveFrom:null,effectiveTo:null});
+ }
+}
 export function checkCreate(resource:Resource,raw:Record<string,unknown>){
   if(resource==="warehouses")throw new CatalogError(405,"READ_ONLY_WAREHOUSE");
   const branchId=requireUuid(raw.branchId);
@@ -348,16 +430,19 @@ export function checkCreate(resource:Resource,raw:Record<string,unknown>){
   const name=requireName(raw.name,resource==="unit-definitions"?80:160);
   if(resource==="price-lists"){
     if(Object.keys(raw).some(k=>!["branchId","code","name","effectiveFrom",
-      "effectiveTo","priority"].includes(k)))
+      "effectiveTo","priority","stackingMode","stopProcessing",...PRICE_SCOPE_KEYS].includes(k)))
       throw new CatalogError(400,"UNKNOWN_FIELD");
-    const hasWindow=["effectiveFrom","effectiveTo","priority"]
+    const scopes=priceScopes(raw);
+    const hasWindow=["effectiveFrom","effectiveTo","priority","stackingMode","stopProcessing",...PRICE_SCOPE_KEYS]
       .some(k=>Object.prototype.hasOwnProperty.call(raw,k));
     if(hasWindow){
       const effectiveFrom=raw.effectiveFrom==null?null:r1cDate(raw.effectiveFrom);
       const effectiveTo=raw.effectiveTo==null?null:r1cDate(raw.effectiveTo);
       const priority=r1cPriority(raw.priority??0);
       r1cRange(effectiveFrom,effectiveTo);
-      return {branchId,code,name,effectiveFrom,effectiveTo,priority};
+      return {branchId,code,name,effectiveFrom,effectiveTo,priority,scopes,
+        stackingMode:listStackingMode(raw.stackingMode),
+        stopProcessing:listStopProcessing(raw.stopProcessing)};
     }
     return {branchId,code,name};
   }
@@ -448,14 +533,22 @@ export async function executeCreate(db:PoolClient,context:MutationContext,
   if(resource==="price-lists"&&"effectiveFrom" in value){
     if(!await hasR1CPriceSchema(db))
       throw new CatalogError(503,"R1C_PRICE_LIST_MIGRATION_REQUIRED");
+    const p0=await hasP0PriceSchema(db);
+    if(!p0&&(value.stackingMode!=="EXCLUSIVE"||value.stopProcessing))
+      throw new CatalogError(503,"P0_PRICE_SCHEMA_REQUIRED");
     const r=await db.query<{id:string}>(`INSERT INTO catalog_price_list
-      (installation_id,branch_id,code,name,effective_from,effective_to,priority)
-      VALUES($1,$2,$3,$4,$5::timestamptz,$6::timestamptz,$7) RETURNING id`,
+      (installation_id,branch_id,code,name,effective_from,effective_to,priority
+       ${p0?",stacking_mode,stop_processing":""})
+      VALUES($1,$2,$3,$4,$5::timestamptz,$6::timestamptz,$7
+       ${p0?",$8,$9":""}) RETURNING id`,
       [installationId,branchId,value.code,value.name,
-        value.effectiveFrom,value.effectiveTo,value.priority]);
+        value.effectiveFrom,value.effectiveTo,value.priority,
+        ...(p0?[value.stackingMode,value.stopProcessing]:[])]);
+    if(value.scopes)await syncPriceScopes(db,installationId,branchId,r.rows[0]!.id,value.scopes);
     return {status:201,body:{id:r.rows[0]!.id,code:value.code,
       name:value.name,revision:0,effectiveFrom:value.effectiveFrom,
-      effectiveTo:value.effectiveTo,priority:value.priority}};
+      effectiveTo:value.effectiveTo,priority:value.priority,
+      stackingMode:value.stackingMode,stopProcessing:value.stopProcessing}};
   }
   if(resource==="products"){
     if(!("baseUnit" in value))throw new CatalogError(400,"INVALID_PRODUCT");
@@ -564,7 +657,8 @@ export function parseEdit(resource:Editable,raw:Record<string,unknown>){
   const allow=new Set(["branchId","name","active",
     ...(resource==="customers"?["customerGroupId","customerRegionId","phone","deliveryAddress","paymentTermsDays"]:[]),
     ...(resource==="products"?["groupId"]:[]),
-    ...(resource==="price-lists"?["effectiveFrom","effectiveTo","priority"]:[])]);
+    ...(resource==="price-lists"?["effectiveFrom","effectiveTo","priority",
+      "stackingMode","stopProcessing",...PRICE_SCOPE_KEYS]:[])]);
   if(Object.keys(raw).some(key=>!allow.has(key)))throw new CatalogError(400,"UNKNOWN_FIELD");
   if(Object.prototype.hasOwnProperty.call(raw,"name"))
     columns.name=requireName(raw.name,resource==="unit-definitions"?80:160);
@@ -595,14 +689,19 @@ export function parseEdit(resource:Editable,raw:Record<string,unknown>){
       columns.effective_to=r1cDate(raw.effectiveTo);
     if(Object.prototype.hasOwnProperty.call(raw,"priority"))
       columns.priority=r1cPriority(raw.priority);
+    if(Object.prototype.hasOwnProperty.call(raw,"stackingMode"))
+      columns.stacking_mode=listStackingMode(raw.stackingMode);
+    if(Object.prototype.hasOwnProperty.call(raw,"stopProcessing"))
+      columns.stop_processing=listStopProcessing(raw.stopProcessing);
     if(columns.effective_from!==undefined&&columns.effective_to!==undefined)
       r1cRange(columns.effective_from as string|null,columns.effective_to as string|null);
   }
   if(resource==="products"&&Object.prototype.hasOwnProperty.call(raw,"groupId")){
     columns.group_id=raw.groupId===null?null:requireUuid(raw.groupId);
   }
-  if(Object.keys(columns).length===0)throw new CatalogError(400,"EMPTY_UPDATE");
-  return {branchId,columns};
+  const scopes=resource==="price-lists"?priceScopes(raw):null;
+  if(Object.keys(columns).length===0&&scopes===null)throw new CatalogError(400,"EMPTY_UPDATE");
+  return {branchId,columns,scopes};
 }
 export async function applyEdit(db:PoolClient,context:MutationContext,
   resource:Editable,targetId:string,value:ReturnType<typeof parseEdit>){
@@ -614,6 +713,10 @@ export async function applyEdit(db:PoolClient,context:MutationContext,
     Object.keys(value.columns).some(x=>["effective_from","effective_to","priority"].includes(x))&&
     !await hasR1CPriceSchema(db))
     throw new CatalogError(503,"R1C_PRICE_LIST_MIGRATION_REQUIRED");
+  if(resource==="price-lists"&&
+    Object.keys(value.columns).some(x=>["stacking_mode","stop_processing"].includes(x))&&
+    !await hasP0PriceSchema(db))
+    throw new CatalogError(503,"P0_PRICE_SCHEMA_REQUIRED");
   const table=editTables[resource];
   const row=await db.query<{revision:string}>(
     `SELECT revision::text FROM ${table} WHERE installation_id=$1
@@ -632,11 +735,13 @@ export async function applyEdit(db:PoolClient,context:MutationContext,
   if(resource==="products"&&Object.prototype.hasOwnProperty.call(value.columns,"group_id"))
     await activeDirectoryCode(db,"catalog_product_group",
       installationId,value.branchId,value.columns.group_id as string|null);
+  if(resource==="price-lists"&&value.scopes)
+    await syncPriceScopes(db,installationId,value.branchId,targetId,value.scopes);
   const columnEntries=Object.entries(value.columns);
   const sets=columnEntries.map(([key],i)=>key+"=$"+(i+4));
   const args=[installationId,value.branchId,targetId,...columnEntries.map(x=>x[1])];
   const saved=await db.query<{revision:string}>(
-    `UPDATE ${table} SET ${sets.join(",")},revision=revision+1
+    `UPDATE ${table} SET ${[...sets,"revision=revision+1"].join(",")}
       WHERE installation_id=$1 AND branch_id=$2 AND id=$3
       RETURNING revision::text`,args);
   return {status:200,body:{id:targetId,revision:Number(saved.rows[0]!.revision)}};

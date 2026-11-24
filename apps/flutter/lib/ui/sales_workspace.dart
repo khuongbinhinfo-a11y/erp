@@ -18,10 +18,15 @@ class SalesWorkspace extends StatefulWidget {
 }
 class _OrderLine {
   String sellSkuId;
-  final TextEditingController quantity;
+  final TextEditingController quantity,unitPrice,discountRate,taxRate;
   final FocusNode quantityFocus=FocusNode();
-  _OrderLine(this.sellSkuId,String value):quantity=TextEditingController(text:erpGroupedDecimalText(value));
-  void dispose(){quantity.dispose();quantityFocus.dispose();}
+  _OrderLine(this.sellSkuId,String value):
+    quantity=TextEditingController(text:erpGroupedDecimalText(value)),
+    unitPrice=TextEditingController(),
+    discountRate=TextEditingController(text:'0'),
+    taxRate=TextEditingController(text:'0');
+  void dispose(){quantity.dispose();unitPrice.dispose();
+    discountRate.dispose();taxRate.dispose();quantityFocus.dispose();}
 }
 class _SalesWorkspaceState extends State<SalesWorkspace> {
   List<Map<String,dynamic>> branches=[],orders=[];
@@ -201,7 +206,14 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           inform('Không tìm thấy đúng SKU và đơn vị của dòng hàng cũ. Hãy tìm đủ sản phẩm trong danh mục trước khi sửa.',error:true);
           return null;
         }
-        lines.add(_OrderLine(matching.single['id'] as String,row['quantity'].toString()));
+        final line=_OrderLine(matching.single['id'] as String,row['quantity'].toString());
+        final snapshot=row['priceSnapshot'];
+        if(snapshot is Map&&snapshot['manualOverride']==true){
+          line.unitPrice.text=erpGroupedDecimalText(row['unitPrice']);
+          line.discountRate.text=erpGroupedDecimalText(row['discountRate']);
+          line.taxRate.text=erpGroupedDecimalText(row['taxRate']);
+        }
+        lines.add(line);
       }
     }
     // Never silently preselect the first product in a sales document.
@@ -216,11 +228,16 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     final quantityPattern=RegExp(r'^(?:0|[1-9]\d{0,8})(?:\.\d{1,3})?$');
     bool validLines()=>lines.isNotEmpty&&
       lines.every((x)=>quantityPattern.hasMatch(erpNumberCanonical(x.quantity.text))&&
-      RegExp('[1-9]').hasMatch(x.quantity.text))&&
-      lines.map((x)=>x.sellSkuId).toSet().length==lines.length;
+      RegExp('[1-9]').hasMatch(x.quantity.text)&&
+      (x.unitPrice.text.trim().isEmpty||
+        RegExp(r'^\d{1,13}(?:\.\d{1,4})?$').hasMatch(erpNumberCanonical(x.unitPrice.text)))&&
+      RegExp(r'^\d{1,3}(?:\.\d{1,2})?$').hasMatch(erpNumberCanonical(x.discountRate.text))&&
+      RegExp(r'^\d{1,3}(?:\.\d{1,2})?$').hasMatch(erpNumberCanonical(x.taxRate.text)));
     String stamp()=>[
       customer??'',list??'',channel??'',
-      ...lines.map((x)=>x.sellSkuId+':'+erpNumberCanonical(x.quantity.text)),
+      ...lines.map((x)=>[x.sellSkuId,erpNumberCanonical(x.quantity.text),
+        erpNumberCanonical(x.unitPrice.text),erpNumberCanonical(x.discountRate.text),
+        erpNumberCanonical(x.taxRate.text)].join(':')),
     ].join('|');
     final originalStamp=stamp(),originalNote=note.text.trim();
     void invalidate(StateSetter refresh){
@@ -245,7 +262,13 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           'branchId':branch,'customerId':customer,'priceListId':list,
           if(channel!=null)'channelId':channel,
           'lines':lines.map((line)=>{'sellSkuId':line.sellSkuId,
-            'quantity':erpNumberCanonical(line.quantity.text)}).toList(),
+            'quantity':erpNumberCanonical(line.quantity.text),
+            if(line.unitPrice.text.trim().isNotEmpty)
+              'unitPrice':erpNumberCanonical(line.unitPrice.text),
+            if(line.unitPrice.text.trim().isNotEmpty)
+              'discountRate':erpNumberCanonical(line.discountRate.text),
+            if(line.unitPrice.text.trim().isNotEmpty)
+              'taxRate':erpNumberCanonical(line.taxRate.text)}).toList(),
         });
         if(!context.mounted||request!=quoteGeneration)return;
         final quoted=(basket['lines'] as List<dynamic>)
@@ -699,6 +722,12 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           'sellSkuId':entry.value.sellSkuId,
           'quantity':erpNumberCanonical(entry.value.quantity.text),
           'expectedPriceSignature':quotes![entry.key]['priceSignature'],
+          if(entry.value.unitPrice.text.trim().isNotEmpty)
+            'unitPrice':erpNumberCanonical(entry.value.unitPrice.text),
+          if(entry.value.unitPrice.text.trim().isNotEmpty)
+            'discountRate':erpNumberCanonical(entry.value.discountRate.text),
+          if(entry.value.unitPrice.text.trim().isNotEmpty)
+            'taxRate':erpNumberCanonical(entry.value.taxRate.text),
         }).toList(),
         '_confirmAfterSave':confirm,
       });
@@ -1186,9 +1215,13 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         const SizedBox(width:112,child:Text('SỐ LƯỢNG',style:TextStyle(fontSize:11,color:ErpTokens.muted))),
                         const SizedBox(width:112,child:Text('ĐƠN GIÁ',textAlign:TextAlign.right,
                           style:TextStyle(fontSize:11,color:ErpTokens.muted))),
-                        const SizedBox(width:130,child:Text('THÀNH TIỀN',textAlign:TextAlign.right,
+                        const SizedBox(width:60,child:Text('CK %',textAlign:TextAlign.right,
                           style:TextStyle(fontSize:11,color:ErpTokens.muted))),
-                        const SizedBox(width:42),
+                        const SizedBox(width:60,child:Text('THUẾ %',textAlign:TextAlign.right,
+                          style:TextStyle(fontSize:11,color:ErpTokens.muted))),
+                        const SizedBox(width:120,child:Text('THÀNH TIỀN',textAlign:TextAlign.right,
+                          style:TextStyle(fontSize:11,color:ErpTokens.muted))),
+                        const SizedBox(width:110),
                       ])),
                     for(var i=0;i<lines.length;i++)Builder(builder:(rowContext){
                       final entry=lines[i];
@@ -1222,7 +1255,91 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                             border:UnderlineInputBorder(),
                             contentPadding:EdgeInsets.symmetric(horizontal:4,vertical:8)),
                         ));
+                      final unitPriceField=SizedBox(width:112,child:TextField(
+                        key:ValueKey('sales-price-$i'),
+                        controller:entry.unitPrice,
+                        enabled:can('orders.update'),
+                        keyboardType:const TextInputType.numberWithOptions(decimal:true),
+                        inputFormatters:const [ErpGroupedNumberFormatter(maxIntegerDigits:13,maxFractionDigits:4)],
+                        onChanged:(_)=>pricingChanged(ctx,refresh),
+                        textAlign:TextAlign.right,
+                        decoration:InputDecoration(
+                          isDense:true,labelText:'Đơn giá',
+                          hintText:price=='—'?'Nhập giá':price,
+                          contentPadding:const EdgeInsets.symmetric(horizontal:3,vertical:8),
+                          border:const UnderlineInputBorder())));
+                      Widget percentField(String title,TextEditingController controller,
+                          String fieldKey)=>SizedBox(width:60,child:TextField(
+                        key:ValueKey('sales-'+fieldKey+'-$i'),
+                        controller:controller,enabled:can('orders.update'),
+                        keyboardType:const TextInputType.numberWithOptions(decimal:true),
+                        inputFormatters:const [ErpGroupedNumberFormatter(maxIntegerDigits:3,maxFractionDigits:2)],
+                        onChanged:(_){
+                          if(entry.unitPrice.text.isEmpty&&quote!=null){
+                            entry.unitPrice.text=erpGroupedDecimalText(quote['unitPrice']);
+                          }
+                          pricingChanged(ctx,refresh);
+                        },
+                        textAlign:TextAlign.right,
+                        decoration:InputDecoration(labelText:title,isDense:true,
+                          border:const UnderlineInputBorder(),
+                          contentPadding:const EdgeInsets.symmetric(horizontal:2,vertical:8))));
+                      final discountField=percentField('CK %',entry.discountRate,'discount');
+                      final taxField=percentField('Thuế %',entry.taxRate,'tax');
+                      final split=IconButton(
+                        constraints:const BoxConstraints(minWidth:32,minHeight:32),
+                        padding:EdgeInsets.zero,
+                        key:ValueKey('sales-split-$i'),tooltip:'Tách 1 đơn vị thành dòng riêng',
+                        icon:const Icon(Icons.call_split_outlined,size:18),
+                        onPressed:(){
+                          final value=erpNumberCanonical(entry.quantity.text);
+                          final parts=value.split('.');
+                          final base=int.tryParse(parts.first);
+                          final frac=parts.length>1?int.tryParse(parts[1].padRight(3,'0')):0;
+                          if(base==null||frac==null||base*1000+frac<=1000){
+                            refresh(()=>formError='Số lượng phải lớn hơn 1 để tách dòng.');
+                            return;
+                          }
+                          final remain=base*1000+frac-1000;
+                          final fraction=(remain%1000).toString().padLeft(3,'0')
+                            .replaceFirst(RegExp(r'0+$'),'');
+                          entry.quantity.text=erpGroupedDecimalText(
+                            (remain~/1000).toString()+(fraction.isEmpty?'':'.$fraction'));
+                          final next=_OrderLine(entry.sellSkuId,'1');
+                          next.unitPrice.text=entry.unitPrice.text;
+                          next.discountRate.text=entry.discountRate.text;
+                          next.taxRate.text=entry.taxRate.text;
+                          lines.insert(i+1,next);pricingChanged(ctx,refresh);
+                        });
+                      final previousPrice=IconButton(
+                        constraints:const BoxConstraints(minWidth:32,minHeight:32),
+                        padding:EdgeInsets.zero,
+                        key:ValueKey('sales-last-price-$i'),
+                        tooltip:'Giá lần mua trước của khách này',
+                        icon:const Icon(Icons.history,size:18),
+                        onPressed:customer==null||!can('orders.update')?null:()async{
+                          final selectedCustomer=customer!;
+                          try{
+                            final data=await widget.client.salesLastPurchasePrice(
+                              widget.session.token,branchId:branch,
+                              customerId:selectedCustomer,sellSkuId:entry.sellSkuId);
+                            if(!ctx.mounted||customer!=selectedCustomer||
+                                !lines.contains(entry))return;
+                            if(data==null){
+                              refresh(()=>formError='Khách này chưa từng mua SKU này.');
+                              return;
+                            }
+                            entry.unitPrice.text=erpGroupedDecimalText(data['unitPrice']);
+                            entry.discountRate.text=erpGroupedDecimalText(data['discountRate']);
+                            entry.taxRate.text=erpGroupedDecimalText(data['taxRate']);
+                            pricingChanged(ctx,refresh);
+                          }on ErpApiError catch(e){
+                            if(ctx.mounted)refresh(()=>formError=e.message);
+                          }
+                        });
                       final remove=IconButton(
+                        constraints:const BoxConstraints(minWidth:32,minHeight:32),
+                        padding:EdgeInsets.zero,
                         key:ValueKey('sales-remove-$i'),
                         tooltip:'Bỏ dòng hàng',
                         onPressed:(){
@@ -1240,7 +1357,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                             Row(children:[
                               Text((i+1).toString()+'. ',style:const TextStyle(color:ErpTokens.muted)),
                               Expanded(child:productName),
-                              remove,
+                              previousPrice,split,remove,
                             ]),
                             const SizedBox(height:5),
                             // Keep quantity input on its own line: long
@@ -1254,10 +1371,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                               quantityField,
                             ]),
                             const SizedBox(height:6),
+                            Wrap(alignment:WrapAlignment.end,spacing:8,runSpacing:4,
+                              children:[unitPriceField,discountField,taxField]),
                             Column(crossAxisAlignment:CrossAxisAlignment.end,children:[
-                              Text('Đơn giá: $price',textAlign:TextAlign.right,
-                                softWrap:true,style:const TextStyle(
-                                  color:ErpTokens.muted,fontSize:12)),
                               Text('Thành tiền: $lineTotal',
                                 textAlign:TextAlign.right,softWrap:true,
                                 style:const TextStyle(color:ErpTokens.ink,
@@ -1269,10 +1385,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                             SizedBox(width:60,child:Text(unit,
                               style:const TextStyle(color:ErpTokens.muted))),
                             SizedBox(width:112,child:quantityField),
-                            SizedBox(width:112,child:Text(price,textAlign:TextAlign.right)),
-                            SizedBox(width:130,child:Text(lineTotal,textAlign:TextAlign.right,
+                            unitPriceField,discountField,taxField,
+                            SizedBox(width:120,child:Text(lineTotal,textAlign:TextAlign.right,
                               style:const TextStyle(fontWeight:FontWeight.w800))),
-                            SizedBox(width:42,child:remove),
+                            SizedBox(width:144,child:Row(mainAxisSize:MainAxisSize.min,
+                              children:[previousPrice,split,remove])),
                           ]),
                       );
                     }),

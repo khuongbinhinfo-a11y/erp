@@ -679,7 +679,7 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
               key:const ValueKey('r1-quote-list-reason'),
               style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
             Text('Thành tiền: '+money(quote!['lineTotal'])),
-            Text('Quy đổi về đơn vị gốc: '+erpDecimalText(quote!['normalizedBaseQuantity'])),
+            Text('Quy đổi về đơn vị gốc: '+erpNumberText(quote!['normalizedBaseQuantity'])),
             const SizedBox(height:12),
             const Text('Quy tắc áp dụng:',style:TextStyle(fontWeight:FontWeight.w700)),
             for(final t in quote!['trace'] as List<dynamic>)
@@ -714,7 +714,7 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
     final value=item[key];if(value==null)return '—';
     if(value is bool)return value?'Có':'Không';
     if(key=='toBase'||key=='amount'||key=='minQuantity')
-      return erpDecimalText(value);
+      return erpNumberText(value);
     if((key=='effectiveFrom'||key=='effectiveTo')&&value is String){
       final date=DateTime.tryParse(value)?.toLocal();
       if(date!=null)return '${date.day.toString().padLeft(2,'0')}/'

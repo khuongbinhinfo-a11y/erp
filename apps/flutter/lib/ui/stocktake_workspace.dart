@@ -3,6 +3,8 @@ import 'package:material_ui/material_ui.dart';
 import 'identity_client.dart';
 import 'erp_tokens.dart';
 import 'erp_toast.dart';
+import 'erp_number_input.dart';
+import 'erp_display.dart';
 
 /// Physical count is an immutable business document. Only server-posted variance
 /// changes ledger stock; the client never owns or overwrites a balance.
@@ -204,16 +206,17 @@ class _StocktakeWorkspaceState extends State<StocktakeWorkspace>{
                     overflow:TextOverflow.ellipsis))).toList(),
               onChanged:(v){if(v!=null)update(()=>line=v);}),
             const SizedBox(height:8),
-            if(line!=null)Text('Tồn sổ tại thời điểm chụp: ${lines.firstWhere((x)=>
-               x['lineNo']==line)['snapshotOnHand']}',
+            if(line!=null)Text('Tồn sổ tại thời điểm chụp: ${erpNumberText(lines.firstWhere((x)=>
+               x['lineNo']==line)['snapshotOnHand'])}',
               style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
             TextField(controller:quantity,keyboardType:
               const TextInputType.numberWithOptions(decimal:true),
+              inputFormatters:const [ErpGroupedNumberFormatter(maxIntegerDigits:12,maxFractionDigits:6)],
               decoration:const InputDecoration(labelText:'Số lượng thực kiểm')),
           ])),
           actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Đóng')),
             FilledButton(onPressed:line==null?null:()=>Navigator.pop(ctx,{
-              'lineNo':line,'quantity':quantity.text.trim(),
+              'lineNo':line,'quantity':erpNumberCanonical(quantity.text),
             }),child:const Text('Lưu số kiểm'))],
         )));
       final selected=await Navigator.of(context,rootNavigator:true).push(route);

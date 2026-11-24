@@ -4,6 +4,7 @@ import { canonicalPayload,requireRevision,type MutationContext } from "./mutatio
 import { checkCreate,executeCreate,parseEdit,applyEdit } from "./catalog_http.ts";
 import { parse as parseR1,create as createR1 } from "./r1_catalog_http.ts";
 import { parseBulkFile,restoreCsvGuard,type ParsedBulkFile } from "./bulk_file.ts";
+import { resolveR1Price,R1QuoteError } from "./r1_pricing.ts";
 
 export type BulkResource="customers"|"products"|"skus"|"prices";
 export type BulkMode="CREATE"|"UPDATE"|"UPSERT";
@@ -11,6 +12,7 @@ export type BulkAction="CREATE"|"UPDATE"|"UNCHANGED"|"ERROR";
 export type BulkInput={
  branchId:string;resource:BulkResource;mode:BulkMode;fileName:string;
  contentBase64:string;hasHeader:boolean;mapping:Record<string,string>;
+ priceListId?:string;defaultEffectiveAt?:string;
 };
 export type BulkRow={
  line:number;key:string;action:BulkAction;before:Record<string,unknown>|null;
@@ -75,6 +77,7 @@ const DEFINITIONS:Record<BulkResource,Record<string,string[]>>={
  },
  prices:{
   priceListCode:["Mã bảng giá","Bảng giá","Price List Code","priceListCode"],
+  skuCode:["Mã SKU","SKU bán","SKU","skuCode"],
   productCode:["Mã sản phẩm","Mã hàng","Product Code","productCode"],
   amount:["Đơn giá","Giá bán","Giá","Price","amount"],
   discountRate:["Chiết khấu %","CK %","Discount Rate","discountRate"],
@@ -82,6 +85,9 @@ const DEFINITIONS:Record<BulkResource,Record<string,string[]>>={
  },
 };
 export function bulkColumns(resource:BulkResource){
+ // Keep the legacy all-lists file contract. Selected-list SKU templates
+ // expose their own exact-SKU columns through bulkExport.
+ if(resource==="prices")return ["priceListCode","productCode","amount","discountRate","effectiveAt"];
  return Object.keys(DEFINITIONS[resource]);
 }
 const simplified=(s:string)=>s.normalize("NFD").replace(/[\u0300-\u036f]/g,"")
@@ -98,7 +104,7 @@ export function suggestBulkMapping(resource:BulkResource,headers:string[]):Recor
 export function checkBulkInput(value:unknown):BulkInput{
  if(!value||typeof value!=="object"||Array.isArray(value))throw new BulkFault("INVALID_BULK_INPUT");
  const v=value as Record<string,unknown>;
- if(Object.keys(v).some(k=>!["branchId","resource","mode","fileName","contentBase64","hasHeader","mapping","previewHash"].includes(k)))
+ if(Object.keys(v).some(k=>!["branchId","resource","mode","fileName","contentBase64","hasHeader","mapping","previewHash","priceListId","defaultEffectiveAt"].includes(k)))
   throw new BulkFault("UNKNOWN_FIELD");
  if(typeof v.branchId!=="string"||
    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v.branchId))
@@ -111,17 +117,24 @@ export function checkBulkInput(value:unknown):BulkInput{
     typeof v.mapping!=="object"||Array.isArray(v.mapping))
   throw new BulkFault("INVALID_FILE_MAPPING");
  const resource=v.resource as BulkResource;
+ if(v.priceListId!==undefined&&(resource!=="prices"||typeof v.priceListId!=="string"||
+   !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v.priceListId)))
+  throw new BulkFault("INVALID_PRICE_LIST");
+ if(v.defaultEffectiveAt!==undefined&&(!v.priceListId||typeof v.defaultEffectiveAt!=="string"||
+   !validEffectiveAt(v.defaultEffectiveAt)))throw new BulkFault("INVALID_EFFECTIVE_AT");
  const mapping=v.mapping as Record<string,unknown>;
  if(Object.keys(mapping).some(x=>!DEFINITIONS[resource][x]||
     typeof mapping[x]!=="string"||(mapping[x] as string).length>160))
   throw new BulkFault("INVALID_FILE_MAPPING");
  if(new Set(Object.values(mapping)).size!==Object.keys(mapping).length)
   throw new BulkFault("DUPLICATE_COLUMN_MAPPING");
- const keys=resource==="prices"?["priceListCode","productCode"]:["code"];
+ const keys=resource==="prices"?(v.priceListId?(mapping.skuCode?["skuCode"]:["productCode"]):["priceListCode","productCode"]):["code"];
  if(keys.some(k=>!mapping[k]))throw new BulkFault("MISSING_KEY_MAPPING");
  return {branchId:v.branchId,resource,mode:v.mode as BulkMode,
    fileName:v.fileName,contentBase64:v.contentBase64,
-   hasHeader:v.hasHeader,mapping:mapping as Record<string,string>};
+   hasHeader:v.hasHeader,mapping:mapping as Record<string,string>,
+   ...(typeof v.priceListId==="string"?{priceListId:v.priceListId.toLowerCase()}:{}),
+   ...(typeof v.defaultEffectiveAt==="string"?{defaultEffectiveAt:v.defaultEffectiveAt}:{})};
 }
 export function mappedRows(input:BulkInput,parsed:ParsedBulkFile){
  for(const column of Object.values(input.mapping)){
@@ -133,6 +146,24 @@ export function mappedRows(input:BulkInput,parsed:ParsedBulkFile){
   const cell=(cells[index]??"").trim();
   return [f,isCsv?restoreCsvGuard(cell):cell];
  })) as Record<string,string>);
+}
+/** Resolve the selected destination against the authenticated branch for both
+ * preview and apply. A file declaring another destination is rejected. */
+async function mappedTargetRows(db:PoolClient,tenant:string,input:BulkInput,file:ParsedBulkFile){
+ const rows=mappedRows(input,file);
+ if(!input.priceListId)return rows;
+ const list=await db.query<{code:string}>(`SELECT code FROM catalog_price_list
+  WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active`,
+  [tenant,input.branchId,input.priceListId]);
+ const target=list.rows[0]?.code;
+ if(!target)throw new BulkFault("PRICE_LIST_NOT_FOUND_OR_INACTIVE",409);
+ for(const row of rows){
+  if(row.priceListCode&&row.priceListCode!==target)
+   throw new BulkFault("PRICE_LIST_TARGET_MISMATCH",409);
+  row.priceListCode=target;
+  if(!row.effectiveAt&&input.defaultEffectiveAt)row.effectiveAt=input.defaultEffectiveAt;
+ }
+ return rows;
 }
 function code(v:string|undefined,kind:string):string{
  if(!v||!CODE.test(v))throw new BulkFault("INVALID_"+kind);
@@ -299,10 +330,115 @@ function normalizeRow(
  }
  return {after,operation:op};
 }
+/** Selected-list SKU imports append immutable BASE policy versions to the
+ * existing R1 resolver. They cannot overwrite prices in another list or unit. */
+async function buildSelectedSkuPrices(db:PoolClient,tenant:string,actor:string,input:BulkInput,
+ data:Record<string,string>[],firstLine:number):Promise<BulkPlan>{
+ const branch=input.branchId,rows:BulkRow[]=[],seen=new Set<string>();
+ const skuCodes=[...new Set(data.map(r=>r.skuCode).filter(Boolean) as string[])];
+ const skuRows=await db.query<{id:string;code:string;productCode:string;unitCode:string;name:string}>(
+  `SELECT s.id,s.sku AS code,p.sku AS "productCode",s.unit_code AS "unitCode",p.name
+   FROM catalog_sell_sku s JOIN catalog_product p
+    ON p.installation_id=s.installation_id AND p.branch_id=s.branch_id
+      AND p.id=s.product_id AND p.active
+   WHERE s.installation_id=$1 AND s.branch_id=$2 AND s.active
+     AND s.sku=ANY($3::text[])`,[tenant,branch,skuCodes]);
+ const skus=new Map(skuRows.rows.map(r=>[r.code,r]));
+ for(let i=0;i<data.length;i++){
+  const raw=data[i]!,line=firstLine+i,key=raw.skuCode??"";
+  try{
+   const codeValue=code(key,"SKU_CODE");
+   if(seen.has(codeValue))throw new BulkFault("DUPLICATE_FILE_KEY");
+   seen.add(codeValue);
+   const sku=skus.get(codeValue);
+   if(!sku)throw new BulkFault("SKU_CODE_NOT_FOUND_OR_INACTIVE");
+   if(raw.productCode&&raw.productCode!==sku.productCode)
+    throw new BulkFault("SKU_PRODUCT_MISMATCH");
+   if(raw.unitCode&&raw.unitCode!==sku.unitCode)
+    throw new BulkFault("SKU_UNIT_MISMATCH");
+   const amount=exactDecimal(raw.amount,MONEY,"PRICE")!;
+   const discount=exactDecimal(raw.discountRate,DISCOUNT,"DISCOUNT",true)??"0";
+   const at=raw.effectiveAt;
+   if(!at||!validEffectiveAt(at))throw new BulkFault("INVALID_EFFECTIVE_AT");
+   const converted=await db.query<{net:string}>(`SELECT greatest(0,round(
+       $1::numeric*(1-$2::numeric/100),0))::text AS net`,[amount,discount]);
+   const net=converted.rows[0]!.net;
+   const baseRules=await db.query<{id:string;amount:string;priority:number}>(
+    `SELECT r.id,r.amount::text,r.priority FROM catalog_sku_price_rule r
+     WHERE r.installation_id=$1 AND r.branch_id=$2 AND r.price_list_id=$3
+       AND r.sell_sku_id=$4 AND r.scope_kind='BASE' AND r.min_quantity<=1
+       AND r.effective_from<=$5::timestamptz
+       AND (r.effective_to IS NULL OR r.effective_to>$5::timestamptz)
+       AND NOT EXISTS (SELECT 1 FROM catalog_sku_price_retirement retired
+        WHERE retired.installation_id=r.installation_id AND retired.branch_id=r.branch_id
+         AND retired.rule_id=r.id AND retired.retired_at<=$5::timestamptz)
+     ORDER BY r.priority DESC,r.effective_from DESC,r.id DESC LIMIT 1`,
+     [tenant,branch,input.priceListId,sku.id,at]);
+   const previousRule=baseRules.rows[0];
+   let previous:string|null=null,sourceId:string|null=null,priority=previousRule?.priority??0;
+   try{
+    const quoted=await resolveR1Price(db,{installationId:tenant,branchId:branch,
+     priceListId:input.priceListId!,sellSkuId:sku.id,quantity:"1",priceAt:at});
+    previous=quoted.basePrice;
+    sourceId=quoted.trace[0]?.ruleId??null;
+    priority=quoted.trace[0]?.priority??priority;
+   }catch(err){
+    if(!(err instanceof R1QuoteError&&err.code==="SKU_HAS_NO_EFFECTIVE_BASE_PRICE"))
+     throw err;
+   }
+   const sameInstant=await db.query<{id:string;amount:string;gross:string|null;discount:string|null}>(
+    `SELECT r.id,r.amount::text,r.imported_gross_amount::text AS gross,
+       r.imported_discount_rate::text AS discount
+       FROM catalog_sku_price_rule r
+      WHERE r.installation_id=$1 AND r.branch_id=$2 AND r.price_list_id=$3
+       AND r.sell_sku_id=$4 AND r.scope_kind='BASE'
+       AND r.effective_from=$5::timestamptz AND r.min_quantity<=1
+       AND NOT EXISTS (SELECT 1 FROM catalog_sku_price_retirement retired
+        WHERE retired.installation_id=r.installation_id AND retired.branch_id=r.branch_id
+         AND retired.rule_id=r.id AND retired.retired_at<=$5::timestamptz)
+       LIMIT 1`,[tenant,branch,input.priceListId,sku.id,at]);
+   const same=sameInstant.rows[0];
+   if(same&&(!equalDecimal(same.amount,net)||
+     (same.gross!==null
+       ?(!equalDecimal(same.gross,amount)||
+         !equalDecimal(same.discount??"0",discount))
+       :(!equalDecimal(discount,"0")||
+         !equalDecimal(same.amount,amount)))))
+    throw new BulkFault("PRICE_EFFECTIVE_TIME_CONFLICT");
+   if(previous!==null&&input.mode==="CREATE")
+    throw new BulkFault("ALREADY_EXISTS_USE_UPDATE");
+   if(previous===null&&input.mode==="UPDATE")
+    throw new BulkFault("NOT_FOUND_USE_CREATE");
+   const action:BulkAction=same?"UNCHANGED":previous===null?"CREATE":"UPDATE";
+   const after={priceListId:input.priceListId,skuCode:sku.code,
+     productCode:sku.productCode,name:sku.name,unitCode:sku.unitCode,
+     amount,discountRate:discount,effectiveAt:at,netUnitPrice:net};
+   rows.push({line,key:codeValue,action,
+    before:previous===null?null:{unitPrice:previous,sourceId},
+    after,revision:null,error:null,
+    internal:{...after,sellSkuId:sku.id,priority}});
+  }catch(err){
+   rows.push({line,key,action:"ERROR",before:null,after:null,revision:null,
+    error:err instanceof BulkFault?err.code:"INVALID_ROW"});
+  }
+ }
+ const summary={create:0,update:0,unchanged:0,error:0,total:rows.length};
+ for(const row of rows)summary[row.action.toLowerCase() as "create"|"update"|"unchanged"|"error"]++;
+ const digest=rows.map(({line,key,action,before,after,revision,error})=>({line,key,action,before,after,revision,error}));
+ const hash=createHash("sha256").update(canonicalPayload({
+  tenant,actor,branch,resource:input.resource,mode:input.mode,
+  priceListId:input.priceListId,defaultEffectiveAt:input.defaultEffectiveAt??null,
+  fileDigest:createHash("sha256").update(input.contentBase64).digest("hex"),
+  mapping:input.mapping,hasHeader:input.hasHeader,rows:digest,
+ })).digest("hex");
+ return {rows,summary,hash};
+}
 export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
  input:BulkInput):Promise<BulkPlan>{
  const file=parseBulkFile(input.fileName,input.contentBase64,input.hasHeader);
- const data=mappedRows(input,file);
+ const data=await mappedTargetRows(db,tenant,input,file);
+ if(input.resource==="prices"&&input.priceListId&&input.mapping.skuCode)
+  return buildSelectedSkuPrices(db,tenant,actor,input,data,file.firstLine);
  const all=(f:string)=>[...new Set(data.map(r=>r[f]).filter(Boolean) as string[])];
  const branch=input.branchId,res=input.resource;
  const products=await db.query<Record<string,any>>(
@@ -538,6 +674,7 @@ export async function buildBulkPlan(db:PoolClient,tenant:string,actor:string,
   tenant,actor,branch,resource:res,mode:input.mode,
   fileDigest:createHash("sha256").update(input.contentBase64).digest("hex"),
   mapping:input.mapping,hasHeader:input.hasHeader,rows:digest,
+  ...(input.priceListId?{priceListId:input.priceListId,defaultEffectiveAt:input.defaultEffectiveAt??null}:{}),
  })).digest("hex");
  return {rows,hash,summary};
 }
@@ -546,11 +683,41 @@ export function publicBulkPlan(plan:BulkPlan):BulkPlan{
 }
 export async function applyBulkPlan(db:PoolClient,ctx:MutationContext,
  input:BulkInput,expectedHash:string):Promise<{status:number;body:unknown}>{
+ if(input.resource==="prices"&&input.priceListId&&input.mapping.skuCode){
+  const file=parseBulkFile(input.fileName,input.contentBase64,input.hasHeader);
+  const data=await mappedTargetRows(db,ctx.installationId,input,file);
+  const codes=[...new Set(data.map(row=>row.skuCode).filter(Boolean))].sort();
+  // A list/SKU stream is serialized across overlapping batches.
+  for(const code of codes)await db.query(
+   "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+   [[ctx.installationId,input.branchId,input.priceListId,code].join("|")]);
+  const plan=await buildSelectedSkuPrices(db,ctx.installationId,ctx.actorId,
+   input,data,file.firstLine);
+  if(plan.summary.error||plan.hash!==expectedHash)
+   throw new BulkFault("PREVIEW_STALE_OR_HAS_ERRORS",409);
+  const applied:{line:number;action:string;id:string}[]=[];
+  for(const row of plan.rows){
+   if(row.action==="UNCHANGED")continue;
+   const data=row.internal;
+   if(!data)throw new BulkFault("INVALID_PLAN",500);
+   const result=await createR1(db,ctx.installationId,"rules",parseR1("rules",{
+    branchId:input.branchId,priceListId:input.priceListId,
+    sellSkuId:data.sellSkuId,scopeKind:"BASE",adjustment:"FIXED_PRICE",
+    amount:data.netUnitPrice,priority:data.priority,stacking:"EXCLUSIVE",
+    importGrossAmount:data.amount,importDiscountRate:data.discountRate,
+    minQuantity:"1",effectiveFrom:data.effectiveAt,
+   }));
+   applied.push({line:row.line,action:row.action,id:String((result.body as {id:string}).id)});
+  }
+  return {status:200,body:{applied,summary:plan.summary,hash:expectedHash}};
+ }
+
  if(input.resource==="prices"){
   // Preview uses GET, apply must acquire same scope locks as single-price
   // inserts BEFORE checking the preview hash. Deterministic order avoids
   // deadlocks when two batches overlap multiple price lists/products.
-  const raw=mappedRows(input,parseBulkFile(input.fileName,input.contentBase64,input.hasHeader));
+  const raw=await mappedTargetRows(db,ctx.installationId,input,
+   parseBulkFile(input.fileName,input.contentBase64,input.hasHeader));
   const listCodes=[...new Set(raw.map(r=>r.priceListCode).filter(Boolean) as string[])];
   const productCodes=[...new Set(raw.map(r=>r.productCode).filter(Boolean) as string[])];
   const lists=await db.query<{id:string;code:string}>(

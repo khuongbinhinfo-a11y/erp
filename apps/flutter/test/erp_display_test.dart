@@ -14,10 +14,16 @@ void main() {
     expect(erpDecimalText(null), '—');
   });
 
+  test('shared display grouping preserves significant decimals',(){
+    expect(erpNumberText('9800.0000'),'9,800');
+    expect(erpNumberText('0.000000'),'0');
+    expect(erpNumberText('12.5000'),'12.5');
+    expect(erpNumberText('123456789.000001'),'123,456,789.000001');
+  });
   test('VND display groups thousands and preserves exact fractional prices', () {
-    expect(erpVndText('35000.000000'), '35.000 ₫');
-    expect(erpVndText('123456789.125000'), '123.456.789,125 ₫');
-    expect(erpVndText('-1500.5000'), '-1.500,5 ₫');
+    expect(erpVndText('35000.000000'), '35,000 ₫');
+    expect(erpVndText('123456789.125000'), '123,456,789.125 ₫');
+    expect(erpVndText('-1500.5000'), '-1,500.5 ₫');
     expect(erpVndText('0.000000'), '0 ₫');
     expect(erpVndText(null), 'Chưa có giá');
   });

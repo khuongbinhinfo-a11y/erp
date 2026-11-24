@@ -31,7 +31,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
   int requestSerial=0;
   final search=TextEditingController();
   final inlineAmount=TextEditingController(),inlineDiscount=TextEditingController();
-  String? inlinePriceId,assignmentListId,priceSkuListId;
+  String? inlinePriceId,assignmentListId,priceSkuListId,selectedPriceListId;
 
   static const tabs=<String,List<ErpSectionTab<String>>>{
     'customers':[
@@ -84,7 +84,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     super.didUpdateWidget(oldWidget);
     if(oldWidget.session.token!=widget.session.token ||
       oldWidget.client!=widget.client || oldWidget.area!=widget.area){
-      requestSerial++;items=[];branches=[];branchId=null;inlinePriceId=null;assignmentListId=null;priceSkuListId=null;
+      requestSerial++;items=[];branches=[];branchId=null;inlinePriceId=null;assignmentListId=null;priceSkuListId=null;selectedPriceListId=null;
       productWriteReady=false;resource=widget.area;search.clear();
       _loadBranches();
     }
@@ -118,6 +118,29 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
         loading=false;error='Không tải được chi nhánh.';
       });
     }
+  }
+  Widget _priceScopeChips(String title,String keyPrefix,
+      List<Map<String,dynamic>> options,Set<String> chosen,StateSetter refresh){
+    return Padding(padding:const EdgeInsets.only(top:10),child:Column(
+      crossAxisAlignment:CrossAxisAlignment.start,children:[
+        Text(title,style:const TextStyle(fontSize:12,
+          fontWeight:FontWeight.w700,color:ErpTokens.ink)),
+        const SizedBox(height:5),
+        if(options.isEmpty)const Text('Chưa có danh mục áp dụng.',
+          style:TextStyle(fontSize:12,color:ErpTokens.muted))
+        else Wrap(spacing:5,runSpacing:3,children:[
+          for(final option in options.where((x)=>x['active']!=false))
+            FilterChip(
+              key:ValueKey('$keyPrefix-${option['id']}'),
+              label:Text((option['name']??option['code']).toString(),
+                style:const TextStyle(fontSize:12)),
+              selected:chosen.contains(option['id'].toString()),
+              onSelected:(enabled)=>refresh((){
+                if(enabled){chosen.add(option['id'].toString());}
+                else{chosen.remove(option['id'].toString());}
+              })),
+        ]),
+      ]));
   }
   String _dateLabel(DateTime? day,String none){
     if(day==null)return none;
@@ -161,6 +184,10 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
       if(!mounted||requestSerial!=stamp)return;
       setState((){
         items=result;loading=false;
+        if(resource=='price-lists'){
+          selectedPriceListId=result.any((x)=>x['id']==selectedPriceListId)
+            ?selectedPriceListId:(result.isEmpty?null:result.first['id'].toString());
+        }
         productWriteReady=resource=='products'&&productResult?.writeReady==true;
       });
     }on ErpApiError catch(e){
@@ -176,7 +203,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
   void _changeResource(String next){
     if(next==resource)return;
     setState((){
-      resource=next;search.clear();items=[];productWriteReady=false;inlinePriceId=null;assignmentListId=null;priceSkuListId=null;
+      resource=next;search.clear();items=[];productWriteReady=false;inlinePriceId=null;assignmentListId=null;priceSkuListId=null;selectedPriceListId=null;
     });
     _loadRecords();
   }
@@ -191,7 +218,11 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     final phone=TextEditingController(),deliveryAddress=TextEditingController();
     final paymentTerms=TextEditingController(text:'0');
     final listPriority=TextEditingController(text:'0');
+    String listStacking='EXCLUSIVE';bool listStop=false;
     DateTime? listStart,listEnd;
+    final selectedChannels=<String>{},selectedGroups=<String>{},selectedCustomers=<String>{};
+    bool assignDefault=false,priceScopesLoaded=false;
+    List<Map<String,dynamic>> priceChannels=[],priceGroups=[],priceCustomers=[];
     final altUnit=TextEditingController(),conversion=TextEditingController();
     final baseBarcode=TextEditingController(),altSku=TextEditingController(),
       altBarcode=TextEditingController();
@@ -275,6 +306,23 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     }
 
     try{
+      if(resource=='price-lists'&&previous==null){
+        try{
+          final loaded=await Future.wait([
+            widget.client.r1CatalogItems(widget.session.token,'channels',branchId:branch),
+            widget.client.catalogDirectoryAll(widget.session.token,
+              'customer-groups',branchId:branch),
+            widget.client.catalogItems(widget.session.token,'customers',branchId:branch),
+          ]);
+          priceChannels=loaded[0];priceGroups=loaded[1];priceCustomers=loaded[2];
+          priceScopesLoaded=true;
+        }catch(_){
+          priceScopesLoaded=false;
+          if(mounted)ErpToast.show(context,
+            'Chưa tải được kênh và nhóm khách. Có thể tạo bảng giá trước rồi phân bổ sau.',
+            isError:true);
+        }
+      }
       if(resource=='prices'&&previous==null){
         availableProducts=await widget.client.catalogItems(widget.session.token,'products',branchId:branchId);
         availableLists=await widget.client.catalogItems(widget.session.token,'price-lists',branchId:branchId);
@@ -364,6 +412,23 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                     decoration:const InputDecoration(labelText:'Mức ưu tiên bảng giá',
                       helperText:'Số lớn được ưu tiên trong cùng phạm vi')),
                   const SizedBox(height:8),
+                  DropdownButtonFormField<String>(
+                    key:const ValueKey('price-create-stacking'),
+                    initialValue:listStacking,isExpanded:true,
+                    decoration:const InputDecoration(labelText:'Cách kết hợp giá'),
+                    items:const [
+                      DropdownMenuItem(value:'EXCLUSIVE',
+                        child:Text('Độc lập: dùng mức giá này')),
+                      DropdownMenuItem(value:'STACKABLE',
+                        child:Text('Cộng dồn chính sách phù hợp')),
+                    ],
+                    onChanged:(v){if(v!=null)refresh(()=>listStacking=v);}),
+                  SwitchListTile(
+                    key:const ValueKey('price-create-stop'),
+                    contentPadding:EdgeInsets.zero,
+                    title:const Text('Ngừng xét bảng giá tiếp theo'),
+                    value:listStop,onChanged:(v)=>refresh(()=>listStop=v)),
+                  const SizedBox(height:8),
                   Wrap(spacing:8,runSpacing:6,children:[
                     OutlinedButton.icon(
                       key:const ValueKey('r1c-create-list-from'),
@@ -388,6 +453,24 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                       onPressed:()=>refresh(()=>listEnd=null),
                       icon:const Icon(Icons.close,size:16)),
                   ]),
+                  if(priceScopesLoaded)...[
+                    const SizedBox(height:10),
+                    SwitchListTile(
+                      key:const ValueKey('price-create-default'),
+                      contentPadding:EdgeInsets.zero,
+                      title:const Text('Áp dụng mặc định'),
+                      value:assignDefault,
+                      onChanged:(v)=>refresh(()=>assignDefault=v)),
+                    _priceScopeChips('Kênh bán','price-create-channel',
+                      priceChannels,selectedChannels,refresh),
+                    _priceScopeChips('Nhóm khách','price-create-group',
+                      priceGroups,selectedGroups,refresh),
+                    _priceScopeChips('Khách hàng riêng','price-create-customer',
+                      priceCustomers,selectedCustomers,refresh),
+                    const Padding(padding:EdgeInsets.only(top:8),
+                      child:Text('Khi chọn cả kênh bán và nhóm khách: áp dụng theo KÊNH VÀ NHÓM.',
+                        style:TextStyle(fontSize:12,color:ErpTokens.muted))),
+                  ],
                 ],
                 if(resource=='customers')...[
                   const SizedBox(height:12),
@@ -846,6 +929,13 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                       'effectiveFrom':listStart?.toIso8601String(),
                       'effectiveTo':_priceListEndExclusive(listEnd)?.toIso8601String(),
                       'priority':int.parse(listPriority.text.trim()),
+                      'stackingMode':listStacking,'stopProcessing':listStop,
+                      if(priceScopesLoaded)...{
+                        'channelIds':selectedChannels.toList(),
+                        'customerGroupIds':selectedGroups.toList(),
+                        'customerIds':selectedCustomers.toList(),
+                        'defaultAssignment':assignDefault,
+                      },
                     });
                   }
                   if(resource=='customers'){
@@ -1183,6 +1273,11 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     var deliveryAddress=(row['deliveryAddress']??'').toString();
     var paymentTermsDays=(row['paymentTermsDays']??0).toString();
     var listPriority=(row['priority']??0).toString();
+    var listStacking=(row['stackingMode']??'EXCLUSIVE').toString();
+    bool listStop=row['stopProcessing']==true;
+    bool assignDefault=false,priceScopesLoaded=false;
+    final selectedChannels=<String>{},selectedGroups=<String>{},selectedCustomers=<String>{};
+    List<Map<String,dynamic>> priceChannels=[],priceGroups=[],priceCustomers=[];
     DateTime? listStart=DateTime.tryParse(row['effectiveFrom']?.toString()??'');
     DateTime? listEnd=DateTime.tryParse(row['effectiveTo']?.toString()??'')
       ?.toLocal().subtract(const Duration(microseconds:1));
@@ -1203,6 +1298,30 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
         ]);
         customerGroups=lookup[0];
         customerRegions=lookup[1];
+      }else if(resource=='price-lists'){
+        try{
+          final loaded=await Future.wait([
+            widget.client.r1CatalogItems(widget.session.token,'channels',branchId:branch),
+            widget.client.catalogDirectoryAll(widget.session.token,
+              'customer-groups',branchId:branch),
+            widget.client.catalogItems(widget.session.token,'customers',branchId:branch),
+            widget.client.priceListAssignments(widget.session.token,branch,priceListId:id),
+          ]);
+          priceChannels=loaded[0];priceGroups=loaded[1];priceCustomers=loaded[2];
+          for(final assignment in loaded[3].where((x)=>x['active']==true)){
+            final target=assignment['scopeKind'];
+            if(target=='DEFAULT')assignDefault=true;
+            if(target=='CHANNEL')selectedChannels.add(assignment['channelId'].toString());
+            if(target=='CUSTOMER_GROUP')selectedGroups.add(assignment['customerGroupId'].toString());
+            if(target=='CUSTOMER')selectedCustomers.add(assignment['customerId'].toString());
+          }
+          priceScopesLoaded=true;
+        }catch(_){
+          priceScopesLoaded=false;
+          if(mounted)ErpToast.show(context,
+            'Không tải được phân bổ. Đang giữ nguyên các phạm vi hiện có.',
+            isError:true);
+        }
       }else if(resource=='products'){
         productGroups=await widget.client.catalogItems(
           widget.session.token,'groups',branchId:branch);
@@ -1247,6 +1366,23 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                       decoration:const InputDecoration(labelText:'Ưu tiên bảng giá'),
                       onChanged:(v)=>refresh(()=>listPriority=v)),
                     const SizedBox(height:8),
+                    DropdownButtonFormField<String>(
+                      key:const ValueKey('price-edit-stacking'),
+                      initialValue:listStacking,isExpanded:true,
+                      decoration:const InputDecoration(labelText:'Cách kết hợp giá'),
+                      items:const [
+                        DropdownMenuItem(value:'EXCLUSIVE',
+                          child:Text('Độc lập: dùng mức giá này')),
+                        DropdownMenuItem(value:'STACKABLE',
+                          child:Text('Cộng dồn chính sách phù hợp')),
+                      ],
+                      onChanged:(v){if(v!=null)refresh(()=>listStacking=v);}),
+                    SwitchListTile(
+                      key:const ValueKey('price-edit-stop'),
+                      contentPadding:EdgeInsets.zero,
+                      title:const Text('Ngừng xét bảng giá tiếp theo'),
+                      value:listStop,onChanged:(v)=>refresh(()=>listStop=v)),
+                    const SizedBox(height:8),
                     Wrap(spacing:8,runSpacing:6,children:[
                       OutlinedButton.icon(
                         key:const ValueKey('r1c-edit-list-from'),
@@ -1275,6 +1411,24 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                         onPressed:()=>refresh(()=>listEnd=null),
                         icon:const Icon(Icons.close,size:16)),
                     ]),
+                    if(priceScopesLoaded)...[
+                      const SizedBox(height:8),
+                      SwitchListTile(
+                        key:const ValueKey('price-edit-default'),
+                        contentPadding:EdgeInsets.zero,
+                        title:const Text('Áp dụng mặc định'),
+                        value:assignDefault,
+                        onChanged:(v)=>refresh(()=>assignDefault=v)),
+                      _priceScopeChips('Kênh bán','price-edit-channel',
+                        priceChannels,selectedChannels,refresh),
+                      _priceScopeChips('Nhóm khách','price-edit-group',
+                        priceGroups,selectedGroups,refresh),
+                      _priceScopeChips('Khách hàng riêng','price-edit-customer',
+                        priceCustomers,selectedCustomers,refresh),
+                      const Padding(padding:EdgeInsets.only(top:8),
+                        child:Text('Kênh bán VÀ nhóm khách phải cùng khớp.',
+                          style:TextStyle(fontSize:12,color:ErpTokens.muted))),
+                    ],
                   ],
                   if(resource=='products')...[
                     const SizedBox(height:12),
@@ -1367,6 +1521,13 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                 'effectiveFrom':listStart?.toIso8601String(),
                 'effectiveTo':_priceListEndExclusive(listEnd)?.toIso8601String(),
                 'priority':int.parse(listPriority.trim()),
+                'stackingMode':listStacking,'stopProcessing':listStop,
+                if(priceScopesLoaded)...{
+                  'channelIds':selectedChannels.toList(),
+                  'customerGroupIds':selectedGroups.toList(),
+                  'customerIds':selectedCustomers.toList(),
+                  'defaultAssignment':assignDefault,
+                },
               },
               if(resource=='products'&&productGroupId!=oldProductGroupId)
                 'groupId':productGroupId,
@@ -1444,13 +1605,13 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
         content:Column(mainAxisSize:MainAxisSize.min,
           crossAxisAlignment:CrossAxisAlignment.start,children:[
             Text(q==null?'Chưa có giá hiệu lực':
-              erpDecimalText(q['amount'])+' '+q['currency'].toString(),
+              erpNumberText(q['amount'])+' '+q['currency'].toString(),
               key:const ValueKey('catalog-quote-result'),
               style:const TextStyle(fontSize:22,fontWeight:FontWeight.w800)),
             if(q!=null)...[
               const SizedBox(height:8),
-              Text('Chiết khấu: '+erpDecimalText(q['discountRate'])+'%'),
-              Text('Hiệu lực: '+q['effectiveAt'].toString()),
+              Text('Chiết khấu: '+erpNumberText(q['discountRate'])+'%'),
+              Text('Hiệu lực: '+erpDateTimeText(q['effectiveAt'])),
             ],
             const SizedBox(height:12),
             const Text('Tồn kho chưa xác minh; chưa được xác nhận đơn hàng.',
@@ -1467,6 +1628,9 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     final value=item[key];
     if(value==null)return '—';
     if(value is bool)return value?'Hoạt động':'Ngừng';
+    if(key=='amount'||key=='discountRate'||key=='quantity')
+      return erpNumberText(value);
+    if(key=='effectiveAt')return erpDateTimeText(value);
     if(key=='effectiveFrom'||key=='effectiveTo'){
       final day=DateTime.tryParse(value.toString())?.toLocal();
       if(day==null)return '—';
@@ -1590,22 +1754,39 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                   onPressed:_loadRecords,icon:const Icon(Icons.arrow_forward))),
             ),
             const SizedBox(height:14),
-            if(resource=='price-lists'&&assignmentListId!=null&&
-              branchId!=null&&items.any((e)=>e['id']==assignmentListId))
-              PriceListAssignmentsPanel(
-                key:ValueKey('assign-'+branchId!+'-'+assignmentListId!),
-                client:widget.client,session:widget.session,branchId:branchId!,
-                priceList:items.firstWhere((e)=>e['id']==assignmentListId),
-                canWrite:canWrite,
-                onClose:()=>setState(()=>assignmentListId=null)),
-            if(resource=='price-lists'&&priceSkuListId!=null&&
-                branchId!=null&&items.any((e)=>e['id']==priceSkuListId))
-              PriceSkuBatchPanel(
-                key:ValueKey('price-skus-'+branchId!+'-'+priceSkuListId!),
-                client:widget.client,session:widget.session,branchId:branchId!,
-                priceList:items.firstWhere((e)=>e['id']==priceSkuListId),
-                canWrite:canWrite,
-                onClose:()=>setState(()=>priceSkuListId=null)),
+            if(resource=='price-lists'&&items.isNotEmpty&&branchId!=null)...[
+              Padding(padding:const EdgeInsets.only(bottom:10),child:
+                DropdownButtonFormField<String>(
+                  key:ValueKey('price-workspace-selected-'+selectedPriceListId.toString()),
+                  initialValue:items.any((x)=>x['id']==selectedPriceListId)
+                    ?selectedPriceListId:null,
+                  isExpanded:true,
+                  decoration:const InputDecoration(labelText:'Bảng giá đang quản lý',
+                    prefixIcon:Icon(Icons.price_change_outlined)),
+                  items:items.map((x)=>DropdownMenuItem<String>(
+                    value:x['id'].toString(),
+                    child:Text((x['name']??x['code']).toString(),
+                      overflow:TextOverflow.ellipsis))).toList(),
+                  onChanged:(id)=>setState(()=>selectedPriceListId=id))),
+              if(selectedPriceListId!=null&&items.any((x)=>x['id']==selectedPriceListId))...[
+                PriceSkuBatchPanel(
+                  key:ValueKey('price-skus-'+branchId!+'-'+selectedPriceListId!),
+                  client:widget.client,session:widget.session,branchId:branchId!,
+                  priceList:items.firstWhere((x)=>x['id']==selectedPriceListId),
+                  canWrite:canWrite,onClose:(){}),
+                PriceListAssignmentsPanel(
+                  key:ValueKey('assign-'+branchId!+'-'+selectedPriceListId!),
+                  client:widget.client,session:widget.session,branchId:branchId!,
+                  priceList:items.firstWhere((x)=>x['id']==selectedPriceListId),
+                  canWrite:canWrite,onClose:(){}),
+                Padding(padding:const EdgeInsets.only(top:14),
+                  child:CatalogBulkWorkspace(
+                    key:ValueKey('price-import-'+branchId!+'-'+selectedPriceListId!),
+                    client:widget.client,session:widget.session,
+                    branchId:branchId,canWrite:canWrite,
+                    initialArea:'price-lists',initialPriceListId:selectedPriceListId)),
+              ],
+            ],
             if(loading)const Center(child:Padding(
               padding:EdgeInsets.all(20),child:CircularProgressIndicator()))
             else if(error!=null)Padding(
@@ -1674,18 +1855,14 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                             icon:const Icon(Icons.groups_outlined,size:16),
                             label:const Text('Áp dụng cho'),
                             onPressed:()=>setState((){
-                              assignmentListId=assignmentListId==entry['id']
-                                ?null:entry['id'] as String;
-                              priceSkuListId=null;
+                              selectedPriceListId=entry['id'] as String;
                             })),
                           if(resource=='price-lists')TextButton.icon(
                             key:ValueKey('catalog-price-list-sku-prices-'+entry['id'].toString()),
                             icon:const Icon(Icons.price_change_outlined,size:16),
                             label:const Text('Giá bán'),
                             onPressed:saving?null:()=>setState((){
-                              priceSkuListId=priceSkuListId==entry['id']
-                                ?null:entry['id'] as String;
-                              assignmentListId=null;
+                              selectedPriceListId=entry['id'] as String;
                             })),
                           if(resource=='price-lists')IconButton(
                             key:ValueKey('catalog-price-list-clone-'+entry['id'].toString()),
