@@ -32,6 +32,18 @@ String erpVndText(Object? value) {
   return erpNumberText(value)+' ₫';
 }
 
+/// Local Vietnamese date/time; ISO database timestamps stay unchanged.
+String erpDateTimeText(Object? value,{bool withTime=true}){
+  if(value==null)return '—';
+  final parsed=DateTime.tryParse(value.toString());
+  if(parsed==null)return value.toString();
+  final local=parsed.toLocal();
+  final day='${local.day.toString().padLeft(2,'0')}/'
+    '${local.month.toString().padLeft(2,'0')}/${local.year}';
+  return withTime?'$day ${local.hour.toString().padLeft(2,'0')}:'
+    '${local.minute.toString().padLeft(2,'0')}':day;
+}
+
 const Map<String, String> _priceRuleNames = {
   'BASE': 'Giá cơ sở',
   'CHANNEL': 'Theo kênh bán',
