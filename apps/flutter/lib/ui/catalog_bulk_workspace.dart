@@ -43,7 +43,8 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
       'active':'Trạng thái','reason':'Lý do ngừng',
     },
     'prices':{
-      'priceListCode':'Mã bảng giá','productCode':'Mã sản phẩm',
+      'priceListCode':'Mã bảng giá','skuCode':'Mã SKU','productCode':'Mã sản phẩm',
+      'name':'Tên hàng','unitCode':'Đơn vị',
       'amount':'Đơn giá','discountRate':'Chiết khấu %',
       'effectiveAt':'Ngày giờ hiệu lực',
     },
@@ -116,7 +117,7 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
     'fileName':fileName,'contentBase64':contentBase64,
     'hasHeader':hasHeader,'mapping':Map<String,String>.from(mapping),
     if(kind=='prices'&&priceListId!=null)'priceListId':priceListId,
-    if(kind=='prices'&&defaultEffectiveAt!=null)'defaultEffectiveAt':defaultEffectiveAt,
+    if(kind=='prices'&&priceListId!=null&&defaultEffectiveAt!=null)'defaultEffectiveAt':defaultEffectiveAt,
   };
   bool get canOperate=>!busy&&pendingPayload==null&&widget.branchId!=null;
   bool get canImport=>canOperate&&(kind!='prices'||priceListId!=null);
@@ -289,7 +290,9 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
         style:TextStyle(color:ErpTokens.muted,fontSize:12)),
       const SizedBox(height:12),
       Wrap(spacing:12,runSpacing:12,children:[
-        for(final field in fieldKeys.where((f)=>kind!='prices'||f!='priceListCode'||mapping.containsKey(f)))
+        for(final field in fieldKeys.where((f)=>kind!='prices'||priceListId==null||
+          f=='skuCode'||f=='amount'||f=='discountRate'||f=='effectiveAt'||
+          (f=='priceListCode'&&mapping.containsKey(f))))
           SizedBox(width:290,child:DropdownButtonFormField<String?>(
             key:ValueKey('catalog-bulk-map-'+field+'-'+(mapping[field]??'')),
             isExpanded:true,initialValue:mapping[field],
