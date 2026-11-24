@@ -44,9 +44,11 @@ class _CustomerLocationsDialogState extends State<CustomerLocationsDialog>{
     var active=old?['active']!=false;
     final keyPart=(old?['id']??'create').toString();
     final kind='catalog.customer-location.${widget.customerId}.$keyPart';
+    ModalRoute<dynamic>? editRoute;
     try{
       final payload=await showDialog<Map<String,dynamic>>(
-        context:context,builder:(dialog)=>StatefulBuilder(builder:(ctx,refresh)=>
+        context:context,builder:(dialog){editRoute=ModalRoute.of(dialog);
+          return StatefulBuilder(builder:(ctx,refresh)=>
           AlertDialog(
             title:Text(old==null?'Thêm cửa hàng / địa chỉ':'Sửa địa chỉ giao hàng'),
             content:SizedBox(width:440,child:SingleChildScrollView(
@@ -84,7 +86,7 @@ class _CustomerLocationsDialogState extends State<CustomerLocationsDialog>{
                   'isDefault':isDefault,if(old!=null)'active':active,
                 }),child:const Text('Lưu địa chỉ')),
             ],
-          )));
+          ));});
       if(payload==null||!mounted)return;
       final pending=widget.client.pendingR1(widget.session.actorId,widget.branchId,kind);
       if(pending!=null&&
@@ -120,6 +122,7 @@ class _CustomerLocationsDialogState extends State<CustomerLocationsDialog>{
           'Chưa có xác nhận máy chủ; hãy thử lại cùng yêu cầu.',isError:true);
       }finally{if(mounted)setState(()=>saving=false);}
     }finally{
+      if(editRoute!=null)await editRoute!.completed;
       code.dispose();name.dispose();address.dispose();phone.dispose();
     }
   }
