@@ -2232,9 +2232,10 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       }else{
         if(recoveredAttempt&&scope!=null&&pendingCreateCartId!=null){
           final status=await cartDisposition();
-          if(status=='rejected'){
-            // Another tab already received a definite PRICE_STALE/validation
-            // rejection. Do not recreate the old recovery command.
+          if(status=='rejected'||status=='never-submitted'){
+            // Stale tab whose original command was either definitively
+            // rejected or never submitted before the cart changed ownership.
+            // Only clear the exact matching key; never change the new cart.
             try{await _persistPending(scope,null,null,null,previousKey:key);}catch(_){}
             if(_sameScope(token,body['branchId'] as String)){
               setState((){
@@ -2242,11 +2243,16 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                 pendingCreateCartId=null;pendingCreateCartOwner=null;
                 localRecoveryBlocked=false;
               });
-              inform('Đơn đã bị máy chủ từ chối. Giỏ được giữ để mở sửa và tra giá lại.',error:true);
+              inform(status=='rejected'
+                ?'Đơn đã bị máy chủ từ chối. Mở giỏ để sửa và tra giá lại.'
+                :'Giỏ đã được mở ở cửa sổ khác trước khi gửi đơn. Không tạo trùng.',error:true);
             }
             return;
           }
-          if(status!='submitted')throw const LocalRecoveryConflict();
+          // Crash between the durable intent write and cart submission:
+          // the same owner may still atomically mark the cart submitted,
+          // then retry the exact original command key and body.
+          if(status!='submitted'&&status!='editing')throw const LocalRecoveryConflict();
         }
         if(scope!=null&&pendingCreateCartId!=null&&pendingCreateCartOwner==null){
           throw const LocalRecoveryConflict();
@@ -2311,16 +2317,17 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       // and reopened the cart. Remove only this command's stranded slot.
       String status='unknown';
       try{status=await cartDisposition();}catch(_){}
-      if(!serverMayHaveSeenCommand||status=='rejected'){
+      if(!serverMayHaveSeenCommand||status=='rejected'||status=='never-submitted'){
         try{await _persistPending(scope,null,null,null,previousKey:key);}catch(_){}
       }
       if(_sameScope(token,body['branchId'] as String))setState((){
         pendingCreate=null;pendingCreateKey=null;pendingCreateAutoConfirm=false;
         pendingCreateCartId=null;pendingCreateCartOwner=null;
-        localRecoveryBlocked=status!='rejected';
+        localRecoveryBlocked=status!='rejected'&&status!='never-submitted';
       });
       inform(status=='rejected'
         ?'Đơn đã bị từ chối. Mở lại giỏ để kiểm tra giá và nhập lại.'
+        :status=='never-submitted'?'Giỏ đã đổi cửa sổ trước khi gửi. Không tạo trùng.'
         :'Yêu cầu đang chờ ở cửa sổ khác. Không gửi trùng.',error:true);
     }on ErpApiError catch(e){
       // Only explicit validation failures prove that the request was rolled back.

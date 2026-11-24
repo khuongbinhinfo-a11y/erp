@@ -217,6 +217,29 @@ void main(){
     await expectLater(store.saveScopedCart(a,'private',{'customerPhone':'0900000000'},owner:'person'),
       throwsA(isA<LocalRecoveryConflict>()));
   });
+  test('crash after pending write before cart reservation has fenced same-key replay',()async{
+    final store=ErpLocalStore(Memory());
+    await store.saveScopedCart(a,'cart-crash',{'lines':[{'quantity':'2'}]},owner:'original');
+    await store.saveSalesRecovery(a,{'kind':'create','key':'same-key',
+      'body':{'branchId':'b'},'cartId':'cart-crash','cartOwner':'original'});
+    expect(await store.cartCreateDisposition(a,'cart-crash',owner:'original',
+      commandKey:'same-key'),'editing');
+    await store.markCartSubmitting(a,'cart-crash',owner:'original',commandKey:'same-key');
+    expect(await store.cartCreateDisposition(a,'cart-crash',owner:'original',
+      commandKey:'same-key'),'submitted');
+    await store.saveSalesRecovery(a,null,expectedKey:'same-key');
+  });
+  test('pending original cannot replay after abandoned cart was taken over',()async{
+    final store=ErpLocalStore(Memory());
+    await store.saveScopedCart(a,'original',{'quantity':'4'},owner:'editor-one');
+    await store.releaseScopedCart(a,'original',owner:'editor-one');
+    await store.claimScopedCart(a,'original','resumed',owner:'editor-two');
+    expect(await store.cartCreateDisposition(a,'original',owner:'editor-one',
+      commandKey:'pending-old'),'never-submitted');
+    await expectLater(store.markCartSubmitting(a,'original',owner:'editor-one',
+      commandKey:'pending-old'),throwsA(isA<LocalRecoveryConflict>()));
+    await store.markCartSubmitting(a,'resumed',owner:'editor-two',commandKey:'pending-new');
+  });
   test('cache expiry is explicit, never proof of a current price',()async{
     final store=ErpLocalStore(Memory());
     final time=DateTime.utc(2026,11,24);

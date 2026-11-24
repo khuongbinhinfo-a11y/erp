@@ -122,6 +122,7 @@ class ErpLocalStore {
       // Retired tombstones prevent the previous live editor resurrecting an ID.
       items[sourceId]={'_kind':'erp-cart-lease-v1','draft':<String,dynamic>{},
         'owner':from['owner'],'status':'retired','leaseUntil':0,
+        if({'editing','released'}.contains(from['status']))'neverSubmitted':true,
         if(from['status']=='rejected'&&from['commandKey'] is String)
           'rejectedCommandKey':from['commandKey']};
       items[newId]={'_kind':'erp-cart-lease-v1','draft':cart,'status':'editing',
@@ -175,6 +176,9 @@ class ErpLocalStore {
     if(entry['status']=='submitted'&&entry['commandKey']==commandKey)return 'submitted';
     if(entry['status']=='rejected'&&entry['commandKey']==commandKey)return 'rejected';
     if(entry['status']=='retired'&&entry['rejectedCommandKey']==commandKey)return 'rejected';
+    if(entry['status']=='retired'&&entry['neverSubmitted']==true)return 'never-submitted';
+    if(entry['status']=='released')return 'never-submitted';
+    if(entry['status']=='editing')return 'editing';
     return 'unknown';
   }
   Future<void> clearScopedCart(LocalScope scope,String id,{required String owner,String? commandKey})async{
