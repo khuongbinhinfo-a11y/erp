@@ -1,4 +1,9 @@
 import test from "node:test";
+import { Pool } from "pg";
+import { randomUUID } from "node:crypto";
+import { resolve } from "node:path";
+import { applyMigrations } from "./migrate.ts";
+
 import assert from "node:assert/strict";
 import { checkCreate, parseEdit, CatalogError } from "./catalog_http.ts";
 import { parseCustomerLocation, CustomerLocationFault } from "./catalog_customer_locations.ts";
@@ -51,4 +56,82 @@ test("product CSV/XLSX mapping recognizes Vietnamese brand and category codes",(
   assert.equal(mapping.code,"Mã sản phẩm");
   assert.equal(mapping.brandCode,"Nhãn hàng");
   assert.equal(mapping.categoryCode,"Mã danh mục");
+});
+
+test("PG16+: nested categories forbid cycles, wrong group and multiple defaults",{
+  skip:!process.env.DATABASE_URL
+},async()=>{
+  const base=process.env.DATABASE_URL!;
+  const admin=new Pool({connectionString:base,max:1});
+  const name="erp_catalog_tree_"+randomUUID().replaceAll("-","").slice(0,12);
+  let db:Pool|null=null;
+  try{
+    await admin.query('CREATE DATABASE "'+name+'"');
+    const uri=new URL(base);uri.pathname="/"+name;
+    db=new Pool({connectionString:uri.toString(),max:2});
+    const migrated=await applyMigrations(db,resolve(process.cwd(),"db/migrations"));
+    assert.equal(migrated.applied.length,20);
+    const installation=(await db.query<{id:string}>(`
+      INSERT INTO installation(code,display_name) VALUES($1,$2) RETURNING id`,
+      ["tree-"+randomUUID().slice(0,8),"Tree test"])).rows[0]!.id;
+    const branchId=(await db.query<{id:string}>(`
+      INSERT INTO branch(installation_id,code,name)
+      VALUES($1,'MAIN','Main') RETURNING id`,[installation])).rows[0]!.id;
+    const brandId=(await db.query<{id:string}>(`
+      INSERT INTO catalog_brand(installation_id,branch_id,code,name)
+      VALUES($1,$2,'NATURE','Nature') RETURNING id`,
+      [installation,branchId])).rows[0]!.id;
+    const groupId=(await db.query<{id:string}>(`
+      INSERT INTO catalog_product_group(installation_id,branch_id,code,name,brand_id)
+      VALUES($1,$2,'TAP','Tập HS/SV',$3) RETURNING id`,
+      [installation,branchId,brandId])).rows[0]!.id;
+    const otherGroupId=(await db.query<{id:string}>(`
+      INSERT INTO catalog_product_group(installation_id,branch_id,code,name)
+      VALUES($1,$2,'PAPER','Giấy') RETURNING id`,
+      [installation,branchId])).rows[0]!.id;
+    const parentId=(await db.query<{id:string}>(`
+      INSERT INTO catalog_product_category(installation_id,branch_id,group_id,code,name)
+      VALUES($1,$2,$3,'F04','100gsm') RETURNING id`,
+      [installation,branchId,groupId])).rows[0]!.id;
+    const childId=(await db.query<{id:string}>(`
+      INSERT INTO catalog_product_category(installation_id,branch_id,group_id,parent_id,code,name)
+      VALUES($1,$2,$3,$4,'F04NA','Nature') RETURNING id`,
+      [installation,branchId,groupId,parentId])).rows[0]!.id;
+    await assert.rejects(db.query(`
+      UPDATE catalog_product_category SET parent_id=$4
+      WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,
+      [installation,branchId,parentId,childId]),{code:"23514"});
+    await assert.rejects(db.query(`
+      INSERT INTO catalog_product_category(installation_id,branch_id,group_id,parent_id,code,name)
+      VALUES($1,$2,$3,$4,'BAD','Sai nhóm')`,
+      [installation,branchId,otherGroupId,parentId]),{code:"23503"});
+    const customerId=(await db.query<{id:string}>(`
+      INSERT INTO catalog_customer(installation_id,branch_id,code,name)
+      VALUES($1,$2,'KH01','Khách nhiều cửa hàng') RETURNING id`,
+      [installation,branchId])).rows[0]!.id;
+    await db.query(`
+      INSERT INTO catalog_customer_location
+      (installation_id,branch_id,customer_id,code,name,address,is_default)
+      VALUES($1,$2,$3,'CH01','Cửa hàng 1','Số 1',true)`,
+      [installation,branchId,customerId]);
+    await assert.rejects(db.query(`
+      INSERT INTO catalog_customer_location
+      (installation_id,branch_id,customer_id,code,name,address,is_default)
+      VALUES($1,$2,$3,'CH02','Cửa hàng 2','Số 2',true)`,
+      [installation,branchId,customerId]),{code:"23505"});
+    await db.query(`
+      INSERT INTO catalog_customer_location
+      (installation_id,branch_id,customer_id,code,name,address)
+      VALUES($1,$2,$3,'CH02','Cửa hàng 2','Số 2')`,
+      [installation,branchId,customerId]);
+    const total=await db.query<{n:string}>(`
+      SELECT count(*)::text AS n FROM catalog_customer_location
+      WHERE installation_id=$1 AND branch_id=$2 AND customer_id=$3`,
+      [installation,branchId,customerId]);
+    assert.equal(total.rows[0]!.n,"2");
+  }finally{
+    if(db)await db.end();
+    await admin.query('DROP DATABASE IF EXISTS "'+name+'" WITH (FORCE)');
+    await admin.end();
+  }
 });
