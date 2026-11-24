@@ -334,6 +334,66 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
    {branchId:b},"p0-manual-confirm-"+randomUUID());
   assert.equal(manualConfirmed.status,200,JSON.stringify(manualConfirmed.body));
 
+  // P0: create/edit multi-scope arrays in ONE audited price-list mutation.
+  const atomicList=await legacy("price-lists",{
+    code:"P0-ATOMIC",name:"Bảng phạm vi kết hợp",
+    effectiveFrom:"2026-11-18T00:00:00Z",
+    effectiveTo:"2026-11-19T00:00:00Z",priority:5,
+    channelIds:[channel.body.id,anotherChannel.body.id],
+    customerGroupIds:[vipGroup.body.id,standardGroup.body.id],
+    customerIds:[c1.body.id],stackingMode:"STACKABLE",stopProcessing:false,
+  });
+  assert.equal(atomicList.status,201,JSON.stringify(atomicList.body));
+  const scopeRead=()=>request("/v1/catalog/price-lists/assignments?branchId="+b+
+    "&priceListId="+atomicList.body.id,"GET",undefined,token);
+  const scopeRows=(await scopeRead()).body.items;
+  assert.equal(scopeRows.filter((x:any)=>x.active).length,5,
+    "one form creates all channel/group/customer assignments atomically");
+  assert.equal((await r1("rules",{priceListId:atomicList.body.id,sellSkuId:baseSku,
+    scopeKind:"BASE",adjustment:"FIXED_PRICE",amount:"9800",
+    effectiveFrom:"2026-11-17T00:00:00Z"})).status,201);
+  const promoList=await legacy("price-lists",{code:"P0-PROMO",
+    name:"Giảm giá thêm",stackingMode:"STACKABLE"});
+  assert.equal(promoList.status,201,JSON.stringify(promoList.body));
+  for(const target of [
+    {scopeKind:"CHANNEL",channelId:channel.body.id},
+    {scopeKind:"CUSTOMER_GROUP",customerGroupId:vipGroup.body.id},
+  ]){
+    const assign=await write("/v1/catalog/price-lists/assignments",{
+      priceListId:promoList.body.id,priority:1,...target});
+    assert.equal(assign.status,201,JSON.stringify(assign.body));
+  }
+  const promotion=await r1("rules",{priceListId:promoList.body.id,
+    sellSkuId:baseSku,scopeKind:"CUSTOMER_GROUP",customerGroup:"VIP",
+    adjustment:"PERCENT_DISCOUNT",amount:"5",
+    priority:15,stacking:"STACKABLE",effectiveFrom:"2026-11-17T00:00:00Z"});
+  assert.equal(promotion.status,201,JSON.stringify(promotion.body));
+  const quoteAtomic=(customerId:string,channelId:string)=>resolvePrice({
+    priceListId:atomicList.body.id,sellSkuId:baseSku,
+    quantity:"1",customerId,channelId,priceAt:"2026-11-18T12:00:00Z"});
+  const stacked=await quoteAtomic(c1.body.id,channel.body.id);
+  assert.equal(stacked.status,200,JSON.stringify(stacked.body));
+  assert.equal(Number(stacked.body.quote.unitPrice),9310,
+    "matching stackable discount on a different list is applied exactly once");
+  assert.equal(Number((await quoteAtomic(c2.body.id,channel.body.id))
+    .body.quote.unitPrice),9800,"nonmatching customer group cannot borrow VIP discount");
+  const stop=await request("/v1/catalog/price-lists/"+atomicList.body.id,"PATCH",{
+    branchId:b,stopProcessing:true},token,{
+    "if-match":"0","idempotency-key":"p0-stop-"+randomUUID()});
+  assert.equal(stop.status,200,JSON.stringify(stop.body));
+  assert.equal(Number((await quoteAtomic(c1.body.id,channel.body.id))
+    .body.quote.unitPrice),9800,"stop processing prevents cross-list discount");
+  const narrowed=await request("/v1/catalog/price-lists/"+atomicList.body.id,"PATCH",{
+    branchId:b,stopProcessing:false,
+    channelIds:[channel.body.id],customerGroupIds:[vipGroup.body.id],
+    customerIds:[],defaultAssignment:false},token,{
+    "if-match":"1","idempotency-key":"p0-narrow-"+randomUUID()});
+  assert.equal(narrowed.status,200,JSON.stringify(narrowed.body));
+  assert.equal((await scopeRead()).body.items.filter((x:any)=>x.active).length,2,
+    "scope edit leaves retired assignment history instead of deleting");
+  assert.equal((await quoteAtomic(c2.body.id,channel.body.id)).status,409,
+    "both scoped dimensions must match after scope correction");
+
   // R1-C.1: selection stays on the existing SKU pricing engine, with
   // strict list windows, scoped priority, concurrency, RBAC, and replay.
   assert.equal((await legacy("price-lists",{code:"BAD-WINDOW",name:"Sai thời hạn",
