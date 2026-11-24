@@ -32,6 +32,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
   final search=TextEditingController();
   final inlineAmount=TextEditingController(),inlineDiscount=TextEditingController();
   String? inlinePriceId,assignmentListId,priceSkuListId,selectedPriceListId;
+  String? priceEditorMode; // Closed unless a price-list action is explicitly selected.
 
   static const tabs=<String,List<ErpSectionTab<String>>>{
     'customers':[
@@ -84,7 +85,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
     super.didUpdateWidget(oldWidget);
     if(oldWidget.session.token!=widget.session.token ||
       oldWidget.client!=widget.client || oldWidget.area!=widget.area){
-      requestSerial++;items=[];branches=[];branchId=null;inlinePriceId=null;assignmentListId=null;priceSkuListId=null;selectedPriceListId=null;
+      requestSerial++;items=[];branches=[];branchId=null;inlinePriceId=null;assignmentListId=null;priceSkuListId=null;selectedPriceListId=null;priceEditorMode=null;
       productWriteReady=false;resource=widget.area;search.clear();
       _loadBranches();
     }
@@ -203,7 +204,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
   void _changeResource(String next){
     if(next==resource)return;
     setState((){
-      resource=next;search.clear();items=[];productWriteReady=false;inlinePriceId=null;assignmentListId=null;priceSkuListId=null;selectedPriceListId=null;
+      resource=next;search.clear();items=[];productWriteReady=false;inlinePriceId=null;assignmentListId=null;priceSkuListId=null;selectedPriceListId=null;priceEditorMode=null;
     });
     _loadRecords();
   }
@@ -1743,49 +1744,71 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                 'Mã SKU và mã vạch không phải mã ĐVT.',
                 style:TextStyle(color:ErpTokens.muted,fontSize:12))),
             const SizedBox(height:12),
-            TextField(key:const ValueKey('catalog-search'),
-              controller:search,
-              onSubmitted:(_)=>_loadRecords(),
-              decoration:InputDecoration(
-                labelText:'Tìm trong ${titles[resource]!.toLowerCase()}',
-                hintText:'Nhập mã hoặc tên rồi nhấn Enter',
-                prefixIcon:const Icon(Icons.search),
-                suffixIcon:IconButton(tooltip:'Tìm kiếm',
-                  onPressed:_loadRecords,icon:const Icon(Icons.arrow_forward))),
-            ),
-            const SizedBox(height:14),
-            if(resource=='price-lists'&&items.isNotEmpty&&branchId!=null)...[
-              Padding(padding:const EdgeInsets.only(bottom:10),child:
-                DropdownButtonFormField<String>(
-                  key:ValueKey('price-workspace-selected-'+selectedPriceListId.toString()),
-                  initialValue:items.any((x)=>x['id']==selectedPriceListId)
-                    ?selectedPriceListId:null,
-                  isExpanded:true,
-                  decoration:const InputDecoration(labelText:'Bảng giá đang quản lý',
-                    prefixIcon:Icon(Icons.price_change_outlined)),
-                  items:items.map((x)=>DropdownMenuItem<String>(
-                    value:x['id'].toString(),
-                    child:Text((x['name']??x['code']).toString(),
-                      overflow:TextOverflow.ellipsis))).toList(),
-                  onChanged:(id)=>setState(()=>selectedPriceListId=id))),
-              if(selectedPriceListId!=null&&items.any((x)=>x['id']==selectedPriceListId))...[
+            LayoutBuilder(builder:(context,constraints){
+              final compact=constraints.maxWidth<700;
+              final searchField=TextField(
+                key:const ValueKey('catalog-search'),
+                controller:search,onSubmitted:(_)=>_loadRecords(),
+                decoration:InputDecoration(
+                  labelText:'Tìm trong ${titles[resource]!.toLowerCase()}',
+                  prefixIcon:const Icon(Icons.search),
+                  suffixIcon:IconButton(tooltip:'Tìm kiếm',
+                    onPressed:_loadRecords,icon:const Icon(Icons.arrow_forward))));
+              final selector=DropdownButtonFormField<String>(
+                key:ValueKey('price-workspace-selected-${selectedPriceListId.toString()}'),
+                initialValue:items.any((x)=>x['id']==selectedPriceListId)
+                  ?selectedPriceListId:null,
+                isExpanded:true,
+                decoration:const InputDecoration(labelText:'Bảng giá',
+                  prefixIcon:Icon(Icons.price_change_outlined)),
+                items:items.map((x)=>DropdownMenuItem<String>(
+                  value:x['id'].toString(),
+                  child:Text((x['name']??x['code']).toString(),
+                    overflow:TextOverflow.ellipsis))).toList(),
+                onChanged:(id)=>setState((){
+                  selectedPriceListId=id;
+                  priceEditorMode=null;
+                }));
+              if(resource!='price-lists'||items.isEmpty)return searchField;
+              if(compact)return Column(children:[
+                searchField,const SizedBox(height:8),selector,
+              ]);
+              return Row(children:[
+                Expanded(child:searchField),const SizedBox(width:10),
+                SizedBox(width:270,child:selector),
+              ]);
+            }),
+            if(resource=='price-lists'&&priceEditorMode!=null&&
+                selectedPriceListId!=null&&items.any((x)=>x['id']==selectedPriceListId))...[
+              const SizedBox(height:12),
+              Row(children:[
+                Expanded(child:Text(
+                  priceEditorMode=='sku'?'Chỉnh giá theo SKU':
+                  priceEditorMode=='assignment'?'Áp dụng bảng giá':'Nhập / xuất giá',
+                  style:const TextStyle(fontWeight:FontWeight.w700))),
+                IconButton(
+                  tooltip:'Đóng thao tác',
+                  onPressed:()=>setState(()=>priceEditorMode=null),
+                  icon:const Icon(Icons.close)),
+              ]),
+              if(priceEditorMode=='sku')
                 PriceSkuBatchPanel(
                   key:ValueKey('price-skus-'+branchId!+'-'+selectedPriceListId!),
                   client:widget.client,session:widget.session,branchId:branchId!,
                   priceList:items.firstWhere((x)=>x['id']==selectedPriceListId),
-                  canWrite:canWrite,onClose:(){}),
+                  canWrite:canWrite,onClose:()=>setState(()=>priceEditorMode=null)),
+              if(priceEditorMode=='assignment')
                 PriceListAssignmentsPanel(
                   key:ValueKey('assign-'+branchId!+'-'+selectedPriceListId!),
                   client:widget.client,session:widget.session,branchId:branchId!,
                   priceList:items.firstWhere((x)=>x['id']==selectedPriceListId),
-                  canWrite:canWrite,onClose:(){}),
-                Padding(padding:const EdgeInsets.only(top:14),
-                  child:CatalogBulkWorkspace(
-                    key:ValueKey('price-import-'+branchId!+'-'+selectedPriceListId!),
-                    client:widget.client,session:widget.session,
-                    branchId:branchId,canWrite:canWrite,
-                    initialArea:'price-lists',initialPriceListId:selectedPriceListId)),
-              ],
+                  canWrite:canWrite,onClose:()=>setState(()=>priceEditorMode=null)),
+              if(priceEditorMode=='import')
+                CatalogBulkWorkspace(
+                  key:ValueKey('price-import-'+branchId!+'-'+selectedPriceListId!),
+                  client:widget.client,session:widget.session,
+                  branchId:branchId,canWrite:canWrite,
+                  initialArea:'price-lists',initialPriceListId:selectedPriceListId),
             ],
             if(loading)const Center(child:Padding(
               padding:EdgeInsets.all(20),child:CircularProgressIndicator()))
@@ -1823,7 +1846,11 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                           keyboardType:const TextInputType.numberWithOptions(decimal:true),
                           decoration:const InputDecoration(
                             labelText:'CK %',isDense:true)))
-                    : Text(_cell(entry,c.$1))),
+                    : Text(_cell(entry,c.$1),
+                        style:c.$1=='active'?TextStyle(
+                          fontWeight:FontWeight.w700,
+                          color:entry['active']==true
+                            ?ErpTokens.primary:ErpTokens.danger):null)),
                   if(canEdit||resource=='prices')DataCell(
                     resource=='prices'
                       ? (!canWrite?const Text('—'):
@@ -1850,20 +1877,19 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                             icon:const Icon(Icons.edit_outlined,size:18),
                             tooltip:'Sửa/ngừng sử dụng',
                             onPressed:saving?null:()=>_edit(entry)),
-                          if(resource=='price-lists')TextButton.icon(
-                            key:ValueKey('catalog-price-list-assignment-'+entry['id'].toString()),
-                            icon:const Icon(Icons.groups_outlined,size:16),
-                            label:const Text('Áp dụng cho'),
-                            onPressed:()=>setState((){
+                          if(resource=='price-lists')PopupMenuButton<String>(
+                            key:ValueKey('catalog-price-list-actions-'+entry['id'].toString()),
+                            tooltip:'Tác vụ bảng giá',
+                            icon:const Icon(Icons.more_horiz,size:20),
+                            onSelected:(mode)=>setState((){
                               selectedPriceListId=entry['id'] as String;
-                            })),
-                          if(resource=='price-lists')TextButton.icon(
-                            key:ValueKey('catalog-price-list-sku-prices-'+entry['id'].toString()),
-                            icon:const Icon(Icons.price_change_outlined,size:16),
-                            label:const Text('Giá bán'),
-                            onPressed:saving?null:()=>setState((){
-                              selectedPriceListId=entry['id'] as String;
-                            })),
+                              priceEditorMode=mode;
+                            }),
+                            itemBuilder:(_)=>const [
+                              PopupMenuItem(value:'sku',child:Text('Giá bán')),
+                              PopupMenuItem(value:'assignment',child:Text('Áp dụng cho')),
+                              PopupMenuItem(value:'import',child:Text('Nhập / xuất')),
+                            ]),
                           if(resource=='price-lists')IconButton(
                             key:ValueKey('catalog-price-list-clone-'+entry['id'].toString()),
                             icon:const Icon(Icons.content_copy_outlined,size:18),
