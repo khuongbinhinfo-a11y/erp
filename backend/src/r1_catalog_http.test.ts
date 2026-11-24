@@ -398,7 +398,8 @@ test("R1: real PostgreSQL exact SKU price precedence, barcode, customer profile,
   const secondPromotion=await r1("rules",{priceListId:promoList.body.id,
     sellSkuId:baseSku,scopeKind:"PROMOTION",
     adjustment:"PERCENT_DISCOUNT",amount:"10",
-    priority:10,stacking:"STACKABLE",effectiveFrom:"2026-11-17T00:00:00Z"});
+    priority:10,stacking:"STACKABLE",effectiveFrom:"2026-11-17T00:00:00Z",
+    effectiveTo:"2026-11-19T00:00:00Z"});
   assert.equal(secondPromotion.status,201,JSON.stringify(secondPromotion.body));
   const promoStop=await request("/v1/catalog/price-lists/"+promoList.body.id,"PATCH",{
     branchId:b,stopProcessing:true},token,{
