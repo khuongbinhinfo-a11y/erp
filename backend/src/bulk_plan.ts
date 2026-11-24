@@ -211,7 +211,7 @@ const exactDecimal=(s:string|undefined,rx:RegExp,codeName:string,optional=false)
  if(!s||!rx.test(s))throw new BulkFault("INVALID_"+codeName);
  return s;
 };
-function normalizeRow(
+export function normalizeRow(
  resource:BulkResource,mode:BulkMode,raw:Record<string,string>,
  current:Record<string,any>|undefined,
  refs:{groups:Map<string,Record<string,any>>;regions:Map<string,Record<string,any>>;
