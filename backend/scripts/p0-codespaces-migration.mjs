@@ -1,10 +1,10 @@
 /**
- * ERP P0 price-list assignment, Codespaces-only production migration operator.
+ * ERP P0 price and order parity, Codespaces-only production migration operator.
  * Run from backend with: node --experimental-strip-types scripts/p0-codespaces-migration.mjs --check|--apply
  *
  * Production writes are gated by observed Compute maintenance mode.
  * A private, encrypted durable backup and its isolated read-back/restore are
- * mandatory before applying versioned migrations 0018.
+ * mandatory before applying versioned migration 0019.
  * NEVER print credentials, SQL driver errors, dump contents, or commercial rows.
  */
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -25,7 +25,7 @@ export const BASE = ["0001_identity.sql","0002_mutation_control.sql","0003_wareh
  "0013_r3_transfer_in_transit.sql","0014_r3_stocktake.sql",
  "0015_r1_unit_dictionary.sql","0016_r1_product_media.sql",
  "0017_r1a_customer_directories.sql", "0018_r1c_price_list_assignment.sql"];
-export const RELEASE = ["0018_p0_price_list_assignment.sql"];
+export const RELEASE = ["0019_p0_price_order_parity.sql"];
 const PROJECT="proj_ud3b1s5yn03vh0zp9cbs2upa";
 const DATABASE="db_jg2bl98hzi1jm06lwo0i4rqx";
 // Prisma Console display name differs from its opaque S3 provider bucket name.
