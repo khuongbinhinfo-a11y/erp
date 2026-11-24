@@ -950,6 +950,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                               });
                             }
                             groupId=savedId;
+                            categoryId=null; // A category cannot belong to two product groups.
                             groupBusy=false;newGroupCode.clear();newGroupName.clear();
                           });
                         }on ErpApiError catch(e){
