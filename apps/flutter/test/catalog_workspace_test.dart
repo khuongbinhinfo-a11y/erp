@@ -479,9 +479,7 @@ void main(){
       await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
         home:Scaffold(body:CompanyWorkspace(previewOnly:false,grants:grants,
           session:activeSession(),client:client))));
-      await openCompanyCatalog(tester,'products');
-      await tester.ensureVisible(find.byKey(const ValueKey('catalog-inner-price-lists')));
-      await tester.tap(find.byKey(const ValueKey('catalog-inner-price-lists')));
+      await openCompanyCatalog(tester,'prices');
       await tester.pumpAndSettle();
       await tester.runAsync(()async=>Future<void>.delayed(const Duration(milliseconds:120)));
       await tester.pumpAndSettle();
