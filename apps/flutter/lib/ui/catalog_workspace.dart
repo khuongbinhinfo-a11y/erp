@@ -1605,12 +1605,12 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
         content:Column(mainAxisSize:MainAxisSize.min,
           crossAxisAlignment:CrossAxisAlignment.start,children:[
             Text(q==null?'Chưa có giá hiệu lực':
-              erpDecimalText(q['amount'])+' '+q['currency'].toString(),
+              erpNumberText(q['amount'])+' '+q['currency'].toString(),
               key:const ValueKey('catalog-quote-result'),
               style:const TextStyle(fontSize:22,fontWeight:FontWeight.w800)),
             if(q!=null)...[
               const SizedBox(height:8),
-              Text('Chiết khấu: '+erpDecimalText(q['discountRate'])+'%'),
+              Text('Chiết khấu: '+erpNumberText(q['discountRate'])+'%'),
               Text('Hiệu lực: '+q['effectiveAt'].toString()),
             ],
             const SizedBox(height:12),
