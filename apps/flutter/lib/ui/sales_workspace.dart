@@ -20,13 +20,14 @@ class _OrderLine {
   String sellSkuId;
   final TextEditingController quantity,unitPrice,discountRate,taxRate;
   final FocusNode quantityFocus=FocusNode();
+  final FocusNode unitFocus=FocusNode();
   _OrderLine(this.sellSkuId,String value):
     quantity=TextEditingController(text:erpGroupedDecimalText(value)),
     unitPrice=TextEditingController(),
     discountRate=TextEditingController(text:'0'),
     taxRate=TextEditingController(text:'0');
   void dispose(){quantity.dispose();unitPrice.dispose();
-    discountRate.dispose();taxRate.dispose();quantityFocus.dispose();}
+    discountRate.dispose();taxRate.dispose();quantityFocus.dispose();unitFocus.dispose();}
 }
 class _SalesWorkspaceState extends State<SalesWorkspace> {
   List<Map<String,dynamic>> branches=[],orders=[];
@@ -343,6 +344,36 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       ?stockWarehouses.single['id'] as String:null;
     int priceGeneration=0,stockGeneration=0;
     Map<String,Map<String,dynamic>> skuQuotes={},stockByProduct={};
+    final variantsByProduct=<String,List<Map<String,dynamic>>>{};
+    final variantLoading=<String>{},variantFailed=<String>{};
+    Future<void> loadVariants(BuildContext ctx,StateSetter refresh,
+        String productId)async{
+      if(variantsByProduct.containsKey(productId)||
+          variantLoading.contains(productId)||variantFailed.contains(productId))return;
+      variantLoading.add(productId);
+      try{
+        final all=await widget.client.catalogProductSkusAll(widget.session.token,
+          branchId:branch,productId:productId);
+        if(!ctx.mounted)return;
+        refresh((){
+          variantsByProduct[productId]=all.where((x)=>x['active']==true).toList();
+          for(final variant in all){
+            if(!skus.any((x)=>x['id']==variant['id']))skus.add(variant);
+          }
+          variantLoading.remove(productId);
+        });
+      }on ErpApiError catch(e){
+        if(ctx.mounted)refresh((){
+          variantLoading.remove(productId);variantFailed.add(productId);
+          formError='Không tải đủ đơn vị bán cho sản phẩm: ${e.message}';
+        });
+      }catch(_){
+        if(ctx.mounted)refresh((){
+          variantLoading.remove(productId);variantFailed.add(productId);
+          formError='Chưa tải được các đơn vị bán của sản phẩm.';
+        });
+      }
+    }
     final skuResultScroll=ScrollController();
     String priceContext()=>[customer??'',list??'',channel??'',
       ...lines.map((line)=>line.sellSkuId+':'+erpNumberCanonical(line.quantity.text))].join('|');
@@ -501,6 +532,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       final id=item['id'] as String;
       if(lines.length>=30){refresh(()=>formError='Tối đa 30 dòng hàng.');return;}
       if(!skus.any((x)=>x['id']==id))skus.add(item);
+      loadVariants(ctx,refresh,item['productId'].toString());
       if(lines.any((x)=>x.sellSkuId==id)&&!starterUntouched){
         refresh(()=>formError='SKU đã có trong đơn. Hãy sửa số lượng tại dòng tương ứng.');
         return;
@@ -1211,7 +1243,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       child:Row(children:[
                         const Expanded(flex:5,child:Text('HÀNG HÓA / SKU',
                           style:TextStyle(fontWeight:FontWeight.w700,fontSize:11,color:ErpTokens.muted))),
-                        const SizedBox(width:60,child:Text('ĐVT',style:TextStyle(fontSize:11,color:ErpTokens.muted))),
+                        const SizedBox(width:92,child:Text('ĐVT',style:TextStyle(fontSize:11,color:ErpTokens.muted))),
                         const SizedBox(width:112,child:Text('SỐ LƯỢNG',style:TextStyle(fontSize:11,color:ErpTokens.muted))),
                         const SizedBox(width:112,child:Text('ĐƠN GIÁ',textAlign:TextAlign.right,
                           style:TextStyle(fontSize:11,color:ErpTokens.muted))),
@@ -1229,6 +1261,55 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       final name=(sku['productName']??sku['name']??'Sản phẩm').toString();
                       final code=(sku['code']??sku['sku']??'').toString();
                       final unit=(sku['unitCode']??'').toString();
+                      final productId=sku['productId'].toString();
+                      if(!variantsByProduct.containsKey(productId)&&
+                          !variantLoading.contains(productId)&&
+                          !variantFailed.contains(productId)){
+                        WidgetsBinding.instance.addPostFrameCallback((_){
+                          if(ctx.mounted)loadVariants(ctx,refresh,productId);
+                        });
+                      }
+                      final variants=variantsByProduct[productId];
+                      final unitChoices=<Map<String,dynamic>>[
+                        if(variants!=null)...variants,
+                        if(variants==null||
+                            !variants.any((x)=>x['id']==entry.sellSkuId))sku,
+                      ];
+                      final unitField=SizedBox(width:narrow?148:92,
+                        child:DropdownButtonFormField<String>(
+                          key:ValueKey('sales-unit-$i-${entry.sellSkuId}'),
+                          initialValue:entry.sellSkuId,
+                          focusNode:entry.unitFocus,isDense:true,isExpanded:true,
+                          menuMaxHeight:240,
+                          decoration:const InputDecoration(
+                            isDense:true,labelText:'ĐVT',
+                            border:UnderlineInputBorder(),
+                            contentPadding:EdgeInsets.symmetric(horizontal:3,vertical:4)),
+                          items:unitChoices.map((variant)=>DropdownMenuItem<String>(
+                            value:variant['id'] as String,
+                            child:Text((variant['unitCode']??'').toString(),
+                              maxLines:1,overflow:TextOverflow.ellipsis))).toList(),
+                          onChanged:variants==null||variants.length<2?null:(next){
+                            if(next==null||next==entry.sellSkuId)return;
+                            final options=variants.where((x)=>x['id']==next&&
+                              x['productId']==productId&&x['active']==true).toList();
+                            if(options.length!=1){
+                              refresh(()=>formError='Đơn vị bán đã chọn không còn hợp lệ.');
+                              return;
+                            }
+                            entry.sellSkuId=next;
+                            // The old unit's manual price, discount and tax
+                            // are not transferable to another exact SKU.
+                            entry.unitPrice.clear();
+                            entry.discountRate.text='0';
+                            entry.taxRate.text='0';
+                            if(!listManuallySelected&&lists.length>1){
+                              listResolveGeneration++;list=null;
+                              pricingChanged(ctx,refresh);
+                              resolveList(ctx,refresh,sellSkuId:next);
+                            }else{pricingChanged(ctx,refresh);}
+                          }));
+
                       final quote=ready&&i<quotes!.length?quotes![i]:null;
                       final price=quote==null?'—':money(quote['unitPrice']);
                       final lineTotal=quote==null?'—':money(quote['lineTotal']);
@@ -1297,7 +1378,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           lines.insert(i+1,next);
                           pricingChanged(ctx,refresh);
                           WidgetsBinding.instance.addPostFrameCallback((_){
-                            if(ctx.mounted)next.quantityFocus.requestFocus();
+                            if(ctx.mounted)next.unitFocus.requestFocus();
                           });
                         });
                       final previousPrice=IconButton(
@@ -1353,9 +1434,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                             // server-quoted amounts must not compete for
                             // horizontal space on 320px/360px phones.
                             Row(children:[
-                              Flexible(child:Text(unit,maxLines:2,
-                                overflow:TextOverflow.ellipsis,
-                                style:const TextStyle(color:ErpTokens.muted,fontSize:12))),
+                              unitField,
                               const SizedBox(width:12),
                               quantityField,
                             ]),
@@ -1371,8 +1450,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           ]):
                           Row(children:[
                             Expanded(flex:5,child:productName),
-                            SizedBox(width:60,child:Text(unit,
-                              style:const TextStyle(color:ErpTokens.muted))),
+                            unitField,
                             SizedBox(width:112,child:quantityField),
                             unitPriceField,discountField,taxField,
                             SizedBox(width:120,child:Text(lineTotal,textAlign:TextAlign.right,
