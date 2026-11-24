@@ -188,10 +188,8 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
     }
     final confirmed=await showDialog<bool>(context:context,
       builder:(dialog)=>AlertDialog(
-        title:const Text('Xác nhận cập nhật giá SKU'),
-        content:Text('Ghi ${selected.length} phiên bản giá mới. '
-          'Giá đang áp dụng được thay bằng phiên bản mới, '
-          'lịch sử đơn hàng đã xác nhận vẫn được giữ.'),
+        title:const Text('Lưu giá bán'),
+        content:Text('Cập nhật giá cho ${selected.length} mặt hàng? Đơn đã xác nhận không đổi.'),
         actions:[
           TextButton(onPressed:()=>Navigator.pop(dialog,false),
             child:const Text('Quay lại')),
@@ -276,7 +274,7 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
               icon:const Icon(Icons.search,size:17),
               label:const Text('Tìm')),
             OutlinedButton(onPressed:loading||saving?null:()=>setState((){
-              for(final row in rows){
+              for(final row in pageRows){
                 final id=row['id'].toString();
                 selected[id]=row;
                 final input=inputs.putIfAbsent(id,()=>TextEditingController());
@@ -284,7 +282,7 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
                   widget.session.actorId,widget.branchId,priceKind(id));
                 if(pending!=null)input.text=erpGroupedDecimalText(pending.payload['amount']);
               }
-            }),child:const Text('Chọn kết quả')),
+            }),child:const Text('Chọn trang')),
             TextButton(onPressed:saving?null:()=>setState((){
               selected.clear();
               for(final input in inputs.values){input.dispose();}
@@ -320,11 +318,11 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
                         maxLines:1,overflow:TextOverflow.ellipsis,
                         style:const TextStyle(fontWeight:FontWeight.w700,fontSize:13)),
                       Text('${sku['code']??sku['sku']} · ${sku['unitCode']??''} '
-                        '· Giá cơ sở: ${current[id]??'Đang tải…'}',
+                        '· Giá cơ sở: ${current[id]??(reading.contains(id)?'Đang tải…':'Chưa tải')}',
                         maxLines:2,overflow:TextOverflow.ellipsis,
                         style:const TextStyle(fontSize:11,color:ErpTokens.muted)),
                     ])),
-                  if(current[id]=='Không tải được giá')IconButton(
+                  if(current[id]=='Không tải được giá'||(current[id]==null&&!pageRows.any((r)=>r['id'].toString()==id)&&!reading.contains(id)))IconButton(
                     tooltip:'Tải lại giá',
                     onPressed:(){setState(()=>current.remove(id));loadCurrent(id);},
                     icon:const Icon(Icons.refresh,size:18)),
