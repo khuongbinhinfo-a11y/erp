@@ -343,7 +343,16 @@ async function listing(db:PoolClient,t:string,b:string,kind:Kind,q:string,skuId?
   const filters:string[]=[];
   const params:(string|null)[]=[t,b,"%"+q+"%"];
   if(scope?.groupId){params.push(scope.groupId);filters.push(`p.group_id=${params.length}::uuid`);}
-  if(scope?.categoryId){params.push(scope.categoryId);filters.push(`p.category_id=${params.length}::uuid`);}
+  if(scope?.categoryId){params.push(scope.categoryId);filters.push(`p.category_id IN (
+    WITH RECURSIVE descendants(id) AS (
+      SELECT id FROM catalog_product_category
+       WHERE installation_id=p.installation_id AND branch_id=p.branch_id
+         AND id=${params.length}::uuid
+      UNION ALL
+      SELECT c.id FROM catalog_product_category c JOIN descendants d
+        ON c.parent_id=d.id
+       WHERE c.installation_id=p.installation_id AND c.branch_id=p.branch_id
+    ) SELECT id FROM descendants)`);}
   if(scope?.brandId){params.push(scope.brandId);
     filters.push(`EXISTS (SELECT 1 FROM catalog_product_group g WHERE
       g.installation_id=p.installation_id AND g.branch_id=p.branch_id
