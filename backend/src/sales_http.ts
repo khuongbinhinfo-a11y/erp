@@ -176,7 +176,8 @@ async function previewOrder(db:PoolClient,t:string,input:QuoteInput){
   return {branchId:b,customerId,priceListId,channelId:channelId??null,
     priceAt:at,lines,subtotal:sums.rows[0]!.subtotal,
     discountTotal:sums.rows[0]!.discount,taxTotal:sums.rows[0]!.tax,
-    grandTotal:total,currency:"VND",taxPolicy:"USER_ENTERED",
+    grandTotal:total,currency:"VND",
+    taxPolicy:lines.some(line=>"manualOverride" in line)?"USER_ENTERED":"NOT_CONFIGURED",
     fulfillmentStatus:"NOT_ALLOCATED",deliveryStatus:"NOT_DISPATCHED",
     paymentStatus:"NOT_DUE"};
 }
