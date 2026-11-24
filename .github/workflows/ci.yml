@@ -242,7 +242,7 @@ jobs:
         run: flutter test
       - name: Build Flutter Web release (UI only)
         working-directory: apps/flutter
-        run: flutter build web --release
+        run: bash build-vercel.sh
 
   native-android:
     name: flutter-android-native-build

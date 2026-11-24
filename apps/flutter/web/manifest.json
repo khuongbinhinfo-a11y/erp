@@ -1,0 +1,23 @@
+{
+  "id": "/",
+  "name": "ERP phân phối",
+  "short_name": "ERP",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#F5F8F6",
+  "theme_color": "#176B46",
+  "lang": "vi",
+  "icons": [
+    {
+      "src": "icons/erp-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icons/erp-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
