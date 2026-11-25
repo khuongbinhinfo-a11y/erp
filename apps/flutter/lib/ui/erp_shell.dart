@@ -305,7 +305,7 @@ class _ErpShellState extends State<ErpShell> {
     } else if(mobile&&selected==3){
       content = _MobileRetailEntry(onOrders:canCompanySection(CompanySection.orders)?()=>_selectSection(CompanySection.orders):null);
     } else {
-      content = _FeaturePage(feature: erpFeatures[selected]);
+      content = _FeaturePage(feature: erpFeatures[selected],mobile:mobile);
     }
     return AnimatedSwitcher(
       duration: MediaQuery.of(context).disableAnimations
@@ -604,16 +604,18 @@ class _Navigation extends StatelessWidget {
 
 class _FeaturePage extends StatelessWidget {
   final ErpFeature feature;
-  const _FeaturePage({required this.feature});
+  final bool mobile;
+  const _FeaturePage({required this.feature,this.mobile=false});
 
   @override
   Widget build(BuildContext context) {
     return Column(children: [
-      Padding(padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+      if(!mobile)Padding(padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
         child: ErpPageHeader(
-          heading: feature.title, subtitle: feature.subtitle, icon: feature.icon)),
+          heading: feature.title, subtitle: feature.subtitle, icon: feature.icon))
+      else Padding(padding:const EdgeInsets.fromLTRB(16,8,16,0),child:Text(feature.subtitle)),
       Expanded(child: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
+        padding: EdgeInsets.all(mobile?12:24),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           const SizedBox(height: 20),
           Card(
@@ -682,8 +684,6 @@ class _MobileRetailEntry extends StatelessWidget {
   const _MobileRetailEntry({this.onOrders});
   @override Widget build(BuildContext context)=>ListView(
     padding:const EdgeInsets.all(16),children:[
-      Text('Bán lẻ',style:Theme.of(context).textTheme.headlineSmall),
-      const SizedBox(height:8),
       const Text('Chọn hàng và lập đơn bán hàng trong hệ thống. Thanh toán tại quầy sẽ được bổ sung khi nghiệp vụ POS sẵn sàng.'),
       const SizedBox(height:16),
       if(onOrders!=null)FilledButton.icon(key:const ValueKey('erp-mobile-retail-orders'),

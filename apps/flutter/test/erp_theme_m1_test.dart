@@ -43,8 +43,10 @@ void main(){
 
   testWidgets('mobile nav five permitted destinations and theme switch preserves search',(tester)async{
     SharedPreferences.setMockInitialValues({});
-    await tester.binding.setSurfaceSize(const Size(360,760));
-    addTearDown(()=>tester.binding.setSurfaceSize(null));
+    tester.view.devicePixelRatio=1;
+    tester.view.physicalSize=const Size(360,760);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(const ErpApp(previewMode:true,initialThemeMode:ThemeMode.light));
     await tester.pumpAndSettle();
     final bar=find.byKey(const ValueKey('erp-mobile-navigation'));
@@ -72,8 +74,10 @@ void main(){
     SharedPreferences.setMockInitialValues({});
     tester.binding.platformDispatcher.platformBrightnessTestValue=Brightness.dark;
     addTearDown(tester.binding.platformDispatcher.clearPlatformBrightnessTestValue);
-    await tester.binding.setSurfaceSize(const Size(390,844));
-    addTearDown(()=>tester.binding.setSurfaceSize(null));
+    tester.view.devicePixelRatio=1;
+    tester.view.physicalSize=const Size(390,844);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(const ErpApp(previewMode:true,initialThemeMode:ThemeMode.system));
     await tester.pumpAndSettle();
     final bar=find.byKey(const ValueKey('erp-mobile-navigation'));
@@ -87,8 +91,10 @@ void main(){
   });
 
   testWidgets('restricted actor only gets authorized More destinations',(tester)async{
-    await tester.binding.setSurfaceSize(const Size(320,720));
-    addTearDown(()=>tester.binding.setSurfaceSize(null));
+    tester.view.devicePixelRatio=1;
+    tester.view.physicalSize=const Size(320,720);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
     final session=IdentitySession(
       actorId:'00000000-0000-4000-8000-000000000001',
       token:'example-token-not-for-network',

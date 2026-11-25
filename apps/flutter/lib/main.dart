@@ -141,12 +141,13 @@ class _ErpAppState extends State<ErpApp>{
       themeAnimationDuration:Duration.zero,
       builder:(context,child){
         final dark=Theme.of(context).brightness==Brightness.dark;
+        final brandLogin=!_restoring&&!preview&&_session==null;
         return AnnotatedRegion<SystemUiOverlayStyle>(
           value:SystemUiOverlayStyle(
             statusBarColor:Colors.transparent,
-            statusBarIconBrightness:dark?Brightness.light:Brightness.dark,
-            systemNavigationBarColor:ErpPalette.of(context).surface,
-            systemNavigationBarIconBrightness:dark?Brightness.light:Brightness.dark,
+            statusBarIconBrightness:(dark||brandLogin)?Brightness.light:Brightness.dark,
+            systemNavigationBarColor:brandLogin?ErpTokens.sidebar:ErpPalette.of(context).surface,
+            systemNavigationBarIconBrightness:(dark||brandLogin)?Brightness.light:Brightness.dark,
           ),child:child!);
       },
       home:_restoring

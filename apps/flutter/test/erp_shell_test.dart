@@ -15,8 +15,10 @@ void main() {
   });
 
   testWidgets('mobile shell opens bottom navigation and More modules', (tester) async {
-    await tester.binding.setSurfaceSize(const Size(390, 844));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+    tester.view.devicePixelRatio=1;
+    tester.view.physicalSize=const Size(390,844);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(const ErpApp(previewMode:true));
     await tester.tap(find.byKey(const ValueKey('erp-mobile-more')));
     await tester.pumpAndSettle();
@@ -45,8 +47,10 @@ testWidgets('Công Ty quick navigation opens typed empty register and search is 
 });
 
 testWidgets('Quản trị shows roles as read-only and does not invent users', (tester) async {
-  await tester.binding.setSurfaceSize(const Size(390, 844));
-  addTearDown(() => tester.binding.setSurfaceSize(null));
+  tester.view.devicePixelRatio=1;
+  tester.view.physicalSize=const Size(390,844);
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
   await tester.pumpWidget(const ErpApp(previewMode:true));
   await tester.tap(find.byKey(const ValueKey('erp-mobile-more')));
   await tester.pumpAndSettle();
@@ -83,8 +87,10 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
   });
 
   testWidgets('toast auto dismisses once and never reappears on navigation', (tester) async {
-    await tester.binding.setSurfaceSize(const Size(390, 844));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+    tester.view.devicePixelRatio=1;
+    tester.view.physicalSize=const Size(390,844);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(const ErpApp(previewMode:true));
     expect(find.byKey(const ValueKey('erp-startup-toast')), findsOneWidget);
     await tester.pump(const Duration(seconds: 5));
@@ -328,8 +334,10 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
   });
 
   testWidgets('mobile login keeps the form readable without the desktop art panel', (tester) async {
-    await tester.binding.setSurfaceSize(const Size(390, 844));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+    tester.view.devicePixelRatio=1;
+    tester.view.physicalSize=const Size(390,844);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(const ErpApp());
     expect(find.byKey(const ValueKey('login-panel-photo')), findsNothing);
     expect(find.byKey(const ValueKey('login-name')), findsOneWidget);

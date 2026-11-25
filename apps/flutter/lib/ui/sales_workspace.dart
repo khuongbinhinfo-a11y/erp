@@ -2812,7 +2812,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         'PAID'=>'Đã thanh toán',_=>'Chưa xử lý',
       };
     }
-    Widget statusInfo(String title,String value,IconData icon)=>Container(
+    Widget statusInfo(BuildContext context,String title,String value,IconData icon)=>Container(
       width:195,padding:const EdgeInsets.all(12),
       decoration:BoxDecoration(
         border:Border(bottom:BorderSide(color:ErpPalette.of(context).border))),
@@ -2859,14 +2859,14 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                   color:ErpPalette.of(ctx).ink,fontWeight:FontWeight.w800,fontSize:17)),
                 const SizedBox(height:10),
                 Wrap(spacing:8,runSpacing:8,children:[
-                  statusInfo('Thương mại',stateOf(item),Icons.assignment_turned_in_outlined),
-                  statusInfo('Kho',
+                  statusInfo(ctx,'Thương mại',stateOf(item),Icons.assignment_turned_in_outlined),
+                  statusInfo(ctx,'Kho',
                     statusText((item['fulfillmentStatus']??'').toString(),'fulfillment'),
                     Icons.inventory_2_outlined),
-                  statusInfo('Giao hàng',
+                  statusInfo(ctx,'Giao hàng',
                     statusText((item['deliveryStatus']??'').toString(),'delivery'),
                     Icons.local_shipping_outlined),
-                  statusInfo('Thanh toán',
+                  statusInfo(ctx,'Thanh toán',
                     statusText((item['paymentStatus']??'').toString(),'payment'),
                     Icons.account_balance_wallet_outlined),
                 ]),

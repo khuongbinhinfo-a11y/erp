@@ -124,16 +124,16 @@ class _ErpLoginState extends State<ErpLogin>{
                           filterQuality: FilterQuality.medium,
                           excludeFromSemantics: true,
                         ),
-                        const DecoratedBox(
+                        DecoratedBox(
                           decoration: BoxDecoration(
                             gradient: LinearGradient(
                               begin: Alignment.topCenter,
                               end: Alignment.bottomCenter,
                               stops: [0, 0.52, 1],
                               colors: [
-                                Color(0xEF102E24),
-                                Color(0xC4102E24),
-                                Color(0x18102E24),
+                                const Color(0xEF102E24),
+                                const Color(0xC4102E24),
+                                ErpPalette.of(context).dark?const Color(0xB0102E24):const Color(0x18102E24),
                               ],
                             ),
                           ),
