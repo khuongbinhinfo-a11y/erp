@@ -12,12 +12,21 @@ void main(){
     expect(()=>ErpAndroidRelease.parse({...manifest,'packageName':'foreign.app'}),throwsFormatException);
   });
   test('download ticket accepts only same-origin authenticated path',(){
-    final now=DateTime.utc(2026,11,24),expires=now.add(const Duration(minutes:5)).toIso8601String();
-    final path='/v1/app/releases/download?versionCode=2&ticket=${'a'*64}';
+    final now=DateTime.utc(2026,11,24),expiration=now.add(const Duration(minutes:5));
+    final expires=expiration.toIso8601String();
+    final path='/v1/app/releases/download?versionCode=2&ticket=${'a'*64}&expires=${expiration.millisecondsSinceEpoch~/1000}';
     expect(erpUpdateTicketUri('https://erp.example',path,expires,now:now).host,'erp.example');
     for(final bad in ['https://other.example$path','//$path','/v1/catalog/secret']){
       expect(()=>erpUpdateTicketUri('https://erp.example',bad,expires,now:now),throwsFormatException);
     }
     expect(()=>erpUpdateTicketUri('https://erp.example',path,now.toIso8601String(),now:now),throwsFormatException);
+    for(final invalid in [
+      path.replaceFirst('expires=', 'expires=1&expires='),
+      path.replaceFirst('versionCode=2','versionCode=0'),
+      path.replaceFirst('expires=', 'expires=1'),
+      path+'&unexpected=1',
+    ]) {
+      expect(()=>erpUpdateTicketUri('https://erp.example',invalid,expires,now:now),throwsFormatException);
+    }
   });
 }

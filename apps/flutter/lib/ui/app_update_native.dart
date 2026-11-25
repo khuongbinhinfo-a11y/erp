@@ -10,6 +10,25 @@ import 'identity_client.dart';
 
 bool get erpAndroidUpdateSupported=>Platform.isAndroid;
 const _bridge=MethodChannel('erp/android_update');
+String _erpUpdateServerMessage(int status,String body){
+  String code='';
+  try{
+    final parsed=jsonDecode(body);
+    if(parsed is Map<String,dynamic>){
+      final error=parsed['error'];
+      if(error is Map<String,dynamic> && error['code'] is String)code=error['code'] as String;
+    }
+  }catch(_){}
+  if(code=='TICKET_DENIED')return 'Liên kết tải đã hết hạn hoặc quyền truy cập thay đổi. Hãy tải lại.';
+  if(code=='RELEASE_CHANGED')return 'Đã có bản phát hành khác. Hãy kiểm tra phiên bản lại.';
+  if(code=='RELEASE_INVALID')return 'Thông tin bản phát hành trên máy chủ không hợp lệ.';
+  if(status==401)return 'Phiên đăng nhập đã hết hạn. Hãy đăng nhập lại rồi kiểm tra cập nhật.';
+  if(status==403)return 'Tài khoản không được phép tải bản cập nhật.';
+  if(status==404)return 'Không tìm thấy bản cập nhật đã phát hành.';
+  if(status==409)return 'Bản phát hành đã thay đổi. Hãy kiểm tra lại.';
+  if(status==503)return 'Máy chủ cập nhật Android chưa sẵn sàng. Vui lòng thử lại sau.';
+  return 'Không thể kiểm tra bản cập nhật (HTTP $status). Hãy thử lại.';
+}
 /// Automatic Android-only check at session start, without blocking ERP work.
 Future<String?> erpAndroidQuietUpdateVersion(ErpIdentityClient client,IdentitySession session)async{
   if(!Platform.isAndroid||!session.expiresAt.isAfter(DateTime.now()))return null;
@@ -77,7 +96,7 @@ class _UpdateDialogState extends State<_UpdateDialog>{
     final streamed=await _control.send(request).timeout(const Duration(seconds:20));
     final response=await http.Response.fromStream(streamed).timeout(const Duration(seconds:20));
     _ensureScope();
-    if(response.statusCode!=200)throw const FormatException('Không thể kiểm tra bản cập nhật. Hãy thử lại.');
+    if(response.statusCode!=200)throw FormatException(_erpUpdateServerMessage(response.statusCode,response.body));
     final data=jsonDecode(response.body);
     if(data is! Map<String,dynamic>)throw const FormatException('Bản cập nhật không hợp lệ.');
     return data;
@@ -134,6 +153,12 @@ class _UpdateDialogState extends State<_UpdateDialog>{
           if(offset>0)request.headers['range']='bytes=$offset-';
           final response=await client.send(request).timeout(const Duration(seconds:25));
           _ensureScope();
+          if(response.statusCode==401||response.statusCode==403){
+            throw const FormatException('Phiên tải đã hết hạn hoặc quyền truy cập thay đổi. Hãy đăng nhập và thử lại.');
+          }
+          if(response.statusCode==404||response.statusCode==409){
+            throw const FormatException('Bản phát hành đã thay đổi. Hãy kiểm tra cập nhật lại.');
+          }
           final expected=offset>0?206:200;
           if(response.statusCode!=expected||response.contentLength!=release.size-offset||
               (offset>0&&response.headers['content-range']!='bytes $offset-${release.size-1}/${release.size}')){
@@ -181,6 +206,10 @@ class _UpdateDialogState extends State<_UpdateDialog>{
       _ensureScope();
       if(opened!=true)setState(()=>_message='Hãy cho phép cài đặt từ nguồn này rồi bấm Cài đặt lại.');
       else setState(()=>_message='Xác nhận cài đè trong cửa sổ Android.');
+    }on PlatformException catch(e){
+      if(mounted)setState(()=>_error=e.code=='VERIFY_FAILED'
+        ?'Tệp APK không vượt qua kiểm tra phiên bản, mã SHA-256 hoặc chữ ký.'
+        :'Không thể mở trình cài đặt Android. Hãy kiểm tra quyền cài ứng dụng.');
     }catch(_){if(mounted)setState(()=>_error='Không thể cài đặt bản cập nhật.');}
     finally{if(mounted)setState(()=>_busy=false);}
   }

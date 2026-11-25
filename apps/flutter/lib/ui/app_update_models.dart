@@ -29,8 +29,11 @@ Uri erpUpdateTicketUri(String origin,Object? path,Object? expiresAt,{DateTime? n
      relative.hasScheme||relative.hasAuthority||relative.hasFragment||
      relative.path!='/v1/app/releases/download'||expiration==null||
      !expiration.isAfter(time)||expiration.isAfter(time.add(const Duration(minutes:6)))||
+     relative.queryParameters.length!=3||
+     relative.queryParametersAll.values.any((values)=>values.length!=1)||
      !RegExp(r'^[a-f0-9]{64}$').hasMatch(relative.queryParameters['ticket']??'')||
-     int.tryParse(relative.queryParameters['versionCode']??'')==null){
+     (int.tryParse(relative.queryParameters['versionCode']??'')??0)<1||
+     int.tryParse(relative.queryParameters['expires']??'')!=(expiration.millisecondsSinceEpoch~/1000)){
     throw const FormatException('Liên kết cập nhật không hợp lệ hoặc đã hết hạn.');
   }
   return base.resolveUri(relative);
