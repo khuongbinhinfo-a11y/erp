@@ -24,16 +24,27 @@ verification="$("${tools}/apksigner" verify --verbose --print-certs "$apk" 2>&1)
 signer="$(printf '%s\n' "$verification" | python3 -c '
 import re, sys
 report = sys.stdin.read()
-entries = re.findall(
-    r"(?im)^\s*Signer\s*#(\d+)\s+certificate\s+SHA-256\s+digest:\s*"
-    r"((?:[0-9a-f]{2}[:\s-]?){32})(?![0-9a-f])",
-    report,
+# Real Android build-tools emits "V2 Signer: certificate SHA-256 digest: ..."
+# (not always "Signer #1 certificate ..."). Parse either, but require one signer.
+pattern = re.compile(
+    r"(?im)^[ \t]*(?:Signer[ \t]*#(?P<index>\d+)|"
+    r"V(?P<scheme>[234])[ \t]+Signer)[ \t]*:?[ \t]*"
+    r"certificate[ \t]+SHA-256[ \t]+digest:[ \t]*"
+    r"(?P<digest>(?:[0-9a-f]{2}[: \t-]?){32})(?![0-9a-f])"
 )
-normalized = [(index, re.sub(r"[^0-9a-f]", "", raw.lower()))
-              for index, raw in entries]
-if len(normalized) != 1 or normalized[0][0] != "1" or len(normalized[0][1]) != 64:
+entries = list(pattern.finditer(report))
+counts = re.findall(r"(?im)^[ \t]*Number of signers:[ \t]*(\d+)[ \t]*$", report)
+if counts and (len(counts) != 1 or counts[0] != "1"):
     sys.exit(1)
-print(normalized[0][1])
+if len(entries) != 1:
+    sys.exit(1)
+entry = entries[0]
+if entry.group("index") not in (None, "1"):
+    sys.exit(1)
+digest = re.sub(r"[^0-9a-f]", "", entry.group("digest").lower())
+if len(digest) != 64:
+    sys.exit(1)
+print(digest)
 ')" || {
   printf '%s\n' "$verification" >&2
   fail 'Unable to read exactly one APK signing certificate digest from apksigner report.'

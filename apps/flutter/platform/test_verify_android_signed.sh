@@ -10,6 +10,8 @@ cat > "$work/tools/apksigner" <<'TOOL'
 case "${FAKE_FORMAT:-plain}" in
   plain) printf 'Verifies\nSigner #1 certificate SHA-256 digest: %s\n' "${FAKE_SIGNER:?}" ;;
   leading) printf 'Verifies\n  Signer #1 Certificate SHA-256 Digest: %s \r\n' "${FAKE_SIGNER:?}" ;;
+  v2) printf 'Verifies\nVerified using v2 scheme (APK Signature Scheme v2): true\nNumber of signers: 1\nV2 Signer: certificate SHA-256 digest: %s\n' "${FAKE_SIGNER:?}" ;;
+  wrong_count) printf 'Verifies\nNumber of signers: 2\nV2 Signer: certificate SHA-256 digest: %s\n' "${FAKE_SIGNER:?}" ;;
   colon) printf 'Verifies\nSigner #1 certificate SHA-256 digest: %s\n' "$(printf '%s' "${FAKE_SIGNER:?}" | sed 's/../&:/g;s/:$//')" ;;
   duplicate) printf 'Verifies\nSigner #1 certificate SHA-256 digest: %s\nSigner #2 certificate SHA-256 digest: %s\n' "${FAKE_SIGNER:?}" "${FAKE_SIGNER:?}" ;;
   missing) printf 'Verifies\nSigner #1 certificate SHA-1 digest: %s\n' "${FAKE_SIGNER:?}" ;;
@@ -24,10 +26,10 @@ chmod +x "$work/tools/apksigner" "$work/tools/aapt"
 export FAKE_SIGNER="$(printf 'a%.0s' {1..64})" FAKE_PACKAGE='vn.erpdistribution.erp_distribution' FAKE_CODE=1 FAKE_VERSION=0.1.0
 cmd=(bash "$root/verify_android_signed.sh" "$work/release.apk" "$work/tools" "$FAKE_PACKAGE" 1 0.1.0 "$FAKE_SIGNER")
 "${cmd[@]}" | grep -q ERP_ANDROID_SIGNED_APK_VERIFIED
-for format in leading colon; do
+for format in leading colon v2; do
   FAKE_FORMAT="$format" "${cmd[@]}" | grep -q ERP_ANDROID_SIGNED_APK_VERIFIED
 done
-for format in duplicate missing; do
+for format in duplicate missing wrong_count; do
   if FAKE_FORMAT="$format" "${cmd[@]}" >"$work/negative.log" 2>&1; then
     echo "Invalid signer report '$format' unexpectedly passed" >&2; exit 1
   fi
