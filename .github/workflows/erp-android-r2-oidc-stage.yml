@@ -60,6 +60,27 @@ jobs:
             -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$OIDC_AUD" | jq -er '.value')"
           test -n "$oidc"
+          # JWT payload is NOT a credential when separated from its signature.
+          # Emit only PASS/FAIL per public GitHub OIDC claim, never the token.
+          OIDC_VALUE="$oidc" python3 - <<'PY'
+          import os, json, base64
+          segment = os.environ.pop("OIDC_VALUE").split(".")[1]
+          payload = json.loads(base64.urlsafe_b64decode(segment + "="*((-len(segment))%4)))
+          expected = {
+            "iss":"https://token.actions.githubusercontent.com",
+            "aud":"erp-android-r2-stage-0.1.0",
+            "repository":"khuongbinhinfo-a11y/erp",
+            "repository_id":"1466503632",
+            "repository_owner_id":"269412638",
+            "environment":"android-r2-publish",
+            "sub":"repo:khuongbinhinfo-a11y@269412638/erp@1466503632:environment:android-r2-publish",
+            "workflow_ref":"khuongbinhinfo-a11y/erp/.github/workflows/erp-android-r2-oidc-stage.yml@refs/heads/main",
+            "ref":"refs/heads/main",
+            "event_name":"workflow_run"
+          }
+          for key,value in expected.items():
+            print("ERP_R2_OIDC_CLAIM_" + key.upper() + "_" + ("PASS" if str(payload.get(key))==value else "MISMATCH"))
+          PY
           curl --silent --show-error --fail-with-body --retry 2 \
             -H "Authorization: Bearer $oidc" \
             -H "X-ERP-SHA256: $APK_SHA" \
