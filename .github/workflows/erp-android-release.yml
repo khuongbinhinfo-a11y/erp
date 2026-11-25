@@ -103,6 +103,12 @@ jobs:
           bytes="$(wc -c < "$ERP_ANDROID_KEYSTORE" | tr -d ' ')"
           digest="$(sha256sum "$ERP_ANDROID_KEYSTORE" | cut -d' ' -f1)"
           echo "ERP_ANDROID_KEYSTORE_READBACK bytes=$bytes sha256=$digest"
+          # Pin original owner-verified PKCS12 bytes: stale/wrong B64 may contain another valid key.
+          if [[ "$digest" != "92d28f3127967461d160ad01aa494084b23849e860fb800c799e6eb09ccd4450" ]]; then
+            echo "::error title=ERP Android signing::Keystore bytes are not the verified original ERP release .p12; refuse to build or rotate signer."
+            exit 1
+          fi
+          echo "ERP_ANDROID_ORIGINAL_KEYSTORE_SHA256_PASS"
           # Check the store password independently from the alias to eliminate ambiguous failures.
           if ! keytool -list -storetype PKCS12 -keystore "$ERP_ANDROID_KEYSTORE" \
             -storepass:env ERP_ANDROID_STORE_PASSWORD >/dev/null 2>&1; then
