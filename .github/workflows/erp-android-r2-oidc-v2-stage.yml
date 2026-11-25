@@ -84,7 +84,7 @@ jobs:
           curl --silent --show-error --fail-with-body --retry 2 \
             -H "Authorization: Bearer $oidc" \
             "$UPLOADER/uat/0.2.0/readback" -o "$RUNNER_TEMP/erp-m3-v2-readback.apk"
-          test "$(wc -c < "$RUNNER_TEMP/erp-m3-v2-readback.apk | tr -d ' ')" = "$bytes"
+          test "$(wc -c < "$RUNNER_TEMP/erp-m3-v2-readback.apk" | tr -d ' ')" = "$bytes"
           test "$(sha256sum "$RUNNER_TEMP/erp-m3-v2-readback.apk" | cut -d' ' -f1)" = "$sha"
           echo "ERP_M3_R2_V2_FULL_READBACK_PASS key=releases/2/erp-2.apk bytes=$bytes sha256=$sha"
       - name: Record R2 staging receipt without secrets
