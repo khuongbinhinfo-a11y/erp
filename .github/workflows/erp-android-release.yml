@@ -81,6 +81,7 @@ jobs:
         env:
           ERP_KEYSTORE_B64: ${{ secrets.ERP_ANDROID_KEYSTORE_B64 }}
           ERP_ANDROID_STORE_PASSWORD: ${{ secrets.ERP_ANDROID_STORE_PASSWORD }}
+          ERP_ANDROID_KEY_PASSWORD: ${{ secrets.ERP_ANDROID_KEY_PASSWORD }}
           ERP_ANDROID_KEY_ALIAS: ${{ secrets.ERP_ANDROID_KEY_ALIAS }}
           ERP_ANDROID_CERT_SHA256: ${{ vars.ERP_ANDROID_CERT_SHA256 }}
           ERP_PUBLIC_API_URL: ${{ vars.ERP_PUBLIC_API_URL }}
@@ -105,8 +106,17 @@ jobs:
           # Check the store password independently from the alias to eliminate ambiguous failures.
           if ! keytool -list -storetype PKCS12 -keystore "$ERP_ANDROID_KEYSTORE" \
             -storepass:env ERP_ANDROID_STORE_PASSWORD >/dev/null 2>&1; then
-            echo "::error title=ERP Android signing::Cannot open decoded PKCS12 with ERP_ANDROID_STORE_PASSWORD. Compare the SHA-256 above with the original local .p12; if equal, correct only the protected store-password secret."
-            exit 1
+            # One-time compatibility with the two protected secrets provisioned at initial setup.
+            # keytool-created PKCS12 accepts the same valid password for store and private key.
+            if [[ -n "${ERP_ANDROID_KEY_PASSWORD:-}" ]] && \
+              keytool -list -storetype PKCS12 -keystore "$ERP_ANDROID_KEYSTORE" \
+                -storepass:env ERP_ANDROID_KEY_PASSWORD >/dev/null 2>&1; then
+              export ERP_ANDROID_STORE_PASSWORD="$ERP_ANDROID_KEY_PASSWORD"
+              echo "::warning title=ERP Android signing::Recovered a valid PKCS12 password from protected ERP_ANDROID_KEY_PASSWORD. Reconcile the two protected secrets before subsequent releases."
+            else
+              echo "::error title=ERP Android signing::Neither configured protected password opens the decoded PKCS12. Compare the SHA-256 above with the original local .p12; if equal, correct ERP_ANDROID_STORE_PASSWORD."
+              exit 1
+            fi
           fi
           if ! keytool -list -storetype PKCS12 -keystore "$ERP_ANDROID_KEYSTORE" \
             -storepass:env ERP_ANDROID_STORE_PASSWORD -alias "$ERP_ANDROID_KEY_ALIAS" >/dev/null 2>&1; then
