@@ -58,24 +58,9 @@ extension CompanySectionGroup on CompanySection {
   };
 }
 
-class CompanyWorkspace extends StatefulWidget {
-  final bool previewOnly;
-  final List<IdentityGrant> grants;
-  final IdentitySession? session;
-  final ErpIdentityClient? client;
-  final ValueChanged<bool>? onNavigationLockChanged;
-  const CompanyWorkspace({super.key,this.previewOnly=true,this.grants=const [],
-    this.session,this.client,this.onNavigationLockChanged});
-  @override
-  State<CompanyWorkspace> createState() => _CompanyWorkspaceState();
-}
-
-class _CompanyWorkspaceState extends State<CompanyWorkspace> {
-  CompanySection section = CompanySection.overview;
-  bool salesNavigationLocked=false;
-  bool canView(CompanySection target){
-    if(widget.previewOnly)return true;
-    final p=widget.grants.map((x)=>x.permission).toSet();
+bool erpCanViewCompanySection(CompanySection target,List<IdentityGrant> grants,{bool previewOnly=false}){
+    if(previewOnly)return true;
+    final p=grants.map((x)=>x.permission).toSet();
     bool has(String code)=>p.contains(code);
     return switch(target){
       CompanySection.overview=>true,
@@ -91,7 +76,40 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
       // implicitly expose finance or stock reporting.
       CompanySection.reports=>has('reports.read'),
     };
+}
+
+class CompanyWorkspace extends StatefulWidget {
+  final bool previewOnly;
+  final List<IdentityGrant> grants;
+  final IdentitySession? session;
+  final ErpIdentityClient? client;
+  final ValueChanged<bool>? onNavigationLockChanged;
+  final bool mobileNavigation;
+  final CompanySection? requestedSection;
+  final ValueChanged<CompanySection>? onSectionChanged;
+  const CompanyWorkspace({super.key,this.previewOnly=true,this.grants=const [],
+    this.session,this.client,this.onNavigationLockChanged,this.mobileNavigation=false,
+    this.requestedSection,this.onSectionChanged});
+  @override
+  State<CompanyWorkspace> createState() => _CompanyWorkspaceState();
+}
+
+class _CompanyWorkspaceState extends State<CompanyWorkspace> {
+  CompanySection section = CompanySection.overview;
+  bool salesNavigationLocked=false;
+  @override void initState(){
+    super.initState();
+    final requested=widget.requestedSection;
+    if(requested!=null&&canView(requested))section=requested;
   }
+  @override void didUpdateWidget(covariant CompanyWorkspace oldWidget){
+    super.didUpdateWidget(oldWidget);
+    final requested=widget.requestedSection;
+    if(requested!=null&&requested!=oldWidget.requestedSection&&canView(requested)&&!salesNavigationLocked){
+      section=requested;filter='';search.clear();
+    }
+  }
+  bool canView(CompanySection target)=>erpCanViewCompanySection(target,widget.grants,previewOnly:widget.previewOnly);
   List<CompanySection> get visibleSections=>CompanySection.values.where(canView).toList();
   List<CompanyGroup> get visibleGroups=>CompanyGroup.values.where((group)=>
     visibleSections.any((section)=>section.group==group)).toList();
@@ -109,6 +127,7 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
   }
 
   void select(CompanySection value) {
+    if(!canView(value)||section==value)return;
     if(section==CompanySection.orders&&value!=section&&salesNavigationLocked){
       ErpToast.show(context,'Đang xử lý đơn hàng. Hãy kiểm tra kết quả trên máy chủ trước khi chuyển mục.',isError:true);
       return;
@@ -118,6 +137,7 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
       filter = '';
       search.clear();
     });
+    widget.onSectionChanged?.call(value);
   }
 
   @override Widget build(BuildContext context) {
@@ -127,9 +147,9 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
     final active = sections.contains(section) ? section : CompanySection.overview;
     final activeGroup=active.group;
     final groupSections=sections.where((item)=>item.group==activeGroup).toList();
-    final margin = narrow ? 16.0 : 26.0;
+    final margin = widget.mobileNavigation ? 8.0 : narrow ? 16.0 : 26.0;
     return Column(children: [
-      Padding(padding: EdgeInsets.fromLTRB(margin, 16, margin, 0),
+      if(!widget.mobileNavigation)Padding(padding: EdgeInsets.fromLTRB(margin, 16, margin, 0),
         child: ErpPageHeader(
           heading: 'Công Ty',
           subtitle: 'Điều hành phân phối · quản lý tập trung',
@@ -141,7 +161,7 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
             onSelected: selectGroup))),
       // Tier 2 stays left below the green heading; tier 3 belongs to the
       // selected workspace (for example CatalogWorkspace product/price tabs).
-      if(activeGroup!=CompanyGroup.overview)
+      if(!widget.mobileNavigation&&activeGroup!=CompanyGroup.overview)
         Padding(
           padding:EdgeInsets.fromLTRB(margin,10,margin,0),
           child:ErpSectionTabs<CompanySection>(
@@ -159,7 +179,7 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
         transitionBuilder: erpFadeSwitcher,
         child: SingleChildScrollView(
           key: ValueKey('company-content-${active.name}'),
-          padding: EdgeInsets.fromLTRB(margin, 18, margin, 26),
+          padding: EdgeInsets.fromLTRB(margin, widget.mobileNavigation?4:18, margin, 26),
           child: active == CompanySection.overview
             ? _Overview(onSelect: select,
                 areas: sections.where((s) => s != CompanySection.overview).toList())
