@@ -14,34 +14,35 @@ class ErpPageHeader extends StatelessWidget {
   @override Widget build(BuildContext context) => LayoutBuilder(
     builder:(context,constraints) {
       final stacked=trailing!=null && constraints.maxWidth<850;
+      final compact=constraints.maxWidth<600;
       final title=Row(mainAxisSize:MainAxisSize.min,children:[
         Icon(icon,size:23,color:ErpTokens.lime),
         const SizedBox(width:12),
         Flexible(child:Column(mainAxisSize:MainAxisSize.min,
           crossAxisAlignment:CrossAxisAlignment.start,children:[
           Text(heading,maxLines:1,overflow:TextOverflow.ellipsis,
-            style:const TextStyle(color:Colors.white,fontSize:22,
+            style:TextStyle(color:Colors.white,fontSize:compact?18:22,
               fontWeight:FontWeight.w800)),
           const SizedBox(height:2),
           Text(subtitle,maxLines:1,overflow:TextOverflow.ellipsis,
-            style:const TextStyle(color:ErpTokens.sidebarText,fontSize:12)),
+            style:TextStyle(color:ErpTokens.sidebarText,fontSize:compact?11:12)),
         ])),
       ]);
       return Container(
         key:const ValueKey('erp-page-header'),
-        height:stacked?138:80,
+        height:stacked?(compact?116:138):(compact?58:80),
         width:double.infinity,
         padding:EdgeInsets.symmetric(horizontal:stacked?14:20),
-        decoration:BoxDecoration(color:ErpTokens.primary,
+        decoration:BoxDecoration(color:ErpPalette.of(context).action,
           borderRadius:BorderRadius.circular(ErpTokens.cardRadius),
           border:const Border(left:BorderSide(color:ErpTokens.lime,width:4))),
         child:stacked
           ? Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
-              const SizedBox(height:10),
-              SizedBox(height:54,child:Align(alignment:Alignment.centerLeft,
+              SizedBox(height:compact?6:10),
+              SizedBox(height:compact?54:54,child:Align(alignment:Alignment.centerLeft,
                 child:title)),
               const SizedBox(height:4),
-              SizedBox(height:66,child:trailing),
+              SizedBox(height:compact?48:66,child:trailing),
             ])
           : Row(children:[
               if(trailing==null)
@@ -124,8 +125,8 @@ class ErpSectionTabs<T> extends StatelessWidget {
   @override Widget build(BuildContext context) {
     final reduceMotion = MediaQuery.of(context).disableAnimations;
     return Container(
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: ErpTokens.border))),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: ErpPalette.of(context).border))),
       child: SingleChildScrollView(
         key: const ValueKey('erp-section-tabs'),
         scrollDirection: Axis.horizontal,
@@ -143,14 +144,14 @@ class ErpSectionTabs<T> extends StatelessWidget {
                     child: Text(item.label, maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        color: active ? ErpTokens.primary : ErpTokens.muted,
+                        color: active ? ErpPalette.of(context).primary : ErpPalette.of(context).muted,
                         fontSize: 13, fontWeight: FontWeight.w600)),
                   ))),
                   SizedBox(width: tabWidth, height: 3,
                     child: AnimatedContainer(
                       duration: reduceMotion ? Duration.zero : ErpTokens.tabMotion,
                       curve: Curves.easeOutCubic,
-                      color: active ? ErpTokens.primary : Colors.transparent)),
+                      color: active ? ErpPalette.of(context).primary : Colors.transparent)),
                 ]),
               ),
             )),

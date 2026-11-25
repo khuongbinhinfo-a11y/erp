@@ -30,7 +30,9 @@ class ErpShell extends StatefulWidget {
   final ErpIdentityClient? client;
   final bool previewOnly;
   final VoidCallback? onLogout;
-  const ErpShell({super.key,this.session,this.client,this.previewOnly=true,this.onLogout});
+  final ThemeMode themeMode;
+  final ValueChanged<ThemeMode>? onThemeChanged;
+  const ErpShell({super.key,this.session,this.client,this.previewOnly=true,this.onLogout,this.themeMode=ThemeMode.system,this.onThemeChanged});
 
   @override
   State<ErpShell> createState() => _ErpShellState();
@@ -43,6 +45,8 @@ class _ErpShellState extends State<ErpShell> {
   bool showIntroToast = true;
   bool companyNavigationLocked = false;
   String? _checkedUpdateSession;
+  bool _initialLayout=false;
+  CompanySection _mobileSection=CompanySection.overview;
 
 
   @override
@@ -55,6 +59,16 @@ class _ErpShellState extends State<ErpShell> {
     _scheduleQuietUpdateCheck();
   }
 
+  bool _isMobile(BuildContext context)=>MediaQuery.sizeOf(context).width<760||erpAndroidUpdateSupported;
+
+  @override void didChangeDependencies(){
+    super.didChangeDependencies();
+    if(!_initialLayout){
+      _initialLayout=true;
+      if(!widget.previewOnly&&_isMobile(context)&&visibleModules.contains(3))selected=3;
+    }
+  }
+
   @override
   void didUpdateWidget(covariant ErpShell oldWidget){
     super.didUpdateWidget(oldWidget);
@@ -62,8 +76,10 @@ class _ErpShellState extends State<ErpShell> {
        oldWidget.previewOnly!=widget.previewOnly)companyNavigationLocked=false;
     if(oldWidget.session!=widget.session||oldWidget.previewOnly!=widget.previewOnly){
       _scheduleQuietUpdateCheck();
+      if(oldWidget.session?.actorId!=widget.session?.actorId)_mobileSection=CompanySection.overview;
       visibleModules=List<int>.generate(erpFeatures.length,(i)=>i)
         .where((i)=>widget.previewOnly||hasModuleAccess(i)).toList();
+      if(!canCompanySection(_mobileSection))_mobileSection=CompanySection.overview;
       if(visibleModules.isNotEmpty&&!visibleModules.contains(selected)){
         selected=visibleModules.first;
       }
@@ -125,17 +141,99 @@ class _ErpShellState extends State<ErpShell> {
       ),
   ]);
 
+  bool canCompanySection(CompanySection section)=>visibleModules.contains(0)&&
+    erpCanViewCompanySection(section,widget.session?.grants??const [],previewOnly:widget.previewOnly);
+
+  void _selectSection(CompanySection section){
+    if(!canCompanySection(section))return;
+    if(selected==0&&_mobileSection==section)return;
+    if(companyNavigationLocked){
+      ErpToast.show(context,'Đơn hàng đang xử lý. Hãy kiểm tra kết quả trước khi chuyển mục.',isError:true);
+      return;
+    }
+    setState((){selected=0;_mobileSection=section;});
+  }
+
+  List<({String label,IconData icon,Object target})> get _mobileDestinations=>[
+    if(visibleModules.contains(3))(label:'Bán lẻ',icon:Icons.storefront_outlined,target:3),
+    if(canCompanySection(CompanySection.orders))(label:'Đơn hàng',icon:Icons.receipt_long_outlined,target:CompanySection.orders),
+    if(canCompanySection(CompanySection.products))(label:'Sản phẩm',icon:Icons.inventory_2_outlined,target:CompanySection.products),
+    if(canCompanySection(CompanySection.customers))(label:'Khách hàng',icon:Icons.groups_outlined,target:CompanySection.customers),
+    (label:'Thêm',icon:Icons.more_horiz,target:'more'),
+  ];
+
+  Future<void> _openMore()async{
+    final target=await showModalBottomSheet<Object>(
+      context:context,isScrollControlled:true,
+      builder:(ctx)=>SafeArea(child:ConstrainedBox(
+        constraints:BoxConstraints(maxHeight:MediaQuery.sizeOf(ctx).height*.82),
+        child:ListView(key:const ValueKey('erp-mobile-more-list'),shrinkWrap:true,padding:const EdgeInsets.all(12),children:[
+          Padding(padding:const EdgeInsets.all(12),child:Text('Thêm',style:Theme.of(ctx).textTheme.titleLarge)),
+          if(widget.session!=null)ListTile(
+            leading:const Icon(Icons.account_circle_outlined),
+            title:Text(widget.session!.loginName),subtitle:const Text('Tài khoản')),
+          if(widget.onThemeChanged!=null)ListTile(
+            leading:const Icon(Icons.palette_outlined),title:const Text('Giao diện'),
+            trailing:ErpThemeSelector(value:widget.themeMode,onChanged:(mode)=>Navigator.pop(ctx,mode))),
+          for(final section in CompanySection.values.where((s)=>canCompanySection(s)&&!const [CompanySection.orders,CompanySection.products,CompanySection.customers].contains(s)))
+            ListTile(key:ValueKey('erp-mobile-more-${section.name}'),
+              leading:Icon(section.icon),title:Text(section.label),
+              onTap:()=>Navigator.pop(ctx,section)),
+          for(final module in visibleModules.where((i)=>i!=0&&i!=3))
+            ListTile(key:ValueKey('erp-mobile-more-module-$module'),leading:Icon(erpFeatures[module].icon),title:Text(erpFeatures[module].title),
+              onTap:()=>Navigator.pop(ctx,module)),
+          if(_canUpdate)ListTile(key:const ValueKey('erp-android-update'),
+            leading:const Icon(Icons.system_update),title:const Text('Cập nhật ứng dụng'),
+            onTap:()=>Navigator.pop(ctx,'update')),
+          if(widget.onLogout!=null)ListTile(key:const ValueKey('erp-session-exit'),
+            leading:const Icon(Icons.logout),title:const Text('Đăng xuất'),
+            onTap:()=>Navigator.pop(ctx,'logout')),
+        ]),
+      )),
+    );
+    if(!mounted||target==null)return;
+    if(target is CompanySection){_selectSection(target);}
+    else if(target is ThemeMode){widget.onThemeChanged?.call(target);}
+    else if(target is int){select(target);}
+    else if(target=='update'){await openUpdate();}
+    else if(target=='logout'){protectedLogout();}
+  }
+
+  Widget _mobileBar(){
+    final destinations=_mobileDestinations;
+    if(destinations.length==1)return SafeArea(top:false,child:ListTile(
+      key:const ValueKey('erp-mobile-more'),leading:const Icon(Icons.more_horiz),
+      title:const Text('Thêm'),onTap:_openMore));
+    final index=destinations.indexWhere((d)=>d.target==(selected==0?_mobileSection:selected));
+    return NavigationBar(
+      key:const ValueKey('erp-mobile-navigation'),
+      height:MediaQuery.textScalerOf(context).scale(1)>1.3?80:68,
+      selectedIndex:index<0?destinations.length-1:index,
+      onDestinationSelected:(i){
+        final target=destinations[i].target;
+        if(target is CompanySection){_selectSection(target);}
+        else if(target is int){select(target);}
+        else{unawaited(_openMore());}
+      },
+      destinations:destinations.map((d)=>NavigationDestination(
+        key:ValueKey('erp-mobile-${d.target}'),icon:Icon(d.icon),label:d.label)).toList(),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final desktop = MediaQuery.sizeOf(context).width >= 960;
+    final mobile=_isMobile(context);
+    final desktop = !mobile&&MediaQuery.sizeOf(context).width >= 960;
     // Keep the same keyed Row/Expanded content slot across responsive
     // breakpoints. Moving between desktop and mobile must NOT dispose a
     // pending sales create/update/confirm state machine.
     return Scaffold(
-      appBar:desktop?null:AppBar(title:Text(visibleModules.isEmpty
-        ? 'Truy cập bị giới hạn':erpFeatures[selected].title)),
-      drawer:desktop?null:Drawer(
-        backgroundColor:ErpTokens.sidebar,
+      appBar:desktop?null:AppBar(toolbarHeight:mobile?52:56,title:Text(visibleModules.isEmpty
+        ? 'Truy cập bị giới hạn':mobile&&selected==0?_mobileSection.label:erpFeatures[selected].title),
+        actions:[if(widget.onThemeChanged!=null)ErpThemeSelector(value:widget.themeMode,onChanged:widget.onThemeChanged!)]),
+      bottomNavigationBar:mobile?_mobileBar():null,
+      drawer:desktop||mobile?null:Drawer(
+        backgroundColor:ErpPalette.of(context).sidebar,
         child:_Navigation(
           selected:selected,visibleModules:visibleModules,
           onLogout:widget.onLogout==null?null:protectedLogout,
@@ -160,7 +258,7 @@ class _ErpShellState extends State<ErpShell> {
           child:Material(
             elevation:13,
             shadowColor:const Color(0x55102E24),
-            color:ErpTokens.sidebar,
+            color:ErpPalette.of(context).sidebar,
             borderRadius:const BorderRadius.only(
               topLeft:Radius.circular(19),
               bottomLeft:Radius.circular(19),
@@ -172,24 +270,27 @@ class _ErpShellState extends State<ErpShell> {
               onLogout:widget.onLogout==null?null:protectedLogout,
               loginName:widget.session?.loginName,
           onUpdate:_canUpdate?openUpdate:null,
+              themeMode:widget.themeMode,onThemeChanged:widget.onThemeChanged,
               collapsed:collapsed,
               onToggle:()=>setState(()=>collapsed=!collapsed)),
           ),
         ),
         Expanded(key:const ValueKey('erp-content-slot'),
-          child:_selectedContent()),
+          child:_selectedContent(mobile)),
       ])),
     );
   }
 
-  Widget _selectedContent() {
-    if (visibleModules.isEmpty) return const Center(child: Text(
+  Widget _selectedContent(bool mobile) {
+    if (visibleModules.isEmpty) return Center(child: Text(
       'Chưa có quyền truy cập phân hệ. Liên hệ quản trị viên.',
-      style: TextStyle(color: ErpTokens.ink)));
+      style: TextStyle(color: ErpPalette.of(context).ink)));
     final Widget content;
     if (selected == 0) {
       content = CompanyWorkspace(
         previewOnly: widget.previewOnly,
+        mobileNavigation:mobile,requestedSection:mobile?_mobileSection:null,
+        onSectionChanged:(section){if(mounted&&section!=_mobileSection)setState(()=>_mobileSection=section);},
         grants: widget.session?.grants ?? const [],
         session: widget.session,
         client: widget.client,
@@ -201,8 +302,10 @@ class _ErpShellState extends State<ErpShell> {
     } else if (selected == 2) {
       content = AdminWorkspace(
         previewOnly: widget.previewOnly, client: widget.client, session: widget.session);
+    } else if(mobile&&selected==3){
+      content = _MobileRetailEntry(onOrders:canCompanySection(CompanySection.orders)?()=>_selectSection(CompanySection.orders):null);
     } else {
-      content = _FeaturePage(feature: erpFeatures[selected]);
+      content = _FeaturePage(feature: erpFeatures[selected],mobile:mobile);
     }
     return AnimatedSwitcher(
       duration: MediaQuery.of(context).disableAnimations
@@ -218,7 +321,7 @@ class _ErpShellState extends State<ErpShell> {
     final grants=widget.session?.grants??const <IdentityGrant>[];
     bool allowed(String prefix)=>grants.any((g)=>g.permission.startsWith(prefix));
     return switch(index){
-      0=>allowed('catalog.')||allowed('orders.')||allowed('inventory.')||allowed('finance.'),
+      0=>allowed('catalog.')||allowed('orders.')||allowed('inventory.')||allowed('finance.')||allowed('purchase.')||allowed('reports.'),
       1=>allowed('orders.')||allowed('catalog.'),
       2=>allowed('identity.'),
       3=>allowed('orders.create'),
@@ -234,7 +337,7 @@ class _ErpShellState extends State<ErpShell> {
         isError:true);
       return;
     }
-    if (visibleModules.contains(index)&&index != selected) setState(() => selected = index);
+    if (visibleModules.contains(index)&&index != selected) setState(() {selected=index;if(index==0)_mobileSection=CompanySection.overview;});
   }
 }
 
@@ -256,7 +359,8 @@ class _IntroToast extends StatelessWidget {
 /// reference. The color stays inside ERP's green palette.
 class _SidebarWavePainter extends CustomPainter {
   final double progress;
-  const _SidebarWavePainter(this.progress);
+  final bool dark;
+  const _SidebarWavePainter(this.progress,this.dark);
   @override void paint(Canvas canvas,Size size){
     if(progress<=0.001)return;
     final w=size.width,h=size.height;
@@ -271,10 +375,10 @@ class _SidebarWavePainter extends CustomPainter {
       ..cubicTo(w-2,h-23,w-5,21,w-10,16)
       ..cubicTo(w-14,10,w-17,1,w-27,1)
       ..close();
-    final shader=const LinearGradient(
+    final shader=LinearGradient(
       begin:Alignment.centerLeft,end:Alignment.centerRight,
       // Gentle translucent wave over the dark ERP green.
-      colors:[Color(0xC0F1FFF2),Color(0xB8D7F2E0)],
+      colors:dark?const [Color(0xFF294D38),Color(0xFF253E30)]:const [Color(0xC0F1FFF2),Color(0xB8D7F2E0)],
     ).createShader(Offset.zero & size);
     canvas.drawPath(shape,Paint()
       ..shader=shader..color=Color.fromRGBO(255,255,255,progress));
@@ -283,7 +387,7 @@ class _SidebarWavePainter extends CustomPainter {
       ..style=PaintingStyle.stroke..strokeWidth=1);
   }
   @override bool shouldRepaint(covariant _SidebarWavePainter old)=>
-    old.progress!=progress;
+    old.progress!=progress||old.dark!=dark;
 }
 
 /// Real pointer hover and active-tab transitions share a single entry.
@@ -322,7 +426,7 @@ class _SidebarNavTileState extends State<_SidebarNavTile>{
               tween:Tween<double>(begin:0,end:active?1:0),
               duration:duration,curve:Curves.easeOutCubic,
               builder:(context,amount,child)=>CustomPaint(
-                painter:_SidebarWavePainter(amount),
+                painter:_SidebarWavePainter(amount,ErpPalette.of(context).dark),
                 child:child),
               child:Material(
                 color:Colors.transparent,
@@ -346,7 +450,7 @@ class _SidebarNavTileState extends State<_SidebarNavTile>{
                           width:39,height:39,
                           alignment:Alignment.center,
                           decoration:BoxDecoration(
-                            color:active?ErpTokens.primary
+                            color:active?ErpPalette.of(context).action
                               :(hovered?const Color(0xFF2D8860):Colors.transparent),
                             shape:BoxShape.circle,
                             boxShadow:active?[
@@ -363,12 +467,12 @@ class _SidebarNavTileState extends State<_SidebarNavTile>{
                         Expanded(child:Text(widget.feature.title,
                           maxLines:1,overflow:TextOverflow.ellipsis,
                           style:TextStyle(
-                            color:active?ErpTokens.primary
+                            color:active?ErpPalette.of(context).onSidebarActive
                               :(hovered?ErpTokens.lime:Colors.white),
                             fontSize:14,
                             fontWeight:active?FontWeight.w800:FontWeight.w500))),
-                        if(active)const Icon(Icons.chevron_right,
-                          size:19,color:ErpTokens.primary),
+                        if(active)Icon(Icons.chevron_right,
+                          size:19,color:ErpPalette.of(context).onSidebarActive),
                         const SizedBox(width:12),
                       ],
                     ]),
@@ -392,17 +496,19 @@ class _Navigation extends StatelessWidget {
   final VoidCallback? onUpdate;
   final bool collapsed;
   final VoidCallback? onToggle;
+  final ThemeMode themeMode;
+  final ValueChanged<ThemeMode>? onThemeChanged;
   const _Navigation({required this.selected, required this.onSelect,
     required this.visibleModules, required this.collapsed, this.onToggle,
-    this.onLogout,this.loginName,this.onUpdate});
+    this.onLogout,this.loginName,this.onUpdate,this.themeMode=ThemeMode.system,this.onThemeChanged});
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(builder:(context,limits){
     final compact=collapsed||limits.maxWidth<160;
     return DecoratedBox(
-    decoration: const BoxDecoration(gradient: LinearGradient(
+    decoration: BoxDecoration(gradient: LinearGradient(
       begin: Alignment.topLeft, end: Alignment.bottomRight,
-      colors: [ErpTokens.sidebar, ErpTokens.sidebarBottom],
+      colors: [ErpPalette.of(context).sidebar, ErpPalette.of(context).sidebarBottom],
     )),
     child: SafeArea(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Padding(
@@ -454,6 +560,9 @@ class _Navigation extends StatelessWidget {
             compact:compact,onSelect:onSelect);
         },
       )),
+      if(onThemeChanged!=null)Align(alignment:Alignment.centerLeft,child:IconTheme(
+        data:const IconThemeData(color:ErpTokens.sidebarText),
+        child:ErpThemeSelector(value:themeMode,onChanged:onThemeChanged!))),
       if(onUpdate!=null)ListTile(
         key:const ValueKey('erp-android-update'),
         leading:const Icon(Icons.system_update,color:ErpTokens.lime),
@@ -495,16 +604,18 @@ class _Navigation extends StatelessWidget {
 
 class _FeaturePage extends StatelessWidget {
   final ErpFeature feature;
-  const _FeaturePage({required this.feature});
+  final bool mobile;
+  const _FeaturePage({required this.feature,this.mobile=false});
 
   @override
   Widget build(BuildContext context) {
     return Column(children: [
-      Padding(padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+      if(!mobile)Padding(padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
         child: ErpPageHeader(
-          heading: feature.title, subtitle: feature.subtitle, icon: feature.icon)),
+          heading: feature.title, subtitle: feature.subtitle, icon: feature.icon))
+      else Padding(padding:const EdgeInsets.fromLTRB(16,8,16,0),child:Text(feature.subtitle)),
       Expanded(child: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
+        padding: EdgeInsets.all(mobile?12:24),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           const SizedBox(height: 20),
           Card(
@@ -513,24 +624,24 @@ class _FeaturePage extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Row(children: [
-                    Icon(Icons.table_chart_outlined, color: ErpTokens.primary),
+                  Row(children: [
+                    Icon(Icons.table_chart_outlined, color: ErpPalette.of(context).primary),
                     SizedBox(width: 8),
                     Expanded(child: Text('Danh sách nghiệp vụ',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: ErpTokens.ink))),
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: ErpPalette.of(context).ink))),
                   ]),
                   const SizedBox(height: 12),
                   ClipRRect(
                     borderRadius: BorderRadius.circular(ErpTokens.controlRadius),
                     child: Container(
-                      decoration: const BoxDecoration(
-                        border: Border(top: BorderSide(color: ErpTokens.fresh, width: 3)),
+                      decoration: BoxDecoration(
+                        border: Border(top: BorderSide(color: ErpPalette.of(context).fresh, width: 3)),
                       ),
                       child: SingleChildScrollView(
                         scrollDirection: Axis.horizontal,
                         child: DataTable(
-                          headingRowColor: const WidgetStatePropertyAll(ErpTokens.mint),
-                          headingTextStyle: const TextStyle(color: ErpTokens.ink, fontWeight: FontWeight.w700),
+                          headingRowColor: WidgetStatePropertyAll(ErpPalette.of(context).mint),
+                          headingTextStyle: TextStyle(color: ErpPalette.of(context).ink, fontWeight: FontWeight.w700),
                           columns: const [
                             DataColumn(label: Text('Mã chứng từ')),
                             DataColumn(label: Text('Ngày lập')),
@@ -543,18 +654,18 @@ class _FeaturePage extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 16),
-                  const Center(
+                  Center(
                     child: Padding(
                       padding: EdgeInsets.symmetric(vertical: 18),
                       child: Column(children: [
-                        Icon(Icons.inbox_outlined, color: ErpTokens.muted, size: 30),
+                        Icon(Icons.inbox_outlined, color: ErpPalette.of(context).muted, size: 30),
                         SizedBox(height: 8),
                         Text('Chưa có thông tin',
-                          style: TextStyle(color: ErpTokens.ink, fontWeight: FontWeight.w600)),
+                          style: TextStyle(color: ErpPalette.of(context).ink, fontWeight: FontWeight.w600)),
                         SizedBox(height: 4),
                         Text('',
                           textAlign: TextAlign.center,
-                          style: TextStyle(color: ErpTokens.muted, fontSize: 13)),
+                          style: TextStyle(color: ErpPalette.of(context).muted, fontSize: 13)),
                       ]),
                     ),
                   ),
@@ -566,4 +677,17 @@ class _FeaturePage extends StatelessWidget {
       )),
     ]);
   }
+}
+
+class _MobileRetailEntry extends StatelessWidget {
+  final VoidCallback? onOrders;
+  const _MobileRetailEntry({this.onOrders});
+  @override Widget build(BuildContext context)=>ListView(
+    padding:const EdgeInsets.all(16),children:[
+      const Text('Chọn hàng và lập đơn bán hàng trong hệ thống. Thanh toán tại quầy sẽ được bổ sung khi nghiệp vụ POS sẵn sàng.'),
+      const SizedBox(height:16),
+      if(onOrders!=null)FilledButton.icon(key:const ValueKey('erp-mobile-retail-orders'),
+        onPressed:onOrders,icon:const Icon(Icons.receipt_long_outlined),label:const Text('Đến lập đơn hàng')),
+    ],
+  );
 }

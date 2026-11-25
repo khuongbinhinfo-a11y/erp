@@ -14,15 +14,21 @@ void main() {
     expect(find.text('Công Ty'), findsWidgets);
   });
 
-  testWidgets('mobile shell opens navigation to all six modules', (tester) async {
-    await tester.binding.setSurfaceSize(const Size(390, 844));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+  testWidgets('mobile shell opens bottom navigation and More modules', (tester) async {
+    tester.view.devicePixelRatio=1;
+    tester.view.physicalSize=const Size(390,844);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(const ErpApp(previewMode:true));
-    await tester.tap(find.byIcon(Icons.menu));
+    await tester.tap(find.byKey(const ValueKey('erp-mobile-more')));
     await tester.pumpAndSettle();
-    expect(find.text('MCP'), findsOneWidget);
-    expect(find.text('Giao Hàng'), findsOneWidget);
-    expect(find.text('Đặt Hàng'), findsOneWidget);
+    final scroll=find.descendant(of:find.byKey(const ValueKey('erp-mobile-more-list')),matching:find.byType(Scrollable)).first;
+    for(final module in [1,4,5]){
+      final target=find.byKey(ValueKey('erp-mobile-more-module-$module'));
+      await tester.scrollUntilVisible(target,150,scrollable:scroll);
+      expect(target,findsOneWidget);
+    }
+    expect(find.byType(Drawer),findsNothing);
   });
 
   // P0 UI regression: navigate without ever displaying fabricated business records.
@@ -41,12 +47,17 @@ testWidgets('Công Ty quick navigation opens typed empty register and search is 
 });
 
 testWidgets('Quản trị shows roles as read-only and does not invent users', (tester) async {
-  await tester.binding.setSurfaceSize(const Size(390, 844));
-  addTearDown(() => tester.binding.setSurfaceSize(null));
+  tester.view.devicePixelRatio=1;
+  tester.view.physicalSize=const Size(390,844);
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
   await tester.pumpWidget(const ErpApp(previewMode:true));
-  await tester.tap(find.byIcon(Icons.menu));
+  await tester.tap(find.byKey(const ValueKey('erp-mobile-more')));
   await tester.pumpAndSettle();
-  await tester.tap(find.text('Quản trị').first);
+  final moreScroll=find.descendant(of:find.byKey(const ValueKey('erp-mobile-more-list')),matching:find.byType(Scrollable)).first;
+  final admin=find.byKey(const ValueKey('erp-mobile-more-module-2'));
+  await tester.scrollUntilVisible(admin,150,scrollable:moreScroll);
+  await tester.tap(admin);
   await tester.pumpAndSettle();
   expect(find.text('Người dùng và phân quyền'), findsOneWidget);
   expect(find.text('Chưa có dữ liệu'), findsOneWidget);
@@ -76,16 +87,21 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
   });
 
   testWidgets('toast auto dismisses once and never reappears on navigation', (tester) async {
-    await tester.binding.setSurfaceSize(const Size(390, 844));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+    tester.view.devicePixelRatio=1;
+    tester.view.physicalSize=const Size(390,844);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(const ErpApp(previewMode:true));
     expect(find.byKey(const ValueKey('erp-startup-toast')), findsOneWidget);
     await tester.pump(const Duration(seconds: 5));
     await tester.pump(const Duration(milliseconds: 250));
     expect(find.byKey(const ValueKey('erp-startup-toast')), findsNothing);
-    await tester.tap(find.byIcon(Icons.menu));
+    await tester.tap(find.byKey(const ValueKey('erp-mobile-more')));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('MCP'));
+    final moreScroll=find.descendant(of:find.byKey(const ValueKey('erp-mobile-more-list')),matching:find.byType(Scrollable)).first;
+    final mcp=find.byKey(const ValueKey('erp-mobile-more-module-1'));
+    await tester.scrollUntilVisible(mcp,150,scrollable:moreScroll);
+    await tester.tap(mcp);
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('erp-startup-toast')), findsNothing);
   });
@@ -318,8 +334,10 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
   });
 
   testWidgets('mobile login keeps the form readable without the desktop art panel', (tester) async {
-    await tester.binding.setSurfaceSize(const Size(390, 844));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+    tester.view.devicePixelRatio=1;
+    tester.view.physicalSize=const Size(390,844);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(const ErpApp());
     expect(find.byKey(const ValueKey('login-panel-photo')), findsNothing);
     expect(find.byKey(const ValueKey('login-name')), findsOneWidget);

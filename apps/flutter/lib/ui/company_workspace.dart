@@ -58,24 +58,9 @@ extension CompanySectionGroup on CompanySection {
   };
 }
 
-class CompanyWorkspace extends StatefulWidget {
-  final bool previewOnly;
-  final List<IdentityGrant> grants;
-  final IdentitySession? session;
-  final ErpIdentityClient? client;
-  final ValueChanged<bool>? onNavigationLockChanged;
-  const CompanyWorkspace({super.key,this.previewOnly=true,this.grants=const [],
-    this.session,this.client,this.onNavigationLockChanged});
-  @override
-  State<CompanyWorkspace> createState() => _CompanyWorkspaceState();
-}
-
-class _CompanyWorkspaceState extends State<CompanyWorkspace> {
-  CompanySection section = CompanySection.overview;
-  bool salesNavigationLocked=false;
-  bool canView(CompanySection target){
-    if(widget.previewOnly)return true;
-    final p=widget.grants.map((x)=>x.permission).toSet();
+bool erpCanViewCompanySection(CompanySection target,List<IdentityGrant> grants,{bool previewOnly=false}){
+    if(previewOnly)return true;
+    final p=grants.map((x)=>x.permission).toSet();
     bool has(String code)=>p.contains(code);
     return switch(target){
       CompanySection.overview=>true,
@@ -91,7 +76,40 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
       // implicitly expose finance or stock reporting.
       CompanySection.reports=>has('reports.read'),
     };
+}
+
+class CompanyWorkspace extends StatefulWidget {
+  final bool previewOnly;
+  final List<IdentityGrant> grants;
+  final IdentitySession? session;
+  final ErpIdentityClient? client;
+  final ValueChanged<bool>? onNavigationLockChanged;
+  final bool mobileNavigation;
+  final CompanySection? requestedSection;
+  final ValueChanged<CompanySection>? onSectionChanged;
+  const CompanyWorkspace({super.key,this.previewOnly=true,this.grants=const [],
+    this.session,this.client,this.onNavigationLockChanged,this.mobileNavigation=false,
+    this.requestedSection,this.onSectionChanged});
+  @override
+  State<CompanyWorkspace> createState() => _CompanyWorkspaceState();
+}
+
+class _CompanyWorkspaceState extends State<CompanyWorkspace> {
+  CompanySection section = CompanySection.overview;
+  bool salesNavigationLocked=false;
+  @override void initState(){
+    super.initState();
+    final requested=widget.requestedSection;
+    if(requested!=null&&canView(requested))section=requested;
   }
+  @override void didUpdateWidget(covariant CompanyWorkspace oldWidget){
+    super.didUpdateWidget(oldWidget);
+    final requested=widget.requestedSection;
+    if(requested!=null&&requested!=oldWidget.requestedSection&&canView(requested)&&!salesNavigationLocked){
+      section=requested;filter='';search.clear();
+    }
+  }
+  bool canView(CompanySection target)=>erpCanViewCompanySection(target,widget.grants,previewOnly:widget.previewOnly);
   List<CompanySection> get visibleSections=>CompanySection.values.where(canView).toList();
   List<CompanyGroup> get visibleGroups=>CompanyGroup.values.where((group)=>
     visibleSections.any((section)=>section.group==group)).toList();
@@ -109,6 +127,7 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
   }
 
   void select(CompanySection value) {
+    if(!canView(value)||section==value)return;
     if(section==CompanySection.orders&&value!=section&&salesNavigationLocked){
       ErpToast.show(context,'Đang xử lý đơn hàng. Hãy kiểm tra kết quả trên máy chủ trước khi chuyển mục.',isError:true);
       return;
@@ -118,6 +137,7 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
       filter = '';
       search.clear();
     });
+    widget.onSectionChanged?.call(value);
   }
 
   @override Widget build(BuildContext context) {
@@ -127,9 +147,9 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
     final active = sections.contains(section) ? section : CompanySection.overview;
     final activeGroup=active.group;
     final groupSections=sections.where((item)=>item.group==activeGroup).toList();
-    final margin = narrow ? 16.0 : 26.0;
+    final margin = widget.mobileNavigation ? 8.0 : narrow ? 16.0 : 26.0;
     return Column(children: [
-      Padding(padding: EdgeInsets.fromLTRB(margin, 16, margin, 0),
+      if(!widget.mobileNavigation)Padding(padding: EdgeInsets.fromLTRB(margin, 16, margin, 0),
         child: ErpPageHeader(
           heading: 'Công Ty',
           subtitle: 'Điều hành phân phối · quản lý tập trung',
@@ -141,7 +161,7 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
             onSelected: selectGroup))),
       // Tier 2 stays left below the green heading; tier 3 belongs to the
       // selected workspace (for example CatalogWorkspace product/price tabs).
-      if(activeGroup!=CompanyGroup.overview)
+      if(!widget.mobileNavigation&&activeGroup!=CompanyGroup.overview)
         Padding(
           padding:EdgeInsets.fromLTRB(margin,10,margin,0),
           child:ErpSectionTabs<CompanySection>(
@@ -159,7 +179,7 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
         transitionBuilder: erpFadeSwitcher,
         child: SingleChildScrollView(
           key: ValueKey('company-content-${active.name}'),
-          padding: EdgeInsets.fromLTRB(margin, 18, margin, 26),
+          padding: EdgeInsets.fromLTRB(margin, widget.mobileNavigation?4:18, margin, 26),
           child: active == CompanySection.overview
             ? _Overview(onSelect: select,
                 areas: sections.where((s) => s != CompanySection.overview).toList())
@@ -231,7 +251,7 @@ class _Overview extends StatelessWidget {
     ];
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Text('Tổng quan điều hành', style: Theme.of(context).textTheme.titleLarge?.copyWith(
-        fontWeight: FontWeight.w700, color: ErpTokens.ink,
+        fontWeight: FontWeight.w700, color: ErpPalette.of(context).ink,
       )),
       const SizedBox(height: 6),
       const SizedBox(height: 16),
@@ -248,7 +268,7 @@ class _Overview extends StatelessWidget {
       }),
       const SizedBox(height: 26),
       Text('Truy cập nhanh', style: Theme.of(context).textTheme.titleMedium?.copyWith(
-        color: ErpTokens.ink, fontWeight: FontWeight.w800)),
+        color: ErpPalette.of(context).ink, fontWeight: FontWeight.w800)),
       const SizedBox(height: 12),
       LayoutBuilder(builder: (context, constraints) {
         final columns = constraints.maxWidth >= 1100 ? 3 : (constraints.maxWidth >= 650 ? 2 : 1);
@@ -264,17 +284,17 @@ class _Overview extends StatelessWidget {
               child: Padding(padding: const EdgeInsets.all(18), child: Row(children: [
                 Container(
                   padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(color: ErpTokens.lime, borderRadius: BorderRadius.circular(ErpTokens.controlRadius)),
-                  child: Icon(item.icon, color: ErpTokens.primary),
+                  decoration: BoxDecoration(color: ErpPalette.of(context).dark?ErpPalette.of(context).mint:ErpTokens.lime, borderRadius: BorderRadius.circular(ErpTokens.controlRadius)),
+                  child: Icon(item.icon, color: ErpPalette.of(context).primary),
                 ),
                 const SizedBox(width: 14),
                 Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(item.label, style: const TextStyle(color: ErpTokens.ink,
+                  Text(item.label, style: TextStyle(color: ErpPalette.of(context).ink,
                     fontWeight: FontWeight.w700, fontSize: 15)),
                   const SizedBox(height: 4),
-                  Text(item.subtitle, style: const TextStyle(color: ErpTokens.muted, fontSize: 12)),
+                  Text(item.subtitle, style: TextStyle(color: ErpPalette.of(context).muted, fontSize: 12)),
                 ])),
-                const Icon(Icons.chevron_right, color: ErpTokens.muted),
+                Icon(Icons.chevron_right, color: ErpPalette.of(context).muted),
               ])),
             ),
           ),
@@ -294,13 +314,13 @@ class _Metric extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(children: [
-          Icon(icon, color: ErpTokens.primary, size: 22),
+          Icon(icon, color: ErpPalette.of(context).primary, size: 22),
           const SizedBox(width: 9),
-          Expanded(child: Text(title, style: const TextStyle(color: ErpTokens.muted, fontSize: 13))),
+          Expanded(child: Text(title, style: TextStyle(color: ErpPalette.of(context).muted, fontSize: 13))),
         ]),
         const SizedBox(height: 12),
-        const Text('—', style: TextStyle(color: ErpTokens.ink, fontSize: 28, fontWeight: FontWeight.w800)),
-        const Text('Chưa có dữ liệu đối soát', style: TextStyle(color: ErpTokens.muted, fontSize: 12)),
+        Text('—', style: TextStyle(color: ErpPalette.of(context).ink, fontSize: 28, fontWeight: FontWeight.w800)),
+        Text('Chưa có dữ liệu đối soát', style: TextStyle(color: ErpPalette.of(context).muted, fontSize: 12)),
       ],
     )),
   );
@@ -336,14 +356,14 @@ class _Register extends StatelessWidget {
         padding: const EdgeInsets.all(18),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
-            Icon(section.icon, color: ErpTokens.primary),
+            Icon(section.icon, color: ErpPalette.of(context).primary),
             const SizedBox(width: 10),
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(section.subtitle, style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                color: ErpTokens.ink, fontWeight: FontWeight.w700)),
+                color: ErpPalette.of(context).ink, fontWeight: FontWeight.w700)),
               const SizedBox(height: 3),
-              const Text('Danh sách và thông tin theo quyền tài khoản.',
-                style: TextStyle(color: ErpTokens.muted, fontSize: 13)),
+              Text('Danh sách và thông tin theo quyền tài khoản.',
+                style: TextStyle(color: ErpPalette.of(context).muted, fontSize: 13)),
             ])),
             Tooltip(
               message: 'Chức năng này chưa thể sử dụng',
@@ -372,10 +392,10 @@ class _Register extends StatelessWidget {
           ),
           const SizedBox(height: 18),
           ClipRRect(borderRadius: BorderRadius.circular(ErpTokens.controlRadius), child: Container(
-            decoration: const BoxDecoration(border: Border(top: BorderSide(color: ErpTokens.fresh, width: 3))),
+            decoration: BoxDecoration(border: Border(top: BorderSide(color: ErpPalette.of(context).fresh, width: 3))),
             child: SingleChildScrollView(scrollDirection: Axis.horizontal, child: DataTable(
-              headingRowColor: const WidgetStatePropertyAll(ErpTokens.mint),
-              headingTextStyle: const TextStyle(fontWeight: FontWeight.w700, color: ErpTokens.ink),
+              headingRowColor: WidgetStatePropertyAll(ErpPalette.of(context).mint),
+              headingTextStyle: TextStyle(fontWeight: FontWeight.w700, color: ErpPalette.of(context).ink),
               columns: cols.map((c) => DataColumn(label: Text(c))).toList(),
               rows: const [],
             )),
@@ -384,16 +404,16 @@ class _Register extends StatelessWidget {
           Center(child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 28),
             child: Column(children: [
-              const Icon(Icons.inbox_outlined, color: ErpTokens.muted, size: 34),
+              Icon(Icons.inbox_outlined, color: ErpPalette.of(context).muted, size: 34),
               const SizedBox(height: 9),
-              const Text('Chưa có dữ liệu',
-                style: TextStyle(color: ErpTokens.ink, fontWeight: FontWeight.w700)),
+              Text('Chưa có dữ liệu',
+                style: TextStyle(color: ErpPalette.of(context).ink, fontWeight: FontWeight.w700)),
               const SizedBox(height: 5),
               Text(filter.isEmpty
                 ? 'Chưa có thông tin để hiển thị.'
                 : 'Không có dữ liệu để tìm với từ khóa: $filter',
                 textAlign: TextAlign.center,
-                style: const TextStyle(color: ErpTokens.muted, fontSize: 13)),
+                style: TextStyle(color: ErpPalette.of(context).muted, fontSize: 13)),
             ]),
           )),
         ]),

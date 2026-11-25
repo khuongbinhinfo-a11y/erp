@@ -267,8 +267,8 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
       margin:const EdgeInsets.only(top:12),
       padding:const EdgeInsets.all(14),
       decoration:BoxDecoration(
-        color:ErpTokens.mint.withValues(alpha:0.18),
-        border:Border.all(color:ErpTokens.border),
+        color:ErpPalette.of(context).mint.withValues(alpha:0.18),
+        border:Border.all(color:ErpPalette.of(context).border),
         borderRadius:BorderRadius.circular(8)),
       child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
         Row(children:[
@@ -354,7 +354,7 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
         if(loading)const Padding(padding:EdgeInsets.only(top:8),
           child:LinearProgressIndicator()),
         if(error!=null)Padding(padding:const EdgeInsets.symmetric(vertical:8),
-          child:Text(error!,style:const TextStyle(color:ErpTokens.danger))),
+          child:Text(error!,style:TextStyle(color:ErpPalette.of(context).danger))),
         const SizedBox(height:8),
         ConstrainedBox(constraints:const BoxConstraints(maxHeight:340),
           child:ListView(shrinkWrap:true,children:[
@@ -365,8 +365,8 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
               final id=sku['id'].toString();
               final checked=selected.containsKey(id);
               return Container(
-                decoration:const BoxDecoration(border:Border(
-                  bottom:BorderSide(color:ErpTokens.border))),
+                decoration:BoxDecoration(border:Border(
+                  bottom:BorderSide(color:ErpPalette.of(context).border))),
                 padding:const EdgeInsets.symmetric(vertical:4),
                 child:Row(children:[
                   Checkbox(key:ValueKey('price-sku-check-$id'),
@@ -380,7 +380,7 @@ class _PriceSkuBatchPanelState extends State<PriceSkuBatchPanel> {
                       Text('${sku['code']??sku['sku']} · ${sku['unitCode']??''} '
                         '· Giá cơ sở: ${current[id]??(reading.contains(id)?'Đang tải…':'Chưa tải')}',
                         maxLines:2,overflow:TextOverflow.ellipsis,
-                        style:const TextStyle(fontSize:11,color:ErpTokens.muted)),
+                        style:TextStyle(fontSize:11,color:ErpPalette.of(context).muted)),
                     ])),
                   if(current[id]=='Không tải được giá'||(current[id]==null&&!pageRows.any((r)=>r['id'].toString()==id)&&!reading.contains(id)))IconButton(
                     tooltip:'Tải lại giá',

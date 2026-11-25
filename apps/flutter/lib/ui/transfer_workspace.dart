@@ -347,14 +347,14 @@ class _TransferWorkspaceState extends State<TransferWorkspace>{
           title:const Text('Nhận hàng chuyển kho'),
           content:SizedBox(width:480,child:SingleChildScrollView(child:Column(
             mainAxisSize:MainAxisSize.min,children:[
-              const Text('Nhập số lượng thực nhận. Phần còn lại vẫn đang đi đường.',
-                style:TextStyle(color:ErpTokens.muted,fontSize:12)),
+              Text('Nhập số lượng thực nhận. Phần còn lại vẫn đang đi đường.',
+                style:TextStyle(color:ErpPalette.of(context).muted,fontSize:12)),
               for(final x in lines)Padding(padding:const EdgeInsets.symmetric(vertical:9),
                 child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
                   Text((x['sku']??'').toString()+' · '+(x['name']??'').toString()),
                   Text('Xuất: '+erpNumberText(x['dispatchedBase'])+'  ·  Đã nhận: '+
                     erpNumberText(x['receivedBase'])+'  ·  Đang đi: '+erpNumberText(x['inTransitBase']),
-                    style:const TextStyle(fontSize:12,color:ErpTokens.muted)),
+                    style:TextStyle(fontSize:12,color:ErpPalette.of(context).muted)),
                   TextField(controller:controls[(x['lineNo'] as num).toInt()],
                     decoration:const InputDecoration(labelText:'Nhận đợt này'),
                     keyboardType:const TextInputType.numberWithOptions(decimal:true),
@@ -395,7 +395,7 @@ class _TransferWorkspaceState extends State<TransferWorkspace>{
               style:const TextStyle(fontWeight:FontWeight.w700)),
             const SizedBox(height:4),
             Text('${status(statusValue)} · ${row['lineCount']} sản phẩm · ${row['receiptCount']} lần nhận',
-              style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
+              style:TextStyle(color:ErpPalette.of(context).muted,fontSize:12)),
           ])),
           if(!busy&&!hasPending&&wh==source&&statusValue=='CREATED'&&
             can('inventory.transfer.approve',source))
@@ -421,8 +421,8 @@ class _TransferWorkspaceState extends State<TransferWorkspace>{
       Text('Chuyển kho và hàng đang đi đường',
         style:Theme.of(context).textTheme.titleLarge),
       const SizedBox(height:6),
-      const Text('Duyệt → Xuất kho nguồn → Nhận tại kho đích từng lần. Không cộng tồn trước khi nhận.',
-        style:TextStyle(color:ErpTokens.muted,fontSize:12)),
+      Text('Duyệt → Xuất kho nguồn → Nhận tại kho đích từng lần. Không cộng tồn trước khi nhận.',
+        style:TextStyle(color:ErpPalette.of(context).muted,fontSize:12)),
       const SizedBox(height:16),
       Wrap(spacing:12,runSpacing:12,children:[
         SizedBox(width:small?300:250,child:DropdownButtonFormField<String>(
@@ -459,7 +459,7 @@ class _TransferWorkspaceState extends State<TransferWorkspace>{
           icon:const Icon(Icons.refresh),tooltip:'Tải lại chuyển kho'),
       ]),
       if(error!=null)Padding(padding:const EdgeInsets.symmetric(vertical:12),
-        child:Text(error!,style:const TextStyle(color:Colors.red))),
+        child:Text(error!,style:TextStyle(color:ErpPalette.of(context).danger))),
       if(loading)const LinearProgressIndicator(),
       if(!loading&&error==null&&items.isEmpty)
         Padding(padding:const EdgeInsets.all(18),child:Text(

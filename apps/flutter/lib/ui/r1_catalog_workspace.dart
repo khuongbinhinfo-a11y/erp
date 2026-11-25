@@ -469,7 +469,7 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
             mainAxisSize:MainAxisSize.min,
             crossAxisAlignment:CrossAxisAlignment.stretch,children:[
               Text('Mã: ${row['code']??row['barcode']??'—'}',
-                style:const TextStyle(fontSize:12,color:ErpTokens.muted)),
+                style:TextStyle(fontSize:12,color:ErpPalette.of(ctx).muted)),
               if(widget.kind=='channels')...[
                 const SizedBox(height:12),
                 TextFormField(initialValue:name,maxLength:160,
@@ -489,20 +489,20 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
                     hintText:'Ví dụ: Nhập sai mã SKU'),
                   maxLines:2,onChanged:(v)=>refresh(()=>reason=v.trim())),
               ],
-              if(isBase)const Text(
+              if(isBase)Text(
                 'SKU gốc gắn cố định với mã sản phẩm và đơn vị tồn kho. '
                 'Nếu nhập sai SKU gốc, hãy ngừng SKU/sản phẩm cũ, '
                 'tạo sản phẩm mới với mã đúng. Không tái sử dụng mã/đơn vị '
                 'trên cùng sản phẩm; chứng từ và lịch sử cũ vẫn giữ nguyên.',
-                style:TextStyle(color:ErpTokens.muted,fontSize:12)),
+                style:TextStyle(color:ErpPalette.of(ctx).muted,fontSize:12)),
               if(widget.kind=='barcodes')SwitchListTile(
                 contentPadding:EdgeInsets.zero,
                 key:const ValueKey('r1-lifecycle-primary'),
                 title:const Text('Mã vạch chính'),value:primary&&active,
                 onChanged:active?(v)=>refresh(()=>primary=v):null),
-              const Text('Mã SKU, mã vạch và hệ số quy đổi đã tạo '
+              Text('Mã SKU, mã vạch và hệ số quy đổi đã tạo '
                 'không được sửa trực tiếp. Ngừng mã sai và tạo mã mới.',
-                style:TextStyle(color:ErpTokens.muted,fontSize:12)),
+                style:TextStyle(color:ErpPalette.of(ctx).muted,fontSize:12)),
             ]))),
         actions:[
           TextButton(onPressed:()=>Navigator.pop(dialog),child:const Text('Hủy')),
@@ -540,8 +540,8 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
       child:Padding(padding:const EdgeInsets.all(16),
         child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
           Text(isQuote?'Tra giá theo ngữ cảnh':'Thêm '+heading.toLowerCase(),
-            style:const TextStyle(fontSize:18,fontWeight:FontWeight.w700,
-              color:ErpTokens.ink)),
+            style:TextStyle(fontSize:18,fontWeight:FontWeight.w700,
+              color:ErpPalette.of(context).ink)),
           const SizedBox(height:14),
           if(busy)const LinearProgressIndicator(),
           Wrap(spacing:12,runSpacing:14,children:[
@@ -704,12 +704,12 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
               ])),
             ],
           ]),
-          if(widget.kind=='rules')const Padding(
+          if(widget.kind=='rules')Padding(
             padding:EdgeInsets.only(top:14),
             child:Text('Giá SKU lẻ và SKU thùng độc lập. Quy tắc đã lưu không bị ghi đè.',
-              style:TextStyle(color:ErpTokens.muted,fontSize:12))),
+              style:TextStyle(color:ErpPalette.of(context).muted,fontSize:12))),
           if(error!=null)Padding(padding:const EdgeInsets.only(top:12),
-            child:Text(error!,style:const TextStyle(color:ErpTokens.danger))),
+            child:Text(error!,style:TextStyle(color:ErpPalette.of(context).danger))),
           const SizedBox(height:15),
           Wrap(spacing:10,children:[
             OutlinedButton(onPressed:busy?null:(){
@@ -726,8 +726,8 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
             const Divider(height:32),
             Text('Đơn giá: '+money(quote!['unitPrice']),
               key:const ValueKey('r1-quote-price'),
-              style:const TextStyle(fontSize:22,fontWeight:FontWeight.w800,
-                color:ErpTokens.primary)),
+              style:TextStyle(fontSize:22,fontWeight:FontWeight.w800,
+                color:ErpPalette.of(context).primary)),
             const SizedBox(height:6),
             Text('SKU: ${quote!['sku']} · ${quote!['productName']} · '
               'ĐVT: ${quote!['unitCode']} · SL: ${erpNumberText(quote!['quantity'])}',
@@ -735,7 +735,7 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
             Text('Bảng giá: ${quote!['priceListCode']??quote!['priceListId']}'),
             Text('${quote!['priceListSelectionReason']??'Bảng giá chỉ định'}',
               key:const ValueKey('r1-quote-list-reason'),
-              style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
+              style:TextStyle(color:ErpPalette.of(context).muted,fontSize:12)),
             Text('Thành tiền: '+money(quote!['lineTotal'])),
             Text('Quy đổi về đơn vị gốc: '+erpNumberText(quote!['normalizedBaseQuantity'])),
             const SizedBox(height:12),
@@ -745,8 +745,8 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
                   erpPriceRuleLabel(t['scope']))+' · '+
                 erpPriceRuleLabel(t['adjustment'])+' → '+money(t['result'])),
             const SizedBox(height:8),
-            const Text('Giá do máy chủ tính; chưa xác minh tồn khả dụng.',
-              style:TextStyle(color:ErpTokens.muted,fontSize:12)),
+            Text('Giá do máy chủ tính; chưa xác minh tồn khả dụng.',
+              style:TextStyle(color:ErpPalette.of(context).muted,fontSize:12)),
           ],
         ])),
     );
@@ -784,9 +784,9 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
   Widget records(){
     if(loading)return const Padding(padding:EdgeInsets.all(24),
       child:Center(child:CircularProgressIndicator()));
-    if(items.isEmpty)return const Padding(padding:EdgeInsets.all(26),
+    if(items.isEmpty)return Padding(padding:EdgeInsets.all(26),
       child:Center(child:Text('Chưa có dữ liệu. Hãy thêm thông tin để bắt đầu.',
-        style:TextStyle(color:ErpTokens.muted))));
+        style:TextStyle(color:ErpPalette.of(context).muted))));
     if(fixedProductId!=null)return Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
       for(final x in items)Padding(padding:const EdgeInsets.only(top:6,bottom:6),child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
         Wrap(spacing:8,runSpacing:6,crossAxisAlignment:WrapCrossAlignment.center,children:[
@@ -794,7 +794,7 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
             SizedBox(width:c.$1=='code'||c.$1=='barcode'?180:130,child:TextFormField(
               key:ValueKey('locked-${widget.kind}-${x['id']}-${c.$1}-${cell(x,c.$1)}'),initialValue:cell(x,c.$1),readOnly:true,
               decoration:InputDecoration(labelText:c.$2,isDense:true,suffixIcon:const Icon(Icons.lock_outline,size:14)))),
-          if(widget.kind!='units')Text(x['active']==true?'Đang dùng':'Ngừng dùng',style:const TextStyle(fontSize:12,color:ErpTokens.muted)),
+          if(widget.kind!='units')Text(x['active']==true?'Đang dùng':'Ngừng dùng',style:TextStyle(fontSize:12,color:ErpPalette.of(context).muted)),
           if(widget.kind=='barcodes'&&x['isPrimary']==true)const Text('Mã chính'),
           if(canEditLifecycle&&inlineEditId!=x['id'])TextButton(key:ValueKey('r1-edit-${x['id']}'),onPressed:busy?null:()=>editRow(x),child:const Text('Sửa')),
         ]),
@@ -827,8 +827,8 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
         const Divider(height:1),
       ])).toList());
       return SingleChildScrollView(scrollDirection:Axis.horizontal,
-        child:DataTable(headingRowColor:const WidgetStatePropertyAll(ErpTokens.mint),
-          headingTextStyle:const TextStyle(color:ErpTokens.ink,fontWeight:FontWeight.w700),
+        child:DataTable(headingRowColor:WidgetStatePropertyAll(ErpPalette.of(ctx).mint),
+          headingTextStyle:TextStyle(color:ErpPalette.of(ctx).ink,fontWeight:FontWeight.w700),
           columns:columns.map((c)=>DataColumn(label:Text(c.$2))).toList()+
             [if(widget.kind=='rules'||canEditLifecycle)
               const DataColumn(label:Text('Thao tác'))],
@@ -837,8 +837,8 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
               ? Column(mainAxisAlignment:MainAxisAlignment.center,
                 crossAxisAlignment:CrossAxisAlignment.start,children:[
                   Text(cell(x,c.$1)),
-                  if(x['retiredAt']!=null)const Text('Đã kết thúc',
-                    style:TextStyle(color:ErpTokens.muted,fontSize:11)),
+                  if(x['retiredAt']!=null)Text('Đã kết thúc',
+                    style:TextStyle(color:ErpPalette.of(ctx).muted,fontSize:11)),
                 ])
               :Text(cell(x,c.$1)))).toList()+
             [if(widget.kind=='rules'||canEditLifecycle)DataCell(
@@ -867,7 +867,7 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
         if(canWrite)TextButton.icon(key:ValueKey('product-add-'+widget.kind),onPressed:busy?null:openForm,
           icon:const Icon(Icons.add,size:17),label:Text(widget.kind=='units'?'Thêm quy đổi':widget.kind=='skus'?'Thêm SKU':'Thêm mã vạch')),
       ])),
-      if(error!=null&&!form)Text(error!,style:const TextStyle(color:ErpTokens.danger)),
+      if(error!=null&&!form)Text(error!,style:TextStyle(color:ErpPalette.of(ctx).danger)),
       records(),
       if(form)editor(box.maxWidth),
       const Divider(height:16),
@@ -878,7 +878,7 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
           child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
             Wrap(spacing:12,runSpacing:12,
               crossAxisAlignment:WrapCrossAlignment.center,children:[
-                Text(heading,style:const TextStyle(color:ErpTokens.ink,
+                Text(heading,style:TextStyle(color:ErpPalette.of(ctx).ink,
                   fontSize:18,fontWeight:FontWeight.w800)),
                 if(fixedProductId==null&&widget.branches.isNotEmpty)SizedBox(width:235,child:
                   DropdownButtonFormField<String>(
@@ -910,12 +910,12 @@ class _R1CatalogWorkspaceState extends State<R1CatalogWorkspace>{
               ]),
             if(error!=null&&!form)Padding(
               padding:const EdgeInsets.only(top:12),
-              child:Text(error!,style:const TextStyle(color:ErpTokens.danger))),
+              child:Text(error!,style:TextStyle(color:ErpPalette.of(ctx).danger))),
             const SizedBox(height:16),
             if(!isQuote)records()
-            else if(!form)const Text(
+            else if(!form)Text(
               'Chọn SKU, khách hàng, kênh bán và bảng giá để xem giá áp dụng.',
-              style:TextStyle(color:ErpTokens.muted)),
+              style:TextStyle(color:ErpPalette.of(ctx).muted)),
           ]))),
         if(form)editor(constraints.maxWidth),
       ],

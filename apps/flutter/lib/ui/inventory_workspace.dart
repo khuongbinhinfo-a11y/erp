@@ -340,7 +340,7 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
         Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
           Text(title,style:const TextStyle(fontWeight:FontWeight.w600)),
           const SizedBox(height:5),
-          Text(details,style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
+          Text(details,style:TextStyle(color:ErpPalette.of(context).muted,fontSize:12)),
         ])),
         if(tab=='reservations'&&row['state']=='ACTIVE'&&can('inventory.reserve'))
           TextButton(onPressed:busy||hasPending?null:()=>release(row),
@@ -354,8 +354,8 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
     return Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
       Text('Kho và tồn khả dụng',style:Theme.of(context).textTheme.titleLarge),
       const SizedBox(height:6),
-      const Text('Tồn, giữ hàng và chứng từ được đối soát trên máy chủ.',
-        style:TextStyle(color:ErpTokens.muted,fontSize:12)),
+      Text('Tồn, giữ hàng và chứng từ được đối soát trên máy chủ.',
+        style:TextStyle(color:ErpPalette.of(context).muted,fontSize:12)),
       const SizedBox(height:18),
       Wrap(spacing:12,runSpacing:12,children:[
         SizedBox(width:small?300:204,child:DropdownButtonFormField<String>(
@@ -405,7 +405,7 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
       ]),
       const SizedBox(height:8),
       if(error!=null)Padding(padding:const EdgeInsets.symmetric(vertical:12),
-        child:Text(error!,style:const TextStyle(color:Colors.red))),
+        child:Text(error!,style:TextStyle(color:ErpPalette.of(context).danger))),
       if(loading)const LinearProgressIndicator(),
       if(!loading&&error==null&&rows.isEmpty)
         const Padding(padding:EdgeInsets.all(18),child:Text('Chưa có chứng từ ở mục này.')),

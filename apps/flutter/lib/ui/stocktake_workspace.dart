@@ -208,7 +208,7 @@ class _StocktakeWorkspaceState extends State<StocktakeWorkspace>{
             const SizedBox(height:8),
             if(line!=null)Text('Tồn sổ tại thời điểm chụp: ${erpNumberText(lines.firstWhere((x)=>
                x['lineNo']==line)['snapshotOnHand'])}',
-              style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
+              style:TextStyle(color:ErpPalette.of(context).muted,fontSize:12)),
             TextField(controller:quantity,keyboardType:
               const TextInputType.numberWithOptions(decimal:true),
               inputFormatters:const [ErpGroupedNumberFormatter(maxIntegerDigits:12,maxFractionDigits:6)],
@@ -258,7 +258,7 @@ class _StocktakeWorkspaceState extends State<StocktakeWorkspace>{
               style:const TextStyle(fontWeight:FontWeight.w700)),
             const SizedBox(height:5),
             Text('${row['lineCount']} sản phẩm · ${row['adjustmentCount']} điều chỉnh',
-              style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
+              style:TextStyle(color:ErpPalette.of(context).muted,fontSize:12)),
           ])),
           if(st=='COUNTING'&&!busy&&!hasPending&&can('inventory.stocktake.count'))
             TextButton(onPressed:()=>count(row),child:const Text('Ghi số kiểm')),
@@ -280,8 +280,8 @@ class _StocktakeWorkspaceState extends State<StocktakeWorkspace>{
     return Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
       Text('Kiểm kê và chênh lệch kho',style:Theme.of(context).textTheme.titleLarge),
       const SizedBox(height:6),
-      const Text('Chụp tồn → kiểm đếm → gửi duyệt → người khác duyệt → ghi sổ chênh lệch.',
-        style:TextStyle(fontSize:12,color:ErpTokens.muted)),
+      Text('Chụp tồn → kiểm đếm → gửi duyệt → người khác duyệt → ghi sổ chênh lệch.',
+        style:TextStyle(fontSize:12,color:ErpPalette.of(context).muted)),
       const SizedBox(height:16),
       Wrap(spacing:12,runSpacing:12,children:[
         SizedBox(width:small?300:255,child:DropdownButtonFormField<String>(
@@ -319,7 +319,7 @@ class _StocktakeWorkspaceState extends State<StocktakeWorkspace>{
           tooltip:'Tải lại kiểm kê',icon:const Icon(Icons.refresh)),
       ]),
       if(error!=null)Padding(padding:const EdgeInsets.symmetric(vertical:12),
-        child:Text(error!,style:const TextStyle(color:Colors.red))),
+        child:Text(error!,style:TextStyle(color:ErpPalette.of(context).danger))),
       if(loading)const LinearProgressIndicator(),
       if(!loading&&error==null&&items.isEmpty)
         Padding(padding:const EdgeInsets.all(18),child:Text(

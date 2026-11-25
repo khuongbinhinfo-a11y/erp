@@ -144,15 +144,15 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
       });
     }
   }
-  Widget _priceScopeChips(String title,String keyPrefix,
+  Widget _priceScopeChips(BuildContext context,String title,String keyPrefix,
       List<Map<String,dynamic>> options,Set<String> chosen,StateSetter refresh){
     return Padding(padding:const EdgeInsets.only(top:10),child:Column(
       crossAxisAlignment:CrossAxisAlignment.start,children:[
-        Text(title,style:const TextStyle(fontSize:12,
-          fontWeight:FontWeight.w700,color:ErpTokens.ink)),
+        Text(title,style:TextStyle(fontSize:12,
+          fontWeight:FontWeight.w700,color:ErpPalette.of(context).ink)),
         const SizedBox(height:5),
-        if(options.isEmpty)const Text('Chưa có danh mục áp dụng.',
-          style:TextStyle(fontSize:12,color:ErpTokens.muted))
+        if(options.isEmpty)Text('Chưa có danh mục áp dụng.',
+          style:TextStyle(fontSize:12,color:ErpPalette.of(context).muted))
         else Wrap(spacing:5,runSpacing:3,children:[
           for(final option in options.where((x)=>x['active']!=false))
             FilterChip(
@@ -283,8 +283,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                 value:x['id'] as String,child:Text('${x['code']} · ${x['name']}'))),
             ],onChanged:(v)=>refresh(()=>categoryId=v)),
           const SizedBox(height:8),
-          const Text('Chỉ thay một loại thuộc tính. Mã SKU và lịch sử đơn không bị sửa.',
-            style:TextStyle(color:ErpTokens.muted,fontSize:12)),
+          Text('Chỉ thay một loại thuộc tính. Mã SKU và lịch sử đơn không bị sửa.',
+            style:TextStyle(color:ErpPalette.of(ctx).muted,fontSize:12)),
         ])),
         actions:[
           TextButton(onPressed:()=>Navigator.pop(dialog,false),child:const Text('Hủy')),
@@ -543,8 +543,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                 TextField(controller:discount,keyboardType:TextInputType.number,
                   decoration:const InputDecoration(labelText:'Chiết khấu (%)',hintText:'0')),
                 const SizedBox(height:12),
-                const Text('Đơn giá có hiệu lực theo ngày áp dụng. Lịch sử giá được giữ lại.',
-                  style:TextStyle(color:ErpTokens.muted,fontSize:12)),
+                Text('Đơn giá có hiệu lực theo ngày áp dụng. Lịch sử giá được giữ lại.',
+                  style:TextStyle(color:ErpPalette.of(ctx).muted,fontSize:12)),
               ]else...[
                 TextField(key:const ValueKey('catalog-create-code'),
                   controller:code,decoration:InputDecoration(
@@ -612,16 +612,16 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                       title:const Text('Áp dụng mặc định'),
                       value:assignDefault,
                       onChanged:(v)=>refresh(()=>assignDefault=v)),
-                    _priceScopeChips('Kênh bán','price-create-channel',
+                    _priceScopeChips(ctx,'Kênh bán','price-create-channel',
                       priceChannels,selectedChannels,refresh),
-                    _priceScopeChips('Nhóm khách','price-create-group',
+                    _priceScopeChips(ctx,'Nhóm khách','price-create-group',
                       priceGroups,selectedGroups,refresh),
                     _PriceCustomerPicker(key:const ValueKey('price-create-customer-picker'),client:widget.client,
                       session:widget.session,branchId:branch,initial:priceCustomers,chosen:selectedCustomers,
                       prefix:'price-create-customer',onChanged:()=>refresh((){})),
-                    const Padding(padding:EdgeInsets.only(top:8),
+                    Padding(padding:EdgeInsets.only(top:8),
                       child:Text('Khi chọn cả kênh bán và nhóm khách: áp dụng theo KÊNH VÀ NHÓM.',
-                        style:TextStyle(fontSize:12,color:ErpTokens.muted))),
+                        style:TextStyle(fontSize:12,color:ErpPalette.of(ctx).muted))),
                   ],
                 ],
                 if(resource=='customers')...[
@@ -643,8 +643,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                     ],
                     onChanged:(v)=>refresh(()=>customerGroupId=v)),
                   const SizedBox(height:8),
-                  const Text('Tạo nhanh nhóm khách hàng (danh mục dùng chung)',
-                    style:TextStyle(color:ErpTokens.muted,fontSize:12)),
+                  Text('Tạo nhanh nhóm khách hàng (danh mục dùng chung)',
+                    style:TextStyle(color:ErpPalette.of(ctx).muted,fontSize:12)),
                   const SizedBox(height:8),
                   Wrap(spacing:8,runSpacing:8,
                     crossAxisAlignment:WrapCrossAlignment.center,children:[
@@ -663,7 +663,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                       icon:const Icon(Icons.add),label:const Text('Tạo nhóm')),
                   ]),
                   if(groupError!=null)Text(groupError!,
-                    style:const TextStyle(color:ErpTokens.danger,fontSize:12)),
+                    style:TextStyle(color:ErpPalette.of(ctx).danger,fontSize:12)),
                   const SizedBox(height:12),
                   DropdownButtonFormField<String?>(
                     key:ValueKey('catalog-create-customer-region-$customerRegionId'),
@@ -682,8 +682,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                     ],
                     onChanged:(v)=>refresh(()=>customerRegionId=v)),
                   const SizedBox(height:8),
-                  const Text('Tạo nhanh khu vực bán hàng',
-                    style:TextStyle(color:ErpTokens.muted,fontSize:12)),
+                  Text('Tạo nhanh khu vực bán hàng',
+                    style:TextStyle(color:ErpPalette.of(ctx).muted,fontSize:12)),
                   const SizedBox(height:8),
                   Wrap(spacing:8,runSpacing:8,
                     crossAxisAlignment:WrapCrossAlignment.center,children:[
@@ -702,7 +702,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                       icon:const Icon(Icons.add),label:const Text('Tạo khu vực')),
                   ]),
                   if(regionError!=null)Text(regionError!,
-                    style:const TextStyle(color:ErpTokens.danger,fontSize:12)),
+                    style:TextStyle(color:ErpPalette.of(ctx).danger,fontSize:12)),
                   const SizedBox(height:12),
                   TextField(controller:phone,
                     keyboardType:TextInputType.phone,
@@ -756,16 +756,16 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                       if(parent.isNotEmpty)code.text=parent.first['code'].toString();
                     })),
                   const SizedBox(height:6),
-                  const Text('Tạo danh mục con: chọn danh mục cha rồi thêm ký tự vào cuối mã gợi ý.',
-                    style:TextStyle(fontSize:12,color:ErpTokens.muted)),
+                  Text('Tạo danh mục con: chọn danh mục cha rồi thêm ký tự vào cuối mã gợi ý.',
+                    style:TextStyle(fontSize:12,color:ErpPalette.of(ctx).muted)),
                 ],
                 if(resource=='products')...[
                   const SizedBox(height:18),
-                  const Text('1. Thông tin sản phẩm',style:TextStyle(
-                    fontWeight:FontWeight.w800,fontSize:16,color:ErpTokens.primary)),
+                  Text('1. Thông tin sản phẩm',style:TextStyle(
+                    fontWeight:FontWeight.w800,fontSize:16,color:ErpPalette.of(ctx).primary)),
                   const SizedBox(height:6),
-                  const Text('Mã hàng là mã của sản phẩm. SKU bán và mã vạch đặt riêng ở phần quy cách.',
-                    style:TextStyle(color:ErpTokens.muted,fontSize:12)),
+                  Text('Mã hàng là mã của sản phẩm. SKU bán và mã vạch đặt riêng ở phần quy cách.',
+                    style:TextStyle(color:ErpPalette.of(ctx).muted,fontSize:12)),
                   const SizedBox(height:12),
                   if(availableUnits.isEmpty)
                     TextField(key:const ValueKey('catalog-base-unit-raw'),
@@ -858,18 +858,18 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                       icon:const Icon(Icons.add),label:const Text('Lưu đơn vị')),
                   ]),
                   if(unitError!=null)
-                    Text(unitError!,style:const TextStyle(color:ErpTokens.danger)),
+                    Text(unitError!,style:TextStyle(color:ErpPalette.of(ctx).danger)),
                   const SizedBox(height:12),
                   TextField(key:const ValueKey('catalog-base-barcode'),
                     controller:baseBarcode,
                     decoration:const InputDecoration(labelText:'Mã vạch SKU gốc (nếu có)',
                       hintText:'893...')),
                   const SizedBox(height:16),
-                  const Text('2. Nhóm hàng',style:TextStyle(
-                    fontWeight:FontWeight.w800,fontSize:16,color:ErpTokens.primary)),
+                  Text('2. Nhóm hàng',style:TextStyle(
+                    fontWeight:FontWeight.w800,fontSize:16,color:ErpPalette.of(ctx).primary)),
                   const SizedBox(height:4),
-                  const Text('Chọn nhãn hàng rồi nhóm/danh mục; mọi trường lưu vào một sản phẩm.',
-                    style:TextStyle(color:ErpTokens.muted,fontSize:12)),
+                  Text('Chọn nhãn hàng rồi nhóm/danh mục; mọi trường lưu vào một sản phẩm.',
+                    style:TextStyle(color:ErpPalette.of(ctx).muted,fontSize:12)),
                   if(availableBrands.isNotEmpty)...[
                     const SizedBox(height:10),
                     DropdownButtonFormField<String?>(
@@ -988,17 +988,17 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                   if(groupError!=null)Padding(
                     padding:const EdgeInsets.only(top:6),
                     child:Text(groupError!,
-                      style:const TextStyle(color:ErpTokens.danger))),
+                      style:TextStyle(color:ErpPalette.of(ctx).danger))),
 
                   const SizedBox(height:18),
                   const Divider(),
                   const SizedBox(height:12),
-                  const Text('3. SKU, đơn vị quy đổi và mã vạch',
+                  Text('3. SKU, đơn vị quy đổi và mã vạch',
                     style:TextStyle(fontWeight:FontWeight.w800,fontSize:16,
-                      color:ErpTokens.primary)),
+                      color:ErpPalette.of(ctx).primary)),
                   const SizedBox(height:4),
-                  const Text('Ví dụ: 1 THUNG = 24 CHAI. Mã đơn vị THUNG khác mã SKU bán SP001-THUNG và khác mã vạch.',
-                    style:TextStyle(fontSize:12,color:ErpTokens.muted)),
+                  Text('Ví dụ: 1 THUNG = 24 CHAI. Mã đơn vị THUNG khác mã SKU bán SP001-THUNG và khác mã vạch.',
+                    style:TextStyle(fontSize:12,color:ErpPalette.of(ctx).muted)),
                   const SizedBox(height:9),
                   Wrap(spacing:10,runSpacing:10,children:[
                     SizedBox(width:210,child:availableUnits.isEmpty
@@ -1079,12 +1079,12 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                   const SizedBox(height:18),
                   const Divider(),
                   const SizedBox(height:12),
-                  const Text('4. Ảnh sản phẩm',style:TextStyle(
-                    fontWeight:FontWeight.w800,fontSize:16,color:ErpTokens.primary)),
+                  Text('4. Ảnh sản phẩm',style:TextStyle(
+                    fontWeight:FontWeight.w800,fontSize:16,color:ErpPalette.of(ctx).primary)),
                   const SizedBox(height:5),
-                  const Text('Chọn ảnh để gửi vào kho R2 riêng sau khi sản phẩm được tạo. '
+                  Text('Chọn ảnh để gửi vào kho R2 riêng sau khi sản phẩm được tạo. '
                     'Tối đa 5 MB, PNG/JPG/WebP. Ảnh không được công khai.',
-                    style:TextStyle(color:ErpTokens.muted,fontSize:12)),
+                    style:TextStyle(color:ErpPalette.of(ctx).muted,fontSize:12)),
                   const SizedBox(height:9),
                   Wrap(spacing:12,runSpacing:12,crossAxisAlignment:WrapCrossAlignment.center,
                     children:[
@@ -1365,9 +1365,9 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
             width:(MediaQuery.sizeOf(ctx).width-70).clamp(220.0,460.0).toDouble(),
             child:Column(mainAxisSize:MainAxisSize.min,
               crossAxisAlignment:CrossAxisAlignment.stretch,children:[
-                const Text('Sao chép giá hiệu lực và chính sách chưa hết hạn. '
+                Text('Sao chép giá hiệu lực và chính sách chưa hết hạn. '
                   'Bảng giá mới độc lập; lịch sử bảng nguồn không đổi.',
-                  style:TextStyle(fontSize:12,color:ErpTokens.muted)),
+                  style:TextStyle(fontSize:12,color:ErpPalette.of(ctx).muted)),
                 const SizedBox(height:12),
                 TextFormField(key:const ValueKey('catalog-clone-code'),
                   initialValue:code,onChanged:(v)=>refresh(()=>code=v.trim()),
@@ -1545,7 +1545,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                 children:[
                   if(resource=='products')TextFormField(initialValue:(row['sku']??row['code']??'').toString(),readOnly:true,
                     decoration:const InputDecoration(labelText:'Mã hàng / SKU gốc',suffixIcon:Icon(Icons.lock_outline,size:16)))
-                  else Text('Mã: ${row['code']??'—'}',style:const TextStyle(fontSize:12,color:ErpTokens.muted)),
+                  else Text('Mã: ${row['code']??'—'}',style:TextStyle(fontSize:12,color:ErpPalette.of(context).muted)),
                   const SizedBox(height:12),
                   TextFormField(key:const ValueKey('catalog-edit-name'),
                     initialValue:name,onChanged:(value)=>name=value,
@@ -1613,16 +1613,16 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                         title:const Text('Áp dụng mặc định'),
                         value:assignDefault,
                         onChanged:(v)=>refresh(()=>assignDefault=v)),
-                      _priceScopeChips('Kênh bán','price-edit-channel',
+                      _priceScopeChips(context,'Kênh bán','price-edit-channel',
                         priceChannels,selectedChannels,refresh),
-                      _priceScopeChips('Nhóm khách','price-edit-group',
+                      _priceScopeChips(context,'Nhóm khách','price-edit-group',
                         priceGroups,selectedGroups,refresh),
                       _PriceCustomerPicker(key:const ValueKey('price-edit-customer-picker'),client:widget.client,
                         session:widget.session,branchId:branch,initial:priceCustomers,chosen:selectedCustomers,
                         prefix:'price-edit-customer',onChanged:()=>refresh((){})),
-                      const Padding(padding:EdgeInsets.only(top:8),
+                      Padding(padding:EdgeInsets.only(top:8),
                         child:Text('Kênh bán VÀ nhóm khách phải cùng khớp.',
-                          style:TextStyle(fontSize:12,color:ErpTokens.muted))),
+                          style:TextStyle(fontSize:12,color:ErpPalette.of(context).muted))),
                     ],
                   ],
                   if(resource=='groups')...[
@@ -1655,12 +1655,12 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                   ],
                   if(resource=='products')...[
                     const SizedBox(height:16),
-                    const Text('1. Thông tin sản phẩm',style:TextStyle(fontWeight:FontWeight.w700,color:ErpTokens.primary)),
+                    Text('1. Thông tin sản phẩm',style:TextStyle(fontWeight:FontWeight.w700,color:ErpPalette.of(context).primary)),
                     const SizedBox(height:8),
                     TextFormField(initialValue:(row['baseUnit']??'').toString(),readOnly:true,
                       decoration:const InputDecoration(labelText:'Đơn vị tồn kho gốc',suffixIcon:Icon(Icons.lock_outline,size:16))),
                     const SizedBox(height:16),
-                    const Text('2. Nhóm hàng',style:TextStyle(fontWeight:FontWeight.w700,color:ErpTokens.primary)),
+                    Text('2. Nhóm hàng',style:TextStyle(fontWeight:FontWeight.w700,color:ErpPalette.of(context).primary)),
                     const SizedBox(height:8),
                     if(brands.isNotEmpty)DropdownButtonFormField<String?>(
                       key:const ValueKey('catalog-edit-product-brand'),initialValue:brands.any((x)=>x['id']==brandId)?brandId:null,
@@ -1700,10 +1700,10 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                             child:Text('${c['code']} · ${c['name']}'))),
                       ],onChanged:(v)=>refresh(()=>categoryId=v)),
                     const SizedBox(height:8),
-                    if(brands.isEmpty)Text('Nhãn hàng: ${productGroups.where((g)=>g['id']==productGroupId).map((g)=>g['brandName']??'Chưa phân nhãn').firstOrNull??'Chưa phân nhãn'}',style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
+                    if(brands.isEmpty)Text('Nhãn hàng: ${productGroups.where((g)=>g['id']==productGroupId).map((g)=>g['brandName']??'Chưa phân nhãn').firstOrNull??'Chưa phân nhãn'}',style:TextStyle(color:ErpPalette.of(context).muted,fontSize:12)),
                     const Divider(height:24),
-                    const Text('3. SKU, đơn vị quy đổi và mã vạch',style:TextStyle(fontWeight:FontWeight.w700,color:ErpTokens.primary)),
-                    const Text('Mã và hệ số đã lưu được khóa. Quy cách và ảnh lưu theo từng thao tác.',style:TextStyle(fontSize:12,color:ErpTokens.muted)),
+                    Text('3. SKU, đơn vị quy đổi và mã vạch',style:TextStyle(fontWeight:FontWeight.w700,color:ErpPalette.of(context).primary)),
+                    Text('Mã và hệ số đã lưu được khóa. Quy cách và ảnh lưu theo từng thao tác.',style:TextStyle(fontSize:12,color:ErpPalette.of(context).muted)),
                     const SizedBox(height:8),
                     for(final kind in ['units','skus','barcodes'])
                       R1CatalogWorkspace(
@@ -1713,7 +1713,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                         changeBranch:(_){},
                       ),
                     const Divider(height:24),
-                    const Text('4. Ảnh sản phẩm',style:TextStyle(fontWeight:FontWeight.w700,color:ErpTokens.primary)),
+                    Text('4. Ảnh sản phẩm',style:TextStyle(fontWeight:FontWeight.w700,color:ErpPalette.of(context).primary)),
                     _ProductEditImages(key:ValueKey('product-edit-$id-images'),client:widget.client,
                       session:widget.session,branchId:branch,productId:id,canWrite:canWrite),
                   ],
@@ -1885,8 +1885,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
               Text('Hiệu lực: '+erpDateTimeText(q['effectiveAt'])),
             ],
             const SizedBox(height:12),
-            const Text('Tồn kho chưa xác minh; chưa được xác nhận đơn hàng.',
-              style:TextStyle(fontSize:12,color:ErpTokens.muted)),
+            Text('Tồn kho chưa xác minh; chưa được xác nhận đơn hàng.',
+              style:TextStyle(fontSize:12,color:ErpPalette.of(dialog).muted)),
           ]),
         actions:[TextButton(onPressed:()=>Navigator.pop(dialog),child:const Text('Đóng'))],
       ));
@@ -1973,8 +1973,8 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
         child:Padding(padding:const EdgeInsets.all(18),child:Column(
           crossAxisAlignment:CrossAxisAlignment.start,children:[
             Wrap(spacing:12,runSpacing:10,crossAxisAlignment:WrapCrossAlignment.center,children:[
-              Text(titles[resource]??'Danh mục',style:const TextStyle(
-                color:ErpTokens.ink,fontSize:18,fontWeight:FontWeight.w800)),
+              Text(titles[resource]??'Danh mục',style:TextStyle(
+                color:ErpPalette.of(context).ink,fontSize:18,fontWeight:FontWeight.w800)),
               if(branches.isNotEmpty)
                 SizedBox(
                   width:(MediaQuery.sizeOf(context).width-96)
@@ -1995,7 +1995,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                 key:const ValueKey('catalog-refresh'),
                 tooltip:'Làm mới danh sách',
                 onPressed:loading?null:_loadRecords,
-                icon:const Icon(Icons.refresh,color:ErpTokens.primary)),
+                icon:Icon(Icons.refresh,color:ErpPalette.of(context).primary)),
               if(resource=='price-lists'||resource=='prices')
                 OutlinedButton.icon(
                   key:const ValueKey('catalog-quote'),
@@ -2017,10 +2017,10 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                   ? 'Kiểm tra yêu cầu trước':resource=='price-lists'?'Tạo bảng giá':'Tạo mới')),
             ]),
             if(resource=='unit-definitions')
-              const Padding(padding:EdgeInsets.only(top:8),child:Text(
+              Padding(padding:EdgeInsets.only(top:8),child:Text(
                 'Mã ĐVT là mã chung (CHAI, THUNG, HOP); mỗi sản phẩm có hệ số quy đổi riêng. '
                 'Mã SKU và mã vạch không phải mã ĐVT.',
-                style:TextStyle(color:ErpTokens.muted,fontSize:12))),
+                style:TextStyle(color:ErpPalette.of(context).muted,fontSize:12))),
             const SizedBox(height:12),
             LayoutBuilder(builder:(context,constraints){
               final compact=constraints.maxWidth<700;
@@ -2093,15 +2093,15 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
             else if(error!=null)Padding(
               padding:const EdgeInsets.all(15),child:Text(error!,
                 key:const ValueKey('catalog-error'),
-                style:const TextStyle(color:ErpTokens.danger)))
-            else if(items.isEmpty)const Padding(
+                style:TextStyle(color:ErpPalette.of(context).danger)))
+            else if(items.isEmpty)Padding(
               padding:EdgeInsets.symmetric(vertical:28),
               child:Center(child:Text('Không có dữ liệu trên server trong phạm vi này.',
-                key:ValueKey('catalog-empty'),style:TextStyle(color:ErpTokens.muted))))
+                key:ValueKey('catalog-empty'),style:TextStyle(color:ErpPalette.of(context).muted))))
             else SingleChildScrollView(scrollDirection:Axis.horizontal,
               child:DataTable(
                 key:const ValueKey('catalog-live-table'),
-                headingRowColor:const WidgetStatePropertyAll(ErpTokens.mint),
+                headingRowColor:WidgetStatePropertyAll(ErpPalette.of(context).mint),
                 columns:[if(resource=='products')const DataColumn(label:Text('Chọn')),
                   ...columns.map((entry)=>DataColumn(
                   label:Text(entry.$2))).toList()]+
@@ -2136,7 +2136,7 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                         style:c.$1=='active'?TextStyle(
                           fontWeight:FontWeight.w700,
                           color:entry['active']==true
-                            ?ErpTokens.primary:ErpTokens.danger):null)),
+                            ?ErpPalette.of(context).primary:ErpPalette.of(context).danger):null)),
                   if(canEdit||resource=='prices'||resource=='price-lists')DataCell(
                     resource=='prices'
                       ? (!canWrite?const Text('—'):
@@ -2194,9 +2194,9 @@ class _CatalogWorkspaceState extends State<CatalogWorkspace> {
                         ])),
                 ])).toList())),
             if(resource=='products'&&!productWriteReady&&!loading)
-              const Padding(padding:EdgeInsets.only(top:12),
+              Padding(padding:EdgeInsets.only(top:12),
                 child:Text('Đã xem được danh mục, nhưng chưa cập nhật đủ cấu trúc SKU để thêm sản phẩm.',
-                  style:TextStyle(fontSize:12,color:ErpTokens.muted))),
+                  style:TextStyle(fontSize:12,color:ErpPalette.of(context).muted))),
 
           ]))),
     ]);
@@ -2274,7 +2274,7 @@ class _PriceCustomerPickerState extends State<_PriceCustomerPicker>{
             trailing:IconButton(tooltip:'Thêm khách hàng',icon:const Icon(Icons.add,size:19),onPressed:()=>toggle(id,true)),
             onTap:()=>toggle(id,true));
         })),
-      if(!loading&&available.isEmpty&&error==null)const Text('Không có khách phù hợp để thêm.',style:TextStyle(fontSize:12,color:ErpTokens.muted)),
+      if(!loading&&available.isEmpty&&error==null)Text('Không có khách phù hợp để thêm.',style:TextStyle(fontSize:12,color:ErpPalette.of(context).muted)),
       if(widget.chosen.isNotEmpty)...[
         const SizedBox(height:8),
         if(widget.chosen.length>5)TextField(controller:selectedSearch,selectAllOnFocus:true,
@@ -2330,7 +2330,7 @@ class _ProductEditImagesState extends State<_ProductEditImages>{
   }
   @override Widget build(BuildContext context)=>Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
     if(busy)const LinearProgressIndicator(minHeight:2),
-    if(error!=null)Text(error!,style:const TextStyle(color:ErpTokens.danger)),
+    if(error!=null)Text(error!,style:TextStyle(color:ErpPalette.of(context).danger)),
     if(images.isEmpty&&!busy&&error==null)const Text('Chưa có ảnh sản phẩm.'),
     Wrap(spacing:8,runSpacing:8,children:[
       for(final image in images)

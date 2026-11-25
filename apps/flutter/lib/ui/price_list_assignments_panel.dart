@@ -235,26 +235,26 @@ class _PriceListAssignmentsPanelState extends State<PriceListAssignmentsPanel>{
     final wide=MediaQuery.sizeOf(context).width>=780;
     return Container(key:const ValueKey('r1c-list-assignment-panel'),
       margin:const EdgeInsets.only(top:16),
-      decoration:BoxDecoration(color:ErpTokens.mint.withValues(alpha:0.20),
-        border:Border.all(color:ErpTokens.mint),
+      decoration:BoxDecoration(color:ErpPalette.of(context).mint.withValues(alpha:0.20),
+        border:Border.all(color:ErpPalette.of(context).mint),
         borderRadius:BorderRadius.circular(8)),
       padding:const EdgeInsets.all(14),
       child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
         Row(children:[
           Expanded(child:Text('Phân bổ · ${widget.priceList['code']}',
-            style:const TextStyle(fontWeight:FontWeight.w800,
-              fontSize:16,color:ErpTokens.ink))),
+            style:TextStyle(fontWeight:FontWeight.w800,
+              fontSize:16,color:ErpPalette.of(context).ink))),
           IconButton(onPressed:widget.onClose,tooltip:'Đóng phân bổ',
             icon:const Icon(Icons.close,size:20)),
         ]),
-        const Padding(padding:EdgeInsets.only(bottom:12),
+        Padding(padding:EdgeInsets.only(bottom:12),
           child:Text('Ưu tiên chọn: khách riêng → nhóm khách → kênh bán → mặc định. '
             'Trong cùng phạm vi: ưu tiên số lớn, sau đó ưu tiên bảng giá. '
             'Bảng giá hết hạn không được áp dụng.',
-            style:TextStyle(fontSize:12,color:ErpTokens.muted))),
+            style:TextStyle(fontSize:12,color:ErpPalette.of(context).muted))),
         if(loading)const LinearProgressIndicator(),
         if(error!=null)Padding(padding:const EdgeInsets.symmetric(vertical:8),
-          child:Text(error!,style:const TextStyle(color:ErpTokens.danger))),
+          child:Text(error!,style:TextStyle(color:ErpPalette.of(context).danger))),
         if(!loading&&error==null)...[
           if(widget.canWrite)...[
             Wrap(spacing:8,runSpacing:8,
@@ -272,8 +272,8 @@ class _PriceListAssignmentsPanelState extends State<PriceListAssignmentsPanel>{
                 onPressed:busy?null:load,
                 icon:const Icon(Icons.search,size:17),
                 label:const Text('Tìm trên máy chủ')),
-              const Text('Kết quả khớp tìm kiếm từ máy chủ.',
-                style:TextStyle(fontSize:12,color:ErpTokens.muted)),
+              Text('Kết quả khớp tìm kiếm từ máy chủ.',
+                style:TextStyle(fontSize:12,color:ErpPalette.of(context).muted)),
             ]),
             const SizedBox(height:12),
           ],
@@ -305,7 +305,7 @@ class _PriceListAssignmentsPanelState extends State<PriceListAssignmentsPanel>{
                       child:const Text('Bỏ chọn')),
                   ]),
                   DecoratedBox(decoration:BoxDecoration(
-                      border:Border.all(color:ErpTokens.border),
+                      border:Border.all(color:ErpPalette.of(context).border),
                       borderRadius:BorderRadius.circular(6)),
                     child:ConstrainedBox(constraints:const BoxConstraints(maxHeight:156),
                       child:eligible.isEmpty
@@ -329,9 +329,9 @@ class _PriceListAssignmentsPanelState extends State<PriceListAssignmentsPanel>{
                               }));
                           })),
                   ),
-                  const Padding(padding:EdgeInsets.only(top:3),
+                  Padding(padding:EdgeInsets.only(top:3),
                     child:Text('Có thể tìm tiếp và chọn thêm; chỉ chọn trong kết quả tải từ máy chủ.',
-                      style:TextStyle(fontSize:11,color:ErpTokens.muted))),
+                      style:TextStyle(fontSize:11,color:ErpPalette.of(context).muted))),
                 ])),
               SizedBox(width:120,child:TextField(
                 key:const ValueKey('r1c-assignment-priority'),
@@ -359,12 +359,12 @@ class _PriceListAssignmentsPanelState extends State<PriceListAssignmentsPanel>{
                   'Gán ${selectedTargets.length} đối tượng')),
             ]),
           const SizedBox(height:12),
-          if(rows.isEmpty)const Text('Chưa có phân bổ cho bảng giá này.',
-            style:TextStyle(color:ErpTokens.muted))
+          if(rows.isEmpty)Text('Chưa có phân bổ cho bảng giá này.',
+            style:TextStyle(color:ErpPalette.of(context).muted))
           else SingleChildScrollView(scrollDirection:Axis.horizontal,
             child:DataTable(dataRowMinHeight:42,dataRowMaxHeight:52,
               headingRowHeight:40,
-              headingRowColor:const WidgetStatePropertyAll(ErpTokens.mint),
+              headingRowColor:WidgetStatePropertyAll(ErpPalette.of(context).mint),
               columns:const [
                 DataColumn(label:Text('Đối tượng')),
                 DataColumn(label:Text('Hiệu lực')),
