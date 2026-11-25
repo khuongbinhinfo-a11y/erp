@@ -39,7 +39,7 @@ async function githubClaims(value) {
   if (payload.repository !== REPO ||
       String(payload.repository_id) !== REPO_ID ||
       payload.environment !== ENVIRONMENT ||
-      payload.sub !== "repo:" + REPO + ":environment:" + ENVIRONMENT ||
+      payload.sub !== "repo:khuongbinhinfo-a11y@269412638/erp@1466503632:environment:" + ENVIRONMENT ||
       payload.workflow_ref !== WORKFLOW_REF ||
       payload.ref !== "refs/heads/main" ||
       payload.event_name !== "workflow_run") throw Error("Unapproved GitHub workflow identity");
