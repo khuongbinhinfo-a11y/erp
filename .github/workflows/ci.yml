@@ -59,6 +59,8 @@ jobs:
         run: node --test apps/flutter/test/web_origin_guard.test.mjs
       - name: Test GitHub OIDC R2 restricted upload gate
         run: node --test apps/flutter/platform/test_erp_r2_oidc_worker.mjs
+      - name: Test M3 Android 0.2.0 OIDC immutable R2 staging
+        run: node --test apps/flutter/platform/test_erp_r2_oidc_v2_worker.mjs
       - name: Test public APK exact-key read-only download gate
         run: node --test apps/flutter/platform/test_erp_r2_download_worker.mjs
       - name: Typecheck backend
