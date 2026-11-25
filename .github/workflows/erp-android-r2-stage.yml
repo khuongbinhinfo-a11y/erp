@@ -1,0 +1,76 @@
+name: ERP Android signed APK to private R2 (UAT staging)
+on:
+  workflow_run:
+    workflows: ['ERP quality gates']
+    types: [completed]
+    branches: [main]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: erp-android-r2-stage-0.1.0
+  cancel-in-progress: false
+jobs:
+  stage:
+    if: >-
+      github.repository == 'khuongbinhinfo-a11y/erp' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      contains(github.event.workflow_run.head_commit.message, '[erp-r2-stage-0.1.0]')
+    environment: android-r2-publish
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPECTED_RUN: '45619096430'
+      SOURCE_SHA: 'e1bf3eeb956b69d70ed678f3b827030be573a72c'
+      EXPECTED_SHA256: '385766285dfc21e4c9d8cca3ab9d332e94476df1ec5ddbe02628bc0dc46b1328'
+      EXPECTED_SIGNER: '545d17fc51c8d24de4d73cb84ff7c3953f79c7d14efc7ada29b7075110d0c028'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - name: Verify exact CI and signed release artifact before any R2 writes
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.workflow_run.head_sha }}"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$EXPECTED_RUN" > /tmp/erp-signed-run.json
+          jq -e --arg sha "$SOURCE_SHA" '
+            .head_sha == $sha and
+            .head_branch == "main" and
+            .conclusion == "success" and
+            (.event == "workflow_run" or .event == "workflow_dispatch") and
+            .path == ".github/workflows/erp-android-release.yml"
+          ' /tmp/erp-signed-run.json > /dev/null
+          gh run download "$EXPECTED_RUN" --repo "$GITHUB_REPOSITORY" -n erp-android-signed -D signed
+          test "$(cat signed/commit.txt)" = "$SOURCE_SHA"
+          test "$(cat signed/signer.txt)" = "$EXPECTED_SIGNER"
+          test "$(sha256sum signed/erp.apk | cut -d' ' -f1)" = "$EXPECTED_SHA256"
+          test "$(wc -c < signed/erp.apk | tr -d ' ')" = 63425634
+          (cd signed && sed 's|signed/||g' SHA256SUMS | sha256sum -c -)
+      - name: Verify APK cryptographic signature, identity and version
+        run: |
+          set -euo pipefail
+          tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          bash apps/flutter/platform/verify_android_signed.sh signed/erp.apk "$tools" \
+            vn.erpdistribution.erp_distribution 1 0.1.0 "$EXPECTED_SIGNER"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Upload reviewed immutable APK to private R2 and verify full readback
+        env:
+          ERP_RELEASE_R2_ACCOUNT_ID: ${{ vars.ERP_RELEASE_R2_ACCOUNT_ID }}
+          ERP_RELEASE_R2_BUCKET: ${{ vars.ERP_RELEASE_R2_BUCKET }}
+          ERP_RELEASE_R2_WRITE_ACCESS_KEY_ID: ${{ secrets.ERP_RELEASE_R2_WRITE_ACCESS_KEY_ID }}
+          ERP_RELEASE_R2_WRITE_SECRET_ACCESS_KEY: ${{ secrets.ERP_RELEASE_R2_WRITE_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          for name in ERP_RELEASE_R2_ACCOUNT_ID ERP_RELEASE_R2_BUCKET ERP_RELEASE_R2_WRITE_ACCESS_KEY_ID ERP_RELEASE_R2_WRITE_SECRET_ACCESS_KEY; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error title=ERP R2 staging::Missing protected R2 publisher configuration $name"
+              exit 1
+            fi
+          done
+          pip install --disable-pip-version-check 'boto3>=1.36,<2'
+          python3 apps/flutter/platform/stage_android_r2.py --apk signed/erp.apk
