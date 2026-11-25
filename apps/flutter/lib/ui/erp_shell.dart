@@ -4,6 +4,7 @@ import 'package:material_ui/material_ui.dart';
 import 'erp_tokens.dart';
 import 'erp_navigation_ui.dart';
 import 'company_workspace.dart';
+import 'sales_workspace.dart';
 import 'admin_workspace.dart';
 import 'identity_client.dart';
 import 'erp_toast.dart';
@@ -303,7 +304,27 @@ class _ErpShellState extends State<ErpShell> {
       content = AdminWorkspace(
         previewOnly: widget.previewOnly, client: widget.client, session: widget.session);
     } else if(mobile&&selected==3){
-      content = _MobileRetailEntry(onOrders:canCompanySection(CompanySection.orders)?()=>_selectSection(CompanySection.orders):null);
+      content = widget.previewOnly||widget.client==null||widget.session==null
+        ?_MobileRetailEntry(onOrders:canCompanySection(CompanySection.orders)
+          ?()=>_selectSection(CompanySection.orders):null)
+        :SalesWorkspace(
+          key:const ValueKey('erp-mobile-retail-workspace'),
+          client:widget.client!,session:widget.session!,retailMode:true,
+          onOpenOrders:canCompanySection(CompanySection.orders)
+            ?()=>_selectSection(CompanySection.orders):null,
+          onOpenCatalog:(area){
+            final section=switch(area){
+              'customers'=>CompanySection.customers,
+              'products'=>CompanySection.products,
+              _=>CompanySection.prices,
+            };
+            if(canCompanySection(section))_selectSection(section);
+          },
+          onNavigationLockChanged:(locked){
+            if(mounted&&companyNavigationLocked!=locked){
+              setState(()=>companyNavigationLocked=locked);
+            }
+          });
     } else {
       content = _FeaturePage(feature: erpFeatures[selected],mobile:mobile);
     }
@@ -331,7 +352,7 @@ class _ErpShellState extends State<ErpShell> {
     };
   }
   void select(int index) {
-    if(index!=selected&&selected==0&&companyNavigationLocked){
+    if(index!=selected&&companyNavigationLocked){
       ErpToast.show(context,
         'Đơn hàng đang xử lý. Hãy kiểm tra kết quả trước khi chuyển phân hệ.',
         isError:true);

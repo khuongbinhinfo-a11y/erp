@@ -61,8 +61,11 @@ class SalesWorkspace extends StatefulWidget {
   final IdentitySession session;
   final ValueChanged<String>? onOpenCatalog;
   final ValueChanged<bool>? onNavigationLockChanged;
+  final VoidCallback? onOpenOrders;
+  final bool retailMode;
   const SalesWorkspace({super.key,required this.client,required this.session,
-    this.onOpenCatalog,this.onNavigationLockChanged});
+    this.onOpenCatalog,this.onNavigationLockChanged,
+    this.retailMode=false,this.onOpenOrders});
   @override State<SalesWorkspace> createState()=>_SalesWorkspaceState();
 }
 class _OrderLine {
@@ -98,6 +101,18 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   LocalScope? get _localScope=>branchId==null?null:widget.client.localScope(widget.session,branchId!);
   bool get _localConfigured=>widget.client.localStore!=null&&widget.session.installationId.isNotEmpty;
   bool _lastNavigationLock=false;
+  bool _retailOpenedOnce=false;
+  void _openRetailIfPermitted(){
+    if(!widget.retailMode||_retailOpenedOnce||branchId==null||
+       !can('orders.create')||_navigationLocked)return;
+    _retailOpenedOnce=true;
+    WidgetsBinding.instance.addPostFrameCallback((_){
+      if(mounted&&widget.retailMode&&branchId!=null&&!_navigationLocked){
+        unawaited(createOrder());
+      }
+    });
+  }
+
   bool pendingNeedsReceipt=false;
   Timer? _syncTimer;
   AppLifecycleListener? _syncLifecycle;
@@ -207,7 +222,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       generation++;branches=[];orders=[];branchId=null;retryKeys.clear();
       pendingCreate=null;pendingCreateKey=null;pendingConfirm=null;
       pendingConfirmKey=null;pendingUpdate=null;pendingUpdateKey=null;
-      pendingCreateAutoConfirm=false;localRecoveryBusy=false;localRecoveryBlocked=false;pendingNeedsReceipt=false;loadBranches();_syncDelay=15;_scheduleRecovery();
+      pendingCreateAutoConfirm=false;localRecoveryBusy=false;localRecoveryBlocked=false;pendingNeedsReceipt=false;
+      _retailOpenedOnce=false;loadBranches();_syncDelay=15;_scheduleRecovery();
     }
   }
   @override void dispose(){generation++;_syncTimer?.cancel();_syncLifecycle?.dispose();search.dispose();super.dispose();}
@@ -227,7 +243,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       });
       if(branchId==null){
         setState((){error='Tài khoản chưa có quyền xem đơn hàng.';loading=false;});
-      }else{await _restorePending();await reload();}
+      }else{await _restorePending();await reload();if(mounted)_openRetailIfPermitted();}
     }on ErpApiError catch(e){
       if(mounted&&generation==id)setState((){loading=false;error=e.message;});
     }catch(_){
@@ -253,6 +269,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   }
   Future<Map<String,dynamic>?> editForm({Map<String,dynamic>? order,bool copying=false,bool localDraft=false})async{
     final branch=branchId;if(branch==null)return null;
+    // Retail entry is a canonical order in pickup mode, not a payment or stock post.
+    final retailNewOrder=widget.retailMode&&order==null&&!copying&&!localDraft;
     final formScope=_localScope,formToken=widget.session.token,formSession=widget.session;
     bool cachedCatalog=false;
     Future<List<Map<String,dynamic>>> catalog(String resource,{String? query,String? itemId})async{
@@ -335,7 +353,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     final deliveryLabels={'TRIP':'Giao thường','MANUAL':'Giao thủ công','PICKUP':'Khách lấy tại kho'};
     final collectionLabels={'COLLECT_ON_DELIVERY':'Thu khi giao','PREPAID':'Trả trước',
       'COLLECT_AFTER_DELIVERY':'Thu sau giao','CREDIT_TERMS':'Công nợ theo hạn'};
-    var deliveryChoice=(savedShipping['deliveryChoice']??entrySettings['deliveryChoice']??'TRIP').toString();
+    var deliveryChoice=(savedShipping['deliveryChoice']??(retailNewOrder?'PICKUP':entrySettings['deliveryChoice'])??'TRIP').toString();
     var collectionPolicy=(savedShipping['collectionPolicy']??'COLLECT_ON_DELIVERY').toString();
     var customerMode=(savedShipping['customerMode']??'EXISTING').toString();
     String? locationId=savedShipping['customerLocationId'] as String?;
@@ -348,8 +366,14 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     List<Map<String,dynamic>> locations=[];
     Map<String,dynamic>? walkInCustomer=entrySettings['walkInCustomer'] is Map
       ?Map<String,dynamic>.from(entrySettings['walkInCustomer'] as Map):null;
+    // Prefer only an existing server-provided, active walk-in customer. Never
+    // invent customer IDs or silently create a customer when opening the POS.
+    final retailWalkInId=retailNewOrder&&walkInCustomer?['active']!=false&&
+      walkInCustomer?['id'] is String&&(walkInCustomer!['id'] as String).isNotEmpty
+        ?walkInCustomer['id'] as String:null;
+    if(retailWalkInId!=null)customerMode='WALK_IN';
     String? customer=(order?['customerId'] as String?) ??
-      (localDraft?null:(customers.length==1?customers.single['id'] as String:null));
+      (localDraft?null:(retailWalkInId??(customers.length==1?customers.single['id'] as String:null)));
     if(savedShipping.isEmpty&&customer!=null){
       deliveryAddress=(customers.where((x)=>x['id']==customer).firstOrNull?['deliveryAddress']??'').toString();
     }
@@ -2991,12 +3015,13 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
 
   }
   @override Widget build(BuildContext context){
+    final retail=widget.retailMode&&MediaQuery.sizeOf(context).width<760;
     return Padding(
-      padding:const EdgeInsets.all(18),
+      padding:EdgeInsets.all(retail?8:18),
       child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
         Wrap(alignment:WrapAlignment.spaceBetween,
           crossAxisAlignment:WrapCrossAlignment.center,spacing:12,runSpacing:12,children:[
-            Text('Danh sách đơn bán hàng',
+            Text(retail?'Bán lẻ · Lên đơn nhanh':'Danh sách đơn bán hàng',
               style:TextStyle(color:ErpPalette.of(context).ink,fontSize:18,fontWeight:FontWeight.w800)),
             FilledButton.icon(
               key:const ValueKey('sales-create'),
@@ -3009,6 +3034,17 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                 pendingUpdate!=null?'Kiểm tra cập nhật':
                 pendingCreate==null?'Lập đơn hàng':'Kiểm tra đơn vừa lưu')),
           ]),
+        if(retail)...[
+          const SizedBox(height:8),
+          Text('Giá và thành tiền lấy từ máy chủ. Lưu/xác nhận đơn không đồng nghĩa đã xuất kho hoặc thu tiền.',
+            key:const ValueKey('sales-retail-unsettled-notice'),
+            style:TextStyle(fontSize:12,color:ErpPalette.of(context).muted)),
+          if(widget.onOpenOrders!=null)Align(alignment:Alignment.centerLeft,
+            child:TextButton.icon(
+              key:const ValueKey('sales-retail-orders'),
+              onPressed:widget.onOpenOrders,icon:const Icon(Icons.receipt_long_outlined),
+              label:const Text('Xem đơn hàng'))),
+        ],
         const SizedBox(height:14),
         if(missingCatalog!=null)Container(
           key:const ValueKey('sales-missing-prerequisite'),
@@ -3038,8 +3074,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           items:branches.map((x)=>DropdownMenuItem<String>(
             value:x['id'] as String,child:Text(x['name'] as String))).toList(),
           onChanged:_navigationLocked?null:(value)async{setState(()=>branchId=value);await _restorePending();await reload();}),
-        const SizedBox(height:12),
-        TextField(key:const ValueKey('sales-search'),controller:search,
+        if(!retail)const SizedBox(height:12),
+        if(!retail)TextField(key:const ValueKey('sales-search'),controller:search,
           onSubmitted:(_)=>reload(),
           decoration:InputDecoration(labelText:'Tìm mã đơn hoặc khách hàng',
             prefixIcon:const Icon(Icons.search),
@@ -3050,6 +3086,10 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           child:Text(error!,style:TextStyle(color:ErpPalette.of(context).danger))),
         if(loading)const Center(child:Padding(padding:EdgeInsets.all(22),
           child:CircularProgressIndicator()))
+        else if(retail)Padding(
+          padding:const EdgeInsets.symmetric(vertical:16),
+          child:Text('Chọn Lập đơn hàng để tiếp tục giỏ đang lưu hoặc tạo đơn mới.',
+            style:TextStyle(color:ErpPalette.of(context).muted))),
         else if(orders.isEmpty)Center(child:Padding(
           padding:EdgeInsets.all(26),child:Text('Chưa có đơn hàng.',
             style:TextStyle(color:ErpPalette.of(context).muted))))
@@ -3096,7 +3136,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
               child:const Text('Chi tiết'))),
           ])).toList(),
         )),
-        Align(alignment:Alignment.centerRight,child:TextButton.icon(
+        if(!retail)Align(alignment:Alignment.centerRight,child:TextButton.icon(
           onPressed:loading?null:reload,icon:const Icon(Icons.refresh),
           label:const Text('Làm mới'))),
       ]),
