@@ -1,7 +1,7 @@
 name: ERP Android signed release
 on:
-  # Single opt-in bootstrap: only a reviewed main commit marked below can start
-  # a signed artifact build after its seven quality jobs PASS. No R2 publish.
+  # M3 one-shot signed v2: only a reviewed merge commit carrying the exact
+  # marker can build after all seven main CI jobs pass. No R2 activation.
   workflow_run:
     workflows: ['ERP quality gates']
     types: [completed]
@@ -35,14 +35,14 @@ jobs:
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_branch == 'main' &&
       github.event.workflow_run.conclusion == 'success' &&
-      contains(github.event.workflow_run.head_commit.message, '[erp-apk-bootstrap-0.1.0]')))
+      contains(github.event.workflow_run.head_commit.message, '[erp-apk-m3-v2]')))
     runs-on: ubuntu-latest
     environment: android-release
     env:
       GH_TOKEN: ${{ github.token }}
       APPROVED_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.approved_sha }}
-      BUILD_NUMBER: ${{ github.event_name == 'workflow_run' && '1' || inputs.build_number }}
-      VERSION_NAME: ${{ github.event_name == 'workflow_run' && '0.1.0' || inputs.version_name }}
+      BUILD_NUMBER: ${{ github.event_name == 'workflow_run' && '2' || inputs.build_number }}
+      VERSION_NAME: ${{ github.event_name == 'workflow_run' && '0.2.0' || inputs.version_name }}
     steps:
       - uses: actions/checkout@v4
         with:
