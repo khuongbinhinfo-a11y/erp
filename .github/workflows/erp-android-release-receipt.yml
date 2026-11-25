@@ -1,0 +1,40 @@
+name: ERP Android signed release receipt
+on:
+  workflow_run:
+    workflows: ['ERP Android signed release']
+    types: [completed]
+permissions:
+  contents: read
+  actions: read
+  issues: write
+jobs:
+  post-receipt:
+    if: github.repository == 'khuongbinhinfo-a11y/erp'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_RUN_ID: ${{ github.event.workflow_run.id }}
+      RELEASE_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+      RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - name: Record actual signed release outcome in T2 issue
+        run: |
+          set -euo pipefail
+          artifacts="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_RUN_ID/artifacts?per_page=100")"
+          matches="$(printf '%s' "$artifacts" | jq -c '[.artifacts[] | select(.name == "erp-android-signed" and .expired == false)]')"
+          count="$(printf '%s' "$matches" | jq length)"
+          {
+            printf 'ERP Android signed release workflow completed.\n\n'
+            printf -- '- Source run: https://github.com/%s/actions/runs/%s\n' "$GITHUB_REPOSITORY" "$RELEASE_RUN_ID"
+            printf -- '- Run SHA: `%s`\n' "$RELEASE_SHA"
+            printf -- '- Workflow conclusion: **%s**\n' "$RELEASE_CONCLUSION"
+            if [[ "$RELEASE_CONCLUSION" == "success" && "$count" == "1" ]]; then
+              artifact_id="$(printf '%s' "$matches" | jq -r '.[0].id')"
+              artifact_bytes="$(printf '%s' "$matches" | jq -r '.[0].size_in_bytes')"
+              printf -- '- Signed artifact: **erp-android-signed**, ID `%s`, archive %s bytes\n' "$artifact_id" "$artifact_bytes"
+              printf -- '- Download in GitHub Actions run → Artifacts → erp-android-signed. APK device UAT still required.\n'
+            else
+              printf -- '- Signed artifact: **not verified** (match count: %s). Inspect signing job logs; do not publish R2.\n' "$count"
+            fi
+          } > /tmp/erp-android-receipt.md
+          gh issue comment 46 -R "$GITHUB_REPOSITORY" --body-file /tmp/erp-android-receipt.md
