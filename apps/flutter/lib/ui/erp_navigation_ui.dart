@@ -30,7 +30,7 @@ class ErpPageHeader extends StatelessWidget {
       ]);
       return Container(
         key:const ValueKey('erp-page-header'),
-        height:stacked?(compact?100:138):(compact?58:80),
+        height:stacked?(compact?116:138):(compact?58:80),
         width:double.infinity,
         padding:EdgeInsets.symmetric(horizontal:stacked?14:20),
         decoration:BoxDecoration(color:ErpPalette.of(context).action,
@@ -39,7 +39,7 @@ class ErpPageHeader extends StatelessWidget {
         child:stacked
           ? Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
               SizedBox(height:compact?6:10),
-              SizedBox(height:compact?42:54,child:Align(alignment:Alignment.centerLeft,
+              SizedBox(height:compact?54:54,child:Align(alignment:Alignment.centerLeft,
                 child:title)),
               const SizedBox(height:4),
               SizedBox(height:compact?48:66,child:trailing),
