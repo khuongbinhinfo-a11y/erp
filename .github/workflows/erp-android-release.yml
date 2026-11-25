@@ -65,12 +65,11 @@ jobs:
           ERP_KEYSTORE_B64: ${{ secrets.ERP_ANDROID_KEYSTORE_B64 }}
           ERP_ANDROID_STORE_PASSWORD: ${{ secrets.ERP_ANDROID_STORE_PASSWORD }}
           ERP_ANDROID_KEY_ALIAS: ${{ secrets.ERP_ANDROID_KEY_ALIAS }}
-          ERP_ANDROID_KEY_PASSWORD: ${{ secrets.ERP_ANDROID_KEY_PASSWORD }}
           ERP_ANDROID_CERT_SHA256: ${{ vars.ERP_ANDROID_CERT_SHA256 }}
           ERP_PUBLIC_API_URL: ${{ vars.ERP_PUBLIC_API_URL }}
         run: |
           set -euo pipefail
-          for name in ERP_KEYSTORE_B64 ERP_ANDROID_STORE_PASSWORD ERP_ANDROID_KEY_ALIAS ERP_ANDROID_KEY_PASSWORD ERP_ANDROID_CERT_SHA256 ERP_PUBLIC_API_URL; do
+          for name in ERP_KEYSTORE_B64 ERP_ANDROID_STORE_PASSWORD ERP_ANDROID_KEY_ALIAS ERP_ANDROID_CERT_SHA256 ERP_PUBLIC_API_URL; do
             test -n "${!name}"
           done
           [[ "$ERP_ANDROID_CERT_SHA256" =~ ^[a-fA-F0-9]{64}$ ]]
@@ -78,7 +77,34 @@ jobs:
           export ERP_ANDROID_KEYSTORE="$RUNNER_TEMP/erp-release.keystore"
           trap 'rm -f "$ERP_ANDROID_KEYSTORE"' EXIT
           umask 077
-          printf '%s' "$ERP_KEYSTORE_B64" | base64 --decode > "$ERP_ANDROID_KEYSTORE"
+          if ! printf '%s' "$ERP_KEYSTORE_B64" | base64 --decode > "$ERP_ANDROID_KEYSTORE"; then
+            echo "::error title=ERP Android signing::Keystore Base64 is invalid."
+            exit 1
+          fi
+          # PKCS12 created with keytool uses the same password for store and private key.
+          # Check the actual private key, alias and certificate BEFORE a long Gradle build.
+          if ! keytool -list -storetype PKCS12 -keystore "$ERP_ANDROID_KEYSTORE" \
+            -storepass:env ERP_ANDROID_STORE_PASSWORD -alias "$ERP_ANDROID_KEY_ALIAS" >/dev/null 2>&1; then
+            echo "::error title=ERP Android signing::Keystore, store password or alias is incorrect."
+            exit 1
+          fi
+          csr="$RUNNER_TEMP/erp-signing-check.csr"
+          if ! keytool -certreq -storetype PKCS12 -keystore "$ERP_ANDROID_KEYSTORE" \
+            -storepass:env ERP_ANDROID_STORE_PASSWORD -keypass:env ERP_ANDROID_STORE_PASSWORD \
+            -alias "$ERP_ANDROID_KEY_ALIAS" -file "$csr" >/dev/null 2>&1; then
+            echo "::error title=ERP Android signing::Private key is inaccessible using the keystore password."
+            exit 1
+          fi
+          rm -f "$csr"
+          cert="$(keytool -exportcert -rfc -storetype PKCS12 \
+            -keystore "$ERP_ANDROID_KEYSTORE" -storepass:env ERP_ANDROID_STORE_PASSWORD \
+            -alias "$ERP_ANDROID_KEY_ALIAS" | openssl x509 -noout -fingerprint -sha256 \
+            | cut -d= -f2 | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          if [[ "$cert" != "${ERP_ANDROID_CERT_SHA256,,}" ]]; then
+            echo "::error title=ERP Android signing::Certificate SHA-256 does not match the protected environment variable."
+            exit 1
+          fi
+          echo "ERP_ANDROID_PKCS12_PREFLIGHT_PASS"
           python3 platform/prepare_native.py android
           flutter pub get
           flutter build apk --release --build-name "$VERSION_NAME" --build-number "$BUILD_NUMBER" --dart-define="ERP_API_BASE_URL=$ERP_PUBLIC_API_URL"
