@@ -353,9 +353,9 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
       title:const Text('Ghi nhận hàng từ nhà cung cấp'),
       content:SizedBox(width:540,child:SingleChildScrollView(child:
        Column(mainAxisSize:MainAxisSize.min,children:[
-        const Align(alignment:Alignment.centerLeft,child:Text(
+        Align(alignment:Alignment.centerLeft,child:Text(
           'Nhập số lượng thực nhận theo đơn vị gốc. Bỏ trống hàng chưa nhận.',
-          style:TextStyle(color:ErpTokens.muted,fontSize:12))),
+          style:TextStyle(color:ErpPalette.of(context).muted,fontSize:12))),
         const SizedBox(height:12),
         for(final item in items)
          Padding(padding:const EdgeInsets.only(bottom:14),child:Column(
@@ -364,7 +364,7 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
              style:const TextStyle(fontWeight:FontWeight.w700)),
            Text('Đặt '+erpNumberText(item['orderedBase'])+
              ' · Đã nhận '+erpNumberText(item['receivedBase']),
-             style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
+             style:TextStyle(color:ErpPalette.of(context).muted,fontSize:12)),
            TextField(controller:controllers[(item['lineNo'] as num).toInt()],
              keyboardType:const TextInputType.numberWithOptions(decimal:true),
              inputFormatters:const [ErpGroupedNumberFormatter(maxIntegerDigits:12,maxFractionDigits:6)],
@@ -403,7 +403,7 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
       const SizedBox(height:4),
       Text((row['supplierName']??'').toString()+' · '+status(statusValue)+
        ' · '+(row['lineCount']??'').toString()+' mặt hàng',
-       style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
+       style:TextStyle(color:ErpPalette.of(context).muted,fontSize:12)),
      ])),
      if(!busy&&!hasPending&&statusValue=='DRAFT'&&hasBranch('purchase.confirm'))
       TextButton(onPressed:()=>changeOrder(row,'confirm'),child:const Text('Xác nhận')),
@@ -422,8 +422,8 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
   return Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
    Text('Đơn mua và nhận hàng',style:Theme.of(context).textTheme.titleLarge),
    const SizedBox(height:6),
-   const Text('Tạo đơn → xác nhận → nhận từng đợt. Tồn chỉ tăng sau khi máy chủ ghi sổ.',
-     style:TextStyle(color:ErpTokens.muted,fontSize:12)),
+   Text('Tạo đơn → xác nhận → nhận từng đợt. Tồn chỉ tăng sau khi máy chủ ghi sổ.',
+     style:TextStyle(color:ErpPalette.of(context).muted,fontSize:12)),
    const SizedBox(height:16),
    Wrap(spacing:12,runSpacing:12,children:[
     SizedBox(width:narrow?300:255,child:DropdownButtonFormField<String>(
@@ -462,7 +462,7 @@ class _PurchasingWorkspaceState extends State<PurchasingWorkspace>{
       tooltip:'Tải lại đơn mua'),
    ]),
    if(error!=null)Padding(padding:const EdgeInsets.symmetric(vertical:12),
-    child:Text(error!,style:const TextStyle(color:Colors.red))),
+    child:Text(error!,style:TextStyle(color:ErpPalette.of(context).danger))),
    if(loading)const LinearProgressIndicator(),
    if(!loading&&error==null&&orders.isEmpty)const Padding(
     padding:EdgeInsets.all(18),child:Text('Chưa có đơn mua tại kho này.')),

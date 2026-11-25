@@ -136,7 +136,7 @@ class _CustomerLocationsDialogState extends State<CustomerLocationsDialog>{
       title:Text('Cửa hàng / địa chỉ · ${widget.customerName}'),
       content:SizedBox(width:620,height:400,child:Column(children:[
         if(loading)const LinearProgressIndicator(),
-        if(error!=null)Text(error!,style:const TextStyle(color:ErpTokens.danger)),
+        if(error!=null)Text(error!,style:TextStyle(color:ErpPalette.of(context).danger)),
         Expanded(child:ListView(children:[
           for(final row in locations)
             ListTile(
@@ -146,10 +146,10 @@ class _CustomerLocationsDialogState extends State<CustomerLocationsDialog>{
                 style:const TextStyle(fontWeight:FontWeight.w700)),
               subtitle:Text('${row['address']}${row['phone']!=null?' · ${row['phone']}':''}'),
               trailing:Row(mainAxisSize:MainAxisSize.min,children:[
-                if(row['isDefault']==true)const Text('Mặc định',
-                  style:TextStyle(fontWeight:FontWeight.w700,color:ErpTokens.primary)),
-                if(row['active']==false)const Text('Ngừng sử dụng',
-                  style:TextStyle(color:ErpTokens.danger)),
+                if(row['isDefault']==true)Text('Mặc định',
+                  style:TextStyle(fontWeight:FontWeight.w700,color:ErpPalette.of(context).primary)),
+                if(row['active']==false)Text('Ngừng sử dụng',
+                  style:TextStyle(color:ErpPalette.of(context).danger)),
                 if(widget.canWrite)IconButton(
                   tooltip:'Sửa địa chỉ',onPressed:saving?null:()=>edit(row),
                   icon:const Icon(Icons.edit_outlined,size:18)),

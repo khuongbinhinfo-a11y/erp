@@ -289,10 +289,10 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
       const Text('2. Ánh xạ cột Excel/CSV sang trường ERP',
         style:TextStyle(fontSize:16,fontWeight:FontWeight.w700)),
       const SizedBox(height:6),
-      const Text('Cột không chọn = giữ nguyên khi cập nhật. Cột đã chọn nhưng ô trống '
+      Text('Cột không chọn = giữ nguyên khi cập nhật. Cột đã chọn nhưng ô trống '
         '= xóa giá trị tùy chọn. Mã khách, mã sản phẩm, SKU hoặc mã bảng giá '
         'là khóa nhận diện; không nhập tên danh mục thay cho mã.',
-        style:TextStyle(color:ErpTokens.muted,fontSize:12)),
+        style:TextStyle(color:ErpPalette.of(context).muted,fontSize:12)),
       const SizedBox(height:12),
       Wrap(spacing:12,runSpacing:12,children:[
         for(final field in fieldKeys.where((f)=>kind!='prices'||priceListId==null||
@@ -316,7 +316,7 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
       const SizedBox(height:8),
       Text('Tìm thấy '+(inspection?['rowCount']??0).toString()+
         ' dòng. Dòng có công thức Excel không được thực thi.',
-        style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
+        style:TextStyle(color:ErpPalette.of(context).muted,fontSize:12)),
     ]);
   }
   Widget _previewTable(){
@@ -354,7 +354,7 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
         '  •  Lỗi: '+(summary['error']??0).toString()),
       const SizedBox(height:8),
       Container(height:380,decoration:BoxDecoration(
-        border:Border.all(color:ErpTokens.fresh)),
+        border:Border.all(color:ErpPalette.of(context).fresh)),
         child:ListView.separated(
           key:const ValueKey('catalog-bulk-preview-rows'),
           itemCount:data.length,
@@ -371,13 +371,13 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
                 Text('Dòng '+x['line'].toString()+' · '+x['key'].toString()+
                   ' · '+actionLabel,
                   style:TextStyle(fontWeight:FontWeight.w700,
-                    color:bad?ErpTokens.danger:ErpTokens.ink)),
+                    color:bad?ErpPalette.of(context).danger:ErpPalette.of(context).ink)),
                 if(bad)Text('Lỗi: '+x['error'].toString(),
-                  style:const TextStyle(color:ErpTokens.danger))
+                  style:TextStyle(color:ErpPalette.of(context).danger))
                 else ...[
                   Text('Trước: '+details(x['before']),
                     maxLines:2,overflow:TextOverflow.ellipsis,
-                    style:const TextStyle(color:ErpTokens.muted,fontSize:12)),
+                    style:TextStyle(color:ErpPalette.of(context).muted,fontSize:12)),
                   Text('Sau: '+details(x['after']),
                     maxLines:2,overflow:TextOverflow.ellipsis),
                 ],
@@ -385,8 +385,8 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
           }),
       ),
       const SizedBox(height:12),
-      if(hasError)const Text('Có dòng lỗi: chưa thể áp dụng. Sửa file hoặc ánh xạ rồi xem trước lại.',
-        style:TextStyle(color:ErpTokens.danger)),
+      if(hasError)Text('Có dòng lỗi: chưa thể áp dụng. Sửa file hoặc ánh xạ rồi xem trước lại.',
+        style:TextStyle(color:ErpPalette.of(context).danger)),
       FilledButton.icon(
         key:const ValueKey('catalog-bulk-apply'),
         onPressed:busy||hasError||!widget.canWrite||pendingPayload!=null
@@ -397,12 +397,12 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
   }
   @override Widget build(BuildContext context){
     return Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
-      const Text('Nhập / cập nhật Excel – CSV',
-        style:TextStyle(fontWeight:FontWeight.w800,fontSize:19,color:ErpTokens.ink)),
+      Text('Nhập / cập nhật Excel – CSV',
+        style:TextStyle(fontWeight:FontWeight.w800,fontSize:19,color:ErpPalette.of(context).ink)),
       const SizedBox(height:6),
-      const Text('Quy trình: chọn file → ánh xạ cột → xem trước trước/sau → xác nhận. '
+      Text('Quy trình: chọn file → ánh xạ cột → xem trước trước/sau → xác nhận. '
         'Chỉ lưu dữ liệu sau khi máy chủ xác nhận. Một file tối đa 5.000 dòng và 6 MB.',
-        style:TextStyle(color:ErpTokens.muted,fontSize:12)),
+        style:TextStyle(color:ErpPalette.of(context).muted,fontSize:12)),
       const SizedBox(height:15),
       Wrap(spacing:12,runSpacing:10,children:[
         if(widget.initialArea!='price-lists')SizedBox(width:230,child:DropdownButtonFormField<String>(
@@ -465,7 +465,7 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
         child:LinearProgressIndicator()),
       if(error!=null)Padding(padding:const EdgeInsets.symmetric(vertical:10),
         child:Text(error!,key:const ValueKey('catalog-bulk-error'),
-          style:const TextStyle(color:ErpTokens.danger))),
+          style:TextStyle(color:ErpPalette.of(context).danger))),
       if(inspection!=null&&pendingPayload==null)...[
         const SizedBox(height:20),
         _mappingEditor(),
@@ -490,7 +490,7 @@ class _CatalogBulkWorkspaceState extends State<CatalogBulkWorkspace>{
           (applied!['applied'] as List? ?? []).length.toString()+
           ' dòng được ghi; các dòng không đổi được giữ nguyên.',
           key:const ValueKey('catalog-bulk-applied'),
-          style:const TextStyle(color:ErpTokens.primary,fontWeight:FontWeight.w700))),
+          style:TextStyle(color:ErpPalette.of(context).primary,fontWeight:FontWeight.w700))),
     ]);
   }
 }
