@@ -79,3 +79,34 @@ test("mismatched remote object metadata never serves data", async () => {
     assert.equal(res.status,409);
   });
 });
+
+test("R2 is required to hash-check the uploaded stream before immutable commit", async () => {
+  await withGithubJwt(async jwt => {
+    const request = new Request("https://erp-android-r2-stage.gustavjung24.workers.dev/uat/0.1.0/upload",{
+      method:"PUT",
+      body:"not the reviewed APK",
+      headers:{
+        authorization:"Bearer "+jwt,
+        "content-length":"63425634",
+        "content-type":"application/vnd.android.package-archive",
+        "x-erp-sha256":SHA
+      }
+    });
+    let putCalled=false;
+    const strict={ERP_ANDROID_RELEASES:{
+      head:async()=>null,
+      put:async (key,body,opts)=>{
+        putCalled=true;
+        assert.equal(key,"releases/1/erp-1.apk");
+        assert.equal(opts.sha256,SHA);
+        // Emulate Cloudflare R2's BadDigest rejection for a mismatched stream.
+        const stream = await new Response(body).arrayBuffer();
+        const actual = crypto.createHash("sha256").update(Buffer.from(stream)).digest("hex");
+        if(actual!==opts.sha256) throw Error("BadDigest");
+        throw Error("Unexpected write");
+      }
+    }};
+    await assert.rejects(()=>worker.fetch(request,strict),/BadDigest/);
+    assert.equal(putCalled,true);
+  });
+});
