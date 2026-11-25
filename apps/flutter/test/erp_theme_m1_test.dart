@@ -108,7 +108,10 @@ void main(){
     expect(find.byKey(const ValueKey('erp-mobile-3')),findsNothing);
     expect(find.byKey(const ValueKey('erp-mobile-CompanySection.orders')),findsNothing);
     await tester.tap(more);
-    await tester.pumpAndSettle();
+    // AdminWorkspace may keep a legitimate network loading frame alive.
+    // Advance only the bottom-sheet animation; this is an RBAC assertion.
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds:420));
     expect(find.byKey(const ValueKey('erp-mobile-more-module-2')),findsOneWidget);
     expect(find.byKey(const ValueKey('erp-mobile-more-products')),findsNothing);
     expect(find.byKey(const ValueKey('erp-mobile-more-warehouses')),findsNothing);
