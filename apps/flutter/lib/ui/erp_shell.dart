@@ -303,7 +303,10 @@ class _ErpShellState extends State<ErpShell> {
     } else if (selected == 2) {
       content = AdminWorkspace(
         previewOnly: widget.previewOnly, client: widget.client, session: widget.session);
-    } else if(mobile&&selected==3){
+    } else if(selected==3){
+      // Keep the canonical retail workspace mounted across mobile, web/PWA
+      // and desktop breakpoints. A pending server receipt and retry key must
+      // never be discarded by a resize or orientation change.
       content = widget.previewOnly||widget.client==null||widget.session==null
         ?_MobileRetailEntry(onOrders:canCompanySection(CompanySection.orders)
           ?()=>_selectSection(CompanySection.orders):null)
