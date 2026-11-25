@@ -1272,13 +1272,13 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
               child:Column(children:[
                 Container(
                   padding:EdgeInsets.symmetric(horizontal:narrow?12:18,vertical:5),
-                  color:ErpPalette.of(context).action,
+                  color:ErpPalette.of(ctx).action,
                   child:Row(children:[
                     const Icon(Icons.receipt_long_outlined,color:Colors.white),
                     const SizedBox(width:10),
                     Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
                       Text(order==null||copying||localDraft?'Lập đơn bán hàng':'Điều chỉnh đơn bán hàng',
-                        style:TextStyle(color:ErpPalette.of(context).onAction,fontSize:narrow?16:21,
+                        style:TextStyle(color:ErpPalette.of(ctx).onAction,fontSize:narrow?16:21,
                           fontWeight:FontWeight.w800)),
                     ])),
                     IconButton(tooltip:'Đóng',onPressed:()=>requestClose(ctx),
@@ -1288,7 +1288,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                 Expanded(child:SingleChildScrollView(
                   padding:EdgeInsets.all(narrow?10:14),
                   child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
-                    if(cachedCatalog)Text('Danh mục lưu trên máy có thể cũ. Phải tra giá máy chủ trước khi lưu đơn.',style:TextStyle(color:ErpPalette.of(context).warning)),
+                    if(cachedCatalog)Text('Danh mục lưu trên máy có thể cũ. Phải tra giá máy chủ trước khi lưu đơn.',style:TextStyle(color:ErpPalette.of(ctx).warning)),
                     Wrap(
                       key:const ValueKey('sales-order-context'),
                       spacing:12,runSpacing:12,children:[
@@ -1414,8 +1414,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       margin:const EdgeInsets.symmetric(vertical:8),
                       padding:const EdgeInsets.all(12),
                       decoration:BoxDecoration(
-                        color:ErpPalette.of(context).mint,
-                        border:Border.all(color:ErpPalette.of(context).border),
+                        color:ErpPalette.of(ctx).mint,
+                        border:Border.all(color:ErpPalette.of(ctx).border),
                         borderRadius:BorderRadius.circular(6)),
                       child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
                         const Text('Thêm khách hàng vào danh mục',
@@ -1563,14 +1563,14 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           onChanged:(v){deliveryAddress=v;addressEditGeneration++;}),
                       ],
                       Text('Hạn thanh toán: ${customerMode=='WALK_IN'?0:customers.where((x)=>x['id']==customer).firstOrNull?['paymentTermsDays']??savedShipping['paymentTermsDays']??0} ngày · Chưa ghi nhận thu tiền',
-                        style:TextStyle(fontSize:12,color:ErpPalette.of(context).muted)),
+                        style:TextStyle(fontSize:12,color:ErpPalette.of(ctx).muted)),
                     ],
                     if(!modern&&customers.any((x)=>x['id']==customer))
                       Text('Địa chỉ giao: '+
                         (customers.firstWhere((x)=>x['id']==customer)['deliveryAddress']??'Chưa cập nhật').toString()+
                         ' · Thanh toán: '+
                         (customers.firstWhere((x)=>x['id']==customer)['paymentTermsDays']??0).toString()+' ngày',
-                        style:TextStyle(fontSize:12,color:ErpPalette.of(context).muted)),
+                        style:TextStyle(fontSize:12,color:ErpPalette.of(ctx).muted)),
                     const Divider(height:14),
                     Align(alignment:Alignment.centerLeft,child:ConstrainedBox(
                       constraints:const BoxConstraints(maxWidth:760),
@@ -1637,25 +1637,25 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       Padding(padding:const EdgeInsets.symmetric(vertical:8),
                         child:Text(skuSearchError!,
                           key:const ValueKey('sales-sku-error'),
-                          style:TextStyle(color:ErpPalette.of(context).danger,fontSize:12))),
+                          style:TextStyle(color:ErpPalette.of(ctx).danger,fontSize:12))),
                     if(skuMatches.isNotEmpty)
                       Material(
                         key:const ValueKey('sales-sku-dropdown'),
                         elevation:9,shadowColor:const Color(0x33102E24),
-                        color:ErpPalette.of(context).surface,clipBehavior:Clip.antiAlias,
+                        color:ErpPalette.of(ctx).surface,clipBehavior:Clip.antiAlias,
                         shape:RoundedRectangleBorder(
                           borderRadius:BorderRadius.circular(9),
-                          side:BorderSide(color:ErpPalette.of(context).border)),
+                          side:BorderSide(color:ErpPalette.of(ctx).border)),
                         child:Column(mainAxisSize:MainAxisSize.min,children:[
-                          Container(color:ErpPalette.of(context).mint,
+                          Container(color:ErpPalette.of(ctx).mint,
                             padding:const EdgeInsets.symmetric(horizontal:12,vertical:8),
                             child:Row(children:[
                               Expanded(child:Text('TÊN SẢN PHẨM · MÃ / ĐVT',
                                 style:TextStyle(fontSize:10,fontWeight:FontWeight.w800,
-                                  color:ErpPalette.of(context).primary))),
+                                  color:ErpPalette.of(ctx).primary))),
                               Text('GIÁ / KHẢ DỤNG',
                                 style:TextStyle(fontSize:10,fontWeight:FontWeight.w800,
-                                  color:ErpPalette.of(context).primary)),
+                                  color:ErpPalette.of(ctx).primary)),
                             ])),
                           ConstrainedBox(
                             constraints:const BoxConstraints(maxHeight:144),
@@ -1679,7 +1679,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                                     :stockComplete?'0 đv gốc':'Chưa xác định tồn';
                                 return Material(
                                   color:i==selectedSkuIndex
-                                    ?ErpPalette.of(context).mint:Colors.transparent,
+                                    ?ErpPalette.of(ctx).mint:Colors.transparent,
                                   child:InkWell(
                                     key:ValueKey('sales-sku-result-'+i.toString()),
                                     onTap:()=>chooseSku(ctx,sku,refresh),
@@ -1692,7 +1692,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                                     },
                                     child:Container(
                                       decoration:BoxDecoration(border:Border(
-                                        bottom:BorderSide(color:ErpPalette.of(context).border,width:.7))),
+                                        bottom:BorderSide(color:ErpPalette.of(ctx).border,width:.7))),
                                       padding:const EdgeInsets.symmetric(horizontal:10,vertical:3),
                                       child:Row(children:[
                                         Expanded(child:Column(
@@ -1701,14 +1701,14 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                                             Text((sku['productName']??'Sản phẩm').toString(),
                                               maxLines:1,overflow:TextOverflow.ellipsis,
                                               style:TextStyle(fontSize:13,
-                                                fontWeight:FontWeight.w700,color:ErpPalette.of(context).ink)),
+                                                fontWeight:FontWeight.w700,color:ErpPalette.of(ctx).ink)),
                                             const SizedBox(height:3),
                                             Text('SKU '+(sku['code']??sku['sku']??'').toString()+
                                               ' · '+(sku['unitCode']??'').toString()+
                                               ((sku['barcode']??'').toString().isEmpty
                                                 ?'':' · '+sku['barcode'].toString()),
                                               maxLines:1,overflow:TextOverflow.ellipsis,
-                                              style:TextStyle(fontSize:11,color:ErpPalette.of(context).muted)),
+                                              style:TextStyle(fontSize:11,color:ErpPalette.of(ctx).muted)),
                                           ])),
                                         const SizedBox(width:8),
                                         SizedBox(width:narrow?116:175,
@@ -1718,10 +1718,10 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                                                 overflow:TextOverflow.ellipsis,
                                                 style:TextStyle(fontSize:narrow?11:13,
                                                   fontWeight:FontWeight.w800,
-                                                  color:unitPrice!=null?ErpPalette.of(context).fresh:ErpPalette.of(context).muted)),
+                                                  color:unitPrice!=null?ErpPalette.of(ctx).fresh:ErpPalette.of(ctx).muted)),
                                               const SizedBox(height:3),
                                               Text(available,maxLines:1,overflow:TextOverflow.ellipsis,
-                                                style:TextStyle(fontSize:11,color:ErpPalette.of(context).muted)),
+                                                style:TextStyle(fontSize:11,color:ErpPalette.of(ctx).muted)),
                                             ])),
                                       ]),
                                     ),
@@ -1737,17 +1737,17 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       padding:const EdgeInsets.symmetric(horizontal:8,vertical:7),
                       child:Row(children:[
                         Expanded(flex:5,child:Text('HÀNG HÓA / SKU',
-                          style:TextStyle(fontWeight:FontWeight.w700,fontSize:11,color:ErpPalette.of(context).muted))),
-                        SizedBox(width:92,child:Text('ĐVT',style:TextStyle(fontSize:11,color:ErpPalette.of(context).muted))),
-                        SizedBox(width:112,child:Text('SỐ LƯỢNG',textAlign:TextAlign.center,style:TextStyle(fontSize:11,color:ErpPalette.of(context).muted))),
+                          style:TextStyle(fontWeight:FontWeight.w700,fontSize:11,color:ErpPalette.of(ctx).muted))),
+                        SizedBox(width:92,child:Text('ĐVT',style:TextStyle(fontSize:11,color:ErpPalette.of(ctx).muted))),
+                        SizedBox(width:112,child:Text('SỐ LƯỢNG',textAlign:TextAlign.center,style:TextStyle(fontSize:11,color:ErpPalette.of(ctx).muted))),
                         SizedBox(width:124,child:Text('ĐƠN GIÁ',textAlign:TextAlign.right,
-                          style:TextStyle(fontSize:11,color:ErpPalette.of(context).muted))),
+                          style:TextStyle(fontSize:11,color:ErpPalette.of(ctx).muted))),
                         SizedBox(width:76,child:Text('CK',textAlign:TextAlign.right,
-                          style:TextStyle(fontSize:11,color:ErpPalette.of(context).muted))),
+                          style:TextStyle(fontSize:11,color:ErpPalette.of(ctx).muted))),
                         SizedBox(width:76,child:Text('THUẾ %',textAlign:TextAlign.right,
-                          style:TextStyle(fontSize:11,color:ErpPalette.of(context).muted))),
+                          style:TextStyle(fontSize:11,color:ErpPalette.of(ctx).muted))),
                         SizedBox(width:120,child:Text('THÀNH TIỀN',textAlign:TextAlign.right,
-                          style:TextStyle(fontSize:11,color:ErpPalette.of(context).muted))),
+                          style:TextStyle(fontSize:11,color:ErpPalette.of(ctx).muted))),
                         const SizedBox(width:36),
                       ])),
                     for(var i=0;i<lines.length;i++)Builder(builder:(rowContext){
@@ -1819,9 +1819,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       final price=quote==null?'—':money(quote['unitPrice']);
                       final lineTotal=quote==null?'—':money(quote['lineTotal']);
                       final productName=Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-                        Text(name,style:TextStyle(color:ErpPalette.of(context).ink,fontWeight:FontWeight.w700),
+                        Text(name,style:TextStyle(color:ErpPalette.of(ctx).ink,fontWeight:FontWeight.w700),
                           maxLines:2,overflow:TextOverflow.ellipsis),
-                        Text('SKU $code',style:TextStyle(color:ErpPalette.of(context).muted,fontSize:12),
+                        Text('SKU $code',style:TextStyle(color:ErpPalette.of(ctx).muted,fontSize:12),
                           maxLines:1,overflow:TextOverflow.ellipsis),
                       ]);
                       final quantityField=SizedBox(width:narrow?118:100,
@@ -1853,7 +1853,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         textAlignVertical:TextAlignVertical.center,
                         decoration:lineDecoration('Đơn giá',
                           hint:price=='—'?'—':erpGroupedDecimalText(quote!['unitPrice']),
-                          hintStyle:TextStyle(color:ErpPalette.of(context).ink,fontWeight:FontWeight.w600))));
+                          hintStyle:TextStyle(color:ErpPalette.of(ctx).ink,fontWeight:FontWeight.w600))));
                       Widget percentField(String title,TextEditingController controller,
                           String fieldKey)=>SizedBox(width:76,child:TextField(
                         key:ValueKey('sales-'+fieldKey+'-$i'),
@@ -1886,7 +1886,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           ],
                           child:Text(switch(entry.discountMode){
                             'PER_UNIT'=>'CK/ĐVT ▾','TOTAL_AMOUNT'=>'CK dòng ▾',_=>'CK % ▾',
-                          },style:TextStyle(fontSize:11,color:ErpPalette.of(context).muted))),
+                          },style:TextStyle(fontSize:11,color:ErpPalette.of(ctx).muted))),
                         if(canTax())PopupMenuButton<String>(tooltip:'Giá đã gồm hay chưa gồm thuế',
                           key:ValueKey('sales-tax-mode-$i'),
                           onSelected:(v){entry.taxMode=v;entry.taxEdited=true;pricingChanged(ctx,refresh);},
@@ -1894,13 +1894,13 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                             PopupMenuItem(value:'EXCLUSIVE',child:Text('Giá chưa gồm thuế')),
                             PopupMenuItem(value:'INCLUSIVE',child:Text('Giá đã gồm thuế')),
                           ],child:Text(entry.taxMode=='INCLUSIVE'?'Gồm thuế ▾':'Chưa thuế ▾',
-                            style:TextStyle(fontSize:11,color:ErpPalette.of(context).muted))),
+                            style:TextStyle(fontSize:11,color:ErpPalette.of(ctx).muted))),
                         if(adjusted(entry))InkWell(
                           key:ValueKey('sales-reset-price-$i'),
                           onTap:(){entry.unitPrice.clear();entry.discountRate.text='0';entry.taxRate.text='0';
                             entry.discountEdited=false;entry.taxEdited=false;entry.discountMode='PERCENT';
                             entry.taxMode='EXCLUSIVE';entry.overrideReason='';pricingChanged(ctx,refresh);},
-                          child:Text('Giá hệ thống',style:TextStyle(fontSize:11,color:ErpPalette.of(context).muted))),
+                          child:Text('Giá hệ thống',style:TextStyle(fontSize:11,color:ErpPalette.of(ctx).muted))),
                       ]);
                       final split=TextButton(
                         style:TextButton.styleFrom(minimumSize:const Size(0,24),padding:const EdgeInsets.symmetric(horizontal:4),tapTargetSize:MaterialTapTargetSize.shrinkWrap),
@@ -1973,16 +1973,16 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           lines.removeAt(i).dispose();
                           pricingChanged(ctx,refresh);
                         },
-                        icon:Icon(Icons.close,size:18,color:ErpPalette.of(context).muted));
+                        icon:Icon(Icons.close,size:18,color:ErpPalette.of(ctx).muted));
                       return Container(
                         key:ValueKey('sales-line-$i'),
                         padding:const EdgeInsets.symmetric(horizontal:8,vertical:4),
                         decoration:BoxDecoration(
-                          border:Border(bottom:BorderSide(color:ErpPalette.of(context).border))),
+                          border:Border(bottom:BorderSide(color:ErpPalette.of(ctx).border))),
                         child:narrow?
                           Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
                             Row(children:[
-                              Text((i+1).toString()+'. ',style:TextStyle(color:ErpPalette.of(context).muted)),
+                              Text((i+1).toString()+'. ',style:TextStyle(color:ErpPalette.of(ctx).muted)),
                               Expanded(child:productName),remove,
                             ]),
                             Wrap(spacing:4,children:[previousPrice,split]),
@@ -2002,7 +2002,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                             Column(crossAxisAlignment:CrossAxisAlignment.end,children:[
                               Text('Thành tiền: $lineTotal',
                                 textAlign:TextAlign.right,softWrap:true,
-                                style:TextStyle(color:ErpPalette.of(context).ink,
+                                style:TextStyle(color:ErpPalette.of(ctx).ink,
                                   fontWeight:FontWeight.w800)),
                             ]),
                           ]):
@@ -2023,7 +2023,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                     if(lines.isEmpty)Padding(
                       padding:EdgeInsets.symmetric(vertical:12),
                       child:Text('Chưa có dòng hàng. Tìm theo mã, tên hoặc barcode rồi nhấn Enter để thêm.',
-                        style:TextStyle(color:ErpPalette.of(context).muted))),
+                        style:TextStyle(color:ErpPalette.of(ctx).muted))),
                     const Divider(height:12),
                     if(modern&&canDiscount())...[
                       Wrap(spacing:8,runSpacing:8,crossAxisAlignment:WrapCrossAlignment.center,children:[
@@ -2063,14 +2063,14 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                     if(formError!=null)Padding(
                       padding:const EdgeInsets.only(top:10),
                       child:Text(formError!,key:const ValueKey('sales-form-error'),
-                        style:TextStyle(color:ErpPalette.of(context).danger))),
+                        style:TextStyle(color:ErpPalette.of(ctx).danger))),
                   ]),
                 )),
                 Container(
                   width:double.infinity,
                   decoration:BoxDecoration(
-                    color:ErpPalette.of(context).onAction,
-                    border:Border(top:BorderSide(color:ErpPalette.of(context).border))),
+                    color:ErpPalette.of(ctx).surface,
+                    border:Border(top:BorderSide(color:ErpPalette.of(ctx).border))),
                   padding:EdgeInsets.symmetric(horizontal:narrow?12:20,vertical:10),
                   child:Wrap(
                     alignment:WrapAlignment.spaceBetween,
@@ -2087,7 +2087,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         ]),
                       Text('Tổng tiền: '+(ready?money(totalQuoted()):'—'),
                         key:const ValueKey('sales-total'),
-                        style:TextStyle(color:ErpPalette.of(context).ink,fontSize:16,
+                        style:TextStyle(color:ErpPalette.of(ctx).ink,fontSize:16,
                           fontWeight:FontWeight.w800)),
                       Wrap(spacing:8,runSpacing:7,children:[
                         TextButton(onPressed:()=>requestClose(ctx),child:const Text('Đóng')),
@@ -2836,16 +2836,16 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           child:Column(children:[
             Container(
               padding:EdgeInsets.symmetric(horizontal:narrow?12:20,vertical:12),
-              color:ErpPalette.of(context).action,
+              color:ErpPalette.of(ctx).action,
               child:Row(children:[
                 const Icon(Icons.receipt_long_outlined,color:Colors.white),
                 const SizedBox(width:8),
                 Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
                   Text(item['documentNo'] as String? ?? 'Đơn hàng đang lập',
-                    style:TextStyle(color:ErpPalette.of(context).onAction,
+                    style:TextStyle(color:ErpPalette.of(ctx).onAction,
                       fontWeight:FontWeight.w800,fontSize:narrow?16:20)),
                   Text((item['customerName']??'').toString()+' · '+stateOf(item),
-                    style:TextStyle(color:ErpPalette.of(context).onAction.withValues(alpha:.82),fontSize:12),
+                    style:TextStyle(color:ErpPalette.of(ctx).onAction.withValues(alpha:.82),fontSize:12),
                     overflow:TextOverflow.ellipsis),
                 ])),
                 IconButton(tooltip:'Đóng',onPressed:()=>Navigator.pop(ctx),
@@ -2856,7 +2856,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
               padding:EdgeInsets.all(narrow?12:20),
               child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
                 Text('Tiến trình đơn hàng',style:TextStyle(
-                  color:ErpPalette.of(context).ink,fontWeight:FontWeight.w800,fontSize:17)),
+                  color:ErpPalette.of(ctx).ink,fontWeight:FontWeight.w800,fontSize:17)),
                 const SizedBox(height:10),
                 Wrap(spacing:8,runSpacing:8,children:[
                   statusInfo('Thương mại',stateOf(item),Icons.assignment_turned_in_outlined),
@@ -2881,18 +2881,18 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                   const SizedBox(height:12),
                 ],
                 Text('Hàng hóa và giá đã lưu',style:TextStyle(
-                  fontWeight:FontWeight.w800,color:ErpPalette.of(context).ink,fontSize:16)),
+                  fontWeight:FontWeight.w800,color:ErpPalette.of(ctx).ink,fontSize:16)),
                 const SizedBox(height:8),
                 for(final line in (item['lines'] as List<dynamic>))
                   Container(
                     padding:const EdgeInsets.symmetric(horizontal:6,vertical:12),
                     decoration:BoxDecoration(
-                      border:Border(bottom:BorderSide(color:ErpPalette.of(context).border))),
+                      border:Border(bottom:BorderSide(color:ErpPalette.of(ctx).border))),
                     child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
                       Text((line['productName']??'').toString(),
-                        style:TextStyle(color:ErpPalette.of(context).ink,fontWeight:FontWeight.w700)),
+                        style:TextStyle(color:ErpPalette.of(ctx).ink,fontWeight:FontWeight.w700)),
                       Text('SKU '+(line['sku']??'').toString(),
-                        style:TextStyle(color:ErpPalette.of(context).muted,fontSize:12)),
+                        style:TextStyle(color:ErpPalette.of(ctx).muted,fontSize:12)),
                       const SizedBox(height:6),
                       Wrap(spacing:16,runSpacing:6,children:[
                         Text('Số lượng: '+erpGroupedDecimalText(line['quantity'])+' '+line['unitCode'].toString()),
@@ -2902,18 +2902,18 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       ]),
                       if(line['priceSnapshot'] is Map&&line['priceSnapshot']['overrideReason']!=null)
                         Text('Lý do điều chỉnh: ${line['priceSnapshot']['overrideReason']}',
-                          style:TextStyle(fontSize:12,color:ErpPalette.of(context).muted)),
+                          style:TextStyle(fontSize:12,color:ErpPalette.of(ctx).muted)),
                       if(line['priceSnapshot'] is Map&&line['priceSnapshot']['documentDiscount'] is Map)
                         Text('CK toàn đơn: '+money(line['priceSnapshot']['documentDiscount']['allocatedAmount'])+
                           ' · '+(line['priceSnapshot']['documentDiscount']['reason']??'').toString(),
-                          style:TextStyle(fontSize:12,color:ErpPalette.of(context).muted)),
+                          style:TextStyle(fontSize:12,color:ErpPalette.of(ctx).muted)),
                       if(line['priceSnapshot'] is Map)
                         Padding(padding:const EdgeInsets.only(top:6),
                           child:Text('Đơn vị cơ sở quy đổi: '+
                             (line['priceSnapshot']['normalizedBaseQuantity']??'').toString()+
                             ' · Chính sách giá đã lưu: '+
                             ((line['priceSnapshot']['trace'] as List?)?.length??0).toString()+' quy tắc',
-                            style:TextStyle(fontSize:12,color:ErpPalette.of(context).muted))),
+                            style:TextStyle(fontSize:12,color:ErpPalette.of(ctx).muted))),
                     ]),
                   ),
                 const Divider(height:24),
@@ -2922,7 +2922,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                   Text('Giảm giá: '+money(item['discountTotal'])),
                   Text('Thuế: '+money(item['taxTotal'])),
                   Text('Tổng tiền: '+money(item['total']),
-                    style:TextStyle(color:ErpPalette.of(context).ink,fontSize:18,
+                    style:TextStyle(color:ErpPalette.of(ctx).ink,fontSize:18,
                       fontWeight:FontWeight.w800)),
                 ]),
                 const SizedBox(height:12),
@@ -2930,11 +2930,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                   'Ghi chú: '+item['note'].toString()),
                 const SizedBox(height:18),
                 Text('Lịch sử chứng từ',style:TextStyle(
-                  fontWeight:FontWeight.w800,color:ErpPalette.of(context).ink,fontSize:16)),
+                  fontWeight:FontWeight.w800,color:ErpPalette.of(ctx).ink,fontSize:16)),
                 const SizedBox(height:8),
                 for(final v in (item['history'] as List<dynamic>))
                   ListTile(contentPadding:EdgeInsets.zero,dense:true,
-                    leading:Icon(Icons.history,color:ErpPalette.of(context).primary),
+                    leading:Icon(Icons.history,color:ErpPalette.of(ctx).primary),
                     title:Text('Phiên bản '+v['version'].toString()+' · '+
                       (v['state']=='DRAFT'?'Đang lập':
                        v['state']=='CANCELLED'?'Đã hủy':'Đã xác nhận')),
@@ -2944,12 +2944,12 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                   ),
                 const SizedBox(height:12),
                 Text('Xác nhận đơn không có nghĩa đã xuất kho, giao hàng hoặc thu tiền.',
-                  style:TextStyle(color:ErpPalette.of(context).muted,fontSize:12)),
+                  style:TextStyle(color:ErpPalette.of(ctx).muted,fontSize:12)),
               ]),
             )),
             Container(padding:EdgeInsets.symmetric(horizontal:narrow?12:20,vertical:10),
-              decoration:BoxDecoration(color:ErpPalette.of(context).surface,
-                border:Border(top:BorderSide(color:ErpPalette.of(context).border))),
+              decoration:BoxDecoration(color:ErpPalette.of(ctx).surface,
+                border:Border(top:BorderSide(color:ErpPalette.of(ctx).border))),
               child:Wrap(alignment:WrapAlignment.end,
                 crossAxisAlignment:WrapCrossAlignment.center,
                 spacing:8,runSpacing:8,children:[

@@ -34,6 +34,22 @@ def prepare(target):
     if not source.is_file():
         raise SystemExit("Unexpected Flutter Android package template")
     shutil.copyfile(ROOT / "platform/android/MainActivity.kt", source)
+    # Neutral branded launch/normal window background in both OS themes.
+    # The persisted Flutter preference is restored before the first frame;
+    # a dark user preference must not flash the default white Android window.
+    for style_file in (main / "res").glob("values*/styles.xml"):
+        styles = ET.parse(style_file)
+        for style in styles.getroot().findall("style"):
+            if style.get("name") not in ("LaunchTheme", "NormalTheme"):
+                continue
+            item = next((x for x in style.findall("item") if x.get("name") == "android:windowBackground"), None)
+            if item is None:
+                item = ET.SubElement(style, "item", {"name":"android:windowBackground"})
+            item.text = "#102E24"
+            for item in style.findall("item"):
+                if item.get("name") == "android:windowSplashScreenBackground":
+                    item.text = "#102E24"
+        styles.write(style_file, encoding="utf-8", xml_declaration=True)
     xml_dir = main / "res/xml"
     xml_dir.mkdir(exist_ok=True)
     shutil.copyfile(ROOT / "platform/android/update_paths.xml", xml_dir / "erp_update_paths.xml")

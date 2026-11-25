@@ -167,7 +167,7 @@ class _ErpShellState extends State<ErpShell> {
       context:context,isScrollControlled:true,
       builder:(ctx)=>SafeArea(child:ConstrainedBox(
         constraints:BoxConstraints(maxHeight:MediaQuery.sizeOf(ctx).height*.82),
-        child:ListView(shrinkWrap:true,padding:const EdgeInsets.all(12),children:[
+        child:ListView(key:const ValueKey('erp-mobile-more-list'),shrinkWrap:true,padding:const EdgeInsets.all(12),children:[
           Padding(padding:const EdgeInsets.all(12),child:Text('Thêm',style:Theme.of(ctx).textTheme.titleLarge)),
           if(widget.session!=null)ListTile(
             leading:const Icon(Icons.account_circle_outlined),
@@ -175,12 +175,12 @@ class _ErpShellState extends State<ErpShell> {
           if(widget.onThemeChanged!=null)ListTile(
             leading:const Icon(Icons.palette_outlined),title:const Text('Giao diện'),
             trailing:ErpThemeSelector(value:widget.themeMode,onChanged:(mode)=>Navigator.pop(ctx,mode))),
-          for(final section in CompanySection.values.where(canCompanySection))
+          for(final section in CompanySection.values.where((s)=>canCompanySection(s)&&!const [CompanySection.orders,CompanySection.products,CompanySection.customers].contains(s)))
             ListTile(key:ValueKey('erp-mobile-more-${section.name}'),
               leading:Icon(section.icon),title:Text(section.label),
               onTap:()=>Navigator.pop(ctx,section)),
-          for(final module in visibleModules.where((i)=>i!=0))
-            ListTile(leading:Icon(erpFeatures[module].icon),title:Text(erpFeatures[module].title),
+          for(final module in visibleModules.where((i)=>i!=0&&i!=3))
+            ListTile(key:ValueKey('erp-mobile-more-module-$module'),leading:Icon(erpFeatures[module].icon),title:Text(erpFeatures[module].title),
               onTap:()=>Navigator.pop(ctx,module)),
           if(_canUpdate)ListTile(key:const ValueKey('erp-android-update'),
             leading:const Icon(Icons.system_update),title:const Text('Cập nhật ứng dụng'),
@@ -207,7 +207,7 @@ class _ErpShellState extends State<ErpShell> {
     final index=destinations.indexWhere((d)=>d.target==(selected==0?_mobileSection:selected));
     return NavigationBar(
       key:const ValueKey('erp-mobile-navigation'),
-      height:68,
+      height:MediaQuery.textScalerOf(context).scale(1)>1.3?80:68,
       selectedIndex:index<0?destinations.length-1:index,
       onDestinationSelected:(i){
         final target=destinations[i].target;
@@ -321,7 +321,7 @@ class _ErpShellState extends State<ErpShell> {
     final grants=widget.session?.grants??const <IdentityGrant>[];
     bool allowed(String prefix)=>grants.any((g)=>g.permission.startsWith(prefix));
     return switch(index){
-      0=>allowed('catalog.')||allowed('orders.')||allowed('inventory.')||allowed('finance.'),
+      0=>allowed('catalog.')||allowed('orders.')||allowed('inventory.')||allowed('finance.')||allowed('purchase.')||allowed('reports.'),
       1=>allowed('orders.')||allowed('catalog.'),
       2=>allowed('identity.'),
       3=>allowed('orders.create'),
@@ -337,7 +337,7 @@ class _ErpShellState extends State<ErpShell> {
         isError:true);
       return;
     }
-    if (visibleModules.contains(index)&&index != selected) setState(() => selected = index);
+    if (visibleModules.contains(index)&&index != selected) setState(() {selected=index;if(index==0)_mobileSection=CompanySection.overview;});
   }
 }
 

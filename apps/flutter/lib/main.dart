@@ -9,15 +9,18 @@ import 'ui/identity_client.dart';
 import 'ui/session_store.dart';
 import 'local/local_store.dart';
 
+Future<ThemeMode> loadErpThemeMode() async {
+  try {
+    final saved=(await SharedPreferences.getInstance()).getString('erp.themeMode');
+    return ThemeMode.values.firstWhere((m)=>m.name==saved,orElse:()=>ThemeMode.system);
+  }catch(_){return ThemeMode.system;}
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   String? token;
   try {token=await ErpSessionStore.load();}catch(_){/* Storage unavailable: login normally. */}
-  var mode=ThemeMode.system;
-  try {
-    final saved=(await SharedPreferences.getInstance()).getString('erp.themeMode');
-    mode=ThemeMode.values.firstWhere((m)=>m.name==saved,orElse:()=>ThemeMode.system);
-  }catch(_){/* Preference is cosmetic, never blocks login. */}
+  final mode=await loadErpThemeMode();
   runApp(ErpApp(initialToken:token,localStore:ErpLocalStore.platform(),initialThemeMode:mode));
 }
 
@@ -39,9 +42,14 @@ class _ErpAppState extends State<ErpApp>{
   String? _pendingToken;
   Timer? _reauthorize;
   late ThemeMode _themeMode=widget.initialThemeMode;
-  Future<void> _saveTheme(ThemeMode mode) async {
+  Future<void> _themeWrite=Future.value();
+  Future<void> _saveTheme(ThemeMode mode) {
+    if(!mounted)return Future.value();
     setState(()=>_themeMode=mode);
-    try{await (await SharedPreferences.getInstance()).setString('erp.themeMode',mode.name);}catch(_){}
+    // Serialize cosmetic writes so rapid changes cannot persist an older mode.
+    return _themeWrite=_themeWrite.then((_)async{
+      try{await (await SharedPreferences.getInstance()).setString('erp.themeMode',mode.name);}catch(_){}
+    });
   }
 
   @override void initState() {
@@ -123,7 +131,7 @@ class _ErpAppState extends State<ErpApp>{
   }
   @override Widget build(BuildContext context){
     final view=WidgetsBinding.instance.platformDispatcher.views.first;
-    final width=view.physicalSize.width/view.devicePixelRatio;
+    final width=MediaQuery.maybeSizeOf(context)?.width??view.physicalSize.width/view.devicePixelRatio;
     final preview=widget.previewMode||_preview;
     return MaterialApp(
       title:'ERP phân phối',debugShowCheckedModeBanner:false,

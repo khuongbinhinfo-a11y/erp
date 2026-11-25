@@ -46,13 +46,15 @@ class ErpPalette {
   Color get popup => dark ? const Color(0xFF26332B) : ErpTokens.surface;
   Color get mint => dark ? const Color(0xFF26392C) : ErpTokens.mint;
   Color get border => dark ? const Color(0xFF65776A) : ErpTokens.border;
+  // Separators may be subtle; interactive control boundaries meet 3:1.
+  Color get controlBorder => dark ? const Color(0xFF819287) : const Color(0xFF7B8A7D);
   Color get ink => dark ? const Color(0xFFDCE5DE) : ErpTokens.ink;
-  Color get muted => dark ? const Color(0xFFA1B2A7) : ErpTokens.muted;
+  Color get muted => dark ? const Color(0xFFA1B2A7) : const Color(0xFF5C6D62);
   Color get primary => dark ? const Color(0xFF9CDDB0) : ErpTokens.primary;
   Color get action => dark ? const Color(0xFF326443) : ErpTokens.primary;
   Color get onAction => const Color(0xFFEEF5EF);
   Color get danger => dark ? const Color(0xFFF0A39E) : ErpTokens.danger;
-  Color get warning => dark ? const Color(0xFFDEC083) : ErpTokens.warning;
+  Color get warning => dark ? const Color(0xFFDEC083) : const Color(0xFF8C5D00);
   Color get fresh => dark ? const Color(0xFF8DCF9F) : const Color(0xFF236B3B);
   Color get sidebar => dark ? const Color(0xFF192A21) : ErpTokens.sidebar;
   Color get sidebarBottom => dark ? const Color(0xFF203529) : ErpTokens.sidebarBottom;
@@ -80,7 +82,8 @@ ThemeData erpTheme({required bool touch, bool dark = false}) {
   ).copyWith(
     primary: p.primary, onPrimary: dark ? const Color(0xFF173324) : Colors.white,
     secondary: p.fresh, surface: p.surface, onSurface: p.ink,
-    onSurfaceVariant: p.muted, outline: p.border, outlineVariant: p.border,
+    onSurfaceVariant: p.muted, outline: p.controlBorder, outlineVariant: p.border,
+    inverseSurface:p.popup,onInverseSurface:p.ink,inversePrimary:p.primary,
     surfaceContainerLowest: p.canvas, surfaceContainerLow: p.surface,
     surfaceContainer: p.popup, surfaceContainerHigh: p.popup,
     surfaceContainerHighest: p.mint, error: p.danger,
@@ -101,7 +104,10 @@ ThemeData erpTheme({required bool touch, bool dark = false}) {
       foregroundColor: WidgetStateProperty.resolveWith((states) =>
         states.contains(WidgetState.disabled) ? p.muted : p.onAction),
     )),
-    outlinedButtonTheme: OutlinedButtonThemeData(style: buttonStyle),
+    outlinedButtonTheme: OutlinedButtonThemeData(style: buttonStyle.copyWith(
+      side:WidgetStateProperty.resolveWith((states)=>BorderSide(
+        color:states.contains(WidgetState.focused)?p.primary:p.controlBorder)),
+    )),
     textButtonTheme: TextButtonThemeData(style: buttonStyle),
     dialogTheme: DialogThemeData(backgroundColor: p.popup,
       surfaceTintColor: Colors.transparent),
@@ -109,6 +115,14 @@ ThemeData erpTheme({required bool touch, bool dark = false}) {
       modalBackgroundColor: p.popup, surfaceTintColor: Colors.transparent),
     popupMenuTheme: PopupMenuThemeData(color: p.popup,
       surfaceTintColor: Colors.transparent),
+    tooltipTheme: TooltipThemeData(
+      decoration:BoxDecoration(color:p.popup,border:Border.all(color:p.controlBorder),borderRadius:BorderRadius.circular(6)),
+      textStyle:TextStyle(color:p.ink,fontSize:12),
+    ),
+    snackBarTheme: SnackBarThemeData(backgroundColor:p.popup,
+      contentTextStyle:TextStyle(color:p.ink),actionTextColor:p.primary),
+    datePickerTheme:DatePickerThemeData(backgroundColor:p.popup,surfaceTintColor:Colors.transparent),
+    timePickerTheme:TimePickerThemeData(backgroundColor:p.popup),
     navigationBarTheme: NavigationBarThemeData(
       backgroundColor: p.surface, indicatorColor: p.mint,
       labelTextStyle: WidgetStateProperty.resolveWith((states) => TextStyle(
@@ -124,11 +138,11 @@ ThemeData erpTheme({required bool touch, bool dark = false}) {
       labelStyle: TextStyle(color: p.muted),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(ErpTokens.controlRadius),
-        borderSide: BorderSide(color: p.border),
+        borderSide: BorderSide(color: p.controlBorder),
       ),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(ErpTokens.controlRadius),
-        borderSide: BorderSide(color: p.border),
+        borderSide: BorderSide(color: p.controlBorder),
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(ErpTokens.controlRadius),
