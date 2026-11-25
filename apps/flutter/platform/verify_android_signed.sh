@@ -19,8 +19,26 @@ verification="$("${tools}/apksigner" verify --verbose --print-certs "$apk" 2>&1)
   printf '%s\n' "$verification" >&2
   fail 'apksigner rejected APK integrity or signature.'
 }
-signer="$(printf '%s\n' "$verification" | sed -nE 's/^Signer #1 certificate SHA-256 digest: ([a-fA-F0-9]{64})\r?$/\1/p')"
-[[ "$signer" =~ ^[a-fA-F0-9]{64}$ ]] || fail 'Unable to read exactly one APK signing certificate digest.'
+# Android build-tools can vary capitalization, leading spaces and digest separators.
+# Keep the strict one-signer identity check; never substitute the configured digest.
+signer="$(printf '%s\n' "$verification" | python3 -c '
+import re, sys
+report = sys.stdin.read()
+entries = re.findall(
+    r"(?im)^\s*Signer\s*#(\d+)\s+certificate\s+SHA-256\s+digest:\s*"
+    r"((?:[0-9a-f]{2}[:\s-]?){32})(?![0-9a-f])",
+    report,
+)
+normalized = [(index, re.sub(r"[^0-9a-f]", "", raw.lower()))
+              for index, raw in entries]
+if len(normalized) != 1 or normalized[0][0] != "1" or len(normalized[0][1]) != 64:
+    sys.exit(1)
+print(normalized[0][1])
+')" || {
+  printf '%s\n' "$verification" >&2
+  fail 'Unable to read exactly one APK signing certificate digest from apksigner report.'
+}
+[[ "$signer" =~ ^[a-f0-9]{64}$ ]] || fail 'Parsed APK signer digest is invalid.'
 [[ "${signer,,}" == "${expected_signer,,}" ]] || fail "APK signer mismatch (actual: ${signer,,}; configured: ${expected_signer,,})."
 
 badging="$("${tools}/aapt" dump badging "$apk" 2>&1)" || {
