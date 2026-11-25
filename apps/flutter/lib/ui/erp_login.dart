@@ -6,7 +6,9 @@ class ErpLogin extends StatefulWidget {
   final ErpIdentityClient client;
   final ValueChanged<IdentitySession> onAuthenticated;
   final VoidCallback onPreview;
-  const ErpLogin({super.key,required this.client,required this.onAuthenticated,required this.onPreview});
+  final ThemeMode themeMode;
+  final ValueChanged<ThemeMode>? onThemeChanged;
+  const ErpLogin({super.key,required this.client,required this.onAuthenticated,required this.onPreview,this.themeMode=ThemeMode.system,this.onThemeChanged});
   @override State<ErpLogin> createState()=>_ErpLoginState();
 }
 class _ErpLoginState extends State<ErpLogin>{
@@ -28,14 +30,17 @@ class _ErpLoginState extends State<ErpLogin>{
   @override Widget build(BuildContext context){
     final compact=MediaQuery.sizeOf(context).width<850;
     final controls=Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-      const Text('CỔNG TRUY CẬP ERP',style:TextStyle(
-        color:ErpTokens.primary,letterSpacing:1.8,fontSize:11,fontWeight:FontWeight.w900)),
+      Row(children:[
+        Expanded(child:Text('CỔNG TRUY CẬP ERP',style:TextStyle(
+          color:ErpPalette.of(context).primary,letterSpacing:1.8,fontSize:11,fontWeight:FontWeight.w900))),
+        if(widget.onThemeChanged!=null)ErpThemeSelector(value:widget.themeMode,onChanged:widget.onThemeChanged!),
+      ]),
       const SizedBox(height:12),
       Text('Đăng nhập hệ thống',style:Theme.of(context).textTheme.headlineMedium?.copyWith(
-        fontWeight:FontWeight.w900,color:ErpTokens.ink)),
+        fontWeight:FontWeight.w900,color:ErpPalette.of(context).ink)),
       const SizedBox(height:8),
-      const Text('Mỗi khách hàng sử dụng tài khoản và dữ liệu riêng biệt.',
-        style:TextStyle(color:ErpTokens.muted,fontSize:14)),
+      Text('Mỗi khách hàng sử dụng tài khoản và dữ liệu riêng biệt.',
+        style:TextStyle(color:ErpPalette.of(context).muted,fontSize:14)),
       const SizedBox(height:28),
       TextField(
         key:const ValueKey('login-name'),
@@ -61,12 +66,12 @@ class _ErpLoginState extends State<ErpLogin>{
       const SizedBox(height:18),
       if(error!=null)...[
         Text(error!,key:const ValueKey('login-error'),
-          style:const TextStyle(color:ErpTokens.danger,fontSize:13)),
+          style:TextStyle(color:ErpPalette.of(context).danger,fontSize:13)),
         const SizedBox(height:14),
       ],
       if(!widget.client.configured)...[
-        const Text('Hệ thống đang tạm gián đoạn. Vui lòng liên hệ quản trị.',
-          style:TextStyle(color:ErpTokens.warning,fontSize:12)),
+        Text('Hệ thống đang tạm gián đoạn. Vui lòng liên hệ quản trị.',
+          style:TextStyle(color:ErpPalette.of(context).warning,fontSize:12)),
         const SizedBox(height:12),
       ],
       SizedBox(width:double.infinity,child:FilledButton.icon(

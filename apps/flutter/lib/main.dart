@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'ui/erp_shell.dart';
 import 'ui/erp_tokens.dart';
@@ -11,7 +13,12 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   String? token;
   try {token=await ErpSessionStore.load();}catch(_){/* Storage unavailable: login normally. */}
-  runApp(ErpApp(initialToken:token,localStore:ErpLocalStore.platform()));
+  var mode=ThemeMode.system;
+  try {
+    final saved=(await SharedPreferences.getInstance()).getString('erp.themeMode');
+    mode=ThemeMode.values.firstWhere((m)=>m.name==saved,orElse:()=>ThemeMode.system);
+  }catch(_){/* Preference is cosmetic, never blocks login. */}
+  runApp(ErpApp(initialToken:token,localStore:ErpLocalStore.platform(),initialThemeMode:mode));
 }
 
 class ErpApp extends StatefulWidget {
@@ -19,7 +26,8 @@ class ErpApp extends StatefulWidget {
   final String? initialToken;
   final ErpIdentityClient? client;
   final ErpLocalStore? localStore;
-  const ErpApp({super.key,this.previewMode=false,this.initialToken,this.client,this.localStore});
+  final ThemeMode initialThemeMode;
+  const ErpApp({super.key,this.previewMode=false,this.initialToken,this.client,this.localStore,this.initialThemeMode=ThemeMode.system});
   @override State<ErpApp> createState()=>_ErpAppState();
 }
 class _ErpAppState extends State<ErpApp>{
@@ -30,6 +38,11 @@ class _ErpAppState extends State<ErpApp>{
   bool _restoreBusy=false;
   String? _pendingToken;
   Timer? _reauthorize;
+  late ThemeMode _themeMode=widget.initialThemeMode;
+  Future<void> _saveTheme(ThemeMode mode) async {
+    setState(()=>_themeMode=mode);
+    try{await (await SharedPreferences.getInstance()).setString('erp.themeMode',mode.name);}catch(_){}
+  }
 
   @override void initState() {
     super.initState();
@@ -115,12 +128,25 @@ class _ErpAppState extends State<ErpApp>{
     return MaterialApp(
       title:'ERP phân phối',debugShowCheckedModeBanner:false,
       theme:erpTheme(touch:width<=780),
+      darkTheme:erpTheme(touch:width<=780,dark:true),
+      themeMode:_themeMode,
+      themeAnimationDuration:Duration.zero,
+      builder:(context,child){
+        final dark=Theme.of(context).brightness==Brightness.dark;
+        return AnnotatedRegion<SystemUiOverlayStyle>(
+          value:SystemUiOverlayStyle(
+            statusBarColor:Colors.transparent,
+            statusBarIconBrightness:dark?Brightness.light:Brightness.dark,
+            systemNavigationBarColor:ErpPalette.of(context).surface,
+            systemNavigationBarIconBrightness:dark?Brightness.light:Brightness.dark,
+          ),child:child!);
+      },
       home:_restoring
         ? Scaffold(body:Center(child:Column(mainAxisSize:MainAxisSize.min,children:[
             if(_restoreBusy)
               const CircularProgressIndicator()
             else
-              const Icon(Icons.wifi_off_outlined,color:ErpTokens.warning,size:28),
+              const Icon(Icons.wifi_off_outlined,size:28),
             const SizedBox(height:14),
             Text(_restoreBusy?'Đang khôi phục phiên ERP...':
               'Tạm mất kết nối ERP. Phiên đăng nhập vẫn được giữ.'),
@@ -130,9 +156,9 @@ class _ErpAppState extends State<ErpApp>{
           ])))
         : preview||_session!=null
           ? ErpShell(previewOnly:preview,session:_session,client:_identity,
-              onLogout:()=>unawaited(logout()))
+              onLogout:()=>unawaited(logout()),themeMode:_themeMode,onThemeChanged:(mode)=>unawaited(_saveTheme(mode)))
           : ErpLogin(client:_identity,onAuthenticated:authenticated,
-              onPreview:()=>setState(()=>_preview=true)),
+              onPreview:()=>setState(()=>_preview=true),themeMode:_themeMode,onThemeChanged:(mode)=>unawaited(_saveTheme(mode))),
     );
   }
 }
