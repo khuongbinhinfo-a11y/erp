@@ -89,8 +89,8 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
           TextField(controller:password,obscureText:true,
             decoration:const InputDecoration(labelText:'Mật khẩu mới (ít nhất 12 ký tự)')),
           const SizedBox(height:10),
-          const Text('Tài khoản mới chưa có quyền. Cấp quyền sau khi tạo.',
-            style:TextStyle(color:ErpTokens.muted,fontSize:12)),
+          Text('Tài khoản mới chưa có quyền. Cấp quyền sau khi tạo.',
+            style:TextStyle(color:ErpPalette.of(context).muted,fontSize:12)),
         ])),
         actions:[
           TextButton(onPressed:()=>Navigator.of(dialog).pop(),child:const Text('Hủy')),
@@ -130,8 +130,8 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
       return StatefulBuilder(builder:(ctx,setLocal)=>AlertDialog(
         title:Text('Cấp quyền: ${user.loginName}'),
         content:SizedBox(width:440,child:Column(mainAxisSize:MainAxisSize.min,children:[
-          const Text('Chỉ được cấp quyền và phạm vi mà tài khoản quản trị hiện sở hữu.',
-            style:TextStyle(color:ErpTokens.muted,fontSize:12)),
+          Text('Chỉ được cấp quyền và phạm vi mà tài khoản quản trị hiện sở hữu.',
+            style:TextStyle(color:ErpPalette.of(context).muted,fontSize:12)),
           const SizedBox(height:16),
           DropdownButtonFormField<int>(
             key:const ValueKey('admin-grant-selector'),
@@ -199,11 +199,11 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
   }
   Widget usersTable(){
     if(widget.previewOnly){
-      return const Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-        Text('Chưa có dữ liệu',style:TextStyle(color:ErpTokens.ink,fontWeight:FontWeight.w600)),
+      return Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+        Text('Chưa có dữ liệu',style:TextStyle(color:ErpPalette.of(context).ink,fontWeight:FontWeight.w600)),
         SizedBox(height:6),
         Text('Chỉ admin đã đăng nhập và được cấp quyền mới có thể quản lý tài khoản.',
-          style:TextStyle(color:ErpTokens.muted)),
+          style:TextStyle(color:ErpPalette.of(context).muted)),
       ]);
     }
     if(!allowed('identity.users.read'))return const Text(
@@ -213,20 +213,20 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
       builder:(ctx,snapshot){
         if(snapshot.connectionState!=ConnectionState.done)return const Center(
           child:Padding(padding:EdgeInsets.all(22),child:CircularProgressIndicator()));
-        if(snapshot.hasError)return const Text('Không tải được danh sách người dùng.',
-          style:TextStyle(color:ErpTokens.danger));
+        if(snapshot.hasError)return Text('Không tải được danh sách người dùng.',
+          style:TextStyle(color:ErpPalette.of(context).danger));
         final users=snapshot.data??[];
         if(users.isEmpty)return const Text('Chưa có tài khoản trong installation này.');
         return Column(children:users.map((user)=>Container(
-          decoration:const BoxDecoration(border:Border(bottom:BorderSide(color:ErpTokens.border))),
+          decoration:BoxDecoration(border:Border(bottom:BorderSide(color:ErpPalette.of(context).border))),
           padding:const EdgeInsets.symmetric(vertical:9),
           child:Row(children:[
-            const Icon(Icons.person_outline,color:ErpTokens.primary),
+            Icon(Icons.person_outline,color:ErpPalette.of(context).primary),
             const SizedBox(width:12),
             Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-              Text(user.loginName,style:const TextStyle(fontWeight:FontWeight.w700,color:ErpTokens.ink)),
+              Text(user.loginName,style:TextStyle(fontWeight:FontWeight.w700,color:ErpPalette.of(context).ink)),
               Text(user.disabled?'Đã khóa':'Đang hoạt động',
-                style:TextStyle(fontSize:12,color:user.disabled?ErpTokens.danger:ErpTokens.muted)),
+                style:TextStyle(fontSize:12,color:user.disabled?ErpPalette.of(context).danger:ErpPalette.of(context).muted)),
             ])),
             if(allowed('identity.roles.manage'))...[
               IconButton(
@@ -275,7 +275,7 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
               Row(children:[
                 Expanded(child:Text(selected==0?'Tài khoản người dùng':'Danh sách quyền',
                   style:Theme.of(context).textTheme.titleLarge?.copyWith(
-                    fontWeight:FontWeight.w800,color:ErpTokens.ink))),
+                    fontWeight:FontWeight.w800,color:ErpPalette.of(context).ink))),
                 if(selected==0)
                   Tooltip(message:real?'Tạo user mới':'Chưa có quyền tạo user',
                     child:FilledButton.icon(
@@ -285,16 +285,16 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
               ]),
               const SizedBox(height:18),
               if(selected==0)usersTable() else ...[
-                const Text('Quyền được giới hạn theo chi nhánh và kho.',
-                  style:TextStyle(color:ErpTokens.muted)),
+                Text('Quyền được giới hạn theo chi nhánh và kho.',
+                  style:TextStyle(color:ErpPalette.of(context).muted)),
                 const SizedBox(height:12),
                 ...permissions.map((entry)=>Padding(
                   padding:const EdgeInsets.symmetric(vertical:9),
                   child:Row(children:[
                     SizedBox(width:mobile?100:150,child:Text(entry.$1,
-                      style:const TextStyle(fontWeight:FontWeight.w600,color:ErpTokens.ink))),
+                      style:TextStyle(fontWeight:FontWeight.w600,color:ErpPalette.of(context).ink))),
                     Expanded(child:Text(entry.$2,
-                      style:const TextStyle(color:ErpTokens.muted))),
+                      style:TextStyle(color:ErpPalette.of(context).muted))),
                   ]),
                 )),
               ],

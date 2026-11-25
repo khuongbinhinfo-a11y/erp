@@ -32,7 +32,7 @@ class ErpPageHeader extends StatelessWidget {
         height:stacked?138:80,
         width:double.infinity,
         padding:EdgeInsets.symmetric(horizontal:stacked?14:20),
-        decoration:BoxDecoration(color:ErpTokens.primary,
+        decoration:BoxDecoration(color:ErpPalette.of(context).action,
           borderRadius:BorderRadius.circular(ErpTokens.cardRadius),
           border:const Border(left:BorderSide(color:ErpTokens.lime,width:4))),
         child:stacked
@@ -124,8 +124,8 @@ class ErpSectionTabs<T> extends StatelessWidget {
   @override Widget build(BuildContext context) {
     final reduceMotion = MediaQuery.of(context).disableAnimations;
     return Container(
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: ErpTokens.border))),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: ErpPalette.of(context).border))),
       child: SingleChildScrollView(
         key: const ValueKey('erp-section-tabs'),
         scrollDirection: Axis.horizontal,
@@ -143,14 +143,14 @@ class ErpSectionTabs<T> extends StatelessWidget {
                     child: Text(item.label, maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        color: active ? ErpTokens.primary : ErpTokens.muted,
+                        color: active ? ErpPalette.of(context).primary : ErpPalette.of(context).muted,
                         fontSize: 13, fontWeight: FontWeight.w600)),
                   ))),
                   SizedBox(width: tabWidth, height: 3,
                     child: AnimatedContainer(
                       duration: reduceMotion ? Duration.zero : ErpTokens.tabMotion,
                       curve: Curves.easeOutCubic,
-                      color: active ? ErpTokens.primary : Colors.transparent)),
+                      color: active ? ErpPalette.of(context).primary : Colors.transparent)),
                 ]),
               ),
             )),

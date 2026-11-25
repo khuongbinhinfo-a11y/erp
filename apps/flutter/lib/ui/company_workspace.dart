@@ -251,7 +251,7 @@ class _Overview extends StatelessWidget {
     ];
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Text('Tổng quan điều hành', style: Theme.of(context).textTheme.titleLarge?.copyWith(
-        fontWeight: FontWeight.w700, color: ErpTokens.ink,
+        fontWeight: FontWeight.w700, color: ErpPalette.of(context).ink,
       )),
       const SizedBox(height: 6),
       const SizedBox(height: 16),
@@ -268,7 +268,7 @@ class _Overview extends StatelessWidget {
       }),
       const SizedBox(height: 26),
       Text('Truy cập nhanh', style: Theme.of(context).textTheme.titleMedium?.copyWith(
-        color: ErpTokens.ink, fontWeight: FontWeight.w800)),
+        color: ErpPalette.of(context).ink, fontWeight: FontWeight.w800)),
       const SizedBox(height: 12),
       LayoutBuilder(builder: (context, constraints) {
         final columns = constraints.maxWidth >= 1100 ? 3 : (constraints.maxWidth >= 650 ? 2 : 1);
@@ -284,17 +284,17 @@ class _Overview extends StatelessWidget {
               child: Padding(padding: const EdgeInsets.all(18), child: Row(children: [
                 Container(
                   padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(color: ErpTokens.lime, borderRadius: BorderRadius.circular(ErpTokens.controlRadius)),
-                  child: Icon(item.icon, color: ErpTokens.primary),
+                  decoration: BoxDecoration(color: ErpPalette.of(context).dark?ErpPalette.of(context).mint:ErpTokens.lime, borderRadius: BorderRadius.circular(ErpTokens.controlRadius)),
+                  child: Icon(item.icon, color: ErpPalette.of(context).primary),
                 ),
                 const SizedBox(width: 14),
                 Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(item.label, style: const TextStyle(color: ErpTokens.ink,
+                  Text(item.label, style: TextStyle(color: ErpPalette.of(context).ink,
                     fontWeight: FontWeight.w700, fontSize: 15)),
                   const SizedBox(height: 4),
-                  Text(item.subtitle, style: const TextStyle(color: ErpTokens.muted, fontSize: 12)),
+                  Text(item.subtitle, style: TextStyle(color: ErpPalette.of(context).muted, fontSize: 12)),
                 ])),
-                const Icon(Icons.chevron_right, color: ErpTokens.muted),
+                Icon(Icons.chevron_right, color: ErpPalette.of(context).muted),
               ])),
             ),
           ),
@@ -314,13 +314,13 @@ class _Metric extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(children: [
-          Icon(icon, color: ErpTokens.primary, size: 22),
+          Icon(icon, color: ErpPalette.of(context).primary, size: 22),
           const SizedBox(width: 9),
-          Expanded(child: Text(title, style: const TextStyle(color: ErpTokens.muted, fontSize: 13))),
+          Expanded(child: Text(title, style: TextStyle(color: ErpPalette.of(context).muted, fontSize: 13))),
         ]),
         const SizedBox(height: 12),
-        const Text('—', style: TextStyle(color: ErpTokens.ink, fontSize: 28, fontWeight: FontWeight.w800)),
-        const Text('Chưa có dữ liệu đối soát', style: TextStyle(color: ErpTokens.muted, fontSize: 12)),
+        Text('—', style: TextStyle(color: ErpPalette.of(context).ink, fontSize: 28, fontWeight: FontWeight.w800)),
+        Text('Chưa có dữ liệu đối soát', style: TextStyle(color: ErpPalette.of(context).muted, fontSize: 12)),
       ],
     )),
   );
@@ -356,14 +356,14 @@ class _Register extends StatelessWidget {
         padding: const EdgeInsets.all(18),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
-            Icon(section.icon, color: ErpTokens.primary),
+            Icon(section.icon, color: ErpPalette.of(context).primary),
             const SizedBox(width: 10),
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(section.subtitle, style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                color: ErpTokens.ink, fontWeight: FontWeight.w700)),
+                color: ErpPalette.of(context).ink, fontWeight: FontWeight.w700)),
               const SizedBox(height: 3),
-              const Text('Danh sách và thông tin theo quyền tài khoản.',
-                style: TextStyle(color: ErpTokens.muted, fontSize: 13)),
+              Text('Danh sách và thông tin theo quyền tài khoản.',
+                style: TextStyle(color: ErpPalette.of(context).muted, fontSize: 13)),
             ])),
             Tooltip(
               message: 'Chức năng này chưa thể sử dụng',
@@ -392,10 +392,10 @@ class _Register extends StatelessWidget {
           ),
           const SizedBox(height: 18),
           ClipRRect(borderRadius: BorderRadius.circular(ErpTokens.controlRadius), child: Container(
-            decoration: const BoxDecoration(border: Border(top: BorderSide(color: ErpTokens.fresh, width: 3))),
+            decoration: BoxDecoration(border: Border(top: BorderSide(color: ErpPalette.of(context).fresh, width: 3))),
             child: SingleChildScrollView(scrollDirection: Axis.horizontal, child: DataTable(
-              headingRowColor: const WidgetStatePropertyAll(ErpTokens.mint),
-              headingTextStyle: const TextStyle(fontWeight: FontWeight.w700, color: ErpTokens.ink),
+              headingRowColor: WidgetStatePropertyAll(ErpPalette.of(context).mint),
+              headingTextStyle: TextStyle(fontWeight: FontWeight.w700, color: ErpPalette.of(context).ink),
               columns: cols.map((c) => DataColumn(label: Text(c))).toList(),
               rows: const [],
             )),
@@ -404,16 +404,16 @@ class _Register extends StatelessWidget {
           Center(child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 28),
             child: Column(children: [
-              const Icon(Icons.inbox_outlined, color: ErpTokens.muted, size: 34),
+              Icon(Icons.inbox_outlined, color: ErpPalette.of(context).muted, size: 34),
               const SizedBox(height: 9),
-              const Text('Chưa có dữ liệu',
-                style: TextStyle(color: ErpTokens.ink, fontWeight: FontWeight.w700)),
+              Text('Chưa có dữ liệu',
+                style: TextStyle(color: ErpPalette.of(context).ink, fontWeight: FontWeight.w700)),
               const SizedBox(height: 5),
               Text(filter.isEmpty
                 ? 'Chưa có thông tin để hiển thị.'
                 : 'Không có dữ liệu để tìm với từ khóa: $filter',
                 textAlign: TextAlign.center,
-                style: const TextStyle(color: ErpTokens.muted, fontSize: 13)),
+                style: TextStyle(color: ErpPalette.of(context).muted, fontSize: 13)),
             ]),
           )),
         ]),

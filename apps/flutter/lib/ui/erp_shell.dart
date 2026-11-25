@@ -233,7 +233,7 @@ class _ErpShellState extends State<ErpShell> {
         actions:[if(widget.onThemeChanged!=null)ErpThemeSelector(value:widget.themeMode,onChanged:widget.onThemeChanged!)]),
       bottomNavigationBar:mobile?_mobileBar():null,
       drawer:desktop||mobile?null:Drawer(
-        backgroundColor:ErpTokens.sidebar,
+        backgroundColor:ErpPalette.of(context).sidebar,
         child:_Navigation(
           selected:selected,visibleModules:visibleModules,
           onLogout:widget.onLogout==null?null:protectedLogout,
@@ -258,7 +258,7 @@ class _ErpShellState extends State<ErpShell> {
           child:Material(
             elevation:13,
             shadowColor:const Color(0x55102E24),
-            color:ErpTokens.sidebar,
+            color:ErpPalette.of(context).sidebar,
             borderRadius:const BorderRadius.only(
               topLeft:Radius.circular(19),
               bottomLeft:Radius.circular(19),
@@ -282,9 +282,9 @@ class _ErpShellState extends State<ErpShell> {
   }
 
   Widget _selectedContent(bool mobile) {
-    if (visibleModules.isEmpty) return const Center(child: Text(
+    if (visibleModules.isEmpty) return Center(child: Text(
       'Chưa có quyền truy cập phân hệ. Liên hệ quản trị viên.',
-      style: TextStyle(color: ErpTokens.ink)));
+      style: TextStyle(color: ErpPalette.of(context).ink)));
     final Widget content;
     if (selected == 0) {
       content = CompanyWorkspace(
@@ -359,7 +359,8 @@ class _IntroToast extends StatelessWidget {
 /// reference. The color stays inside ERP's green palette.
 class _SidebarWavePainter extends CustomPainter {
   final double progress;
-  const _SidebarWavePainter(this.progress);
+  final bool dark;
+  const _SidebarWavePainter(this.progress,this.dark);
   @override void paint(Canvas canvas,Size size){
     if(progress<=0.001)return;
     final w=size.width,h=size.height;
@@ -374,10 +375,10 @@ class _SidebarWavePainter extends CustomPainter {
       ..cubicTo(w-2,h-23,w-5,21,w-10,16)
       ..cubicTo(w-14,10,w-17,1,w-27,1)
       ..close();
-    final shader=const LinearGradient(
+    final shader=LinearGradient(
       begin:Alignment.centerLeft,end:Alignment.centerRight,
       // Gentle translucent wave over the dark ERP green.
-      colors:[Color(0xC0F1FFF2),Color(0xB8D7F2E0)],
+      colors:dark?const [Color(0xFF294D38),Color(0xFF253E30)]:const [Color(0xC0F1FFF2),Color(0xB8D7F2E0)],
     ).createShader(Offset.zero & size);
     canvas.drawPath(shape,Paint()
       ..shader=shader..color=Color.fromRGBO(255,255,255,progress));
@@ -386,7 +387,7 @@ class _SidebarWavePainter extends CustomPainter {
       ..style=PaintingStyle.stroke..strokeWidth=1);
   }
   @override bool shouldRepaint(covariant _SidebarWavePainter old)=>
-    old.progress!=progress;
+    old.progress!=progress||old.dark!=dark;
 }
 
 /// Real pointer hover and active-tab transitions share a single entry.
@@ -425,7 +426,7 @@ class _SidebarNavTileState extends State<_SidebarNavTile>{
               tween:Tween<double>(begin:0,end:active?1:0),
               duration:duration,curve:Curves.easeOutCubic,
               builder:(context,amount,child)=>CustomPaint(
-                painter:_SidebarWavePainter(amount),
+                painter:_SidebarWavePainter(amount,ErpPalette.of(context).dark),
                 child:child),
               child:Material(
                 color:Colors.transparent,
@@ -449,7 +450,7 @@ class _SidebarNavTileState extends State<_SidebarNavTile>{
                           width:39,height:39,
                           alignment:Alignment.center,
                           decoration:BoxDecoration(
-                            color:active?ErpTokens.primary
+                            color:active?ErpPalette.of(context).action
                               :(hovered?const Color(0xFF2D8860):Colors.transparent),
                             shape:BoxShape.circle,
                             boxShadow:active?[
@@ -466,12 +467,12 @@ class _SidebarNavTileState extends State<_SidebarNavTile>{
                         Expanded(child:Text(widget.feature.title,
                           maxLines:1,overflow:TextOverflow.ellipsis,
                           style:TextStyle(
-                            color:active?ErpTokens.primary
+                            color:active?ErpPalette.of(context).onSidebarActive
                               :(hovered?ErpTokens.lime:Colors.white),
                             fontSize:14,
                             fontWeight:active?FontWeight.w800:FontWeight.w500))),
-                        if(active)const Icon(Icons.chevron_right,
-                          size:19,color:ErpTokens.primary),
+                        if(active)Icon(Icons.chevron_right,
+                          size:19,color:ErpPalette.of(context).onSidebarActive),
                         const SizedBox(width:12),
                       ],
                     ]),
@@ -505,9 +506,9 @@ class _Navigation extends StatelessWidget {
   Widget build(BuildContext context) => LayoutBuilder(builder:(context,limits){
     final compact=collapsed||limits.maxWidth<160;
     return DecoratedBox(
-    decoration: const BoxDecoration(gradient: LinearGradient(
+    decoration: BoxDecoration(gradient: LinearGradient(
       begin: Alignment.topLeft, end: Alignment.bottomRight,
-      colors: [ErpTokens.sidebar, ErpTokens.sidebarBottom],
+      colors: [ErpPalette.of(context).sidebar, ErpPalette.of(context).sidebarBottom],
     )),
     child: SafeArea(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Padding(
@@ -621,24 +622,24 @@ class _FeaturePage extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Row(children: [
-                    Icon(Icons.table_chart_outlined, color: ErpTokens.primary),
+                  Row(children: [
+                    Icon(Icons.table_chart_outlined, color: ErpPalette.of(context).primary),
                     SizedBox(width: 8),
                     Expanded(child: Text('Danh sách nghiệp vụ',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: ErpTokens.ink))),
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: ErpPalette.of(context).ink))),
                   ]),
                   const SizedBox(height: 12),
                   ClipRRect(
                     borderRadius: BorderRadius.circular(ErpTokens.controlRadius),
                     child: Container(
-                      decoration: const BoxDecoration(
-                        border: Border(top: BorderSide(color: ErpTokens.fresh, width: 3)),
+                      decoration: BoxDecoration(
+                        border: Border(top: BorderSide(color: ErpPalette.of(context).fresh, width: 3)),
                       ),
                       child: SingleChildScrollView(
                         scrollDirection: Axis.horizontal,
                         child: DataTable(
-                          headingRowColor: const WidgetStatePropertyAll(ErpTokens.mint),
-                          headingTextStyle: const TextStyle(color: ErpTokens.ink, fontWeight: FontWeight.w700),
+                          headingRowColor: WidgetStatePropertyAll(ErpPalette.of(context).mint),
+                          headingTextStyle: TextStyle(color: ErpPalette.of(context).ink, fontWeight: FontWeight.w700),
                           columns: const [
                             DataColumn(label: Text('Mã chứng từ')),
                             DataColumn(label: Text('Ngày lập')),
@@ -651,18 +652,18 @@ class _FeaturePage extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 16),
-                  const Center(
+                  Center(
                     child: Padding(
                       padding: EdgeInsets.symmetric(vertical: 18),
                       child: Column(children: [
-                        Icon(Icons.inbox_outlined, color: ErpTokens.muted, size: 30),
+                        Icon(Icons.inbox_outlined, color: ErpPalette.of(context).muted, size: 30),
                         SizedBox(height: 8),
                         Text('Chưa có thông tin',
-                          style: TextStyle(color: ErpTokens.ink, fontWeight: FontWeight.w600)),
+                          style: TextStyle(color: ErpPalette.of(context).ink, fontWeight: FontWeight.w600)),
                         SizedBox(height: 4),
                         Text('',
                           textAlign: TextAlign.center,
-                          style: TextStyle(color: ErpTokens.muted, fontSize: 13)),
+                          style: TextStyle(color: ErpPalette.of(context).muted, fontSize: 13)),
                       ]),
                     ),
                   ),
