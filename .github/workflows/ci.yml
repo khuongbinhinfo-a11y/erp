@@ -57,6 +57,8 @@ jobs:
           bash apps/flutter/platform/test_verify_android_signed.sh
       - name: Test canonical ERP login origins (browser entrypoint)
         run: node --test apps/flutter/test/web_origin_guard.test.mjs
+      - name: Test GitHub OIDC R2 restricted upload gate
+        run: node --test apps/flutter/platform/test_erp_r2_oidc_worker.mjs
       - name: Typecheck backend
         working-directory: backend
         run: npm run typecheck
