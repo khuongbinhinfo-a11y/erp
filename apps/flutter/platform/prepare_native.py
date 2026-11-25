@@ -71,7 +71,7 @@ def prepare(target):
             storeFile = System.getenv("ERP_ANDROID_KEYSTORE")?.let { file(it) }
             storePassword = System.getenv("ERP_ANDROID_STORE_PASSWORD")
             keyAlias = System.getenv("ERP_ANDROID_KEY_ALIAS")
-            keyPassword = System.getenv("ERP_ANDROID_KEY_PASSWORD")
+            keyPassword = System.getenv("ERP_ANDROID_STORE_PASSWORD")
         }
     }
     buildTypes {''')
@@ -84,7 +84,7 @@ tasks.configureEach {
     if (name == "validateSigningRelease") {
         doFirst {
             listOf("ERP_ANDROID_KEYSTORE", "ERP_ANDROID_STORE_PASSWORD",
-                   "ERP_ANDROID_KEY_ALIAS", "ERP_ANDROID_KEY_PASSWORD").forEach {
+                   "ERP_ANDROID_KEY_ALIAS").forEach {
                 require(!System.getenv(it).isNullOrBlank()) { "Protected ERP Android signing is missing" }
             }
         }
