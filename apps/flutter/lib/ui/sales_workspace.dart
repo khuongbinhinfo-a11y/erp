@@ -3216,7 +3216,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         else if(retail)Padding(
           padding:const EdgeInsets.symmetric(vertical:16),
           child:Text('Chọn Lập đơn hàng để tiếp tục giỏ đang lưu hoặc tạo đơn mới.',
-            style:TextStyle(color:ErpPalette.of(context).muted))),
+            style:TextStyle(color:ErpPalette.of(context).muted)))
         else if(orders.isEmpty)Center(child:Padding(
           padding:EdgeInsets.all(26),child:Text('Chưa có đơn hàng.',
             style:TextStyle(color:ErpPalette.of(context).muted))))
