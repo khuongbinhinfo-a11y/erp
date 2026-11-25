@@ -24,7 +24,7 @@ async function withGithubJwt(callback, overrides = {}) {
     repository:"khuongbinhinfo-a11y/erp",
     repository_id:"1466503632",
     environment:"android-r2-publish",
-    sub:"repo:khuongbinhinfo-a11y/erp:environment:android-r2-publish",
+    sub:"repo:khuongbinhinfo-a11y@269412638/erp@1466503632:environment:android-r2-publish",
     workflow_ref:"khuongbinhinfo-a11y/erp/.github/workflows/erp-android-r2-oidc-stage.yml@refs/heads/main",
     ref:"refs/heads/main",
     event_name:"workflow_run",
@@ -64,7 +64,7 @@ test("short-lived GitHub OIDC signature + protected workflow gives private readb
 
 test("OIDC cannot come from another ref or event", async () => {
   for(const change of [{ref:"refs/heads/feature"},{event_name:"pull_request"},{repository_id:"999"},
-     {environment:"production"},{aud:"other"},{exp:0}]) {
+     {environment:"production"},{sub:"repo:khuongbinhinfo-a11y/erp:environment:android-r2-publish"},{aud:"other"},{exp:0}]) {
     await withGithubJwt(async jwt=>{
       const res=await worker.fetch(new Request(URL,{headers:{authorization:"Bearer "+jwt}}),env);
       assert.equal(res.status,403);
