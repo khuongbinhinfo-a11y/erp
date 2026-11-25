@@ -1,0 +1,108 @@
+name: ERP Android R2 OIDC M3 signed UAT upload
+on:
+  workflow_run:
+    workflows: ['ERP quality gates']
+    types: [completed]
+    branches: [main]
+permissions:
+  contents: read
+  actions: read
+  issues: write
+  id-token: write
+concurrency:
+  group: erp-android-r2-oidc-stage-v2
+  cancel-in-progress: false
+jobs:
+  upload:
+    if: >-
+      github.repository == 'khuongbinhinfo-a11y/erp' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      contains(github.event.workflow_run.head_commit.message, '[erp-r2-oidc-m3-v2]')
+    runs-on: ubuntu-latest
+    environment: android-r2-publish
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SIGNED_RUN: '45657360084'
+      SIGNED_SHA: '9963be10fd6d648474b826bcb5e917adbde03b5c'
+      SIGNER: '545d17fc51c8d24de4d73cb84ff7c3953f79c7d14efc7ada29b7075110d0c028'
+      OIDC_AUD: 'erp-android-r2-stage-v2'
+      UPLOADER: 'https://erp-android-r2-stage-v2.gustavjung24.workers.dev'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - name: Verify exact staged-source CI and signed APK source/identity
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.workflow_run.head_sha }}"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/${{ github.event.workflow_run.id }}/jobs?per_page=100"             --jq '.jobs[] | select(.conclusion == "success") | .name' > "$RUNNER_TEMP/m3-ci-jobs"
+          for job in backend-types-and-unit postgres-fresh-schema prisma-compute-build-only \
+            verify-db-isolation-and-ci-gated-release flutter-analyze-widget \
+            flutter-android-native-build flutter-windows-native-build; do
+            grep -Fxq "$job" "$RUNNER_TEMP/m3-ci-jobs"
+          done
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SIGNED_RUN" > "$RUNNER_TEMP/m3-signed-run.json"
+          jq -e --arg sha "$SIGNED_SHA" '
+            .head_sha == $sha and .head_branch == "main" and .conclusion == "success" and
+            .event == "workflow_run" and .path == ".github/workflows/erp-android-release.yml"
+          ' "$RUNNER_TEMP/m3-signed-run.json" >/dev/null
+          gh run download "$SIGNED_RUN" --repo "$GITHUB_REPOSITORY" -n erp-android-signed -D signed
+          test "$(cat signed/commit.txt)" = "$SIGNED_SHA"
+          test "$(cat signed/signer.txt)" = "$SIGNER"
+          (cd signed && sed 's|signed/||g' SHA256SUMS | sha256sum -c -)
+          test -s signed/erp.apk
+          test -s signed/erp.aab
+          bytes="$(wc -c < signed/erp.apk | tr -d ' ')"
+          test "$bytes" -gt 1000
+          test "$bytes" -le 314572800
+          tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          bash apps/flutter/platform/verify_android_signed.sh signed/erp.apk "$tools" \
+            vn.erpdistribution.erp_distribution 2 0.2.0 "$SIGNER"
+          echo "ERP_M3_SIGNED_APK_PROVENANCE_PASS SHA=$SIGNED_SHA bytes=$bytes"
+      - name: Upload immutable v2 APK with GitHub OIDC and verify all R2 bytes
+        id: upload
+        run: |
+          set -euo pipefail
+          sha="$(sha256sum signed/erp.apk | cut -d' ' -f1)"
+          bytes="$(wc -c < signed/erp.apk | tr -d ' ')"
+          oidc="$(curl --silent --show-error --fail-with-body \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$OIDC_AUD" | jq -er '.value')"
+          test -n "$oidc"
+          curl --silent --show-error --fail-with-body --retry 2 \
+            -H "Authorization: Bearer $oidc" \
+            -H "X-ERP-SHA256: $sha" \
+            -H "X-ERP-SIGNER-SHA256: $SIGNER" \
+            -H "X-ERP-SOURCE-SHA: $SIGNED_SHA" \
+            -H "X-ERP-VERSION-CODE: 2" \
+            -H "X-ERP-VERSION-NAME: 0.2.0" \
+            -H "Content-Type: application/vnd.android.package-archive" \
+            -X PUT --data-binary @signed/erp.apk "$UPLOADER/uat/0.2.0/upload"
+          curl --silent --show-error --fail-with-body --retry 2 \
+            -H "Authorization: Bearer $oidc" \
+            "$UPLOADER/uat/0.2.0/readback" -o "$RUNNER_TEMP/erp-m3-v2-readback.apk"
+          test "$(wc -c < "$RUNNER_TEMP/erp-m3-v2-readback.apk | tr -d ' ')" = "$bytes"
+          test "$(sha256sum "$RUNNER_TEMP/erp-m3-v2-readback.apk" | cut -d' ' -f1)" = "$sha"
+          echo "ERP_M3_R2_V2_FULL_READBACK_PASS key=releases/2/erp-2.apk bytes=$bytes sha256=$sha"
+      - name: Record R2 staging receipt without secrets
+        if: always()
+        env:
+          UPLOAD_STATUS: ${{ steps.upload.outcome }}
+        run: |
+          set -euo pipefail
+          {
+            printf 'ERP Android M3 v0.2.0 signed private R2 staging: **%s**\n\n' "$UPLOAD_STATUS"
+            printf -- '- [Staging workflow run](https://github.com/%s/actions/runs/%s)\n' "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+            printf -- '- Signed release run: %s; source SHA: %s\n' "$SIGNED_RUN" "$SIGNED_SHA"
+            printf -- '- Private R2 key: `erp-android-releases/releases/2/erp-2.apk`\n'
+            if [[ "$UPLOAD_STATUS" == success ]]; then
+              printf -- '- Signed APK full remote SHA-256 and byte length readback: PASS\n'
+              printf -- '- UAT candidate only; `releases/latest.json` **NOT** activated\n'
+            else
+              printf -- '- R2 staging/readback **CHƯA XÁC MINH**; inspect workflow job logs\n'
+            fi
+          } > "$RUNNER_TEMP/erp-m3-r2-report.md"
+          gh issue comment 46 --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/erp-m3-r2-report.md"
