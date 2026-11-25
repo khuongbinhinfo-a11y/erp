@@ -23,7 +23,7 @@ void main(){
       matching:find.byType(SlideTransition)).first;
     final startX=tester.widget<SlideTransition>(slide).position.value.dx;
     final progress=find.byKey(const ValueKey('erp-toast-time-progress'));
-    expect(tester.widget<LinearProgressIndicator>(progress).color,ErpTokens.fresh);
+    expect(tester.widget<LinearProgressIndicator>(progress).color,const ErpPalette(false).fresh);
     await tester.pump(const Duration(milliseconds:350));
     expect(tester.widget<SlideTransition>(slide).position.value.dx,
       lessThan(startX),reason:'Thông báo phải trượt từ bên phải vào');
