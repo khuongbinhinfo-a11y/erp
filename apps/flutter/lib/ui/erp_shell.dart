@@ -310,7 +310,9 @@ class _ErpShellState extends State<ErpShell> {
       content = widget.previewOnly||widget.client==null||widget.session==null
         ?_MobileRetailEntry(onOrders:canCompanySection(CompanySection.orders)
           ?()=>_selectSection(CompanySection.orders):null)
-        :SalesWorkspace(
+        :SingleChildScrollView(
+          key:const ValueKey('erp-retail-vertical-scroll'),
+          child:SalesWorkspace(
           key:const ValueKey('erp-mobile-retail-workspace'),
           client:widget.client!,session:widget.session!,retailMode:true,
           onOpenOrders:canCompanySection(CompanySection.orders)
@@ -327,7 +329,7 @@ class _ErpShellState extends State<ErpShell> {
             if(mounted&&companyNavigationLocked!=locked){
               setState(()=>companyNavigationLocked=locked);
             }
-          });
+          }));
     } else {
       content = _FeaturePage(feature: erpFeatures[selected],mobile:mobile);
     }
