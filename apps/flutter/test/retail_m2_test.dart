@@ -111,6 +111,16 @@ void main(){
     expect(calls.where((x)=>x=='/v1/sales/orders').isNotEmpty,isTrue);
     // A price preview or cart gesture never posts stock or records payment.
     expect(calls.where((x)=>x.contains('/issue')||x.contains('/payment')||x.contains('/settle')),isEmpty);
+    // Changing between handset and desktop must retain the same mounted
+    // SalesWorkspace, its editable cart and its pending command state.
+    tester.view.physicalSize=const Size(1100,820);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('sales-sku-search')),findsOneWidget);
+    expect(tester.widget<TextField>(find.byKey(const ValueKey('sales-qty-0'))).controller?.text,'2');
+    tester.view.physicalSize=const Size(360,760);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('sales-retail-submit')),findsOneWidget);
+    expect(tester.widget<TextField>(find.byKey(const ValueKey('sales-qty-0'))).controller?.text,'2');
     expect(tester.takeException(),isNull);
   });
 }
