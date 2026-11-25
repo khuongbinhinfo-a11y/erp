@@ -94,6 +94,9 @@ export default {
     }
     const written = await env.ERP_ANDROID_RELEASES.put(KEY,request.body,{
       onlyIf:{etagDoesNotMatch:"*"},
+      // R2 validates the actual stream bytes BEFORE committing the immutable object.
+      // A client-provided checksum header or metadata alone is never sufficient.
+      sha256: APK_SHA,
       httpMetadata:{contentType:"application/vnd.android.package-archive"},
       customMetadata:{sha256:APK_SHA,signersha256:SIGNER,sourcesha:SOURCE_SHA}
     });
