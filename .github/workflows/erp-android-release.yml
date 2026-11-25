@@ -98,11 +98,19 @@ jobs:
             echo "::error title=ERP Android signing::Keystore Base64 is invalid."
             exit 1
           fi
-          # PKCS12 created with keytool uses the same password for store and private key.
-          # Check the actual private key, alias and certificate BEFORE a long Gradle build.
+          # No secrets: binary size + SHA-256 allow local keystore comparison if provisioning fails.
+          bytes="$(wc -c < "$ERP_ANDROID_KEYSTORE" | tr -d ' ')"
+          digest="$(sha256sum "$ERP_ANDROID_KEYSTORE" | cut -d' ' -f1)"
+          echo "ERP_ANDROID_KEYSTORE_READBACK bytes=$bytes sha256=$digest"
+          # Check the store password independently from the alias to eliminate ambiguous failures.
+          if ! keytool -list -storetype PKCS12 -keystore "$ERP_ANDROID_KEYSTORE" \
+            -storepass:env ERP_ANDROID_STORE_PASSWORD >/dev/null 2>&1; then
+            echo "::error title=ERP Android signing::Cannot open decoded PKCS12 with ERP_ANDROID_STORE_PASSWORD. Compare the SHA-256 above with the original local .p12; if equal, correct only the protected store-password secret."
+            exit 1
+          fi
           if ! keytool -list -storetype PKCS12 -keystore "$ERP_ANDROID_KEYSTORE" \
             -storepass:env ERP_ANDROID_STORE_PASSWORD -alias "$ERP_ANDROID_KEY_ALIAS" >/dev/null 2>&1; then
-            echo "::error title=ERP Android signing::Keystore, store password or alias is incorrect."
+            echo "::error title=ERP Android signing::The store password is correct but ERP_ANDROID_KEY_ALIAS does not exist in the PKCS12 file."
             exit 1
           fi
           csr="$RUNNER_TEMP/erp-signing-check.csr"
