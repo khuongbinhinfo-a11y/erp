@@ -406,6 +406,26 @@ export async function handlePosHttp(req:IncomingMessage,res:ServerResponse,
    });
    respond(res,result.status,result.body,rid,cors);return;
   }
+  if(req.method==="GET"&&url.pathname==="/v1/pos/checkouts"){
+   const b=id(url.searchParams.get("branchId")),w=id(url.searchParams.get("warehouseId"));
+   const db=await pool.connect();
+   try{
+    const c={installationId:t,actorId:actor,requestId:rid,action:"pos.checkout.list",
+      idempotencyKey:"read",expectedRevision:0,payload:{}};
+    if(!await perm(db,c,b,w,["pos.checkout"]))throw new PosFault(403,"FORBIDDEN");
+    const list=await db.query(`SELECT c.id,c.order_id AS "orderId",o.document_no AS "documentNo",
+      c.grand_total::text AS total,c.created_at AS "createdAt",
+      (r.id IS NOT NULL) AS returned
+      FROM retail_checkout c JOIN sales_order o ON o.installation_id=c.installation_id
+       AND o.branch_id=c.branch_id AND o.id=c.order_id
+      LEFT JOIN retail_return r ON r.installation_id=c.installation_id
+       AND r.branch_id=c.branch_id AND r.checkout_id=c.id
+      WHERE c.installation_id=$1 AND c.branch_id=$2 AND c.warehouse_id=$3
+      ORDER BY c.created_at DESC,c.id DESC LIMIT 50`,[t,b,w]);
+    respond(res,200,{items:list.rows},rid,cors);
+   }finally{db.release();}
+   return;
+  }
   const read=/^\/v1\/pos\/checkouts\/([0-9a-f-]{36})$/.exec(url.pathname);
   if(req.method==="GET"&&read){
    const b=id(url.searchParams.get("branchId")),w=id(url.searchParams.get("warehouseId"));
