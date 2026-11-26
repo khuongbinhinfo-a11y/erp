@@ -27,6 +27,12 @@ jobs:
           node --check backend/scripts/db-cutover-resume.mjs
           node --check backend/scripts/b1-production-migration.mjs
           node --check backend/scripts/r1-production-migration.mjs
+          node --check backend/scripts/t6-0023-codespaces-migration.mjs
+          # Even the read-only Codespaces preflight must reject GitHub Actions.
+          if (cd backend && node --experimental-strip-types scripts/t6-0023-codespaces-migration.mjs --check               >/tmp/erp-t6-operator-negative.log 2>&1); then
+            echo 'T6 Codespaces-only migration operator ran inside CI' >&2
+            exit 1
+          fi
           node --check backend/scripts/r1-maintenance.mjs
           node --check backend/scripts/r1-resume-preflight.mjs
           node --check backend/scripts/r1-target-preflight.mjs
