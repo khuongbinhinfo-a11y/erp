@@ -641,8 +641,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     String shippingStamp()=>[warehouseId,deliveryChoice,collectionPolicy,customerMode,
       locationId,deliveryAddress,deliveryDate,walkInName,walkInPhone,rememberDelivery].join('|');
     final originalShippingStamp=shippingStamp();
-    Future<void> loadLocations(BuildContext ctx,StateSetter refresh,{bool selectDefault=false})async{
-      final run=++locationGeneration,id=customer,addressRun=addressGeneration,editRun=addressEditGeneration;
+    Future<void> loadLocations(BuildContext ctx,StateSetter refresh)async{
+      final run=++locationGeneration,id=customer;
       if(!modern||id==null||customerMode=='WALK_IN')return;
       refresh(()=>locationBusy=true);
       try{
@@ -652,14 +652,6 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           locations=found.where((x)=>x['active']!=false).toList();
           if(locationId!=null&&!locations.any((x)=>x['id']==locationId)){
             locations.add({'id':locationId,'name':'Địa chỉ đã lưu','address':deliveryAddress});
-          }
-          if(selectDefault&&addressRun==addressGeneration&&editRun==addressEditGeneration&&locationId==null){
-            final preferred=locations.where((x)=>x['isDefault']==true).firstOrNull;
-            if(preferred!=null){
-              locationId=preferred['id'] as String;
-              deliveryAddress=(preferred['address']??'').toString();
-              addressGeneration++;
-            }
           }
           locationBusy=false;
         });
@@ -961,7 +953,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       customerSearch.clear();customerMatches=[];
       customerSearchGeneration++;
       customerPricingChanged(ctx,refresh);
-      if(modern)loadLocations(ctx,refresh,selectDefault:true);
+      if(modern)loadLocations(ctx,refresh);
       skuFocus.requestFocus();
     }
     Future<void> chooseWalkIn(BuildContext ctx,StateSetter refresh)async{
@@ -1279,7 +1271,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
               if(ctx.mounted){
                 scheduleQuote(ctx,refresh);
                 if(modern&&customer!=null&&customerMode!='WALK_IN'){
-                  loadLocations(ctx,refresh,selectDefault:savedShipping.isEmpty);
+                  loadLocations(ctx,refresh);
                 }
               }
             });
@@ -1605,24 +1597,51 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           onChanged:(v)=>walkInPhone=v)),
                       ]),
                       if(customerMode!='WALK_IN'&&deliveryChoice!='PICKUP')...[
-                        if(locationBusy)const LinearProgressIndicator(minHeight:2),
-                        if(locations.isNotEmpty)DropdownButtonFormField<String>(
-                          key:ValueKey('sales-location-$customer-$locationId'),
-                          initialValue:locations.any((x)=>x['id']==locationId)?locationId:null,
-                          isExpanded:true,decoration:const InputDecoration(labelText:'Địa điểm giao hàng',isDense:true),
-                          items:[const DropdownMenuItem<String>(value:null,child:Text('Nhập địa chỉ')),
-                            ...locations.map((x)=>DropdownMenuItem<String>(value:x['id'] as String,
-                              child:Text((x['name']??x['address']??'').toString(),overflow:TextOverflow.ellipsis)))],
-                          onChanged:(v)=>refresh((){
-                            locationId=v;addressGeneration++;
-                            if(v!=null)deliveryAddress=(locations.firstWhere((x)=>x['id']==v)['address']??'').toString();
-                          })),
-                        TextFormField(key:ValueKey('sales-delivery-address-$customer-$addressGeneration'),
-                          initialValue:deliveryAddress,readOnly:locationId!=null,
-                          decoration:const InputDecoration(labelText:'Địa chỉ giao',isDense:true),
-                          onChanged:(v){deliveryAddress=v;addressEditGeneration++;}),
-                      ],
-                      if(!retailMobile||retailExtras)Text('Hạn thanh toán: ${customerMode=='WALK_IN'?0:customers.where((x)=>x['id']==customer).firstOrNull?['paymentTermsDays']??savedShipping['paymentTermsDays']??0} ngày · Chưa ghi nhận thu tiền',
+                         if(locationBusy)const LinearProgressIndicator(minHeight:2),
+                         Builder(builder:(_){
+                           final primary=(customers.where((x)=>x['id']==customer).firstOrNull?['deliveryAddress']??'').toString().trim();
+                           return Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+                             if(primary.isNotEmpty||locations.isNotEmpty)
+                               DropdownButtonFormField<String>(
+                                 key:ValueKey('sales-location-$customer-$locationId-$addressGeneration'),
+                                 initialValue:locations.any((x)=>x['id']==locationId)
+                                   ?locationId:(primary.isNotEmpty&&deliveryAddress==primary?'__primary__':'__manual__'),
+                                 isExpanded:true,menuMaxHeight:260,
+                                 decoration:const InputDecoration(labelText:'Chọn địa chỉ giao hàng',isDense:true),
+                                 items:[
+                                   if(primary.isNotEmpty)DropdownMenuItem<String>(
+                                     value:'__primary__',
+                                     child:Text('Địa chỉ chính · $primary',overflow:TextOverflow.ellipsis)),
+                                   const DropdownMenuItem<String>(value:'__manual__',
+                                     child:Text('Nhập địa chỉ khác')),
+                                   ...locations.map((x){
+                                     final name=(x['name']??'').toString().trim();
+                                     final address=(x['address']??'').toString();
+                                     final label=name.isEmpty||name=='Địa chỉ giao hàng'
+                                       ?address:'$name · $address';
+                                     return DropdownMenuItem<String>(value:x['id'] as String,
+                                       child:Text(label,overflow:TextOverflow.ellipsis));
+                                   }),
+                                 ],
+                                 onChanged:(v)=>refresh((){
+                                   if(v=='__primary__'){
+                                     locationId=null;deliveryAddress=primary;
+                                   }else if(v=='__manual__'){
+                                     locationId=null;deliveryAddress='';
+                                   }else if(v!=null){
+                                     locationId=v;
+                                     deliveryAddress=(locations.firstWhere((x)=>x['id']==v)['address']??'').toString();
+                                   }
+                                   addressGeneration++;
+                                 })),
+                             TextFormField(key:ValueKey('sales-delivery-address-$customer-$addressGeneration'),
+                               initialValue:deliveryAddress,readOnly:locationId!=null,
+                               decoration:const InputDecoration(labelText:'Địa chỉ giao',isDense:true),
+                               onChanged:(v){deliveryAddress=v;addressEditGeneration++;}),
+                           ]);
+                         }),
+                       ],
+                       if(!retailMobile||retailExtras)Text('Hạn thanh toán: ${customerMode=='WALK_IN'?0:customers.where((x)=>x['id']==customer).firstOrNull?['paymentTermsDays']??savedShipping['paymentTermsDays']??0} ngày · Chưa ghi nhận thu tiền',
                         style:TextStyle(fontSize:12,color:ErpPalette.of(ctx).muted)),
                     ],
                     if(!modern&&customers.any((x)=>x['id']==customer))
