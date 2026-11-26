@@ -1,5 +1,10 @@
 package vn.erpdistribution.erp_distribution
 
+import android.content.Context
+import android.print.PrintAttributes
+import android.print.PrintManager
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.content.Intent
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
@@ -17,9 +22,57 @@ import java.util.concurrent.Executors
 
 class MainActivity : FlutterActivity() {
     private val worker = Executors.newSingleThreadExecutor()
+    private val receiptViews = mutableListOf<WebView>()
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        // Print only a caller-supplied, locally generated, already ACK'd
+        // receipt. The platform opens the native print chooser; never claim
+        // paper was printed unless the operator confirms at the printer.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "erp/pos_receipt")
+            .setMethodCallHandler { call, result ->
+                if (call.method != "printReceipt") {
+                    result.notImplemented()
+                    return@setMethodCallHandler
+                }
+                val html = call.argument<String>("html")
+                if (html == null || html.length !in 100..64000 ||
+                    !html.startsWith("<!doctype html>") || html.contains("<script", true)) {
+                    result.error("INVALID_RECEIPT", "Phiếu bán chưa hợp lệ.", null)
+                    return@setMethodCallHandler
+                }
+                try {
+                    if (isFinishing || isDestroyed) throw IllegalStateException()
+                    val page = WebView(this).apply {
+                        settings.javaScriptEnabled = false
+                        settings.blockNetworkLoads = true
+                        settings.allowFileAccess = false
+                        settings.allowContentAccess = false
+                    }
+                    receiptViews.add(page)
+                    if (receiptViews.size > 3) receiptViews.removeAt(0).destroy()
+                    var submitted = false
+                    page.webViewClient = object : WebViewClient() {
+                        override fun onPageFinished(view: WebView?, url: String?) {
+                            if (submitted) return
+                            submitted = true
+                            try {
+                                if (isFinishing || isDestroyed) throw IllegalStateException()
+                                val manager = getSystemService(Context.PRINT_SERVICE) as PrintManager
+                                manager.print("ERP - Phiếu bán lẻ", page.createPrintDocumentAdapter("Phiếu bán lẻ"),
+                                    PrintAttributes.Builder()
+                                        .setMediaSize(PrintAttributes.MediaSize.ISO_A5).build())
+                                result.success(true)
+                            } catch (_: Exception) {
+                                result.error("PRINT_UNAVAILABLE", "Không thể mở cửa sổ in.", null)
+                            }
+                        }
+                    }
+                    page.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
+                } catch (_: Exception) {
+                    result.error("PRINT_UNAVAILABLE", "Không thể mở cửa sổ in.", null)
+                }
+            }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "erp/android_update")
             .setMethodCallHandler { call, result ->
                 if (call.method !in setOf("installed", "inspect", "install")) {
@@ -121,6 +174,8 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        receiptViews.forEach { it.destroy() }
+        receiptViews.clear()
         worker.shutdownNow()
         super.onDestroy()
     }

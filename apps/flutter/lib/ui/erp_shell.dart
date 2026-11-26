@@ -4,7 +4,7 @@ import 'package:material_ui/material_ui.dart';
 import 'erp_tokens.dart';
 import 'erp_navigation_ui.dart';
 import 'company_workspace.dart';
-import 'sales_workspace.dart';
+import 'retail_pos_workspace.dart';
 import 'admin_workspace.dart';
 import 'identity_client.dart';
 import 'erp_toast.dart';
@@ -304,32 +304,13 @@ class _ErpShellState extends State<ErpShell> {
       content = AdminWorkspace(
         previewOnly: widget.previewOnly, client: widget.client, session: widget.session);
     } else if(selected==3){
-      // Keep the canonical retail workspace mounted across mobile, web/PWA
-      // and desktop breakpoints. A pending server receipt and retry key must
-      // never be discarded by a resize or orientation change.
-      content = widget.previewOnly||widget.client==null||widget.session==null
-        ?_MobileRetailEntry(onOrders:canCompanySection(CompanySection.orders)
-          ?()=>_selectSection(CompanySection.orders):null)
-        :SingleChildScrollView(
-          key:const ValueKey('erp-retail-vertical-scroll'),
-          child:SalesWorkspace(
-          key:const ValueKey('erp-mobile-retail-workspace'),
-          client:widget.client!,session:widget.session!,retailMode:true,
-          onOpenOrders:canCompanySection(CompanySection.orders)
-            ?()=>_selectSection(CompanySection.orders):null,
-          onOpenCatalog:(area){
-            final section=switch(area){
-              'customers'=>CompanySection.customers,
-              'products'=>CompanySection.products,
-              _=>CompanySection.prices,
-            };
-            if(canCompanySection(section))_selectSection(section);
-          },
-          onNavigationLockChanged:(locked){
-            if(mounted&&companyNavigationLocked!=locked){
-              setState(()=>companyNavigationLocked=locked);
-            }
-          }));
+      // Dedicated supermarket-style POS surface: no distribution order list
+      // or order form is mounted in the Bán Lẻ module.
+      content=widget.previewOnly||widget.client==null||widget.session==null
+        ?const _MobileRetailEntry()
+        :RetailPosWorkspace(
+            key:const ValueKey('erp-mobile-retail-workspace'),
+            client:widget.client!,session:widget.session!);
     } else {
       content = _FeaturePage(feature: erpFeatures[selected],mobile:mobile);
     }
@@ -706,14 +687,10 @@ class _FeaturePage extends StatelessWidget {
 }
 
 class _MobileRetailEntry extends StatelessWidget {
-  final VoidCallback? onOrders;
-  const _MobileRetailEntry({this.onOrders});
+  const _MobileRetailEntry();
   @override Widget build(BuildContext context)=>ListView(
     padding:const EdgeInsets.all(16),children:[
-      const Text('Chọn hàng và lập đơn bán hàng trong hệ thống. Thanh toán tại quầy sẽ được bổ sung khi nghiệp vụ POS sẵn sàng.'),
-      const SizedBox(height:16),
-      if(onOrders!=null)FilledButton.icon(key:const ValueKey('erp-mobile-retail-orders'),
-        onPressed:onOrders,icon:const Icon(Icons.receipt_long_outlined),label:const Text('Đến lập đơn hàng')),
+      const Text('Quầy Bán Lẻ có giỏ và tra giá riêng. Thanh toán chỉ mở khi API POS xuất kho và thu tiền được kiểm chứng.'),
     ],
   );
 }

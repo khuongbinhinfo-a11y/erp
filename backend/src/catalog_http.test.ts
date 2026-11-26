@@ -27,7 +27,7 @@ test("Issue #7: catalog HTTP uses real PostgreSQL with tenant/branch RBAC, decim
     pool=new Pool({connectionString:target.toString(),max:5,query_timeout:12000});
     pool.on("error",()=>{});
     const applied=await applyMigrations(pool,resolve(process.cwd(),"db/migrations"));
-    assert.equal(applied.applied.length,22);
+    assert.equal(applied.applied.length,23);
     const ownerPassword="Owner-test-"+randomUUID();
     const root=await bootstrapInstallation(pool,{code:"catalog-ci",displayName:"Catalog Integration CI",
       adminLogin:"root",adminPassword:ownerPassword});
