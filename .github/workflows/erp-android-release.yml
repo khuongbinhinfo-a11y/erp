@@ -1,7 +1,7 @@
 name: ERP Android signed release
 on:
-  # M3 one-shot signed v2: only a reviewed merge commit carrying the exact
-  # marker can build after all seven main CI jobs pass. No R2 activation.
+  # M3/v2 and M4/v3 signed builds run automatically on reviewed CI-green
+  # main merge commits carrying the matching release marker. No R2 activation.
   workflow_run:
     workflows: ['ERP quality gates']
     types: [completed]
@@ -35,14 +35,15 @@ jobs:
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_branch == 'main' &&
       github.event.workflow_run.conclusion == 'success' &&
-      contains(github.event.workflow_run.head_commit.message, '[erp-apk-m3-v2]')))
+      (contains(github.event.workflow_run.head_commit.message, '[erp-apk-m3-v2]') ||
+      contains(github.event.workflow_run.head_commit.message, '[erp-apk-m4-v3]'))))
     runs-on: ubuntu-latest
     environment: android-release
     env:
       GH_TOKEN: ${{ github.token }}
       APPROVED_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.approved_sha }}
-      BUILD_NUMBER: ${{ github.event_name == 'workflow_run' && '2' || inputs.build_number }}
-      VERSION_NAME: ${{ github.event_name == 'workflow_run' && '0.2.0' || inputs.version_name }}
+      BUILD_NUMBER: ${{ github.event_name == 'workflow_run' && (contains(github.event.workflow_run.head_commit.message, '[erp-apk-m4-v3]') && '3' || '2') || inputs.build_number }}
+      VERSION_NAME: ${{ github.event_name == 'workflow_run' && (contains(github.event.workflow_run.head_commit.message, '[erp-apk-m4-v3]') && '0.3.0' || '0.2.0') || inputs.version_name }}
     steps:
       - uses: actions/checkout@v4
         with:
