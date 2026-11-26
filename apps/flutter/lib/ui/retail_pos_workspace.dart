@@ -35,7 +35,7 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
   int _generation=0,_quoteVersion=0,_searchVersion=0;
   bool _loading=true,_searching=false,_quoting=false,_configOpen=false,_cached=false;
   String? _branch,_warehouse,_priceList,_walkIn,_error,_quoteError,_total;
-  List<Map<String,dynamic>> _branches=[],_warehouses=[],_priceLists=[],_matches=[];
+  List<Map<String,dynamic>> _branches=[],_warehouses=[],_priceLists=[],_customers=[],_matches=[];
   List<_RetailLine> _lines=[];
   List<Map<String,dynamic>> _priced=[];
   Map<String,dynamic>? _shift,_pendingCheckout,_lastReceipt;
@@ -104,6 +104,7 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
         widget.client.salesCatalog(widget.session,'warehouses',branchId:branch),
         widget.client.salesCatalog(widget.session,'price-lists',branchId:branch),
         widget.client.salesEntrySettings(widget.session.token,branch),
+        widget.client.salesCatalog(widget.session,'customers',branchId:branch),
       ]);
       if(!mounted||g!=_generation)return;
       final warehouses=(result[0] as ({List<Map<String,dynamic>> items,bool cached})).items;
@@ -111,9 +112,15 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
         .where((p)=>p['active']!=false).toList();
       final settings=result[2] as Map<String,dynamic>;
       final walkIn=settings['walkInCustomer'];
+      final customers=(result[3] as ({List<Map<String,dynamic>> items,bool cached})).items
+        .where((x)=>x['active']!=false).toList();
+      if(walkIn is Map&&walkIn['id'] is String&&
+         !customers.any((x)=>x['id']==walkIn['id'])){
+        customers.insert(0,Map<String,dynamic>.from(walkIn));
+      }
       final preferred=lists.where((p)=>p['code']?.toString().toUpperCase()=='RETAIL').firstOrNull;
       setState((){
-        _warehouses=warehouses;_priceLists=lists;
+        _warehouses=warehouses;_priceLists=lists;_customers=customers;
         _warehouse=warehouses.isEmpty?null:warehouses.first['id'] as String;
         _priceList=(preferred??lists.firstOrNull)?['id'] as String?;
         _walkIn=walkIn is Map&&walkIn['active']==true?walkIn['id'] as String?:null;
@@ -530,6 +537,7 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
 
   @override Widget build(BuildContext context){
     final palette=ErpPalette.of(context),wide=MediaQuery.sizeOf(context).width>=760;
+    final keyboardOpen=MediaQuery.viewInsetsOf(context).bottom>0;
     final status=_branch==null?'Chọn chi nhánh':
       _warehouses.where((x)=>x['id']==_warehouse).firstOrNull?['name']?.toString()??'Chọn kho';
     return SafeArea(top:false,child:Padding(
@@ -549,7 +557,7 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
             icon:Icon(_configOpen?Icons.expand_less:Icons.tune)),
         ]),
 
-        Padding(padding:const EdgeInsets.only(top:5),child:Wrap(
+        if(!keyboardOpen)Padding(padding:const EdgeInsets.only(top:5),child:Wrap(
           crossAxisAlignment:WrapCrossAlignment.center,spacing:8,runSpacing:4,children:[
             Text(_shift==null?'Chưa mở ca':('Đang bán · '+(_shift?['counterName']?.toString()??'Quầy')),
               style:TextStyle(fontSize:12,color:palette.muted)),
@@ -579,6 +587,10 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
           _selector('Kho bán',_warehouse,_warehouses,(value)=>unawaited(_setWarehouse(value))),
           const SizedBox(height:6),
           _selector('Bảng giá',_priceList,_priceLists,_changePriceList),
+          const SizedBox(height:6),
+          _selector('Khách hàng',_walkIn,_customers,(id){
+            setState(()=>_walkIn=id);unawaited(_quote());
+          }),
         ])),
         const SizedBox(height:8),
         TextField(key:const ValueKey('pos-sku-search'),controller:_search,focusNode:_searchFocus,
@@ -593,7 +605,7 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
               _search.text.isNotEmpty?IconButton(tooltip:'Xóa tìm kiếm',
                 onPressed:(){_search.clear();_onSearch('');setState((){});},
                 icon:const Icon(Icons.close)):null)),
-        if(_matches.isNotEmpty)ConstrainedBox(constraints:const BoxConstraints(maxHeight:190),
+        if(_matches.isNotEmpty)ConstrainedBox(constraints:BoxConstraints(maxHeight:keyboardOpen?140:190),
           child:ListView.builder(key:const ValueKey('pos-search-results'),shrinkWrap:true,
             itemCount:_matches.length,itemBuilder:(context,i){
               final item=_matches[i];
@@ -659,28 +671,30 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
             })),
         if(_quoting)const LinearProgressIndicator(),
         if(_quoteError!=null)Text(_quoteError!,style:TextStyle(color:palette.danger,fontSize:12)),
-        Divider(color:palette.border),
-        Row(children:[
+        if(!keyboardOpen)Divider(color:palette.border),
+        if(!keyboardOpen)Row(children:[
           Text('Tạm tính',style:TextStyle(fontWeight:FontWeight.w700,color:palette.ink)),
           const SizedBox(width:8),
           Expanded(child:Text(erpVndText(_total),key:const ValueKey('pos-grand-total'),
             textAlign:TextAlign.end,maxLines:1,overflow:TextOverflow.ellipsis,
             style:TextStyle(fontSize:20,fontWeight:FontWeight.w800,color:palette.primary))),
         ]),
-        const SizedBox(height:6),
-
+        if(keyboardOpen)Align(alignment:Alignment.centerRight,
+          child:Text('Tạm tính: '+erpVndText(_total),
+            style:TextStyle(fontWeight:FontWeight.w700,color:palette.primary))),
+        if(!keyboardOpen)const SizedBox(height:6),
         if(_busyAction)const LinearProgressIndicator(),
-        if(_pendingCheckout!=null)FilledButton.icon(
+        if(!keyboardOpen&&_pendingCheckout!=null)FilledButton.icon(
           key:const ValueKey('pos-reconcile'),
           onPressed:_busyAction?null:_resolvePendingCheckout,
           icon:const Icon(Icons.sync),
           label:const Text('Kiểm tra giao dịch chưa có xác nhận'))
-        else FilledButton.icon(key:const ValueKey('pos-checkout-disabled'),
+        else if(!keyboardOpen)FilledButton.icon(key:const ValueKey('pos-checkout-disabled'),
           onPressed:_canSettle?_checkoutDialog:null,icon:const Icon(Icons.point_of_sale),
           label:Text(_shift==null?'Mở ca trước khi thanh toán':
             _canSettle?'Thanh toán và hoàn tất bán':'Chọn hàng và xác minh giá để thanh toán')),
-        const SizedBox(height:3),
-        Text(_pendingCheckout!=null
+        if(!keyboardOpen)const SizedBox(height:3),
+        if(!keyboardOpen)Text(_pendingCheckout!=null
           ?'Không tạo giao dịch mới khi chưa đối soát kết quả máy chủ.'
           :'Chỉ xác nhận đã bán khi máy chủ ghi nhận đủ xuất kho và thanh toán.',
           key:const ValueKey('pos-no-fake-settlement'),
