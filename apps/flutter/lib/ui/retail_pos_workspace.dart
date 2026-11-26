@@ -753,13 +753,13 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
           key:const ValueKey('pos-reconcile'),
           onPressed:_busyAction?null:_resolvePendingCheckout,
           icon:const Icon(Icons.sync),
-          label:const Text('Kiểm tra giao dịch chưa có xác nhận'))
+          label:const Text('Kiểm tra giao dịch chưa có xác nhận')),
         if(!keyboardOpen&&_pendingCheckout!=null)OutlinedButton.icon(
           key:const ValueKey('pos-cancel-intent'),
           onPressed:_busyAction?null:_cancelPendingCheckout,
           icon:const Icon(Icons.cancel_outlined),
-          label:const Text('Hủy lệnh sau đối soát để sửa giỏ'))
-        else if(!keyboardOpen)FilledButton.icon(key:const ValueKey('pos-checkout-disabled'),
+          label:const Text('Hủy lệnh sau đối soát để sửa giỏ')),
+        if(!keyboardOpen&&_pendingCheckout==null)FilledButton.icon(key:const ValueKey('pos-checkout-disabled'),
           onPressed:_canSettle?_checkoutDialog:null,icon:const Icon(Icons.point_of_sale),
           label:Text(_shift==null?'Mở ca trước khi thanh toán':
             _canSettle?'Thanh toán và hoàn tất bán':'Chọn hàng và xác minh giá để thanh toán')),
