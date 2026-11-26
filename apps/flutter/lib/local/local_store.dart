@@ -43,6 +43,34 @@ class ErpLocalStore {
   }
   Future<void> clearRetailCart(LocalScope scope)=>
     driver.remove(_key(scope,'retail-pos-cart','current'));
+  /// A checkout command survives process death/lost ACK. A second tab may not
+  /// silently replace it with another key or body.
+  Future<void> saveRetailPending(LocalScope scope,Map<String,dynamic> command)async{
+    final path=_key(scope,'retail-pos-command','current');
+    final payload=jsonEncode(command),old=await driver.read(path);
+    if(old==payload)return;
+    if(old!=null)throw StateError('POS command pending reconciliation');
+    if(driver is! AtomicLocalDriver)throw StateError('Atomic POS storage required');
+    if(!await (driver as AtomicLocalDriver).compareAndSwap(path,null,payload))
+      throw StateError('POS command already in flight');
+  }
+  Future<Map<String,dynamic>?> retailPending(LocalScope scope)async{
+    final raw=await driver.read(_key(scope,'retail-pos-command','current'));
+    return raw==null?null:Map<String,dynamic>.from(jsonDecode(raw) as Map);
+  }
+  Future<void> clearRetailPending(LocalScope scope,String expectedKey)async{
+    final path=_key(scope,'retail-pos-command','current');
+    if(driver is! AtomicLocalDriver)throw StateError('Atomic POS storage required');
+    for(var i=0;i<12;i++){
+      final before=await driver.read(path);
+      if(before==null)return;
+      final data=Map<String,dynamic>.from(jsonDecode(before) as Map);
+      if(data['key']!=expectedKey)throw StateError('POS command changed');
+      if(await (driver as AtomicLocalDriver).compareAndSwap(path,before,null))return;
+    }
+    throw StateError('POS command write conflict');
+  }
+
 
 
   // An editor owns one UUID-like token. Lease expiry permits crash recovery,
