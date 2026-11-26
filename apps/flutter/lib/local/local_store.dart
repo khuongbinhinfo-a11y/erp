@@ -32,6 +32,18 @@ class ErpLocalStore {
     return raw==null?null:Map<String,dynamic>.from(jsonDecode(raw) as Map);
   }
   Future<void> clearCart(LocalScope scope)=>driver.remove(_key(scope,'cart','current'));
+  /// POS carts are separate from distribution sales editor drafts.
+  /// Scope includes installation, actor, branch and warehouse; no auth token.
+  Future<void> saveRetailCart(LocalScope scope,Map<String,dynamic> draft)=>
+    driver.write(_key(scope,'retail-pos-cart','current'),jsonEncode(draft));
+  Future<Map<String,dynamic>?> loadRetailCart(LocalScope scope)async{
+    final raw=await driver.read(_key(scope,'retail-pos-cart','current'));
+    if(raw==null)return null;
+    return Map<String,dynamic>.from(jsonDecode(raw) as Map);
+  }
+  Future<void> clearRetailCart(LocalScope scope)=>
+    driver.remove(_key(scope,'retail-pos-cart','current'));
+
 
   // An editor owns one UUID-like token. Lease expiry permits crash recovery,
   // but the old editor can neither autosave nor submit after a takeover.
