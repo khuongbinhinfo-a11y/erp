@@ -82,7 +82,7 @@ type LineInput={productId?:string;sellSkuId?:string;quantity:string;expectedPric
  overrideReason?:string}&ManualAdjustments;
 type OrderInput={branchId:string;customerId:string;priceListId:string;
   channelId?:string;note:string;lines:LineInput[];shipping?:OrderContextInput;documentDiscount?:DocumentDiscount};
-function parseOrder(raw:Record<string,unknown>):OrderInput{
+export function parseOrder(raw:Record<string,unknown>):OrderInput{
   allowKeys(raw,["branchId","customerId","priceListId","channelId","note","lines","shipping","documentDiscount"]);
   const branchId=uuid(raw.branchId),customerId=uuid(raw.customerId),priceListId=uuid(raw.priceListId);
   const channelId=raw.channelId==null?undefined:uuid(raw.channelId);
@@ -350,13 +350,13 @@ async function recalc(db:PoolClient,t:string,b:string,id:string,version:number){
   if(!r.rows[0])throw new SalesError(409,"VERSION_NOT_FOUND");
   return r.rows[0].total;
 }
-async function create(db:PoolClient,ctx:MutationContext,input:OrderInput){
+export async function create(db:PoolClient,ctx:MutationContext,input:OrderInput,retailRef?:string){
   const t=ctx.installationId,b=input.branchId;
   const refs=await eligibility(db,t,b,input.customerId,input.priceListId);
   const r=await db.query<{id:string}>(`INSERT INTO sales_order
-    (installation_id,branch_id,customer_id,price_list_id,channel_id,created_by)
-    VALUES($1,$2,$3,$4,$5,$6) RETURNING id`,
-    [t,b,input.customerId,input.priceListId,input.channelId??null,ctx.actorId]);
+    (installation_id,branch_id,customer_id,price_list_id,channel_id,created_by,source_type,source_ref)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+    [t,b,input.customerId,input.priceListId,input.channelId??null,ctx.actorId,retailRef?'RETAIL':'COMPANY',retailRef??null]);
   const id=r.rows[0]!.id;
   await db.query(`INSERT INTO sales_order_version
     (installation_id,branch_id,order_id,version_no,customer_code,customer_name,price_list_code,note,created_by)
@@ -414,7 +414,7 @@ async function edit(db:PoolClient,ctx:MutationContext,id:string,input:OrderInput
   return {status:200,body:{id,revision:Number(q.rows[0]!.revision),
     status:o.status,versionStatus:"DRAFT",version:v,total}};
 }
-async function confirm(db:PoolClient,ctx:MutationContext,id:string,b:string){
+export async function confirm(db:PoolClient,ctx:MutationContext,id:string,b:string){
   const t=ctx.installationId,o=await lockOrder(db,t,b,id);
   requireRevision(ctx.expectedRevision,Number(o.revision));
   if(o.status==="CANCELLED")throw new SalesError(409,"ORDER_CANCELLED");
