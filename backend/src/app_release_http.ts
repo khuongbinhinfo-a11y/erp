@@ -14,16 +14,36 @@ type Release={
   schema:1;versionCode:number;versionName:string;packageName:string;sha256:string;
   signerSha256:string;size:number;objectKey:string;notes:string;releasedAt:string;sourceSha:string;
 };
-type Config={r2:R2Config;signer:string;ticketKey:string};
+type Config={r2:R2Config|null;readOrigin:string|null;signer:string;ticketKey:string};
+const RELEASE_READ_ORIGIN="https://erp-android-download.gustavjung24.workers.dev";
+const PINNED_SIGNER="545d17fc51c8d24de4d73cb84ff7c3953f79c7d14efc7ada29b7075110d0c028";
+function releaseRead(config:Config,method:"GET"|"HEAD",key:string):string{
+  // Even the read-only Worker fallback is restricted to immutable release keys.
+  if(!/^releases\/(?:latest\.json|[1-9][0-9]*\/erp-[1-9][0-9]*\.apk)$/.test(key))
+    throw new Error("Unsafe release key");
+  if(config.r2)return presignReleaseRead(config.r2,method,key);
+  if(config.readOrigin===RELEASE_READ_ORIGIN)return config.readOrigin+"/"+key;
+  throw new Error("Release storage unavailable");
+}
+function releaseMetadata(response:Response,config:Config,release:Release):boolean{
+  const shaHeader=config.r2?"x-amz-meta-sha256":"x-erp-sha256";
+  const signerHeader=config.r2?"x-amz-meta-signersha256":"x-erp-signer-sha256";
+  return response.headers.get(shaHeader)===release.sha256&&
+    response.headers.get(signerHeader)===release.signerSha256;
+}
 
 export function releaseConfig(env:Record<string,string|undefined>=process.env):Config|null{
   const accountId=env.ERP_RELEASE_R2_ACCOUNT_ID??"",bucket=env.ERP_RELEASE_R2_BUCKET??"";
   const accessKeyId=env.ERP_RELEASE_R2_ACCESS_KEY_ID??"",secretAccessKey=env.ERP_RELEASE_R2_SECRET_ACCESS_KEY??"";
   const signer=env.ERP_ANDROID_CERT_SHA256??"",ticketKey=env.ERP_RELEASE_TICKET_SECRET??"";
-  if(!/^[a-f0-9]{32}$/i.test(accountId)||!/^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$/.test(bucket)||
-    bucket===env.ERP_R2_BUCKET||! /^[a-f0-9]{32}$/i.test(accessKeyId)||
-    secretAccessKey.length<32||!HEX.test(signer)||ticketKey.length<32)return null;
-  return {r2:{accountId,bucket,accessKeyId,secretAccessKey},signer,ticketKey};
+  if(!HEX.test(signer)||ticketKey.length<32)return null;
+  if(/^[a-f0-9]{32}$/i.test(accountId)&&/^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$/.test(bucket)&&
+    bucket!==env.ERP_R2_BUCKET&&/^[a-f0-9]{32}$/i.test(accessKeyId)&&secretAccessKey.length>=32)
+    return {r2:{accountId,bucket,accessKeyId,secretAccessKey},readOrigin:null,signer,ticketKey};
+  // Fixed public artifact Worker; authorization and ticket checks stay in backend.
+  if(env.ERP_RELEASE_READ_ORIGIN===RELEASE_READ_ORIGIN&&signer===PINNED_SIGNER)
+    return {r2:null,readOrigin:RELEASE_READ_ORIGIN,signer,ticketKey};
+  return null;
 }
 export function validateRelease(raw:unknown,signer:string):Release|null{
   if(!raw||typeof raw!=="object"||Array.isArray(raw))return null;
@@ -48,7 +68,7 @@ export function validTicket(secret:string,scope:string,release:Release,expires:n
 }
 class Fault extends Error{readonly status:number;readonly code:string;constructor(status:number,code:string){super(code);this.status=status;this.code=code;}}
 async function active(config:Config):Promise<Release|null>{
-  const response=await fetch(presignReleaseRead(config.r2,"GET","releases/latest.json"),{
+  const response=await fetch(releaseRead(config,"GET","releases/latest.json"),{
     redirect:"error",signal:AbortSignal.timeout(8000)});
   if(response.status===404){await response.body?.cancel();return null;}
   if(!response.ok||!response.body){await response.body?.cancel();throw new Fault(503,"RELEASE_UNAVAILABLE");}
@@ -60,11 +80,10 @@ async function active(config:Config):Promise<Release|null>{
   try{release=validateRelease(JSON.parse(Buffer.concat(chunks).toString("utf8")),config.signer);}
   catch{throw new Fault(503,"RELEASE_INVALID");}
   if(!release)throw new Fault(503,"RELEASE_INVALID");
-  const head=await fetch(presignReleaseRead(config.r2,"HEAD",release.objectKey),{
+  const head=await fetch(releaseRead(config,"HEAD",release.objectKey),{
     method:"HEAD",redirect:"error",signal:AbortSignal.timeout(8000)});
   if(!head.ok||head.headers.get("content-length")!==String(release.size)||
-    head.headers.get("x-amz-meta-sha256")!==release.sha256||
-    head.headers.get("x-amz-meta-signersha256")!==release.signerSha256)throw new Fault(503,"RELEASE_INVALID");
+    !releaseMetadata(head,config,release))throw new Fault(503,"RELEASE_INVALID");
   return release;
 }
 function json(res:ServerResponse,status:number,data:unknown,id:string){
@@ -131,12 +150,12 @@ export async function handleAppReleaseHttp(req:IncomingMessage,res:ServerRespons
     const controller=new AbortController();res.once("close",()=>controller.abort());
     const partial=range!==undefined;
     const expectedRange="bytes "+offset+"-"+(release.size-1)+"/"+release.size;
-    const upstream=await fetch(presignReleaseRead(config.r2,"GET",release.objectKey),{
+    const upstream=await fetch(releaseRead(config,"GET",release.objectKey),{
       headers:partial?{range:"bytes="+offset+"-"}:{},redirect:"error",
       signal:AbortSignal.any([controller.signal,AbortSignal.timeout(180000)])});
     if(upstream.status!==(partial?206:200)||!upstream.body||
       upstream.headers.get("content-length")!==String(release.size-offset)||
-      upstream.headers.get("x-amz-meta-sha256")!==release.sha256||
+      !releaseMetadata(upstream,config,release)||
       (partial&&upstream.headers.get("content-range")!==expectedRange)){
       await upstream.body?.cancel();throw new Fault(503,"RELEASE_INVALID");
     }

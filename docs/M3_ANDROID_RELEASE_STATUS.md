@@ -23,3 +23,8 @@
 - PR #69: strict ticket expiry/duplicate validation, error messages tiếng Việt và unit regression test.
 - Mỗi kết luận phải ghi ĐÃ XÁC MINH / CHƯA XÁC MINH. CI PASS không thay thế UAT, R2 staged không thay thế activated release.
 - Không sửa POS/bán lẻ trong M3; tab Bán lẻ vẫn chỉ là UI tạm, không trộn thêm nghiệp vụ vào đơn phân phối.
+
+## M3 bổ sung: nối backend–R2 OTA an toàn
+- Backend có fallback Worker chỉ-đọc và vẫn xác thực phiên/quyền, cấp ticket HMAC ngắn hạn, khóa dẫn xuất từ protected backend secret đã tồn tại (không lộ credential ở client).
+- Worker chỉ phục vụ APK v1/v2 cố định, hỗ trợ Range, HEAD, relay `releases/latest.json` và đối chiếu SHA/cert/size/source.
+- Cổng phát hành: CI 7/7 + Codex sạch, Worker/R2/manifest readback, backend deploy đúng SHA bằng Codespaces, smoke API đã login và UAT cài đè thật. **Không có migration**.

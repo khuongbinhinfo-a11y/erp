@@ -1,4 +1,5 @@
 import service from "./service.ts";
+import {createHmac} from "node:crypto";
 import { buildApp } from "../src/server.ts";
 import { createDatabasePool, isDatabaseReady, isDatabaseConnected } from "../src/db.ts";
 
@@ -13,6 +14,15 @@ const r2Inputs = {
 };
 for (const [key,value] of Object.entries(r2Inputs)) {
   if (value) process.env[key] = value;
+}
+// Already-provisioned protected backend secret, domain-separated for OTA tickets.
+// No release R2 writer credentials are needed in the API process or Android app.
+const keyMaterial=serviceInput.throttleSecret?.expose()||serviceInput.r2SecretAccessKey?.expose();
+if(keyMaterial&&keyMaterial.length>=32){
+  process.env.ERP_RELEASE_READ_ORIGIN="https://erp-android-download.gustavjung24.workers.dev";
+  process.env.ERP_ANDROID_CERT_SHA256="545d17fc51c8d24de4d73cb84ff7c3953f79c7d14efc7ada29b7075110d0c028";
+  process.env.ERP_RELEASE_TICKET_SECRET=createHmac("sha256",keyMaterial)
+    .update("ERP-ANDROID-RELEASE-TICKET-v1").digest("hex");
 }
 const databaseUrl = serviceInput.postgresUrl.expose();
 const pool = createDatabasePool(databaseUrl);
