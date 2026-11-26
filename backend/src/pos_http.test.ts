@@ -148,6 +148,32 @@ test("T6 POS posts exactly once: PICKUP, inventory, AR, mixed payment and return
   assert.equal(closed.status,200,JSON.stringify(closed.body));
   assert.equal(closed.body.expectedCash,"1600");
   assert.equal(closed.body.variance,"0");
+  // Two cashiers/devices racing for the same 5 physical units cannot both
+  // issue 4. The failed checkout rolls its order and payment back atomically.
+  const nextShift=await make("/v1/pos/shifts/open",{
+    branchId:b,warehouseId:w,counterName:"Quầy sau kiểm ca",openingCash:"0",
+  });
+  assert.equal(nextShift.status,201,JSON.stringify(nextShift.body));
+  const quoteFour=await call("/v1/sales/quote","POST",{
+    branchId:b,customerId:walk.body.customer.id,priceListId:list.body.id,
+    lines:[{sellSkuId,quantity:"4"}],
+  },token);
+  assert.equal(quoteFour.status,200,JSON.stringify(quoteFour.body));
+  const raced={...payload,shiftId:nextShift.body.id,
+    cashReceived:"4000",bankAmount:"0",
+    lines:[{sellSkuId,quantity:"4",
+      expectedPriceSignature:quoteFour.body.quote.lines[0].priceSignature}]};
+  const competing=await Promise.all([
+    make("/v1/pos/checkouts",raced,"race-a-"+randomUUID()),
+    make("/v1/pos/checkouts",raced,"race-b-"+randomUUID()),
+  ]);
+  assert.deepEqual(competing.map(x=>x.status).sort(),[201,409],
+    JSON.stringify(competing.map(x=>x.body)));
+  const afterRace=await db.query<{on_hand:string}>(`SELECT on_hand::text
+   FROM inventory_stock_balance WHERE installation_id=$1 AND branch_id=$2
+   AND warehouse_id=$3 AND product_id=$4`,[t,b,w,product.body.id]);
+  assert.equal(afterRace.rows[0]!.on_hand,"1.000000");
+
  }finally{
   if(server)await new Promise<void>(done=>server!.close(()=>done()));
   if(db)await db.end();
