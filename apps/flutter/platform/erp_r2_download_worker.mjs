@@ -7,7 +7,7 @@ const RELEASES={
   "/ERP-Android-0.2.0.apk":{key:"releases/2/erp-2.apk",name:"ERP-Android-0.2.0.apk",
     sha:"c1c047754b69e466467c7997c6dd2cb752b806a5a8e4f2d1609524b59102b7c0",size:63769586},
   "/releases/2/erp-2.apk":{key:"releases/2/erp-2.apk",name:"ERP-Android-0.2.0.apk",
-    sha:"c1c047754b69e466467c7997c6dd2cb752b806a5a8e4f2d1609524b59102b7c0",size:63769586}
+    sha:"c1c047754b69e466467c7997c6dd2cb752b806a5a8e4f2d1609524b59102b7c0",size:63769586},
   "/ERP-Android-0.3.0.apk":{key:"releases/3/erp-3.apk",name:"ERP-Android-0.3.0.apk",
     sha:"5bce59f3dea1143f148632f5bfc17552b2f4dd3d6a10d56cf5f4e4ef7c23f9f0",size:64343306},
   "/releases/3/erp-3.apk":{key:"releases/3/erp-3.apk",name:"ERP-Android-0.3.0.apk",
