@@ -377,7 +377,7 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
 
   Widget _selector(String label,String? value,List<Map<String,dynamic>> rows,
       void Function(String) onChanged)=>DropdownButtonFormField<String>(
-    key:ValueKey('pos-select-'+label),value:rows.any((x)=>x['id']==value)?value:null,
+    key:ValueKey('pos-select-'+label),initialValue:rows.any((x)=>x['id']==value)?value:null,
     isExpanded:true,decoration:InputDecoration(labelText:label,isDense:true,
       border:const OutlineInputBorder()),
     items:rows.map((x)=>DropdownMenuItem<String>(value:x['id'] as String,
