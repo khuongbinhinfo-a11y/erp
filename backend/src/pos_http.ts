@@ -12,7 +12,9 @@ const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]
 const MONEY=/^(?:0|[1-9][0-9]{0,15})$/;
 const QTY=/^(?:0|[1-9][0-9]{0,8})(?:\.[0-9]{1,3})?$/;
 class PosFault extends Error {
- constructor(readonly status:number,readonly code:string){super(code);}
+ readonly status:number;
+ readonly code:string;
+ constructor(status:number,code:string){super(code);this.status=status;this.code=code;}
 }
 function id(v:unknown):string {
  if(typeof v!=="string"||!UUID.test(v))throw new PosFault(400,"INVALID_ID");
