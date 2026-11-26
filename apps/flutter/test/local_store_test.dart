@@ -15,6 +15,19 @@ class Memory implements AtomicLocalDriver{
 void main(){
   const a=LocalScope(origin:'https://erp.example',installation:'i',actor:'a',branch:'b',warehouse:'w');
   const b=LocalScope(origin:'https://erp.example',installation:'i',actor:'other',branch:'b',warehouse:'w');
+  test('pending POS payment is durable, actor scoped and CAS fenced',()async{
+    final driver=Memory(),first=ErpLocalStore(driver),second=ErpLocalStore(driver);
+    final command={'key':'pos-k-1','body':{'amount':'1000','quantity':'2'}};
+    await first.saveRetailPending(a,command);
+    expect((await second.retailPending(a))?['key'],'pos-k-1');
+    expect(await second.retailPending(b),isNull);
+    await first.saveRetailPending(a,command);
+    await expectLater(second.saveRetailPending(a,{
+      'key':'pos-k-2','body':{'amount':'1000'}}),throwsStateError);
+    await expectLater(first.clearRetailPending(a,'other-key'),throwsStateError);
+    await second.clearRetailPending(a,'pos-k-1');
+    expect(await first.retailPending(a),isNull);
+  });
   test('retail POS cart is scoped independently from distribution and other cashiers',()async{
     final shared=Memory(),store=ErpLocalStore(shared);
     const otherWarehouse=LocalScope(origin:'https://erp.example',installation:'i',
