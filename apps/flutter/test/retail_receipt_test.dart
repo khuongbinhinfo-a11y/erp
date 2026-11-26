@@ -18,7 +18,7 @@ void main(){
     expect(html,contains('Nước &lt;script&gt;'));
     expect(html,contains('Phiếu bán hàng'));
     expect(html,contains('không thay thế hóa đơn thuế'));
-    expect(html,contains('<script'),isFalse);
+    expect(html.contains('<script'),isFalse);
     expect(html.contains('https://'),false);
   });
   test('unacknowledged, malformed or missing server lines cannot be printed',(){
