@@ -1,31 +1,38 @@
-# M4 — Audit Android và ranh giới Bán Lẻ POS (26/11/2026)
+# M4 / T6 — Bán Lẻ POS siêu thị, Android và gate phát hành (26/11/2026)
 
-Baseline đã read-back khi bắt đầu lô: repo phụ main `666fd4796be9d541bc8db146917514db9d335326`; repo chính main `05c495f5a687e3f5eee554f943901cdf9a387190`. SHA chỉ là mốc, không mặc định HEAD tương lai.
+Baseline read-back lúc khởi sự: repo phụ main `666fd4796be9d541bc8db146917514db9d335326`; repo chính main `05c495f5a687e3f5eee554f943901cdf9a387190`. Trạng thái hiện hành phải kiểm lại, không suy HEAD từ tài liệu. PR code: [repo phụ #73](https://github.com/khuongbinhinfo-a11y/erp/pull/73).
 
-## Quyết định nghiệp vụ bắt buộc
+## Ranh giới bất biến
 
-**Bán Lẻ = POS cửa hàng/siêu thị**; độc lập luồng **Công Ty → đơn phân phối**. Không mở lại `SalesWorkspace(retailMode:true)` làm POS. Dùng chung server pricing, canonical order, inventory ledger, payment ledger với direct PICKUP; không phát triển ledger/engine thứ hai. Không coi `order.confirm` là xuất hàng, thanh toán, hoàn tất bán hoặc in hóa đơn.
+**Bán Lẻ = POS tại quầy**, không phải đơn phân phối đổi tên. App mở `RetailPosWorkspace` riêng; doanh số POS chỉ được ghi khi **API /v1/pos/checkouts** server ACK sau transaction thống nhất: canonical sales create/confirm, direct PICKUP issue inventory ledger, sales fulfillment, AR SALE/PAYMENT, payment receipts/allocations và cash change. Không tự ghi tiền hay trừ tồn bằng Flutter, không lập engine giá thứ hai. Đơn retail `source_type='RETAIL'` không lẫn trong danh sách đơn phân phối. `MANUAL/TRIP` phân phối giữ hợp đồng riêng.
 
-## Audit có chứng cứ
+## Đã code trên PR #73 — chưa đồng nghĩa production đã có
 
-| Ưu tiên | Phát hiện / bằng chứng | Hành động và cổng chấp nhận |
+- **Quầy**: tìm/quét SKU bằng đầu đọc bàn phím, giỏ, số lượng, tra giá server, chọn khách và bảng giá, điều hướng mobile, tối ưu khoảng trống bàn phím; `local_store.dart` giữ giỏ POS theo installation/actor/branch/warehouse.
+- **Thanh toán**: ca bán mở/đóng, đối soát tiền mặt; tiền mặt/chuyển khoản/hỗn hợp và tiền thừa; thao tác gửi server duy nhất, giữ Idempotency-Key/body CAS local và `POST /v1/pos/recovery` read-before-retry khi mất ACK.
+- **Hóa đơn bán tại quầy**: `GET /v1/pos/checkouts/:id` đọc dữ liệu đã ACK; tạo phiếu HTML escape dữ liệu khách, Android native `PrintManager` mở cửa sổ in (không báo đã in nếu chưa xác nhận ở thiết bị). `GET /v1/pos/checkouts` lịch sử giao dịch riêng.
+- **Hoàn hàng**: `POST /v1/pos/returns` toàn bộ giao dịch bằng REVERSAL của inventory ledger, RETURN/REFUND của AR ledger, bất biến posted; không sửa/xóa lịch sử. Hiện **chưa hỗ trợ hoàn một phần**.
+- **Backend**: `backend/src/pos_http.ts`, tái sử dụng `sales_http.ts` canonical create/confirm, `rbac.ts` deny-by-default pos.shift/checkout/return, warehouse locks, Numeric/PostgreSQL, append-only facts.
+- **Migration additive**: `backend/db/migrations/0023_t6_pos_checkout.sql`: retail shift, fulfillment, checkout, customer AR ledger, payment receipts, allocations, returns; constraints/unique/immutability. CI fresh/replay, dump/restore count/reconciliation cập nhật 23 versions.
+- **Test**: `backend/src/pos_http.test.ts` trên PostgreSQL CI thật: cash/bank/change, quote, ACK, replay, conflicting body, stock posting, AR zero, full return và bút toán đảo, đóng ca, immutable ledger, **hai checkout đua cùng tồn kho chỉ một thành công**. Flutter widget POS, receipt escaping và CAS local có test riêng.
+
+## P0/P1/P2 và bằng chứng còn thiếu
+
+| Mức | Điểm cần đối soát | Trạng thái |
 |---|---|---|
-| P0 | `apps/flutter/lib/ui/erp_shell.dart` ở baseline M3 hiển thị `SalesWorkspace(retailMode:true)`, không phải POS; `docs/M2_RETAIL_MOBILE.md` ghi xác nhận đơn nhưng chưa thanh toán/xuất kho | Lô M4-A tách màn POS và không tạo paid/stock giả; **P0 nghiệp vụ checkout vẫn mở**, cần API direct issue/completion/payment canonical T3/T5/T6, idempotent, RBAC và reconciliation |
-| P0 | Backend contract `backend/src/sales_http.ts` chỉ có order/quote/confirm hiện hành; chưa có receipt checkout POS chứng minh stock + payment cùng một giao dịch | Không bật nút thanh toán; sau khi backend có contract, thử mất ACK, retry, double tap, hai thiết bị, partial/refund |
-| P1 | M2 dùng danh sách đơn phân phối trước khi chọn hàng, thêm một modal lập đơn; quá nhiều thao tác trên 360 px | M4-A POS có màn quét/tìm + giỏ trực tiếp, tổng tiền cố định ở đáy; kiểm thật 320/360/390/430 |
-| P1 | Chưa có ca/quầy, in hóa đơn, thanh toán hỗn hợp, khách thành viên, đổi/hoàn hàng và cash drawer trong POS | POS lô tiếp theo; không làm giả receipt hay movement |
-| P1 | M4-A chưa có dữ liệu tồn chính xác theo SKU + kho trong kết quả; không nên hiển thị tồn từ trang đầu tiên làm tồn toàn bộ | Kết nối API có pagination/filter theo SKU+kho; cần quyền và cảnh báo stale |
-| P1 | M4-A giỏ lưu tách `retail-pos-cart`, actor/installation/branch/warehouse; nhưng chưa có CAS lease đa tab của `sales` | Kiểm sau crash, đa tab, account switch và storage eviction trước khi coi offline PASS |
-| P1 | Bàn giao M3 chưa có bằng chứng máy thật về APK cài đè, giữ phiên/SQLite, resume Range và permission installer | Hai APK ký cùng key trên máy thật; gián đoạn giữa chừng và SHA/signature/package/version kiểm |
-| P2 | Dark Mode và one-hand/chỗ mở keyboard/popup chưa có ảnh test thật cho Android/Web/Windows/PWA | Ma trận tương phản, scale chữ, safe inset, focus, xoay máy và accessibility |
-| P2 | Giá retail cần tự chọn bảng giá chính xác theo customer/channel/tier, không tùy tiện lấy bảng giá sai | M4-A ưu tiên bảng giá code RETAIL, luôn hiển thị chọn; backend quote authoritative; test assignment và override |
+| P0 | CI 7/7 trên SHA cuối, Codex Preview sạch, independent review security/invariants | **Chưa mặc định PASS**; đọc Actions/PR trước merge |
+| P0 | Production DB ERP-DB migration 0023: backup mã hóa, read-back durable, thử restore cô lập, đối chiếu ledger, duyệt riêng | **CHƯA CHẠY**; không dùng CI backup thay backup production |
+| P0 | Backend/POS frontend cùng release SHA, API ACK và smoke với dữ liệu tổng hợp thật | **CHƯA TRIỂN KHAI**; ẩn nút thanh toán nếu API/shift chưa sẵn sàng |
+| P1 | Hoàn hàng từng dòng/từng phần; bán trả nợ/công nợ theo quyền; nhiều máy in/driver, cash drawer | **Chưa hoàn tất** |
+| P1 | Kết quả tìm SKU hiển thị tồn **chính xác từng kho**; lookup theo SKU có pagination đủ 1000+; chọn khách hàng ngoài trang đầu | **Chưa có bằng chứng UAT đủ** |
+| P1 | Gián đoạn mạng lúc chuẩn bị/sau COMMIT, retry, app force-stop, mất SQLite/IndexedDB, account switch, hai tab, hàng chục nghìn giỏ | **Cần test thiết bị thực** |
+| P1 | OTA Android 0.2.0 → bản sau: ký đúng key, versionCode tăng, tải tiếp HTTP Range, cài đè giữ session/SQLite | **Chưa UAT máy thật** |
+| P2 | Dark Mode tương phản, 320/360/390/430 px, xoay màn hình, font scale, bàn phím, Android/Windows/Web/PWA | **Widget CI có nhưng chưa có nghiệm thu thiết bị** |
 
-## M4-A hiện có gì
+## Hạ tầng mục tiêu — read-back 26/11
 
-- `retail_pos_workspace.dart`: màn quầy riêng, nhập quét barcode bàn phím, tìm SKU branch-scoped, giỏ, chỉnh số lượng, giá và tổng theo `/v1/sales/quote`. Không tự tạo chứng từ.
-- `local_store.dart`: giỏ POS riêng không ghi đè giỏ phân phối; phân vùng theo installation/actor/branch/warehouse. Không lưu bearer token.
-- Test POS dự kiến: không mở `SalesWorkspace`; không POST `/v1/sales/orders`, payment, settlement hoặc stock issue từ cử chỉ xem giỏ; báo giá sau chỉnh số lượng; giữ giỏ khi đổi kích thước.
+Prisma project `erp-backend` ID `proj_ud3b1s5yn03vh0zp9cbs2upa`; PostgreSQL `ERP-DB` ID `db_jg2bl98hzi1jm06lwo0i4rqx`, READY, Singapore; Compute `cps_gh30k50bvsc0o9298w9leivf`, latest deployment `cpv_lsaxllv57artocjxcob3iw2k`. Prisma automated backups list trống tại thời điểm kiểm — **không chứng minh** durable manual backup đã mất hay đã có; phải kiểm bên Object Storage trước migration. Các IDs chỉ để đối chiếu, không thay owner approval.
 
-## Gate không được bỏ qua
+## Gate phát hành
 
-CI và Codex trên đúng SHA cuối; review diff + contract; merge repo phụ khi owner cho phép và gate đạt; đối chiếu file sync repo chính; Vercel deploy thủ công khi được giao. APK mới phải tăng versionCode, ký cùng chứng chỉ và phát hành R2 đúng runbook; cần test máy thật để ghi UAT. Không migration/backend trong M4-A. Không gọi M4 hoàn thành khi checkout POS, UAT Android và OTA chưa đủ.
+CI exact HEAD PASS + Codex sạch + owner merge approval → merge repo phụ → sync đúng scope sang repo chính → **migration 0023** production chỉ sau backup/isolated restore/reconciliation và owner approval riêng → backend Codespaces đúng target → Vercel **thủ công** đúng SHA khi API đã live → smoke POS → APK Android ký chứng chỉ cũ/versionCode tăng/R2 SHA read-back/stage + activate theo release runbook → test máy thật và owner UAT. Không sửa production từ PR/CI, không deploy frontend POS trước backend/schema. Tài liệu cũ `t1-0022-codespaces-migration.mjs` chỉ áp dụng đến version 0022, **cấm dùng để chạy 0023**.
