@@ -290,7 +290,7 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
     try{
       final totalMoney=BigInt.parse(total),cashMoney=BigInt.parse(payment['cashReceived']!),
         bankMoney=BigInt.parse(payment['bankAmount']!);
-      if(cashMoney<0n||bankMoney<0n||bankMoney>totalMoney||
+      if(cashMoney<BigInt.zero||bankMoney<BigInt.zero||bankMoney>totalMoney||
           cashMoney+bankMoney<totalMoney||payment.values.any((x)=>x.length>16)){
         setState(()=>_posError='Tiền mặt và chuyển khoản không đủ hoặc không hợp lệ.');
         return;
