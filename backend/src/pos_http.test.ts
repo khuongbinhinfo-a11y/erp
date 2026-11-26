@@ -113,19 +113,19 @@ test("T6 POS posts exactly once: PICKUP, inventory, AR, mixed payment and return
   const stock=await db.query<{on_hand:string}>(`SELECT on_hand::text FROM inventory_stock_balance
    WHERE installation_id=$1 AND branch_id=$2 AND warehouse_id=$3 AND product_id=$4`,
    [t,b,w,product.body.id]);
-  assert.equal(stock.rows[0].on_hand,"3.000000");
+  assert.equal(stock.rows[0]!.on_hand,"3.000000");
   const payment=await db.query<{n:string;sum:string}>(`SELECT count(*)::text AS n,
    sum(amount)::text AS sum FROM customer_receivable_ledger
    WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3`,
    [t,b,settle.body.orderId]);
-  assert.equal(payment.rows[0].n,"3");
-  assert.equal(payment.rows[0].sum,"0");
+  assert.equal(payment.rows[0]!.n,"3");
+  assert.equal(payment.rows[0]!.sum,"0");
   const posts=await db.query<{n:string}>(`SELECT count(*)::text AS n FROM inventory_ledger
    WHERE installation_id=$1 AND branch_id=$2 AND source_type='FULFILLMENT' AND source_id=$3`,
    [t,b,(await db.query<{fulfillment_id:string}>(`SELECT fulfillment_id FROM retail_checkout
     WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,
-    [t,b,settle.body.id])).rows[0].fulfillment_id]);
-  assert.equal(posts.rows[0].n,"1");
+    [t,b,settle.body.id])).rows[0]!.fulfillment_id]);
+  assert.equal(posts.rows[0]!.n,"1");
   const ret=await make("/v1/pos/returns",{
    branchId:b,warehouseId:w,shiftId:openShift.body.id,
    checkoutId:settle.body.id,refundMethod:"BANK_TRANSFER",
@@ -138,7 +138,7 @@ test("T6 POS posts exactly once: PICKUP, inventory, AR, mixed payment and return
   const restored=await db.query<{on_hand:string}>(`SELECT on_hand::text FROM inventory_stock_balance
    WHERE installation_id=$1 AND branch_id=$2 AND warehouse_id=$3 AND product_id=$4`,
    [t,b,w,product.body.id]);
-  assert.equal(restored.rows[0].on_hand,"5.000000");
+  assert.equal(restored.rows[0]!.on_hand,"5.000000");
   await assert.rejects(db.query(`UPDATE customer_receivable_ledger SET amount=123
    WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3`,
    [t,b,settle.body.orderId]),/immutable/i);
