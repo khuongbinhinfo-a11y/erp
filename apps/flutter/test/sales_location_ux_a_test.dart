@@ -33,7 +33,7 @@ void main(){
           ]});
           case '/v1/catalog/warehouses':return reply({'items':[{'id':warehouse,'name':'Kho chính','code':'MAIN'}]});
           case '/v1/catalog/price-lists':return reply({'items':[{'id':'00000000-0000-4000-8000-000000000008','name':'Giá bán','code':'SELL','active':true}]});
-          case '/v1/catalog/r1/skus':return reply({'items':[]});
+          case '/v1/catalog/r1/skus':return reply({'items':[{'id':'00000000-0000-4000-8000-000000000007','productId':'00000000-0000-4000-8000-000000000006','sku':'P01','code':'P01','productName':'Hàng A','unitCode':'cai','active':true}]});
           case '/v1/catalog/r1/channels':return reply({'items':[]});
           case '/v1/inventory/balances':return reply({'items':[]});
           case '/v1/sales/entry-settings':return reply({'settings':{'deliveryChoice':'MANUAL','walkInCustomer':null}});
