@@ -15,6 +15,21 @@ class Memory implements AtomicLocalDriver{
 void main(){
   const a=LocalScope(origin:'https://erp.example',installation:'i',actor:'a',branch:'b',warehouse:'w');
   const b=LocalScope(origin:'https://erp.example',installation:'i',actor:'other',branch:'b',warehouse:'w');
+  test('retail POS cart is scoped independently from distribution and other cashiers',()async{
+    final shared=Memory(),store=ErpLocalStore(shared);
+    const otherWarehouse=LocalScope(origin:'https://erp.example',installation:'i',
+      actor:'a',branch:'b',warehouse:'another');
+    await store.saveCart(a,{'lines':[{'sellSkuId':'distribution'}]});
+    await store.saveRetailCart(a,{'lines':[{'sku':{'id':'pos'},'quantity':'2'}]});
+    final restored=ErpLocalStore(shared);
+    expect((await restored.loadRetailCart(a))?['lines'],isNotEmpty);
+    expect(await restored.loadRetailCart(b),isNull);
+    expect(await restored.loadRetailCart(otherWarehouse),isNull);
+    expect((await restored.loadCart(a))?['lines'],isNotEmpty);
+    await restored.clearRetailCart(a);
+    expect(await restored.loadRetailCart(a),isNull);
+    expect((await restored.loadCart(a))?['lines'],isNotEmpty);
+  });
   test('cart and intent survive recreation, cannot cross actor scope',()async{
     final driver=Memory();final store=ErpLocalStore(driver);
     await store.saveCart(a,{'lines':[{'sellSkuId':'sku','quantity':'2'}]});
