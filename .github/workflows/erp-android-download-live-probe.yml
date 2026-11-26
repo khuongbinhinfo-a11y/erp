@@ -47,9 +47,9 @@ jobs:
             --write-out 'ALIAS_GET_STATUS=%{http_code} ALIAS_GET_BYTES=%{size_download}\n'
           echo 'c1c047754b69e466467c7997c6dd2cb752b806a5a8e4f2d1609524b59102b7c0  '"$RUNNER_TEMP/erp-v2-alias.apk" | sha256sum -c -
           curl --location --max-time 30 --silent --show-error \
-            -H 'Range: bytes=100-1123' \
+            -H 'Range: bytes=100-' \
             "$root/releases/2/erp-2.apk" \
             --output "$RUNNER_TEMP/erp-range.bin" \
             --write-out 'RANGE_STATUS=%{http_code} RANGE_BYTES=%{size_download}\n'
-          test "$(wc -c < "$RUNNER_TEMP/erp-range.bin" | tr -d ' ')" = '1024'
+          test "$(wc -c < "$RUNNER_TEMP/erp-range.bin" | tr -d ' ')" = '63769486'
           echo ERP_M3_R2_ALIAS_GET_FULL_SHA256_AND_RANGE_PASS
