@@ -144,7 +144,7 @@ CREATE TABLE payment_allocation (
 CREATE TABLE retail_return (
  installation_id uuid NOT NULL,branch_id uuid NOT NULL,
  id uuid NOT NULL DEFAULT gen_random_uuid(),
- checkout_id uuid NOT NULL,order_id uuid NOT NULL,
+ checkout_id uuid NOT NULL,order_id uuid NOT NULL,shift_id uuid NOT NULL,
  amount numeric(20,0) NOT NULL CHECK(amount>=0),
  refund_method text NOT NULL CHECK(refund_method IN ('CASH','BANK_TRANSFER')),
  actor_id uuid NOT NULL,request_id text NOT NULL CHECK(length(request_id) BETWEEN 1 AND 80),
@@ -153,6 +153,8 @@ CREATE TABLE retail_return (
  UNIQUE(installation_id,branch_id,checkout_id),
  FOREIGN KEY(installation_id,branch_id,checkout_id)
   REFERENCES retail_checkout(installation_id,branch_id,id),
+ FOREIGN KEY(installation_id,branch_id,shift_id)
+  REFERENCES retail_shift(installation_id,branch_id,id),
  FOREIGN KEY(installation_id,branch_id,order_id)
   REFERENCES sales_order(installation_id,branch_id,id),
  FOREIGN KEY(installation_id,actor_id) REFERENCES app_user(installation_id,id)
