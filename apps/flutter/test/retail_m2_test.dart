@@ -47,6 +47,8 @@ void main(){
         switch(request.url.path){
           case '/v1/catalog/branches':
             return reply({'items':[{'id':branch,'name':'Chi nhánh 1','code':'MAIN'}]});
+          case '/v1/catalog/customers':
+            return reply({'items':[{'id':customer,'name':'Khách lẻ','code':'WALK','active':true}]});
           case '/v1/catalog/warehouses':
             return reply({'items':[{'id':warehouse,'name':'Kho chính','code':'MAIN'}]});
           case '/v1/catalog/price-lists':
