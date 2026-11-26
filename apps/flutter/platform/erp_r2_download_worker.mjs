@@ -8,9 +8,14 @@ const RELEASES={
     sha:"c1c047754b69e466467c7997c6dd2cb752b806a5a8e4f2d1609524b59102b7c0",size:63769586},
   "/releases/2/erp-2.apk":{key:"releases/2/erp-2.apk",name:"ERP-Android-0.2.0.apk",
     sha:"c1c047754b69e466467c7997c6dd2cb752b806a5a8e4f2d1609524b59102b7c0",size:63769586}
+  "/ERP-Android-0.3.0.apk":{key:"releases/3/erp-3.apk",name:"ERP-Android-0.3.0.apk",
+    sha:"5bce59f3dea1143f148632f5bfc17552b2f4dd3d6a10d56cf5f4e4ef7c23f9f0",size:64343306},
+  "/releases/3/erp-3.apk":{key:"releases/3/erp-3.apk",name:"ERP-Android-0.3.0.apk",
+    sha:"5bce59f3dea1143f148632f5bfc17552b2f4dd3d6a10d56cf5f4e4ef7c23f9f0",size:64343306},
 };
 const PKG="vn.erpdistribution.erp_distribution";
-const SOURCE="9963be10fd6d648474b826bcb5e917adbde03b5c";
+const SOURCE_2="9963be10fd6d648474b826bcb5e917adbde03b5c";
+const SOURCE_3="56384b325b55129f028906edf3d9b2b33e20b6bb";
 function fail(status,message){return new Response(message,{status,headers:{
   "content-type":"text/plain; charset=utf-8","cache-control":"no-store",
   "x-content-type-options":"nosniff"
@@ -20,10 +25,13 @@ function same(meta,release){
     meta.customMetadata?.sha256===release.sha&&meta.customMetadata?.signersha256===SIGNER;
 }
 function releaseValid(x){
-  const r=RELEASES["/releases/2/erp-2.apk"];
-  return !!x&&x.schema===1&&x.versionCode===2&&x.versionName==="0.2.0"&&
+  if(!x||typeof x!=="object")return false;
+  const r=RELEASES["/releases/"+x.versionCode+"/erp-"+x.versionCode+".apk"];
+  const versionName=x.versionCode===2?"0.2.0":x.versionCode===3?"0.3.0":null;
+  const sourceSha=x.versionCode===2?SOURCE_2:x.versionCode===3?SOURCE_3:null;
+  return !!r&&!!versionName&&x.schema===1&&x.versionName===versionName&&
     x.packageName===PKG&&x.sha256===r.sha&&x.signerSha256===SIGNER&&
-    x.size===r.size&&x.objectKey===r.key&&x.sourceSha===SOURCE&&
+    x.size===r.size&&x.objectKey===r.key&&x.sourceSha===sourceSha&&
     typeof x.notes==="string"&&x.notes.length<=4000&&
     typeof x.releasedAt==="string"&&Number.isFinite(Date.parse(x.releasedAt));
 }
@@ -43,8 +51,8 @@ export default {
       let active;
       try{active=JSON.parse(raw)}catch{return fail(409,"Invalid manifest")}
       if(!releaseValid(active))return fail(409,"Release identity mismatch");
-      if(!same(await bucket.head(RELEASES["/releases/2/erp-2.apk"].key),
-        RELEASES["/releases/2/erp-2.apk"]))return fail(409,"Signed APK mismatch");
+      const current=RELEASES["/releases/"+active.versionCode+"/erp-"+active.versionCode+".apk"];
+      if(!current||!same(await bucket.head(current.key),current))return fail(409,"Signed APK mismatch");
       const headers={"content-type":"application/json; charset=utf-8",
         "content-length":String(new TextEncoder().encode(raw).length),
         "cache-control":"no-store","x-content-type-options":"nosniff"};
