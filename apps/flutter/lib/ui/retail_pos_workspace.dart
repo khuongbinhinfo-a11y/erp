@@ -34,7 +34,7 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
   final _searchFocus=FocusNode();
   Timer? _debounce;
   Future<void> _pendingWrite=Future<void>.value();
-  int _generation=0,_quoteVersion=0,_searchVersion=0;
+  int _generation=0,_quoteVersion=0,_searchVersion=0,_customerChoiceVersion=0;
   bool _loading=true,_searching=false,_quoting=false,_configOpen=false,_cached=false;
   String? _branch,_warehouse,_priceList,_walkIn,_error,_quoteError,_total;
   List<Map<String,dynamic>> _branches=[],_warehouses=[],_priceLists=[],_customers=[],_matches=[];
@@ -59,7 +59,7 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
         old.session.installationId!=widget.session.installationId){
       ++_generation;++_quoteVersion;++_searchVersion;
       _debounce?.cancel();_search.clear();
-      _branch=null;_warehouse=null;_priceList=null;_walkIn=null;_canonicalWalkIn=null;_preparingWalkIn=false;
+      _branch=null;_warehouse=null;_priceList=null;_walkIn=null;_canonicalWalkIn=null;_preparingWalkIn=false;++_customerChoiceVersion;
       _lines=[];_matches=[];_priced=[];_total=null;_error=null;
       _shift=null;_pendingCheckout=null;_lastReceipt=null;
       unawaited(_loadBranches());
@@ -97,7 +97,7 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
     final g=++_generation;
     ++_quoteVersion;++_searchVersion;_debounce?.cancel();
     setState((){
-      _branch=branch;_warehouse=null;_priceList=null;_walkIn=null;_canonicalWalkIn=null;_preparingWalkIn=false;
+      _branch=branch;_warehouse=null;_priceList=null;_walkIn=null;_canonicalWalkIn=null;_preparingWalkIn=false;++_customerChoiceVersion;
       _lines=[];_priced=[];_matches=[];_total=null;_quoteError=null;
       _loading=true;_error=null;_search.clear();
       _shift=null;_pendingCheckout=null;_lastReceipt=null;
@@ -178,6 +178,9 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
     ++_quoteVersion;
     setState((){
       _warehouse=value;_lines=[];_priced=[];_total=null;
+       // The pending server command remains retryable with the same key.
+       // A warehouse switch must not leave the guest action disabled.
+       _preparingWalkIn=false;
       _matches=[];_quoteError=null;
     });
     await _pendingWrite;
@@ -512,13 +515,13 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
 
   Future<void> _chooseWalkIn()async{
      final branch=_branch,actor=widget.session.actorId;
-     if(branch==null||!_hasSalesGrant||_preparingWalkIn)return;
+     if(branch==null||_loading||!_hasSalesGrant||_preparingWalkIn)return;
      if(_canonicalWalkIn!=null){
-       setState(()=>_walkIn=_canonicalWalkIn);
+       setState((){++_customerChoiceVersion;_walkIn=_canonicalWalkIn;});
        unawaited(_quote());
        return;
      }
-     final generation=_generation;
+     final generation=_generation,choiceVersion=_customerChoiceVersion;
      const kind='sales.walk-in.prepare';
      final pending=widget.client.pendingR1(actor,branch,kind);
      final key=pending?.key??'pos-walk-in-'+_nonce();
@@ -534,10 +537,12 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
        if(customerId is! String||customerId.isEmpty)throw const FormatException('WALK_IN_ID');
        widget.client.clearR1(actor,branch,kind);
        setState((){
-         _canonicalWalkIn=customerId;_walkIn=customerId;
+         _canonicalWalkIn=customerId;
          if(!_customers.any((x)=>x['id']==customerId))_customers.insert(0,customer);
+         // A later explicit customer choice always wins over the HTTP response.
+         if(choiceVersion==_customerChoiceVersion)_walkIn=customerId;
        });
-       unawaited(_quote());
+       if(choiceVersion==_customerChoiceVersion)unawaited(_quote());
      }on ErpApiError catch(e){
        if(e.status==400||e.status==404||e.status==409)
          widget.client.clearR1(actor,branch,kind);
@@ -695,13 +700,13 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
           _selector('Bảng giá',_priceList,_priceLists,_changePriceList),
           const SizedBox(height:6),
           _selector('Khách hàng',_walkIn,_customers,(id){
-            setState(()=>_walkIn=id);unawaited(_quote());
+            setState((){++_customerChoiceVersion;_walkIn=id;});unawaited(_quote());
           }),
         ])),
         const SizedBox(height:8),
         Padding(padding:const EdgeInsets.only(top:4),child:Row(children:[
            TextButton.icon(key:const ValueKey('pos-walk-in-quick'),
-             onPressed:_branch==null||_preparingWalkIn||!_hasSalesGrant
+             onPressed:_branch==null||_loading||_preparingWalkIn||!_hasSalesGrant
                ?null:()=>unawaited(_chooseWalkIn()),
              icon:const Icon(Icons.person_outline,size:18),
              label:Text(_preparingWalkIn?'Đang chuẩn bị…':'Khách lẻ')),
