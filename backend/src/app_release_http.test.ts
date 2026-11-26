@@ -26,10 +26,10 @@ test("T2 strict release manifest and independent R2 read namespace",()=>{
   assert.equal(releaseConfig({...workerEnv,ERP_RELEASE_READ_ORIGIN:"https://evil.example"}),null);
   assert.equal(releaseConfig({...workerEnv,ERP_ANDROID_CERT_SHA256:"a".repeat(64)}),null);
   assert.equal(releaseConfig({...workerEnv,ERP_RELEASE_TICKET_SECRET:"weak"}),null);
-  assert.throws(()=>presignR2(config.r2,"GET",release.objectKey));
-  assert.throws(()=>presignReleaseRead(config.r2,"GET","releases/2/erp-1.apk"));
-  assert.throws(()=>presignReleaseRead(config.r2,"GET","media/a.png"));
-  assert.match(new URL(presignReleaseRead(config.r2,"GET",release.objectKey)).pathname,/erp-release\/releases\/1\/erp-1\.apk$/);
+  assert.throws(()=>presignR2(config.r2!,"GET",release.objectKey));
+  assert.throws(()=>presignReleaseRead(config.r2!,"GET","releases/2/erp-1.apk"));
+  assert.throws(()=>presignReleaseRead(config.r2!,"GET","media/a.png"));
+  assert.match(new URL(presignReleaseRead(config.r2!,"GET",release.objectKey)).pathname,/erp-release\/releases\/1\/erp-1\.apk$/);
 });
 test("tickets bind actor/session/grants, release bytes, version and short expiration",()=>{
   const checked=validateRelease(release,signer)!;
