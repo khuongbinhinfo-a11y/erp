@@ -30,6 +30,7 @@ void main(){
 
   testWidgets('POS has independent catalog and quote-driven basket, never confirms distribution order as paid',(tester)async{
     final calls=<String>[];
+     var guestPrepares=0;
     final session=IdentitySession(actorId:customer,token:'mock-token',
       expiresAt:DateTime.now().add(const Duration(hours:1)),
       grants:const [
@@ -59,8 +60,12 @@ void main(){
               'barcode':'8931234567890','active':true}]});
           case '/v1/sales/entry-settings':
             return reply({'settings':{'deliveryChoice':'TRIP',
-              'walkInCustomer':{'id':customer,'code':'WALK','name':'Khách lẻ','active':true}}});
-          case '/v1/sales/quote':
+              'walkInCustomer':null}});
+          case '/v1/sales/walk-in':
+             guestPrepares++;
+             expect(request.headers['idempotency-key'],isNotEmpty);
+             return reply({'customer':{'id':customer,'code':'WALK','name':'Khách lẻ','active':true}});
+           case '/v1/sales/quote':
             final body=jsonDecode(request.body) as Map<String,dynamic>;
             final lines=body['lines'] as List<dynamic>;
             final quantity=(lines.first as Map)['quantity'].toString();
@@ -83,6 +88,13 @@ void main(){
     expect(find.byKey(const ValueKey('erp-mobile-retail-workspace')),findsOneWidget);
     expect(find.byKey(const ValueKey('erp-pos-workspace')),findsOneWidget);
     expect(find.byKey(const ValueKey('pos-sku-search')),findsOneWidget);
+     expect(find.byKey(const ValueKey('pos-walk-in-quick')),findsOneWidget);
+     await tester.tap(find.byKey(const ValueKey('pos-walk-in-quick')));
+     await tester.pumpAndSettle();
+     expect(guestPrepares,1);
+     await tester.tap(find.byKey(const ValueKey('pos-walk-in-quick')));
+     await tester.pumpAndSettle();
+     expect(guestPrepares,1);
     expect(find.byKey(const ValueKey('sales-sku-search')),findsNothing);
     expect(find.byKey(const ValueKey('sales-create')),findsNothing);
     expect(find.byKey(const ValueKey('pos-checkout-disabled')),findsOneWidget);
