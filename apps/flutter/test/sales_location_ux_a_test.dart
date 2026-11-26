@@ -70,7 +70,7 @@ void main(){
     await tester.pumpAndSettle();
     final address2=find.byKey(const ValueKey('sales-delivery-address-$customer-1'));
     expect(tester.widget<TextFormField>(address2).initialValue,'20 Pasteur, Quận 1');
-    expect(tester.widget<TextFormField>(address2).readOnly,isTrue);
+    expect(tester.widget<EditableText>(find.descendant(of:address2,matching:find.byType(EditableText))).readOnly,isTrue);
     final selectSecondary=find.byKey(const ValueKey('sales-location-$customer-$location2-1'));
     await tester.tap(selectSecondary);
     await tester.pumpAndSettle();
@@ -78,6 +78,6 @@ void main(){
     await tester.pumpAndSettle();
     final addressPrimary=find.byKey(const ValueKey('sales-delivery-address-$customer-2'));
     expect(tester.widget<TextFormField>(addressPrimary).initialValue,'10 Nguyễn Huệ, Quận 1');
-    expect(tester.widget<TextFormField>(addressPrimary).readOnly,isFalse);
+    expect(tester.widget<EditableText>(find.descendant(of:addressPrimary,matching:find.byType(EditableText))).readOnly,isFalse);
   });
 }
