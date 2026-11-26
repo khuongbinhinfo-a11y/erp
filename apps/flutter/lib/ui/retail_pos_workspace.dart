@@ -5,6 +5,8 @@ import 'package:material_ui/material_ui.dart';
 
 import '../local/local_store.dart';
 import 'erp_display.dart';
+import 'app_update.dart';
+import 'retail_receipt.dart';
 import 'erp_number_input.dart';
 import 'erp_tokens.dart';
 import 'identity_client.dart';
@@ -354,6 +356,23 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
       if(mounted)setState(()=>_posError='Chưa xác minh máy chủ đã nhận tiền. Hãy kiểm tra giao dịch, không tạo đơn khác.');
     }finally{if(mounted)setState(()=>_busyAction=false);}
   }
+  Future<void> _printReceipt(Map<String,dynamic> receipt)async{
+    final branch=_branch,warehouse=_warehouse,token=widget.session.token;
+    final checkoutId=receipt['id'];
+    if(!erpAndroidUpdateSupported||checkoutId is! String||
+       branch==null||warehouse==null)return;
+    try{
+      final verified=await widget.client.posReceipt(token,branch,warehouse,checkoutId);
+      if(!mounted||_branch!=branch||_warehouse!=warehouse||
+          widget.session.token!=token)return;
+      final html=erpRetailReceiptHtml(verified);
+      final opened=await const MethodChannel('erp/pos_receipt').invokeMethod<bool>(
+        'printReceipt',{'html':html});
+      if(mounted&&opened!=true)throw const FormatException('Không mở được trình in');
+    }catch(_){
+      if(mounted)setState(()=>_posError='Không mở được trình in Android. Phiếu vẫn lưu trong lịch sử quầy.');
+    }
+  }
   Future<void> _showReceipt(Map<String,dynamic> receipt)async{
     if(!mounted)return;
     final label='Phiếu bán '+(receipt['documentNo']?.toString()??'');
@@ -367,6 +386,9 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
         Text('Tiền trả lại: '+erpVndText(receipt['changeDue'])),
       ]),
       actions:[
+        if(erpAndroidUpdateSupported)TextButton.icon(
+          onPressed:(){Navigator.pop(ctx);unawaited(_printReceipt(receipt));},
+          icon:const Icon(Icons.print_outlined),label:const Text('In phiếu')),
         TextButton(onPressed:(){
           Clipboard.setData(ClipboardData(text:label+'\nTổng: '+
             erpVndText(receipt['total'])+'\nTiền thừa: '+erpVndText(receipt['changeDue'])));
