@@ -196,7 +196,7 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
       });
     }
   }
-  void _editCart(Map<String,dynamic> sku,{int delta=1}){
+  void _editCart(Map<String,dynamic> sku,{int delta=1,bool refocus=true}){
     if(!_hasSalesGrant||sku['id'] is! String)return;
     final id=sku['id'] as String;
     final at=_lines.indexWhere((x)=>x.id==id);
@@ -208,7 +208,7 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
       setState(()=>_lines[at].quantity=next);
     }
     _queueSave();unawaited(_quote());
-    _search.clear();_matches=[];_searchFocus.requestFocus();
+    if(refocus){_search.clear();_matches=[];_searchFocus.requestFocus();}
   }
   void _remove(int i){
     setState(()=>_lines.removeAt(i));
@@ -334,11 +334,11 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
                   const SizedBox(height:5),
                   Row(children:[
                     IconButton(key:ValueKey('pos-minus-'+i.toString()),
-                      onPressed:line.quantity=='1'?null:()=>_editCart(line.sku,delta:-1),
+                      onPressed:line.quantity=='1'?null:()=>_editCart(line.sku,delta:-1,refocus:false),
                       tooltip:'Giảm số lượng',icon:const Icon(Icons.remove_circle_outline)),
                     Text(erpNumberText(line.quantity),style:const TextStyle(fontWeight:FontWeight.w700)),
                     IconButton(key:ValueKey('pos-plus-'+i.toString()),
-                      onPressed:()=>_editCart(line.sku),tooltip:'Tăng số lượng',
+                      onPressed:()=>_editCart(line.sku,refocus:false),tooltip:'Tăng số lượng',
                       icon:const Icon(Icons.add_circle_outline)),
                     IconButton(key:ValueKey('pos-remove-'+i.toString()),
                       onPressed:()=>_remove(i),tooltip:'Bỏ sản phẩm',icon:const Icon(Icons.delete_outline)),
