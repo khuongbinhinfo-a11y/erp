@@ -589,7 +589,7 @@ async function listing(db:PoolClient,t:string,b:string,search:string,actor:strin
     JOIN catalog_customer c ON c.installation_id=o.installation_id
       AND c.branch_id=o.branch_id AND c.id=o.customer_id
     ${modern?'LEFT JOIN sales_order_version_context sc ON sc.installation_id=v.installation_id AND sc.branch_id=v.branch_id AND sc.order_id=v.order_id AND sc.version_no=v.version_no':''}
-    WHERE o.installation_id=$1 AND o.branch_id=$2
+    WHERE o.installation_id=$1 AND o.branch_id=$2 AND o.source_type<>'RETAIL'
       ${modern?'AND (sc.warehouse_id IS NULL OR sc.warehouse_id=ANY($4::uuid[]))':''}
       AND ($3='' OR o.document_no ILIKE '%'||$3||'%' OR c.code ILIKE '%'||$3||'%'
         OR c.name ILIKE '%'||$3||'%' ${modern?"OR sc.walk_in_name ILIKE '%'||$3||'%'":""})
