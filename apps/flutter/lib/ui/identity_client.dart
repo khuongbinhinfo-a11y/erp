@@ -708,6 +708,42 @@ class ErpIdentityClient {
     final r=await _request('POST','/v1/sales/quote',token:token,body:fields);
     return Map<String,dynamic>.from(r['quote'] as Map);
   }
+  /// Canonical POS APIs: only an ACK from server means stock issued and paid.
+  Future<Map<String,dynamic>?> posCurrentShift(String token,String branch,String warehouse)async{
+    final q=Uri(queryParameters:{'branchId':branch,'warehouseId':warehouse}).query;
+    final response=await _request('GET','/v1/pos/shifts/current?$q',token:token);
+    final shift=response['shift'];
+    return shift is Map?Map<String,dynamic>.from(shift):null;
+  }
+  Future<Map<String,dynamic>> posOpenShift(String token,Map<String,dynamic> fields,{
+    required String key,
+  })=>_request('POST','/v1/pos/shifts/open',token:token,body:fields,
+    revision:0,idempotencyKey:key);
+  Future<Map<String,dynamic>> posCloseShift(String token,String id,Map<String,dynamic> fields,{
+    required String key,
+  })=>_request('POST','/v1/pos/shifts/$id/close',token:token,body:fields,
+    revision:0,idempotencyKey:key);
+  Future<Map<String,dynamic>> posCheckout(String token,Map<String,dynamic> fields,{
+    required String key,
+  })=>_request('POST','/v1/pos/checkouts',token:token,body:fields,
+    revision:0,idempotencyKey:key);
+  Future<Map<String,dynamic>?> posCheckoutRecovery(String token,Map<String,dynamic> fields,{
+    required String key,
+  })async{
+    final response=await _request('POST','/v1/pos/recovery',token:token,
+      body:{'checkout':fields},revision:0,idempotencyKey:key);
+    final receipt=response['receipt'];
+    return receipt is Map?Map<String,dynamic>.from(receipt):null;
+  }
+  Future<Map<String,dynamic>> posReturn(String token,Map<String,dynamic> fields,{
+    required String key,
+  })=>_request('POST','/v1/pos/returns',token:token,body:fields,
+    revision:0,idempotencyKey:key);
+  Future<Map<String,dynamic>> posReceipt(String token,String branch,String warehouse,String id)async{
+    final q=Uri(queryParameters:{'branchId':branch,'warehouseId':warehouse}).query;
+    final response=await _request('GET','/v1/pos/checkouts/$id?$q',token:token);
+    return Map<String,dynamic>.from(response['receipt'] as Map);
+  }
   /// Sales commands retain one idempotency key on lost acknowledgments.
   Future<Map<String,dynamic>> salesEntrySettings(String token,String branchId)async{
     final raw=await _request('GET','/v1/sales/entry-settings?'+
