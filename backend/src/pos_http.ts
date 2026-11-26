@@ -1,6 +1,6 @@
 import {randomUUID} from "node:crypto";
 import type {IncomingMessage,ServerResponse} from "node:http";
-import type {Pool,PoolClient} from "pg";
+import type {PoolClient} from "pg";
 import type {IdentityOptions} from "./identity_http.ts";
 import {resolveSession} from "./auth.ts";
 import {hasPermission} from "./rbac.ts";
