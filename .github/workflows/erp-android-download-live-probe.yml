@@ -22,3 +22,16 @@ jobs:
               --write-out 'HTTP_STATUS=%{http_code} REMOTE_IP=%{remote_ip} REDIRECT=%{redirect_url}\n' \
               "$url" || echo 'CURL_FAILED'
           done
+
+      - name: Download actual R2-backed v2 APK bytes and verify SHA256
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --location --retry 2 --connect-timeout 15 --max-time 180 \
+            --silent --show-error \
+            'https://erp-android-download.gustavjung24.workers.dev/ERP-Android-0.2.0.apk' \
+            --output "$RUNNER_TEMP/erp-v2.apk" \
+            --write-out 'APK_GET_STATUS=%{http_code} APK_GET_BYTES=%{size_download}\n'
+          test "$(wc -c < "$RUNNER_TEMP/erp-v2.apk" | tr -d ' ')" = '63769586'
+          echo 'c1c047754b69e466467c7997c6dd2cb752b806a5a8e4f2d1609524b59102b7c0  '"$RUNNER_TEMP/erp-v2.apk" | sha256sum -c -
+          echo ERP_M3_PUBLIC_WORKER_APK_GET_FULL_SHA256_PASS
