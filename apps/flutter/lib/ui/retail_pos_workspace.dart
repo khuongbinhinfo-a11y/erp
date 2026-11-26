@@ -1,8 +1,11 @@
 import 'dart:async';
+import 'dart:math';
+import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../local/local_store.dart';
 import 'erp_display.dart';
+import 'erp_number_input.dart';
 import 'erp_tokens.dart';
 import 'identity_client.dart';
 import 'sales_workspace.dart' show erpRetailStepQuantity;
@@ -35,6 +38,15 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
   List<Map<String,dynamic>> _branches=[],_warehouses=[],_priceLists=[],_matches=[];
   List<_RetailLine> _lines=[];
   List<Map<String,dynamic>> _priced=[];
+  Map<String,dynamic>? _shift,_pendingCheckout,_lastReceipt;
+  bool _busyAction=false;
+  String? _posError;
+  String _nonce()=>DateTime.now().microsecondsSinceEpoch.toString()+'-'+
+    Random.secure().nextInt(0x7fffffff).toRadixString(16);
+  bool get _canSettle=>_lines.isNotEmpty&&_total!=null&&_priceList!=null&&
+    _walkIn!=null&&!_quoting&&_priced.length==_lines.length&&
+    _shift!=null&&!_busyAction&&_pendingCheckout==null;
+
 
   @override void initState(){super.initState();unawaited(_loadBranches());}
   @override void didUpdateWidget(covariant RetailPosWorkspace old){
@@ -46,6 +58,7 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
       _debounce?.cancel();_search.clear();
       _branch=null;_warehouse=null;_priceList=null;_walkIn=null;
       _lines=[];_matches=[];_priced=[];_total=null;_error=null;
+      _shift=null;_pendingCheckout=null;_lastReceipt=null;
       unawaited(_loadBranches());
     }
   }
@@ -84,6 +97,7 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
       _branch=branch;_warehouse=null;_priceList=null;_walkIn=null;
       _lines=[];_priced=[];_matches=[];_total=null;_quoteError=null;
       _loading=true;_error=null;_search.clear();
+      _shift=null;_pendingCheckout=null;_lastReceipt=null;
     });
     try{
       final result=await Future.wait<Object>([
@@ -106,6 +120,7 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
         _loading=false;
       });
       await _restoreCart(g);
+      await _loadPosState(g);
     }on ErpApiError catch(e){
       if(mounted&&g==_generation)setState((){_loading=false;_error=e.message;});
     }catch(_){
@@ -156,7 +171,232 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
     });
     await _pendingWrite;
     await _restoreCart(g);
+    await _loadPosState(g);
   }
+  Future<void> _loadPosState(int g)async{
+    final scope=_scope,store=widget.client.localStore;
+    if(scope==null)return;
+    try{
+      final saved=await store?.retailPending(scope);
+      if(!mounted||g!=_generation)return;
+      setState(()=>_pendingCheckout=saved);
+      final shift=await widget.client.posCurrentShift(widget.session.token,_branch!,_warehouse!);
+      if(!mounted||g!=_generation)return;
+      setState((){_shift=shift;_posError=null;});
+    }on ErpApiError catch(e){
+      if(mounted&&g==_generation)setState((){_shift=null;_posError=e.message;});
+    }catch(_){
+      if(mounted&&g==_generation)setState((){_shift=null;_posError='Chưa kết nối được ca bán.';});
+    }
+  }
+  Future<void> _openShift()async{
+    final branch=_branch,warehouse=_warehouse;
+    if(branch==null||warehouse==null||_busyAction)return;
+    final counter=TextEditingController(text:'Quầy chính');
+    final opening=TextEditingController(text:'0');
+    final form=await showDialog<Map<String,String>>(context:context,builder:(ctx)=>AlertDialog(
+      title:const Text('Mở ca bán hàng'),
+      content:Column(mainAxisSize:MainAxisSize.min,children:[
+        TextField(controller:counter,decoration:const InputDecoration(labelText:'Tên quầy')),
+        TextField(controller:opening,keyboardType:TextInputType.number,
+          inputFormatters:const [ErpGroupedNumberFormatter(maxIntegerDigits:16,maxFractionDigits:0)],
+          decoration:const InputDecoration(labelText:'Tiền mặt đầu ca')),
+      ]),
+      actions:[
+        TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Hủy')),
+        FilledButton(onPressed:()=>Navigator.pop(ctx,{
+          'counterName':counter.text.trim(),'openingCash':erpNumberCanonical(opening.text),
+        }),child:const Text('Mở ca')),
+      ]));
+    counter.dispose();opening.dispose();
+    if(form==null)return;
+    setState((){_busyAction=true;_posError=null;});
+    try{
+      await widget.client.posOpenShift(widget.session.token,{
+        'branchId':branch,'warehouseId':warehouse,...form},key:'pos-shift-'+_nonce());
+      if(mounted)await _loadPosState(_generation);
+    }on ErpApiError catch(e){if(mounted){
+      setState(()=>_posError=e.message);
+      await _loadPosState(_generation);
+    }}catch(_){if(mounted)setState(()=>_posError='Không mở được ca. Hãy kiểm tra lại trạng thái ca.');}
+    finally{if(mounted)setState(()=>_busyAction=false);}
+  }
+  Future<void> _closeShift()async{
+    final shiftId=_shift?['id']?.toString(),branch=_branch,warehouse=_warehouse;
+    if(shiftId==null||branch==null||warehouse==null||_busyAction||_pendingCheckout!=null)return;
+    final closing=TextEditingController(text:_shift?['expectedCash']?.toString()??'0');
+    final count=await showDialog<String>(context:context,builder:(ctx)=>AlertDialog(
+      title:const Text('Đóng ca và đối soát tiền mặt'),
+      content:Column(mainAxisSize:MainAxisSize.min,crossAxisAlignment:CrossAxisAlignment.start,children:[
+        Text('Tiền mặt dự kiến: '+erpVndText(_shift?['expectedCash'])),
+        TextField(controller:closing,keyboardType:TextInputType.number,
+          inputFormatters:const [ErpGroupedNumberFormatter(maxIntegerDigits:16,maxFractionDigits:0)],
+          decoration:const InputDecoration(labelText:'Tiền mặt kiểm đếm')),
+      ]),
+      actions:[
+        TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Hủy')),
+        FilledButton(onPressed:()=>Navigator.pop(ctx,erpNumberCanonical(closing.text)),
+          child:const Text('Xác nhận đóng ca')),
+      ]));
+    closing.dispose();
+    if(count==null)return;
+    setState(()=>_busyAction=true);
+    try{
+      final result=await widget.client.posCloseShift(widget.session.token,shiftId,{
+        'branchId':branch,'warehouseId':warehouse,'closingCash':count,
+      },key:'pos-close-'+_nonce());
+      if(mounted){
+        setState(()=>_shift=null);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(
+          'Đã đóng ca. Chênh lệch: '+erpVndText(result['variance']))));
+      }
+    }on ErpApiError catch(e){if(mounted)setState(()=>_posError=e.message);}
+    catch(_){if(mounted)setState(()=>_posError='Không đóng được ca. Kiểm tra kết nối.');}
+    finally{if(mounted)setState(()=>_busyAction=false);}
+  }
+  Future<void> _checkoutDialog()async{
+    final total=_total;
+    if(!_canSettle||total==null||_branch==null||_warehouse==null||_shift==null)return;
+    final cash=TextEditingController(text:erpNumberText(total));
+    final bank=TextEditingController(text:'0');
+    final payment=await showDialog<Map<String,String>>(context:context,builder:(ctx)=>AlertDialog(
+      title:const Text('Thanh toán tại quầy'),
+      content:Column(mainAxisSize:MainAxisSize.min,crossAxisAlignment:CrossAxisAlignment.start,children:[
+        Text('Khách cần thanh toán: '+erpVndText(total),
+          style:const TextStyle(fontWeight:FontWeight.bold)),
+        const SizedBox(height:12),
+        TextField(key:const ValueKey('pos-cash-received'),controller:cash,
+          keyboardType:TextInputType.number,
+          inputFormatters:const [ErpGroupedNumberFormatter(maxIntegerDigits:16,maxFractionDigits:0)],
+          decoration:const InputDecoration(labelText:'Tiền mặt khách đưa')),
+        const SizedBox(height:8),
+        TextField(key:const ValueKey('pos-bank-amount'),controller:bank,
+          keyboardType:TextInputType.number,
+          inputFormatters:const [ErpGroupedNumberFormatter(maxIntegerDigits:16,maxFractionDigits:0)],
+          decoration:const InputDecoration(labelText:'Tiền chuyển khoản')),
+        const SizedBox(height:8),
+        const Text('Chỉ xuất kho, ghi nhận thu tiền sau khi máy chủ xác nhận.'),
+      ]),
+      actions:[
+        TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Quay lại')),
+        FilledButton(key:const ValueKey('pos-confirm-payment'),
+          onPressed:()=>Navigator.pop(ctx,{
+            'cashReceived':erpNumberCanonical(cash.text),
+            'bankAmount':erpNumberCanonical(bank.text),
+          }),child:const Text('Xác nhận thanh toán')),
+      ]));
+    cash.dispose();bank.dispose();
+    if(payment==null||!mounted||!_canSettle)return;
+    try{
+      final totalMoney=BigInt.parse(total),cashMoney=BigInt.parse(payment['cashReceived']!),
+        bankMoney=BigInt.parse(payment['bankAmount']!);
+      if(cashMoney<0n||bankMoney<0n||bankMoney>totalMoney||
+          cashMoney+bankMoney<totalMoney||payment.values.any((x)=>x.length>16)){
+        setState(()=>_posError='Tiền mặt và chuyển khoản không đủ hoặc không hợp lệ.');
+        return;
+      }
+    }catch(_){setState(()=>_posError='Nhập tiền nguyên VND hợp lệ.');return;}
+    final fields=<String,dynamic>{
+      'branchId':_branch,'warehouseId':_warehouse,'shiftId':_shift!['id'],
+      'customerId':_walkIn,'priceListId':_priceList,...payment,
+      'lines':_lines.asMap().entries.map((entry)=>({
+        'sellSkuId':entry.value.id,'quantity':entry.value.quantity,
+        'expectedPriceSignature':_priced[entry.key]['priceSignature'],
+      })).toList(),
+    };
+    final scope=_scope,store=widget.client.localStore;
+    if(scope==null||store==null){
+      setState(()=>_posError='Không có kho lưu giao dịch an toàn trên thiết bị.');
+      return;
+    }
+    final command={'key':'pos-checkout-'+_nonce(),'body':fields};
+    try{
+      await _pendingWrite;
+      await store.saveRetailPending(scope,command);
+    }catch(_){if(mounted)setState(()=>_posError='Có giao dịch chưa đối soát. Hãy kiểm tra trước.');return;}
+    if(!mounted)return;
+    setState(()=>_pendingCheckout=command);
+    await _resolvePendingCheckout();
+  }
+  Future<void> _resolvePendingCheckout()async{
+    final pending=_pendingCheckout,scope=_scope,store=widget.client.localStore;
+    if(pending==null||_busyAction||scope==null||store==null)return;
+    final key=pending['key']?.toString(),raw=pending['body'];
+    if(key==null||raw is! Map)return;
+    final fields=Map<String,dynamic>.from(raw);
+    final branch=_branch,warehouse=_warehouse,token=widget.session.token;
+    if(branch==null||warehouse==null||fields['branchId']!=branch||
+        fields['warehouseId']!=warehouse)return;
+    setState((){_busyAction=true;_posError=null;});
+    try{
+      final prior=await widget.client.posCheckoutRecovery(token,fields,key:key);
+      final receipt=prior??await widget.client.posCheckout(token,fields,key:key);
+      if(!mounted||_branch!=branch||_warehouse!=warehouse||
+          widget.session.token!=token)return;
+      if(receipt['paymentStatus']!='PAID'||receipt['deliveryStatus']!='DELIVERED'||
+          receipt['total']?.toString()==null)throw const FormatException('Invalid POS receipt');
+      await store.clearRetailPending(scope,key);
+      if(!mounted)return;
+      setState((){_pendingCheckout=null;_lastReceipt=receipt;_lines=[];_priced=[];_total=null;});
+      _queueSave();
+      await _loadPosState(_generation);
+      if(mounted)await _showReceipt(receipt);
+    }on ErpApiError catch(e){
+      if(mounted)setState(()=>_posError=e.message+'; giữ giao dịch để đối soát, không thanh toán lần hai.');
+    }catch(_){
+      if(mounted)setState(()=>_posError='Chưa xác minh máy chủ đã nhận tiền. Hãy kiểm tra giao dịch, không tạo đơn khác.');
+    }finally{if(mounted)setState(()=>_busyAction=false);}
+  }
+  Future<void> _showReceipt(Map<String,dynamic> receipt)async{
+    if(!mounted)return;
+    final label='Phiếu bán '+(receipt['documentNo']?.toString()??'');
+    await showDialog<void>(context:context,builder:(ctx)=>AlertDialog(
+      title:Text(label),content:Column(mainAxisSize:MainAxisSize.min,
+      crossAxisAlignment:CrossAxisAlignment.start,children:[
+        const Text('Đã thanh toán và giao hàng tại quầy.'),
+        Text('Tổng tiền: '+erpVndText(receipt['total'])),
+        Text('Tiền mặt nhận: '+erpVndText(receipt['cashReceived'])),
+        Text('Chuyển khoản: '+erpVndText(receipt['bankAmount'])),
+        Text('Tiền trả lại: '+erpVndText(receipt['changeDue'])),
+      ]),
+      actions:[
+        TextButton(onPressed:(){
+          Clipboard.setData(ClipboardData(text:label+'\nTổng: '+
+            erpVndText(receipt['total'])+'\nTiền thừa: '+erpVndText(receipt['changeDue'])));
+          Navigator.pop(ctx);
+        },child:const Text('Sao chép phiếu')),
+        FilledButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Đóng')),
+      ]));
+  }
+  Future<void> _returnLastSale()async{
+    final receipt=_lastReceipt,branch=_branch,warehouse=_warehouse,shift=_shift;
+    if(receipt==null||branch==null||warehouse==null||shift==null||_busyAction)return;
+    final method=await showDialog<String>(context:context,builder:(ctx)=>AlertDialog(
+      title:const Text('Hoàn trả toàn bộ giao dịch'),
+      content:Text('Hoàn hàng về kho và hoàn '+erpVndText(receipt['total'])+
+        '. Chọn cách thực trả tiền; mọi bút toán được ghi riêng.'),
+      actions:[
+        TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Hủy')),
+        TextButton(onPressed:()=>Navigator.pop(ctx,'CASH'),child:const Text('Hoàn tiền mặt')),
+        TextButton(onPressed:()=>Navigator.pop(ctx,'BANK_TRANSFER'),child:const Text('Hoàn chuyển khoản')),
+      ]));
+    if(method==null)return;
+    setState(()=>_busyAction=true);
+    try{
+      final result=await widget.client.posReturn(widget.session.token,{
+        'branchId':branch,'warehouseId':warehouse,'shiftId':shift['id'],
+        'checkoutId':receipt['id'],'refundMethod':method,
+      },key:'pos-return-'+_nonce());
+      if(mounted){setState(()=>_lastReceipt=null);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(
+          'Đã hoàn hàng và ghi nhận hoàn '+erpVndText(result['amount']))));
+        await _loadPosState(_generation);
+      }
+    }on ErpApiError catch(e){if(mounted)setState(()=>_posError=e.message);}
+    catch(_){if(mounted)setState(()=>_posError='Chưa xác minh hoàn hàng. Cần đối chiếu giao dịch trước khi thử lại.');}
+    finally{if(mounted)setState(()=>_busyAction=false);}
+  }
+
   void _changePriceList(String value){
     if(value==_priceList)return;
     setState((){_priceList=value;});
