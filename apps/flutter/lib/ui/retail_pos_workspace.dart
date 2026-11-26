@@ -368,9 +368,48 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
         FilledButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Đóng')),
       ]));
   }
+  Future<void> _showHistory()async{
+    final branch=_branch,warehouse=_warehouse;
+    if(branch==null||warehouse==null||_busyAction)return;
+    setState(()=>_busyAction=true);
+    try{
+      final items=await widget.client.posCheckouts(widget.session.token,branch,warehouse);
+      if(!mounted)return;
+      await showModalBottomSheet<void>(context:context,isScrollControlled:true,
+        builder:(ctx)=>SafeArea(child:FractionallySizedBox(heightFactor:.72,
+          child:Column(children:[
+            const Padding(padding:EdgeInsets.all(16),child:Text('Lịch sử bán tại quầy',
+              style:TextStyle(fontSize:18,fontWeight:FontWeight.bold))),
+            Expanded(child:items.isEmpty?const Center(child:Text('Chưa có giao dịch')):
+              ListView.builder(itemCount:items.length,itemBuilder:(ctx,i){
+                final item=items[i],returned=item['returned']==true;
+                return ListTile(
+                  leading:Icon(returned?Icons.assignment_return_outlined:Icons.receipt_long_outlined),
+                  title:Text(item['documentNo']?.toString()??'Phiếu bán'),
+                  subtitle:Text(returned?'Đã hoàn hàng':'Đã thanh toán'),
+                  trailing:Text(erpVndText(item['total'])),
+                  onTap:()async{
+                    Navigator.pop(ctx);
+                    try{
+                      final receipt=await widget.client.posReceipt(widget.session.token,
+                        branch,warehouse,item['id'] as String);
+                      if(!mounted||branch!=_branch||warehouse!=_warehouse)return;
+                      setState(()=>_lastReceipt=receipt);
+                      await _showReceipt(receipt);
+                    }on ErpApiError catch(e){
+                      if(mounted)setState(()=>_posError=e.message);
+                    }
+                  },
+                );
+              })),
+          ]))));
+    }on ErpApiError catch(e){if(mounted)setState(()=>_posError=e.message);}
+    catch(_){if(mounted)setState(()=>_posError='Không tải được lịch sử quầy.');}
+    finally{if(mounted)setState(()=>_busyAction=false);}
+  }
   Future<void> _returnLastSale()async{
     final receipt=_lastReceipt,branch=_branch,warehouse=_warehouse,shift=_shift;
-    if(receipt==null||branch==null||warehouse==null||shift==null||_busyAction)return;
+    if(receipt==null||receipt['returnId']!=null||branch==null||warehouse==null||shift==null||_busyAction)return;
     final method=await showDialog<String>(context:context,builder:(ctx)=>AlertDialog(
       title:const Text('Hoàn trả toàn bộ giao dịch'),
       content:Text('Hoàn hàng về kho và hoàn '+erpVndText(receipt['total'])+
@@ -521,11 +560,14 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
               key:const ValueKey('pos-close-shift'),
               onPressed:_busyAction||_pendingCheckout!=null?null:_closeShift,
               icon:const Icon(Icons.stop_circle_outlined),label:const Text('Đóng ca')),
+            TextButton.icon(key:const ValueKey('pos-history'),
+              onPressed:_busyAction?null:_showHistory,
+              icon:const Icon(Icons.history),label:const Text('Lịch sử quầy')),
             if(_lastReceipt!=null)TextButton.icon(
               key:const ValueKey('pos-last-receipt'),
               onPressed:()=>_showReceipt(_lastReceipt!),icon:const Icon(Icons.receipt_long_outlined),
               label:const Text('Phiếu vừa bán')),
-            if(_lastReceipt!=null&&_shift!=null)TextButton(
+            if(_lastReceipt!=null&&_lastReceipt!['returnId']==null&&_shift!=null)TextButton(
               key:const ValueKey('pos-return-last'),
               onPressed:_busyAction?null:_returnLastSale,
               child:const Text('Hoàn hàng')),
