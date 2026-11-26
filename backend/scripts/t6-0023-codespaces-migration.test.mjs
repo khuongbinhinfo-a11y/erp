@@ -18,7 +18,7 @@ test("T6 requires independent explicit owner approval, exact SHA and target",()=
  ERP_APPROVED_SHA:sha,ERP_TARGET_PROJECT_ID:"proj_ud3b1s5yn03vh0zp9cbs2upa",ERP_TARGET_DATABASE_ID:"db_jg2bl98hzi1jm06lwo0i4rqx"};
  assert.doesNotThrow(()=>checkOperator(e,"main",sha,origin,[],false));
  assert.throws(()=>checkOperator(e,"main",sha,origin,[],true),/APPROVAL/);
- const approved={...e,ERP_T6_MIGRATION_APPROVAL:"OWNER_APPROVED_T6_0022_ERP_DB"};
+ const approved={...e,ERP_T6_MIGRATION_APPROVAL:"OWNER_APPROVED_T6_0023_ERP_DB"};
  assert.doesNotThrow(()=>checkOperator(approved,"main",sha,origin,[],true));
  assert.throws(()=>checkOperator({...approved,ERP_TARGET_DATABASE_ID:"other"},"main",sha,origin,[],true),/APPROVAL/);
 });
