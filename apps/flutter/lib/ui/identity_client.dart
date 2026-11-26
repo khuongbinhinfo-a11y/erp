@@ -739,6 +739,11 @@ class ErpIdentityClient {
     required String key,
   })=>_request('POST','/v1/pos/returns',token:token,body:fields,
     revision:0,idempotencyKey:key);
+  Future<List<Map<String,dynamic>>> posCheckouts(String token,String branch,String warehouse)async{
+    final q=Uri(queryParameters:{'branchId':branch,'warehouseId':warehouse}).query;
+    final raw=await _request('GET','/v1/pos/checkouts?$q',token:token);
+    return (raw['items'] as List).map((e)=>Map<String,dynamic>.from(e as Map)).toList();
+  }
   Future<Map<String,dynamic>> posReceipt(String token,String branch,String warehouse,String id)async{
     final q=Uri(queryParameters:{'branchId':branch,'warehouseId':warehouse}).query;
     final response=await _request('GET','/v1/pos/checkouts/$id?$q',token:token);
