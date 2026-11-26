@@ -13,8 +13,8 @@ import 'identity_client.dart';
 import 'sales_workspace.dart' show erpRetailStepQuantity;
 
 /// POS is a separate task surface, not a cosmetic mode of the distribution
-/// order editor. There is no settlement endpoint today: never present order
-/// confirmation as payment, inventory issue or a completed retail sale.
+/// order editor. Only an acknowledged, atomic server POS checkout can
+/// report issued inventory and settled payment; no client-side ledger writes.
 class RetailPosWorkspace extends StatefulWidget {
   final ErpIdentityClient client;
   final IdentitySession session;
