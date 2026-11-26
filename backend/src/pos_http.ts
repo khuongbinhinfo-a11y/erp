@@ -380,6 +380,24 @@ export async function handlePosHttp(req:IncomingMessage,res:ServerResponse,
    respond(res,200,{receipt:receipt?.body??null,requestId:rid},rid,cors);
    return;
   }
+  // Safe operator cancellation of a stalled/rejected payment intent.
+  // This intentionally uses the EXACT original checkout action, idempotency key,
+  // fingerprint and permission set. A competing checkout serializes on the
+  // mutation_receipt unique key: if it committed, replay the PAID receipt;
+  // otherwise commit a terminal CANCELED receipt. That key can never post later.
+  if(req.method==="POST"&&url.pathname==="/v1/pos/checkouts/cancel"){
+   const v=await body(req);only(v,["checkout"]);
+   const input=checkoutInput(record(v.checkout));
+   const c=mutation(req,rid,t,actor,"pos.checkout",input);
+   const result=await executeMutation(pool,c,{
+    authorize:(db,ctx)=>perm(db,ctx,input.branchId,input.warehouseId,
+      ["pos.checkout","orders.create","orders.confirm","inventory.post"]),
+    execute:async()=>({status:200,body:{status:"CANCELED",
+      reason:"OPERATOR_CANCELLED",branchId:input.branchId,
+      warehouseId:input.warehouseId}}),
+   });
+   respond(res,result.status,result.body,rid,cors);return;
+  }
   if(req.method==="POST"&&url.pathname==="/v1/pos/checkouts"){
    const input=checkoutInput(await body(req));
    const c=mutation(req,rid,t,actor,"pos.checkout",input);
