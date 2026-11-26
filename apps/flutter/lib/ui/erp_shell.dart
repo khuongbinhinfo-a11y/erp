@@ -687,14 +687,10 @@ class _FeaturePage extends StatelessWidget {
 }
 
 class _MobileRetailEntry extends StatelessWidget {
-  final VoidCallback? onOrders;
-  const _MobileRetailEntry({this.onOrders});
+  const _MobileRetailEntry();
   @override Widget build(BuildContext context)=>ListView(
     padding:const EdgeInsets.all(16),children:[
-      const Text('Quầy Bán Lẻ có giỏ và tra giá riêng. Thanh toán sẽ chỉ mở khi API POS xuất kho và thu tiền được kiểm chứng.'),
-      const SizedBox(height:16),
-      if(onOrders!=null)FilledButton.icon(key:const ValueKey('erp-mobile-retail-orders'),
-        onPressed:onOrders,icon:const Icon(Icons.receipt_long_outlined),label:const Text('Đến lập đơn hàng')),
+      const Text('Quầy Bán Lẻ có giỏ và tra giá riêng. Thanh toán chỉ mở khi API POS xuất kho và thu tiền được kiểm chứng.'),
     ],
   );
 }
