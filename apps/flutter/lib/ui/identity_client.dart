@@ -735,6 +735,12 @@ class ErpIdentityClient {
     final receipt=response['receipt'];
     return receipt is Map?Map<String,dynamic>.from(receipt):null;
   }
+  /// Cancels a terminally rejected checkout, serialized with the original
+  /// idempotency receipt. May return the paid receipt if checkout won the race.
+  Future<Map<String,dynamic>> posCancelCheckout(String token,Map<String,dynamic> fields,{
+    required String key,
+  })=>_request('POST','/v1/pos/checkouts/cancel',token:token,
+    body:{'checkout':fields},revision:0,idempotencyKey:key);
   Future<Map<String,dynamic>> posReturn(String token,Map<String,dynamic> fields,{
     required String key,
   })=>_request('POST','/v1/pos/returns',token:token,body:fields,
