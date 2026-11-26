@@ -1,0 +1,24 @@
+name: ERP Android public download live HTTP probe
+on:
+  push:
+    branches: [agent/m3-worker-live-http-check]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check production Worker URLs and HTTP response without downloading APK
+        shell: bash
+        run: |
+          set -u
+          echo '=== DNS ==='
+          getent ahosts erp-android-download.gustavjung24.workers.dev || true
+          for suffix in ERP-Android-0.2.0.apk ERP-Android-0.1.0.apk releases/latest.json releases/2/erp-2.apk; do
+            url="https://erp-android-download.gustavjung24.workers.dev/$suffix"
+            echo "=== Probe $suffix ==="
+            curl --max-time 20 --connect-timeout 10 --silent --show-error \
+              --head --dump-header - --output /dev/null \
+              --write-out 'HTTP_STATUS=%{http_code} REMOTE_IP=%{remote_ip} REDIRECT=%{redirect_url}\n' \
+              "$url" || echo 'CURL_FAILED'
+          done
