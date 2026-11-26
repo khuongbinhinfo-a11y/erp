@@ -6,7 +6,7 @@ import { applyMigrations } from "./migrate.ts";
 
 import assert from "node:assert/strict";
 import { checkCreate, parseEdit, CatalogError } from "./catalog_http.ts";
-import { parseCustomerLocation, CustomerLocationFault } from "./catalog_customer_locations.ts";
+import { parseCustomerLocation, nextCustomerLocationCode, CustomerLocationFault } from "./catalog_customer_locations.ts";
 import { bulkColumns, suggestBulkMapping, normalizeRow, BulkFault } from "./bulk_plan.ts";
 import { buildSkuTaxonomyFilters } from "./r1_catalog_http.ts";
 
@@ -55,6 +55,12 @@ test("customer location payload has one client-supplied location and no tenant o
     address:"Số 1 Nguyễn Văn A",phone:"+84912345678",isDefault:true});
   assert.deepEqual(value.columns,{code:"CH01",name:"Cửa hàng 1",
     address:"Số 1 Nguyễn Văn A",phone:"+84912345678",is_default:true});
+  const addressOnly=parseCustomerLocation({branchId:branch,address:"  12 Lê Lợi  "});
+  assert.deepEqual(addressOnly.columns,{name:"Địa chỉ giao hàng",address:"12 Lê Lợi"});
+  const optionalName=parseCustomerLocation({branchId:branch,address:"23 Pasteur",name:"   "});
+  assert.deepEqual(optionalName.columns,{name:"Địa chỉ giao hàng",address:"23 Pasteur"});
+  assert.equal(nextCustomerLocationCode([]),"DC0001");
+  assert.equal(nextCustomerLocationCode(["CH01","DC0001","DC0002"]),"DC0003");
   const update=parseCustomerLocation({branchId:branch,active:false},true);
   assert.deepEqual(update.columns,{active:false,is_default:false});
   for(const invalid of [
