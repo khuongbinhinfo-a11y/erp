@@ -509,6 +509,28 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
             onPressed:()=>setState(()=>_configOpen=!_configOpen),
             icon:Icon(_configOpen?Icons.expand_less:Icons.tune)),
         ]),
+
+        Padding(padding:const EdgeInsets.only(top:5),child:Wrap(
+          crossAxisAlignment:WrapCrossAlignment.center,spacing:8,runSpacing:4,children:[
+            Text(_shift==null?'Chưa mở ca':('Đang bán · '+(_shift?['counterName']?.toString()??'Quầy')),
+              style:TextStyle(fontSize:12,color:palette.muted)),
+            if(_shift==null)TextButton.icon(
+              key:const ValueKey('pos-open-shift'),onPressed:_busyAction?null:_openShift,
+              icon:const Icon(Icons.play_circle_outline),label:const Text('Mở ca bán')),
+            if(_shift!=null)TextButton.icon(
+              key:const ValueKey('pos-close-shift'),
+              onPressed:_busyAction||_pendingCheckout!=null?null:_closeShift,
+              icon:const Icon(Icons.stop_circle_outlined),label:const Text('Đóng ca')),
+            if(_lastReceipt!=null)TextButton.icon(
+              key:const ValueKey('pos-last-receipt'),
+              onPressed:()=>_showReceipt(_lastReceipt!),icon:const Icon(Icons.receipt_long_outlined),
+              label:const Text('Phiếu vừa bán')),
+            if(_lastReceipt!=null&&_shift!=null)TextButton(
+              key:const ValueKey('pos-return-last'),
+              onPressed:_busyAction?null:_returnLastSale,
+              child:const Text('Hoàn hàng')),
+          ])),
+        if(_posError!=null)Text(_posError!,style:TextStyle(color:palette.danger,fontSize:12)),
         if(_configOpen)Padding(padding:const EdgeInsets.only(top:8),child:Column(children:[
           _selector('Chi nhánh',_branch,_branches,(value)=>unawaited(_loadBranch(value))),
           const SizedBox(height:6),
@@ -604,12 +626,21 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
             style:TextStyle(fontSize:20,fontWeight:FontWeight.w800,color:palette.primary))),
         ]),
         const SizedBox(height:6),
-        // POS must never fake cash receipt or stock movement using order.confirm.
-        FilledButton.icon(key:const ValueKey('pos-checkout-disabled'),
-          onPressed:null,icon:const Icon(Icons.lock_clock_outlined),
-          label:const Text('Thanh toán tại quầy · Chưa khả dụng')),
+
+        if(_busyAction)const LinearProgressIndicator(),
+        if(_pendingCheckout!=null)FilledButton.icon(
+          key:const ValueKey('pos-reconcile'),
+          onPressed:_busyAction?null:_resolvePendingCheckout,
+          icon:const Icon(Icons.sync),
+          label:const Text('Kiểm tra giao dịch chưa có xác nhận'))
+        else FilledButton.icon(key:const ValueKey('pos-checkout-disabled'),
+          onPressed:_canSettle?_checkoutDialog:null,icon:const Icon(Icons.point_of_sale),
+          label:Text(_shift==null?'Mở ca trước khi thanh toán':
+            _canSettle?'Thanh toán và hoàn tất bán':'Chọn hàng và xác minh giá để thanh toán')),
         const SizedBox(height:3),
-        Text('Giỏ và giá đã tách khỏi đơn phân phối. Chưa xuất kho, thu tiền hay hoàn tất bán.',
+        Text(_pendingCheckout!=null
+          ?'Không tạo giao dịch mới khi chưa đối soát kết quả máy chủ.'
+          :'Chỉ xác nhận đã bán khi máy chủ ghi nhận đủ xuất kho và thanh toán.',
           key:const ValueKey('pos-no-fake-settlement'),
           textAlign:TextAlign.center,style:TextStyle(fontSize:11,color:palette.muted)),
       ]),
