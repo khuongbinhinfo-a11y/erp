@@ -37,6 +37,9 @@ export const PERMISSIONS = {
   "purchase.receive": "warehouse",
   "finance.receivables.read": "branch",
   "finance.payments.record": "branch",
+  "pos.shift": "branch",
+  "pos.checkout": "branch",
+  "pos.return": "branch",
   "delivery.read": "branch",
   "delivery.update": "branch",
 } as const;
