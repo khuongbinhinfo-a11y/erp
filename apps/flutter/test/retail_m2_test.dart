@@ -90,9 +90,9 @@ void main(){
     await tester.testTextInput.receiveAction(TextInputAction.search);
     await tester.pump(const Duration(milliseconds:250));
     await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('pos-result-'+sku)),findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('pos-result-'+sku)));
-    await tester.pumpAndSettle();
+    // A barcode scanner sends Enter; exact barcode must add without a second tap.
+    expect(find.byKey(const ValueKey('pos-cart')),findsOneWidget);
+    expect(find.byKey(const ValueKey('pos-plus-0')),findsOneWidget);
     expect(find.textContaining('12,000 ₫'),findsWidgets);
     await tester.tap(find.byKey(const ValueKey('pos-plus-0')));
     await tester.pumpAndSettle();
