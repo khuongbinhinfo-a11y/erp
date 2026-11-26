@@ -36,8 +36,9 @@ class _CustomerLocationsDialogState extends State<CustomerLocationsDialog>{
   }
   Future<void> edit([Map<String,dynamic>? old])async{
     if(saving||!widget.canWrite)return;
-    final code=TextEditingController(text:(old?['code']??'').toString());
-    final name=TextEditingController(text:(old?['name']??'').toString());
+    final name=TextEditingController(
+      text:(old?['name']=='Địa chỉ giao hàng'?'':old?['name']??'').toString());
+    var invalidAddress=false;
     final address=TextEditingController(text:(old?['address']??'').toString());
     final phone=TextEditingController(text:(old?['phone']??'').toString());
     var isDefault=old?['isDefault']==true;
@@ -50,21 +51,20 @@ class _CustomerLocationsDialogState extends State<CustomerLocationsDialog>{
         context:context,builder:(dialog){editRoute=ModalRoute.of(dialog);
           return StatefulBuilder(builder:(ctx,refresh)=>
           AlertDialog(
-            title:Text(old==null?'Thêm cửa hàng / địa chỉ':'Sửa địa chỉ giao hàng'),
+            title:Text(old==null?'Thêm địa chỉ giao hàng':'Sửa địa chỉ giao hàng'),
             content:SizedBox(width:440,child:SingleChildScrollView(
               child:Column(mainAxisSize:MainAxisSize.min,children:[
-                TextField(key:const ValueKey('location-code'),controller:code,
-                  readOnly:old!=null,
-                  decoration:const InputDecoration(
-                    labelText:'Mã cửa hàng',hintText:'CH01')),
-                const SizedBox(height:10),
-                TextField(key:const ValueKey('location-name'),controller:name,
-                  decoration:const InputDecoration(labelText:'Tên cửa hàng / địa điểm')),
-                const SizedBox(height:10),
                 TextField(key:const ValueKey('location-address'),controller:address,
-                  maxLines:2,decoration:const InputDecoration(labelText:'Địa chỉ giao hàng')),
-                const SizedBox(height:10),
-                TextField(key:const ValueKey('location-phone'),controller:phone,
+                   maxLines:2,onChanged:(value){
+                     if(invalidAddress&&value.trim().isNotEmpty)refresh(()=>invalidAddress=false);
+                   },
+                   decoration:InputDecoration(labelText:'Địa chỉ giao hàng *',
+                     errorText:invalidAddress?'Vui lòng nhập địa chỉ giao hàng':null)),
+                 const SizedBox(height:10),
+                 TextField(key:const ValueKey('location-name'),controller:name,
+                   decoration:const InputDecoration(labelText:'Tên cửa hàng / địa điểm (tùy chọn)')),
+                 const SizedBox(height:10),
+                 TextField(key:const ValueKey('location-phone'),controller:phone,
                   keyboardType:TextInputType.phone,
                   decoration:const InputDecoration(labelText:'Số điện thoại (tùy chọn)')),
                 CheckboxListTile(
@@ -78,13 +78,18 @@ class _CustomerLocationsDialogState extends State<CustomerLocationsDialog>{
               TextButton(onPressed:()=>Navigator.pop(dialog),
                 child:const Text('Hủy')),
               FilledButton(key:const ValueKey('location-save'),
-                onPressed:()=>Navigator.pop(dialog,<String,dynamic>{
-                  'branchId':widget.branchId,
-                  if(old==null)'code':code.text.trim(),
-                  'name':name.text.trim(),'address':address.text.trim(),
-                  'phone':phone.text.trim().isEmpty?null:phone.text.trim(),
-                  'isDefault':isDefault,if(old!=null)'active':active,
-                }),child:const Text('Lưu địa chỉ')),
+                onPressed:(){
+                   if(address.text.trim().isEmpty){
+                     refresh(()=>invalidAddress=true);
+                     return;
+                   }
+                   Navigator.pop(dialog,<String,dynamic>{
+                     'branchId':widget.branchId,
+                     'name':name.text.trim(),'address':address.text.trim(),
+                     'phone':phone.text.trim().isEmpty?null:phone.text.trim(),
+                     'isDefault':isDefault,if(old!=null)'active':active,
+                   });
+                 },child:const Text('Lưu địa chỉ')),
             ],
           ));});
       if(payload==null||!mounted)return;
@@ -128,12 +133,12 @@ class _CustomerLocationsDialogState extends State<CustomerLocationsDialog>{
       }finally{if(mounted)setState(()=>saving=false);}
     }finally{
       if(editRoute!=null)await editRoute!.completed;
-      code.dispose();name.dispose();address.dispose();phone.dispose();
+      name.dispose();address.dispose();phone.dispose();
     }
   }
   @override Widget build(BuildContext context){
     return AlertDialog(
-      title:Text('Cửa hàng / địa chỉ · ${widget.customerName}'),
+      title:Text('Địa chỉ giao hàng · ${widget.customerName}'),
       content:SizedBox(width:620,height:400,child:Column(children:[
         if(loading)const LinearProgressIndicator(),
         if(error!=null)Text(error!,style:TextStyle(color:ErpPalette.of(context).danger)),
@@ -142,10 +147,13 @@ class _CustomerLocationsDialogState extends State<CustomerLocationsDialog>{
             ListTile(
               key:ValueKey('customer-location-${row['id']}'),
               dense:true,
-              title:Text('${row['code']} · ${row['name']}',
-                style:const TextStyle(fontWeight:FontWeight.w700)),
-              subtitle:Text('${row['address']}${row['phone']!=null?' · ${row['phone']}':''}'),
-              trailing:Row(mainAxisSize:MainAxisSize.min,children:[
+              title:Text(
+                 row['name']==null||row['name']=='Địa chỉ giao hàng'
+                   ?(row['address']??'').toString()
+                   :'${row['name']} · ${row['address']}',
+                 style:const TextStyle(fontWeight:FontWeight.w700)),
+               subtitle:row['phone']==null?null:Text(row['phone'].toString()),
+               trailing:Row(mainAxisSize:MainAxisSize.min,children:[
                 if(row['isDefault']==true)Text('Mặc định',
                   style:TextStyle(fontWeight:FontWeight.w700,color:ErpPalette.of(context).primary)),
                 if(row['active']==false)Text('Ngừng sử dụng',

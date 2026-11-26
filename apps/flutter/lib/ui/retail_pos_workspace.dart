@@ -34,14 +34,15 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
   final _searchFocus=FocusNode();
   Timer? _debounce;
   Future<void> _pendingWrite=Future<void>.value();
-  int _generation=0,_quoteVersion=0,_searchVersion=0;
+  int _generation=0,_quoteVersion=0,_searchVersion=0,_customerChoiceVersion=0;
   bool _loading=true,_searching=false,_quoting=false,_configOpen=false,_cached=false;
   String? _branch,_warehouse,_priceList,_walkIn,_error,_quoteError,_total;
   List<Map<String,dynamic>> _branches=[],_warehouses=[],_priceLists=[],_customers=[],_matches=[];
   List<_RetailLine> _lines=[];
   List<Map<String,dynamic>> _priced=[];
   Map<String,dynamic>? _shift,_pendingCheckout,_lastReceipt;
-  bool _busyAction=false;
+  bool _busyAction=false,_preparingWalkIn=false;
+   String? _canonicalWalkIn;
   String? _posError;
   String _nonce()=>DateTime.now().microsecondsSinceEpoch.toString()+'-'+
     Random.secure().nextInt(0x7fffffff).toRadixString(16);
@@ -58,7 +59,7 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
         old.session.installationId!=widget.session.installationId){
       ++_generation;++_quoteVersion;++_searchVersion;
       _debounce?.cancel();_search.clear();
-      _branch=null;_warehouse=null;_priceList=null;_walkIn=null;
+      _branch=null;_warehouse=null;_priceList=null;_walkIn=null;_canonicalWalkIn=null;_preparingWalkIn=false;++_customerChoiceVersion;
       _lines=[];_matches=[];_priced=[];_total=null;_error=null;
       _shift=null;_pendingCheckout=null;_lastReceipt=null;
       unawaited(_loadBranches());
@@ -96,7 +97,7 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
     final g=++_generation;
     ++_quoteVersion;++_searchVersion;_debounce?.cancel();
     setState((){
-      _branch=branch;_warehouse=null;_priceList=null;_walkIn=null;
+      _branch=branch;_warehouse=null;_priceList=null;_walkIn=null;_canonicalWalkIn=null;_preparingWalkIn=false;++_customerChoiceVersion;
       _lines=[];_priced=[];_matches=[];_total=null;_quoteError=null;
       _loading=true;_error=null;_search.clear();
       _shift=null;_pendingCheckout=null;_lastReceipt=null;
@@ -125,7 +126,8 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
         _warehouses=warehouses;_priceLists=lists;_customers=customers;
         _warehouse=warehouses.isEmpty?null:warehouses.first['id'] as String;
         _priceList=(preferred??lists.firstOrNull)?['id'] as String?;
-        _walkIn=walkIn is Map&&walkIn['active']==true?walkIn['id'] as String?:null;
+        _canonicalWalkIn=walkIn is Map&&walkIn['active']==true?walkIn['id'] as String?:null;
+         _walkIn=_canonicalWalkIn;
         _loading=false;
       });
       await _restoreCart(g);
@@ -176,6 +178,9 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
     ++_quoteVersion;
     setState((){
       _warehouse=value;_lines=[];_priced=[];_total=null;
+       // The pending server command remains retryable with the same key.
+       // A warehouse switch must not leave the guest action disabled.
+       _preparingWalkIn=false;
       _matches=[];_quoteError=null;
     });
     await _pendingWrite;
@@ -508,7 +513,48 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
     finally{if(mounted)setState(()=>_busyAction=false);}
   }
 
-  void _changePriceList(String value){
+  Future<void> _chooseWalkIn()async{
+     final branch=_branch,actor=widget.session.actorId;
+     if(branch==null||_loading||!_hasSalesGrant||_preparingWalkIn)return;
+     if(_canonicalWalkIn!=null){
+       setState((){++_customerChoiceVersion;_walkIn=_canonicalWalkIn;});
+       unawaited(_quote());
+       return;
+     }
+     final generation=_generation,choiceVersion=_customerChoiceVersion;
+     const kind='sales.walk-in.prepare';
+     final pending=widget.client.pendingR1(actor,branch,kind);
+     final key=pending?.key??'pos-walk-in-'+_nonce();
+     if(pending==null){
+       widget.client.retainR1(actor,branch,kind,{'branchId':branch},key);
+     }
+     setState((){_preparingWalkIn=true;_posError=null;});
+     try{
+       final customer=await widget.client.prepareSalesWalkIn(widget.session.token,branch,key:key);
+       if(!mounted||generation!=_generation||_branch!=branch||
+          widget.session.actorId!=actor)return;
+       final customerId=customer['id'];
+       if(customerId is! String||customerId.isEmpty)throw const FormatException('WALK_IN_ID');
+       widget.client.clearR1(actor,branch,kind);
+       setState((){
+         _canonicalWalkIn=customerId;
+         if(!_customers.any((x)=>x['id']==customerId))_customers.insert(0,customer);
+         // A later explicit customer choice always wins over the HTTP response.
+         if(choiceVersion==_customerChoiceVersion)_walkIn=customerId;
+       });
+       if(choiceVersion==_customerChoiceVersion)unawaited(_quote());
+     }on ErpApiError catch(e){
+       if(e.status==400||e.status==404||e.status==409)
+         widget.client.clearR1(actor,branch,kind);
+       if(mounted&&generation==_generation)setState(()=>_posError=e.message);
+     }catch(_){
+       if(mounted&&generation==_generation)setState(()=>
+         _posError='Chưa xác minh được khách lẻ. Bấm lại để kiểm tra cùng yêu cầu.');
+     }finally{
+       if(mounted&&generation==_generation)setState(()=>_preparingWalkIn=false);
+     }
+   }
+   void _changePriceList(String value){
     if(value==_priceList)return;
     setState((){_priceList=value;});
     unawaited(_quote());
@@ -654,11 +700,21 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
           _selector('Bảng giá',_priceList,_priceLists,_changePriceList),
           const SizedBox(height:6),
           _selector('Khách hàng',_walkIn,_customers,(id){
-            setState(()=>_walkIn=id);unawaited(_quote());
+            setState((){++_customerChoiceVersion;_walkIn=id;});unawaited(_quote());
           }),
         ])),
         const SizedBox(height:8),
-        TextField(key:const ValueKey('pos-sku-search'),controller:_search,focusNode:_searchFocus,
+        Padding(padding:const EdgeInsets.only(top:4),child:Wrap(spacing:8,runSpacing:4,crossAxisAlignment:WrapCrossAlignment.center,children:[
+           TextButton.icon(key:const ValueKey('pos-walk-in-quick'),
+             onPressed:_branch==null||_loading||_preparingWalkIn||!_hasSalesGrant
+               ?null:()=>unawaited(_chooseWalkIn()),
+             icon:const Icon(Icons.person_outline,size:18),
+             label:Text(_preparingWalkIn?'Đang chuẩn bị…':'Khách lẻ')),
+           if(_canonicalWalkIn!=null&&_walkIn==_canonicalWalkIn)
+             Text('Đang chọn khách lẻ',style:TextStyle(color:palette.muted,fontSize:12)),
+         ])),
+         const SizedBox(height:8),
+         TextField(key:const ValueKey('pos-sku-search'),controller:_search,focusNode:_searchFocus,
           enabled:!_loading&&_branch!=null&&_hasSalesGrant,
           textInputAction:TextInputAction.search,autocorrect:false,
           onChanged:_onSearch,onSubmitted:(value)=>unawaited(_onScan(value)),

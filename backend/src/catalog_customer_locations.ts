@@ -33,13 +33,18 @@ export function parseCustomerLocation(raw:unknown,edit=false){
   if(typeof raw.branchId!=="string"||!UUID.test(raw.branchId))
     throw new CustomerLocationFault(400,"INVALID_BRANCH");
   const columns:Record<string,unknown>={};
-  if(!edit){
+  // A location belongs to the same customer. Code is an internal identity,
+  // not an input required from a cashier or customer.
+  if(!edit&&raw.code!==undefined&&raw.code!==null&&raw.code!==""){
     if(typeof raw.code!=="string"||!CODE.test(raw.code))
       throw new CustomerLocationFault(400,"INVALID_LOCATION_CODE");
     columns.code=raw.code;
   }
-  if(!edit||Object.prototype.hasOwnProperty.call(raw,"name"))
-    columns.name=fieldName(raw.name,160);
+  if(!edit||Object.prototype.hasOwnProperty.call(raw,"name")){
+    columns.name=raw.name==null||
+      (typeof raw.name==="string"&&!raw.name.trim())
+        ?"Địa chỉ giao hàng":fieldName(raw.name,160);
+  }
   if(!edit||Object.prototype.hasOwnProperty.call(raw,"address"))
     columns.address=fieldName(raw.address,500);
   if(Object.prototype.hasOwnProperty.call(raw,"phone"))
@@ -58,6 +63,13 @@ export function parseCustomerLocation(raw:unknown,edit=false){
   if(edit&&Object.keys(columns).length===0)
     throw new CustomerLocationFault(400,"EMPTY_LOCATION_UPDATE");
   return {branchId:raw.branchId,columns};
+}
+/** Allocate an internal destination code under the per-customer write lock. */
+export function nextCustomerLocationCode(existing:Iterable<string>):string{
+  const used=new Set(existing);
+  let index=1;
+  while(used.has("DC"+String(index).padStart(4,"0")))index++;
+  return "DC"+String(index).padStart(4,"0");
 }
 async function permit(db:PoolClient,installationId:string,actorId:string,
   branchId:string,write:boolean){
@@ -91,6 +103,12 @@ export async function createCustomerLocation(db:PoolClient,ctx:MutationContext,
   // Serialize every location write for one customer so a single default is stable.
   await db.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
     [[ctx.installationId,input.branchId,customerId].join("|")]);
+  if(cols.code===undefined){
+    const existing=await db.query<{code:string}>(`SELECT code FROM catalog_customer_location
+      WHERE installation_id=$1 AND branch_id=$2 AND customer_id=$3`,
+      [ctx.installationId,input.branchId,customerId]);
+    cols.code=nextCustomerLocationCode(existing.rows.map(row=>row.code));
+  }
   if(cols.is_default===true)await db.query(`UPDATE catalog_customer_location
     SET is_default=false,revision=revision+1 WHERE installation_id=$1
     AND branch_id=$2 AND customer_id=$3 AND is_default`,
