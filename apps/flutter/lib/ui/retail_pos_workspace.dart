@@ -704,7 +704,7 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
           }),
         ])),
         const SizedBox(height:8),
-        Padding(padding:const EdgeInsets.only(top:4),child:Row(children:[
+        Padding(padding:const EdgeInsets.only(top:4),child:Wrap(spacing:8,runSpacing:4,crossAxisAlignment:WrapCrossAlignment.center,children:[
            TextButton.icon(key:const ValueKey('pos-walk-in-quick'),
              onPressed:_branch==null||_loading||_preparingWalkIn||!_hasSalesGrant
                ?null:()=>unawaited(_chooseWalkIn()),
