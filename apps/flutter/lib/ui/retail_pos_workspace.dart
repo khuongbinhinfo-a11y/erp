@@ -340,20 +340,63 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
     try{
       final prior=await widget.client.posCheckoutRecovery(token,fields,key:key);
       final receipt=prior??await widget.client.posCheckout(token,fields,key:key);
-      if(!mounted||_branch!=branch||_warehouse!=warehouse||
-          widget.session.token!=token)return;
-      if(receipt['paymentStatus']!='PAID'||receipt['deliveryStatus']!='DELIVERED'||
-          receipt['total']?.toString()==null)throw const FormatException('Invalid POS receipt');
-      await store.clearRetailPending(scope,key);
-      if(!mounted)return;
-      setState((){_pendingCheckout=null;_lastReceipt=receipt;_lines=[];_priced=[];_total=null;});
-      _queueSave();
-      await _loadPosState(_generation);
-      if(mounted)await _showReceipt(receipt);
+      await _applyPendingPosOutcome(receipt,key,branch,warehouse,token);
     }on ErpApiError catch(e){
       if(mounted)setState(()=>_posError=e.message+'; giữ giao dịch để đối soát, không thanh toán lần hai.');
     }catch(_){
       if(mounted)setState(()=>_posError='Chưa xác minh máy chủ đã nhận tiền. Hãy kiểm tra giao dịch, không tạo đơn khác.');
+    }finally{if(mounted)setState(()=>_busyAction=false);}
+  }
+
+  /// Only a server-committed CANCELED receipt can unlock a rejected command.
+  /// If checkout won the race, the same endpoint returns the PAID receipt.
+  Future<void> _applyPendingPosOutcome(Map<String,dynamic> outcome,String key,
+    String branch,String warehouse,String token)async{
+    final scope=_scope,store=widget.client.localStore;
+    if(scope==null||store==null||!mounted||_branch!=branch||
+       _warehouse!=warehouse||widget.session.token!=token)return;
+    if(outcome['status']=='CANCELED'){
+      await store.clearRetailPending(scope,key);
+      if(!mounted||_branch!=branch||_warehouse!=warehouse)return;
+      setState((){
+        _pendingCheckout=null;_priced=[];_total=null;_quoteError=null;
+        _posError='Giao dịch cũ đã hủy an toàn. Anh/chị có thể sửa giỏ và tính giá lại.';
+      });
+      await _quote();
+      return;
+    }
+    if(outcome['paymentStatus']!='PAID'||outcome['deliveryStatus']!='DELIVERED'||
+       outcome['total'] is! String||outcome['id'] is! String){
+      throw const FormatException('Unverified POS outcome');
+    }
+    await store.clearRetailPending(scope,key);
+    if(!mounted||_branch!=branch||_warehouse!=warehouse)return;
+    setState((){
+      _pendingCheckout=null;_lastReceipt=outcome;
+      _lines=[];_priced=[];_total=null;_posError=null;
+    });
+    _queueSave();
+    await _loadPosState(_generation);
+    if(mounted)await _showReceipt(outcome);
+  }
+  Future<void> _cancelPendingCheckout()async{
+    final pending=_pendingCheckout;
+    if(pending==null||_busyAction)return;
+    final key=pending['key']?.toString(),raw=pending['body'];
+    final branch=_branch,warehouse=_warehouse,token=widget.session.token;
+    if(key==null||raw is! Map||branch==null||warehouse==null)return;
+    final fields=Map<String,dynamic>.from(raw);
+    if(fields['branchId']!=branch||fields['warehouseId']!=warehouse)return;
+    setState((){_busyAction=true;_posError=null;});
+    try{
+      final outcome=await widget.client.posCancelCheckout(token,fields,key:key);
+      await _applyPendingPosOutcome(outcome,key,branch,warehouse,token);
+    }on ErpApiError catch(e){
+      if(mounted)setState(()=>_posError=e.message+
+        '; giao dịch vẫn được giữ cho đến khi máy chủ xác minh.');
+    }catch(_){
+      if(mounted)setState(()=>_posError='Chưa đối soát được lệnh hủy. '+
+        'Không được tạo giao dịch khác trước khi kiểm tra lại.');
     }finally{if(mounted)setState(()=>_busyAction=false);}
   }
   Future<void> _printReceipt(Map<String,dynamic> receipt)async{
@@ -711,6 +754,11 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
           onPressed:_busyAction?null:_resolvePendingCheckout,
           icon:const Icon(Icons.sync),
           label:const Text('Kiểm tra giao dịch chưa có xác nhận'))
+        if(!keyboardOpen&&_pendingCheckout!=null)OutlinedButton.icon(
+          key:const ValueKey('pos-cancel-intent'),
+          onPressed:_busyAction?null:_cancelPendingCheckout,
+          icon:const Icon(Icons.cancel_outlined),
+          label:const Text('Hủy lệnh sau đối soát để sửa giỏ'))
         else if(!keyboardOpen)FilledButton.icon(key:const ValueKey('pos-checkout-disabled'),
           onPressed:_canSettle?_checkoutDialog:null,icon:const Icon(Icons.point_of_sale),
           label:Text(_shift==null?'Mở ca trước khi thanh toán':
