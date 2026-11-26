@@ -379,7 +379,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     var walkInName=(savedShipping['walkInName']??'').toString();
     var walkInPhone=(savedShipping['walkInPhone']??'').toString();
     var rememberDelivery=savedShipping['rememberDeliveryChoice']==true,walkInBusy=false,locationBusy=false;
-    int locationGeneration=0,addressGeneration=0,addressEditGeneration=0,customerChoiceGeneration=0;
+    int locationGeneration=0,addressGeneration=0,customerChoiceGeneration=0;
     List<Map<String,dynamic>> locations=[];
     Map<String,dynamic>? walkInCustomer=entrySettings['walkInCustomer'] is Map
       ?Map<String,dynamic>.from(entrySettings['walkInCustomer'] as Map):null;
@@ -1637,7 +1637,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                              TextFormField(key:ValueKey('sales-delivery-address-$customer-$addressGeneration'),
                                initialValue:deliveryAddress,readOnly:locationId!=null,
                                decoration:const InputDecoration(labelText:'Địa chỉ giao',isDense:true),
-                               onChanged:(v){deliveryAddress=v;addressEditGeneration++;}),
+                               onChanged:(v){deliveryAddress=v;}),
                            ]);
                          }),
                        ],
