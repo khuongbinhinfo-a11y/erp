@@ -4,7 +4,7 @@ import type {PoolClient} from "pg";
 import type {IdentityOptions} from "./identity_http.ts";
 import {resolveSession} from "./auth.ts";
 import {hasPermission} from "./rbac.ts";
-import {executeMutation,MutationFault,type MutationContext} from "./mutation.ts";
+import {executeMutation,readCommittedMutation,MutationFault,type MutationContext} from "./mutation.ts";
 import {validIdempotencyKey} from "./contracts.ts";
 import {parseOrder,create,confirm} from "./sales_http.ts";
 
@@ -370,6 +370,15 @@ export async function handlePosHttp(req:IncomingMessage,res:ServerResponse,
     },
    });
    respond(res,output.status,output.body,rid,cors);return;
+  }
+  if(req.method==="POST"&&url.pathname==="/v1/pos/recovery"){
+   const v=await body(req);only(v,["checkout"]);
+   const input=checkoutInput(record(v.checkout));
+   const c=mutation(req,rid,t,actor,"pos.checkout",input);
+   const receipt=await readCommittedMutation(pool,c,(db,ctx)=>perm(db,ctx,
+     input.branchId,input.warehouseId,["pos.checkout","orders.create","orders.confirm","inventory.post"]));
+   respond(res,200,{receipt:receipt?.body??null,requestId:rid},rid,cors);
+   return;
   }
   if(req.method==="POST"&&url.pathname==="/v1/pos/checkouts"){
    const input=checkoutInput(await body(req));
