@@ -358,9 +358,10 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
         Divider(color:palette.border),
         Row(children:[
           Text('Tạm tính',style:TextStyle(fontWeight:FontWeight.w700,color:palette.ink)),
-          const Spacer(),
-          Text(erpVndText(_total),key:const ValueKey('pos-grand-total'),
-            style:TextStyle(fontSize:20,fontWeight:FontWeight.w800,color:palette.primary)),
+          const SizedBox(width:8),
+          Expanded(child:Text(erpVndText(_total),key:const ValueKey('pos-grand-total'),
+            textAlign:TextAlign.end,maxLines:1,overflow:TextOverflow.ellipsis,
+            style:TextStyle(fontSize:20,fontWeight:FontWeight.w800,color:palette.primary))),
         ]),
         const SizedBox(height:6),
         // POS must never fake cash receipt or stock movement using order.confirm.
