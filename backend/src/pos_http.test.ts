@@ -110,6 +110,10 @@ test("T6 POS posts exactly once: PICKUP, inventory, AR, mixed payment and return
   const lost=await make("/v1/pos/recovery",{checkout:payload},key);
   assert.equal(lost.status,200,JSON.stringify(lost.body));
   assert.equal(lost.body.receipt.id,settle.body.id);
+  // A cancellation arriving after COMMIT must replay the paid receipt.
+  const cancelPaid=await make("/v1/pos/checkouts/cancel",{checkout:payload},key);
+  assert.equal(cancelPaid.status,201);
+  assert.deepEqual(cancelPaid.body,settle.body);
   const stock=await db.query<{on_hand:string}>(`SELECT on_hand::text FROM inventory_stock_balance
    WHERE installation_id=$1 AND branch_id=$2 AND warehouse_id=$3 AND product_id=$4`,
    [t,b,w,product.body.id]);
@@ -173,6 +177,46 @@ test("T6 POS posts exactly once: PICKUP, inventory, AR, mixed payment and return
    FROM inventory_stock_balance WHERE installation_id=$1 AND branch_id=$2
    AND warehouse_id=$3 AND product_id=$4`,[t,b,w,product.body.id]);
   assert.equal(afterRace.rows[0]!.on_hand,"1.000000");
+
+  // Codex P1: terminal stock rejection must not trap the cashier forever.
+  // Cancellation commits a terminal receipt with the SAME original key and
+  // fingerprint, so a late/retried request cannot create a ghost sale.
+  const rejected={...payload,shiftId:nextShift.body.id};
+  const rejectedKey="stock-rejected-"+randomUUID();
+  const noStock=await make("/v1/pos/checkouts",rejected,rejectedKey);
+  assert.equal(noStock.status,409,JSON.stringify(noStock.body));
+  const release=await make("/v1/pos/checkouts/cancel",{checkout:rejected},rejectedKey);
+  assert.equal(release.status,200,JSON.stringify(release.body));
+  assert.equal(release.body.status,"CANCELED");
+  const recovered=await make("/v1/pos/recovery",{checkout:rejected},rejectedKey);
+  assert.equal(recovered.body.receipt.status,"CANCELED");
+  const retryDenied=await make("/v1/pos/checkouts",rejected,rejectedKey);
+  assert.equal(retryDenied.status,200);
+  assert.equal(retryDenied.body.status,"CANCELED");
+  assert.equal((await make("/v1/pos/checkouts",
+    {...rejected,cashReceived:"3000"},rejectedKey)).status,409);
+  const stillOne=await db.query<{on_hand:string}>(`SELECT on_hand::text
+   FROM inventory_stock_balance WHERE installation_id=$1 AND branch_id=$2
+    AND warehouse_id=$3 AND product_id=$4`,[t,b,w,product.body.id]);
+  assert.equal(stillOne.rows[0]!.on_hand,"1.000000");
+
+  // Next cashier intent with a fresh key/quote can now sell the last unit.
+  const quoteOne=await call("/v1/sales/quote","POST",{
+   branchId:b,customerId:walk.body.customer.id,priceListId:list.body.id,
+   lines:[{sellSkuId,quantity:"1"}],
+  },token);
+  assert.equal(quoteOne.status,200);
+  const replacement={...rejected,cashReceived:"1000",bankAmount:"0",
+   lines:[{sellSkuId,quantity:"1",
+    expectedPriceSignature:quoteOne.body.quote.lines[0].priceSignature}]};
+  const resumed=await make("/v1/pos/checkouts",replacement,"resumed-"+randomUUID());
+  assert.equal(resumed.status,201,JSON.stringify(resumed.body));
+  assert.equal(resumed.body.total,"1000");
+  const gone=await db.query<{on_hand:string}>(`SELECT on_hand::text
+   FROM inventory_stock_balance WHERE installation_id=$1 AND branch_id=$2
+    AND warehouse_id=$3 AND product_id=$4`,[t,b,w,product.body.id]);
+  assert.equal(gone.rows[0]!.on_hand,"0.000000");
+
 
  }finally{
   if(server)await new Promise<void>(done=>server!.close(()=>done()));
