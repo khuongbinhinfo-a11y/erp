@@ -825,6 +825,10 @@ class ErpIdentityClient {
     inventoryPage(token,'reservations',branchId:branchId,
       warehouseId:warehouseId,state:state,offset:offset);
   /// T3-B: scoped on-hand and source issues are server-derived facts only.
+  Future<Map<String,dynamic>> inventoryGuardPolicy(String token,{
+    required String branchId,required String warehouseId})=>
+    _request('GET','/v1/inventory/guard-policy?'+Uri(queryParameters:{
+      'branchId':branchId,'warehouseId':warehouseId}).query,token:token);
   Future<Map<String,dynamic>> inventoryStockScopes(String token,{
     required String branchId,required String warehouseId,required String productId})=>
     _request('GET','/v1/inventory/stock-scopes?'+Uri(queryParameters:{
