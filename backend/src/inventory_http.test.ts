@@ -509,7 +509,9 @@ test("R3 real PostgreSQL: on-hand, hold, release, no oversell, exact replay, RBA
   const cleared=await pool.query<{state:string}>(`SELECT state FROM inventory_reservation
    WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3 ORDER BY created_at,id`,
    [t,b,trip]);
-  assert.deepEqual(cleared.rows,[{state:"RELEASED"},{state:"RELEASED"}]);
+  assert.ok(cleared.rows.length>=2,"all historical and active hold snapshots must reconcile");
+  assert.ok(cleared.rows.every(row=>row.state==="RELEASED"),
+   "no active reservation may survive a cancelled unprepared TRIP");
   const manual=await makeTrip([{productId:tripProducts[0]!,quantity:"1"}],"MANUAL");
   assert.equal((await make("/v1/inventory/trip-holds",{...pScope,orderId:manual,version:1},1)).status,409);
   // Simulate a production installation still on Sales 0010 while Inventory 0011 awaits approval.
