@@ -11,6 +11,17 @@ import 'erp_toast.dart';
 import 'identity_client.dart';
 import '../local/local_store.dart';
 
+/// Shipping addresses on existing orders are immutable snapshots until the
+/// operator explicitly selects a different directory address.
+String erpSalesLocationLabel(Map<String,dynamic> location,
+    {String? snapshot,bool selected=false}){
+  final current=(location['address']??'').toString().trim();
+  final saved=snapshot?.trim()??'';
+  if(selected&&saved.isNotEmpty&&current!=saved)return 'Địa chỉ trên đơn · $saved';
+  final name=(location['name']??'').toString().trim();
+  return name.isEmpty||name=='Địa chỉ giao hàng'?current:'$name · $current';
+}
+
 /// Overlay an explicitly rejected or never-submitted edit onto the fresh
 /// canonical order. No old quote signatures are reused.
 Map<String,dynamic> erpSalesReconciliationOrder(
@@ -1611,6 +1622,10 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                          if(locationBusy)const LinearProgressIndicator(minHeight:2),
                          Builder(builder:(_){
                            final primary=(customers.where((x)=>x['id']==customer).firstOrNull?['deliveryAddress']??'').toString().trim();
+                           final selectedLocation=locations.where((x)=>x['id']==locationId).firstOrNull;
+                           final currentSelectedAddress=(selectedLocation?['address']??'').toString().trim();
+                           final historicalMismatch=order!=null&&locationId!=null&&selectedLocation!=null&&
+                             deliveryAddress.trim().isNotEmpty&&currentSelectedAddress!=deliveryAddress.trim();
                            return Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
                              if(primary.isNotEmpty||locations.isNotEmpty)
                                DropdownButtonFormField<String>(
@@ -1619,20 +1634,23 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                                    ?locationId:(primary.isNotEmpty&&deliveryAddress==primary?'__primary__':'__manual__'),
                                  isExpanded:true,menuMaxHeight:260,
                                  decoration:const InputDecoration(labelText:'Chọn địa chỉ giao hàng',isDense:true),
+                                 selectedItemBuilder:(context)=>[
+                                   if(primary.isNotEmpty)Text('Địa chỉ chính · $primary',overflow:TextOverflow.ellipsis),
+                                   const Text('Nhập địa chỉ khác',overflow:TextOverflow.ellipsis),
+                                   ...locations.map((x)=>Text(erpSalesLocationLabel(x,
+                                     snapshot:historicalMismatch&&x['id']==locationId?deliveryAddress:null,
+                                     selected:historicalMismatch&&x['id']==locationId),
+                                     overflow:TextOverflow.ellipsis)),
+                                 ],
                                  items:[
                                    if(primary.isNotEmpty)DropdownMenuItem<String>(
                                      value:'__primary__',
                                      child:Text('Địa chỉ chính · $primary',overflow:TextOverflow.ellipsis)),
                                    const DropdownMenuItem<String>(value:'__manual__',
                                      child:Text('Nhập địa chỉ khác')),
-                                   ...locations.map((x){
-                                     final name=(x['name']??'').toString().trim();
-                                     final address=(x['address']??'').toString();
-                                     final label=name.isEmpty||name=='Địa chỉ giao hàng'
-                                       ?address:'$name · $address';
-                                     return DropdownMenuItem<String>(value:x['id'] as String,
-                                       child:Text(label,overflow:TextOverflow.ellipsis));
-                                   }),
+                                   ...locations.map((x)=>DropdownMenuItem<String>(
+                                     value:x['id'] as String,
+                                     child:Text(erpSalesLocationLabel(x),overflow:TextOverflow.ellipsis))),
                                  ],
                                  onChanged:(v)=>refresh((){
                                    if(v=='__primary__'){
@@ -1645,6 +1663,13 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                                    }
                                    addressGeneration++;
                                  })),
+                             if(historicalMismatch)Padding(
+                               key:ValueKey('sales-address-snapshot-$customer'),
+                               padding:const EdgeInsets.only(top:5,bottom:4),
+                               child:Text(
+                                 'Đơn đang dùng: $deliveryAddress. Danh mục đã đổi thành: $currentSelectedAddress. '
+                                 'Chọn lại địa chỉ để cập nhật, hoặc giữ nguyên địa chỉ trên đơn.',
+                                 style:TextStyle(fontSize:12,color:ErpPalette.of(ctx).warning))),
                              // Saved addresses display their full text in the one selector.
                              if((primary.isEmpty&&locations.isEmpty)||
                                (locationId==null&&(primary.isEmpty||deliveryAddress!=primary)))
