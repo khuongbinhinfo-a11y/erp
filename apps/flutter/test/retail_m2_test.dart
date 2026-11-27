@@ -129,6 +129,12 @@ void main(){
     expect(find.byKey(const ValueKey('pos-fullscreen-back')),findsOneWidget);
     expect(find.byKey(const ValueKey('pos-cart')),findsOneWidget);
     expect(find.textContaining('24,000 ₫'),findsWidgets);
-    expect(tester.takeException(),isNull);
+    // Verify no RenderFlex overflow as the browser/tablet/device width changes.
+    for(final width in <double>[390,430,768,1024,1440,360]){
+      tester.view.physicalSize=Size(width,820);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('pos-cart')),findsOneWidget);
+      expect(tester.takeException(),isNull,reason:'POS width $width');
+    }
   });
 }
