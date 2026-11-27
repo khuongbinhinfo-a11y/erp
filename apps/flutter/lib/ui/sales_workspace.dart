@@ -3077,6 +3077,150 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       if(path!=null&&mounted)inform('Mở bản in HTML đã lưu để in đơn hàng.');
     }catch(_){if(mounted)inform('Không mở được bản in.',error:true);}
   }
+  bool _manualAllowed(String action,Map<String,dynamic> order){
+    if(order['status']!='CONFIRMED'||order['versionStatus']!='CONFIRMED')return false;
+    final s=order['shipping'];
+    if(s is! Map||s['deliveryChoice']!='MANUAL'||s['warehouseId'] is! String||
+       branchId==null)return false;
+    final warehouse=s['warehouseId'] as String;
+    bool branchPermission(String permission)=>widget.session.grants.any((g)=>
+      g.permission==permission&&g.branchId==branchId);
+    bool warehousePermission(String permission)=>widget.session.grants.any((g)=>
+      g.permission==permission&&g.branchId==branchId&&g.warehouseId==warehouse);
+    if(action=='issue'||action=='return'){
+      if(!warehousePermission('inventory.post'))return false;
+      if(action=='issue')return branchPermission('orders.read');
+      return branchPermission('orders.update')&&branchPermission('delivery.update');
+    }
+    if(action=='complete')return branchPermission('orders.read')&&
+       branchPermission('delivery.update')&&warehousePermission('inventory.read');
+    if(action=='payment'||action=='fullPayment')return branchPermission('orders.read')&&
+      branchPermission('finance.payments.record')&&warehousePermission('inventory.read');
+    return false;
+  }
+
+  Future<void> _manualAction(Map<String,dynamic> order,String action)async{
+    final branch=branchId,token=widget.session.token,orderId=order['id'];
+    if(_navigationLocked||branch==null||orderId is! String||
+      !_manualAllowed(action,order))return;
+    setState(()=>_manualBusy=true);
+    bool ok=false;
+    try{
+      ok=await erpManualOrderAction(context:context,client:widget.client,
+        session:widget.session,order:order,branchId:branch,action:action);
+    }on ErpApiError catch(e){
+      if(mounted)inform(e.message,error:true);
+    }catch(_){
+      if(mounted)inform('Thao tác chưa được xác nhận trên máy chủ. Cần đối soát.',
+        error:true);
+    }finally{
+      if(mounted)setState(()=>_manualBusy=false);
+    }
+    if(ok&&_sameScope(token,branch)){
+      await reload();
+      if(mounted&&_selectedOrderId==orderId){
+        await _selectOrder({'id':orderId},afterMutation:true);
+      }
+    }
+  }
+
+  Future<void> _batchManual(String action)async{
+    if(_navigationLocked||branchId==null||_selectedBulkOrders.isEmpty)return;
+    final branch=branchId!,token=widget.session.token;
+    final chosen=orders.where((o)=>_selectedBulkOrders.contains(o['id'])&&
+       _manualAllowed(action,o)).toList(growable:false);
+    if(chosen.isEmpty){inform('Chọn các đơn MANUAL có quyền xử lý.',error:true);return;}
+    final prompt=action=='complete'?'Hoàn thành thực giao':
+       'Thu đủ công nợ theo từng đơn';
+    final yes=await showDialog<bool>(context:context,builder:(c)=>AlertDialog(
+      title:Text(prompt+' hàng loạt'),
+      content:Text('Sẽ đối chiếu và xử lý tối đa '+chosen.length.toString()+
+        ' đơn riêng biệt trên máy chủ. Từng đơn cần đủ hàng thực giao/quyền, '+
+        'các đơn lỗi không ảnh hưởng đơn đã ghi nhận. '+
+        (action=='payment'?'Thu bằng phương thức tiền mặt.':'Không tạo phiếu thu tự động.')),
+      actions:[
+        TextButton(onPressed:()=>Navigator.pop(c,false),child:const Text('Hủy')),
+        FilledButton(onPressed:()=>Navigator.pop(c,true),child:const Text('Xác nhận')),
+      ],
+    ));
+    if(yes!=true||!mounted||!_sameScope(token,branch))return;
+    setState(()=>_manualBusy=true);
+    final outcomes=<({String label,bool success,String message})>[];
+    try{
+      for(final row in chosen){
+        if(!_sameScope(token,branch))break;
+        final label=(row['documentNo']??row['customerName']??'Đơn').toString(),
+          id=row['id'] as String;
+        try{
+          // Server re-read BEFORE every write; list totals/prices can be stale.
+          final detail=await widget.client.salesOrder(token,id,branch);
+          final shipping=detail['shipping'];
+          if(shipping is! Map||shipping['deliveryChoice']!='MANUAL'||
+            shipping['warehouseId'] is! String||
+            !_manualAllowed(action,detail))throw const ErpApiError(409,
+              'Đơn không còn hợp lệ hoặc đã đổi quyền/kho.');
+          final warehouse=shipping['warehouseId'] as String;
+          final state=await widget.client.salesExecutionRead(token,
+            branchId:branch,warehouseId:warehouse,orderId:id);
+          Map<String,dynamic> payload;
+          if(action=='complete'){
+            if(state['completed']==true||state['hasIssuedDelivery']!=true)
+              throw const ErpApiError(409,'Đơn chưa có lượng thực giao hoặc đã hoàn thành.');
+            // Batch completion cannot guess a partial return. Physical issues
+            // are explicitly shown in each order's return dialog in advance.
+            payload={'branchId':branch,'warehouseId':warehouse,
+              'orderId':id,'version':state['version']};
+          }else{
+            if(state['completed']!=true)throw const ErpApiError(409,
+              'Phải hoàn thành giao trước khi thu.');
+            final due=BigInt.tryParse((state['remaining']??'0').toString())??BigInt.zero;
+            if(due<=BigInt.zero)throw const ErpApiError(409,'Không còn công nợ.');
+            payload={'branchId':branch,'warehouseId':warehouse,
+              'orderId':id,'method':'CASH','amount':due.toString()};
+          }
+          final response=await widget.client.postSalesExecution(widget.session,
+            action,payload,(state['revision'] as num).toInt());
+          outcomes.add((label:label,success:true,
+            message:action=='complete'?
+              'Đã ghi hàng giao: '+erpVndText(response['grandTotal']):
+              'Đã thu: '+erpVndText(response['amount'])+' · Còn: '+
+                 erpVndText(response['remaining'])));
+        }on ErpApiError catch(e){
+          outcomes.add((label:label,success:false,message:e.message));
+        }catch(_){
+          outcomes.add((label:label,success:false,
+            message:'Chưa xác minh server ACK; kiểm tra lệnh chờ trước khi thử lại.'));
+        }
+      }
+    }finally{
+      if(mounted)setState((){_manualBusy=false;_selectedBulkOrders.clear();});
+    }
+    if(!_sameScope(token,branch))return;
+    await reload();
+    if(mounted&&_selectedOrderId!=null){
+      await _selectOrder({'id':_selectedOrderId},afterMutation:true);
+    }
+    if(!mounted)return;
+    await showDialog<void>(context:context,builder:(c)=>AlertDialog(
+      title:Text('Kết quả '+prompt.toLowerCase()+' ('+
+        outcomes.where((x)=>x.success).length.toString()+'/'+
+        outcomes.length.toString()+' thành công)'),
+      content:SizedBox(width:560,child:ConstrainedBox(
+        constraints:const BoxConstraints(maxHeight:450),
+        child:ListView.separated(shrinkWrap:true,itemCount:outcomes.length,
+          separatorBuilder:(_,__)=>const Divider(height:1),
+          itemBuilder:(ctx,i){
+            final item=outcomes[i];
+            return ListTile(dense:true,
+              leading:Icon(item.success?Icons.check_circle:Icons.error_outline,
+                color:item.success?Colors.green:Colors.red),
+              title:Text(item.label,maxLines:1,overflow:TextOverflow.ellipsis),
+              subtitle:Text(item.message));
+          }))),
+      actions:[FilledButton(onPressed:()=>Navigator.pop(c),child:const Text('Đóng'))],
+    ));
+  }
+
   Future<void> _selectOrder(Map<String,dynamic> row,{bool afterMutation=false})async{
     final branch=branchId,token=widget.session.token,id=row['id'];
     if(branch==null||id is! String||(_navigationLocked&&!afterMutation))return;
