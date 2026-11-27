@@ -783,33 +783,49 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
             separatorBuilder:(_,__)=>Divider(color:palette.border,height:1),
             itemBuilder:(context,i){
               final line=_lines[i],quoted=i<_priced.length?_priced[i]:null;
-              return Padding(padding:const EdgeInsets.symmetric(vertical:9),
-                child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-                  Text(line.sku['productName']?.toString()??line.sku['code']?.toString()??'Sản phẩm',
-                    maxLines:2,overflow:TextOverflow.ellipsis,
-                    style:TextStyle(color:palette.ink,fontWeight:FontWeight.w600)),
-                  Text((line.sku['code']?.toString()??'')+' · '+
-                    (line.sku['unitCode']?.toString()??''),
-                    style:TextStyle(fontSize:12,color:palette.muted)),
-                  const SizedBox(height:5),
+              return Padding(padding:const EdgeInsets.symmetric(vertical:7),
+                child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+                  Row(children:[
+                    Expanded(child:Text(line.sku['productName']?.toString()??
+                      line.sku['code']?.toString()??'Sản phẩm',
+                      maxLines:2,overflow:TextOverflow.ellipsis,
+                      style:TextStyle(color:palette.ink,fontWeight:FontWeight.w700))),
+                    const SizedBox(width:6),
+                    Text(erpVndText(quoted?['lineTotal']),
+                      style:TextStyle(color:palette.ink,fontWeight:FontWeight.w800)),
+                  ]),
+                  const SizedBox(height:3),
+                  Row(children:[
+                    Expanded(child:Text([line.sku['code'],line.sku['unitCode']]
+                      .where((v)=>v!=null&&v.toString().isNotEmpty).join(' · '),
+                      maxLines:1,overflow:TextOverflow.ellipsis,
+                      style:TextStyle(color:palette.muted,fontSize:11))),
+                    const SizedBox(width:6),
+                    Text(quoted==null?'Chưa xác minh giá':
+                      erpVndText(quoted['unitPrice'])+' / '+(line.sku['unitCode']?.toString()??''),
+                      style:TextStyle(color:palette.muted,fontSize:11)),
+                  ]),
+                  const SizedBox(height:3),
                   Row(children:[
                     IconButton(key:ValueKey('pos-minus-'+i.toString()),
+                      constraints:const BoxConstraints(minWidth:40,minHeight:40),
+                      padding:EdgeInsets.zero,iconSize:21,
                       onPressed:line.quantity=='1'?null:()=>_editCart(line.sku,delta:-1,refocus:false),
                       tooltip:'Giảm số lượng',icon:const Icon(Icons.remove_circle_outline)),
-                    Text(erpNumberText(line.quantity),style:const TextStyle(fontWeight:FontWeight.w700)),
+                    Padding(padding:const EdgeInsets.symmetric(horizontal:3),
+                      child:Text(erpNumberText(line.quantity),
+                        style:TextStyle(color:palette.ink,fontWeight:FontWeight.w800))),
                     IconButton(key:ValueKey('pos-plus-'+i.toString()),
-                      onPressed:()=>_editCart(line.sku,refocus:false),tooltip:'Tăng số lượng',
-                      icon:const Icon(Icons.add_circle_outline)),
-                    IconButton(key:ValueKey('pos-remove-'+i.toString()),
-                      onPressed:()=>_remove(i),tooltip:'Bỏ sản phẩm',icon:const Icon(Icons.delete_outline)),
+                      constraints:const BoxConstraints(minWidth:40,minHeight:40),
+                      padding:EdgeInsets.zero,iconSize:21,
+                      onPressed:()=>_editCart(line.sku,refocus:false),
+                      tooltip:'Tăng số lượng',icon:const Icon(Icons.add_circle_outline)),
                     const Spacer(),
-                    Flexible(child:Column(crossAxisAlignment:CrossAxisAlignment.end,children:[
-                      Text(erpVndText(quoted?['lineTotal']),textAlign:TextAlign.end,
-                        style:TextStyle(fontWeight:FontWeight.w700,color:palette.ink)),
-                      Text(quoted==null?'Chưa xác minh giá':
-                        erpVndText(quoted['unitPrice'])+' / '+(line.sku['unitCode']?.toString()??''),
-                        textAlign:TextAlign.end,style:TextStyle(fontSize:11,color:palette.muted)),
-                    ])),
+                    IconButton(key:ValueKey('pos-remove-'+i.toString()),
+                      constraints:const BoxConstraints(minWidth:40,minHeight:40),
+                      padding:EdgeInsets.zero,iconSize:21,
+                      onPressed:()=>_remove(i),
+                      tooltip:'Bỏ sản phẩm',icon:const Icon(Icons.delete_outline)),
                   ]),
                 ]));
             })),
@@ -906,17 +922,21 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
               child:const Text('Hoàn hàng')),
           ])),
         if(_posError!=null)Text(_posError!,style:TextStyle(color:palette.danger,fontSize:12)),
-        if(_configOpen)Padding(padding:const EdgeInsets.only(top:8),child:Column(children:[
-          _selector('Chi nhánh',_branch,_branches,(value)=>unawaited(_loadBranch(value))),
-          const SizedBox(height:6),
-          _selector('Kho bán',_warehouse,_warehouses,(value)=>unawaited(_setWarehouse(value))),
-          const SizedBox(height:6),
-          _selector('Bảng giá',_priceList,_priceLists,_changePriceList),
-          const SizedBox(height:6),
-          _selector('Khách hàng',_walkIn,_customers,(id){
-            setState((){++_customerChoiceVersion;_walkIn=id;});unawaited(_quote());
-          }),
-        ])),
+        if(_configOpen)Padding(padding:const EdgeInsets.only(top:8),
+          child:LayoutBuilder(builder:(context,size){
+            final compact=size.maxWidth<700;
+            final fieldWidth=compact?size.maxWidth:(size.maxWidth-24)/4;
+            return Wrap(spacing:8,runSpacing:6,children:[
+              SizedBox(width:fieldWidth,child:_selector('Chi nhánh',_branch,_branches,
+                (value)=>unawaited(_loadBranch(value)))),
+              SizedBox(width:fieldWidth,child:_selector('Kho bán',_warehouse,_warehouses,
+                (value)=>unawaited(_setWarehouse(value)))),
+              SizedBox(width:fieldWidth,child:_selector('Bảng giá',_priceList,_priceLists,_changePriceList)),
+              SizedBox(width:fieldWidth,child:_selector('Khách hàng',_walkIn,_customers,(id){
+                setState((){++_customerChoiceVersion;_walkIn=id;});unawaited(_quote());
+              })),
+            ]);
+          })),
         const SizedBox(height:8),
         Padding(padding:const EdgeInsets.only(top:4),child:Wrap(spacing:8,runSpacing:4,crossAxisAlignment:WrapCrossAlignment.center,children:[
            TextButton.icon(key:const ValueKey('pos-walk-in-quick'),
