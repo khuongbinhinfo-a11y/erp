@@ -22,10 +22,10 @@ test("T3-B requires independent explicit owner approval, exact SHA and target",(
  assert.doesNotThrow(()=>checkOperator(approved,"main",sha,origin,[],true));
  assert.throws(()=>checkOperator({...approved,ERP_TARGET_DATABASE_ID:"other"},"main",sha,origin,[],true),/APPROVAL/);
 });
-test("T3-B verifies all six T3-B tables and ten guards, no invalid or backfilled rows",()=>{
- const valid={tables:"6",guards:"10",invalid_links:"0",new_rows:"0"};
+test("T3-B verifies all six T3-B tables and eleven guards, no invalid or backfilled rows",()=>{
+ const valid={tables:"6",guards:"11",invalid_links:"0",new_rows:"0"};
  assert.doesNotThrow(()=>assertT3bSchemaState(valid,true));
- assert.throws(()=>assertT3bSchemaState({...valid,guards:"9"},true),/RECONCILIATION/);
+ assert.throws(()=>assertT3bSchemaState({...valid,guards:"10"},true),/RECONCILIATION/);
  assert.throws(()=>assertT3bSchemaState({...valid,new_rows:"1"},true),/RECONCILIATION/);
  assert.doesNotThrow(()=>assertT3bSchemaState({...valid,new_rows:"1"},false));
 });
