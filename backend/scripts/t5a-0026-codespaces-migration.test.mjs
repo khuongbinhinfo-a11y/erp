@@ -17,11 +17,11 @@ test("T5-A operator requires exactly 25 baseline migrations and immutable 0026",
    [...BASE,...RELEASE,"0027_unapproved.sql"]),/MISMATCH/);
 });
 test("T5-A operator requires isolated restore schema and no orphan facts",()=>{
- const valid={tables:"3",guards:"10",payment_source_columns:"1",
+ const valid={tables:"3",guards:"11",payment_source_columns:"1",
   invalid_links:"0",new_rows:"0"};
  assert.doesNotThrow(()=>assertT5aSchemaState(valid,true));
  assert.throws(()=>assertT5aSchemaState({...valid,tables:"2"},true),/RECONCILIATION/);
- assert.throws(()=>assertT5aSchemaState({...valid,guards:"9"},true),/RECONCILIATION/);
+ assert.throws(()=>assertT5aSchemaState({...valid,guards:"10"},true),/RECONCILIATION/);
  assert.throws(()=>assertT5aSchemaState({...valid,invalid_links:"1"},true),/RECONCILIATION/);
  assert.throws(()=>assertT5aSchemaState({...valid,new_rows:"1"},true),/RECONCILIATION/);
  assert.doesNotThrow(()=>assertT5aSchemaState({...valid,new_rows:"1"},false));
