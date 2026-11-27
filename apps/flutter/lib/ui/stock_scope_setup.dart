@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 import 'erp_number_input.dart';
 import 'identity_client.dart';
 import 'manual_stock_issue.dart';
+import 'stock_scope_picker.dart';
 
 /// Stock classification: assigns existing stock to a bin/lot. Never posts
 /// inventory_ledger or invents on-hand quantities on the client.
@@ -111,20 +112,14 @@ Future<void> showStockScopeSetup({
       ],
       if(mode=='assign')...[
         const Text('Chỉ phân loại tồn đang có. Không làm tăng số lượng tồn kho.'),
-        DropdownButtonFormField<String>(initialValue:location,isExpanded:true,
-         decoration:const InputDecoration(labelText:'Vị trí'),
-         items:[const DropdownMenuItem(value:'',child:Text('Không chọn')),
-           for(final x in (scopes['locations'] as List? ??const []))
-             DropdownMenuItem(value:(x as Map)['id'].toString(),
-              child:Text((x['code']??'').toString()+' · '+(x['name']??'').toString()))],
-         onChanged:(v)=>refresh(()=>location=v??'')),
-        DropdownButtonFormField<String>(initialValue:lot,isExpanded:true,
-         decoration:const InputDecoration(labelText:'Lô'),
-         items:[const DropdownMenuItem(value:'',child:Text('Không chọn')),
-           for(final x in (scopes['lots'] as List? ??const []))
-             DropdownMenuItem(value:(x as Map)['id'].toString(),
-              child:Text((x['lotCode']??'').toString()))],
-         onChanged:(v)=>refresh(()=>lot=v??'')),
+        StockScopePicker(kind:'location',
+          selectedId:location,
+          items:scopes['locations'] as List? ??const [],
+          onChanged:(v)=>refresh(()=>location=v)),
+        StockScopePicker(kind:'lot',
+          selectedId:lot,
+          items:scopes['lots'] as List? ??const [],
+          onChanged:(v)=>refresh(()=>lot=v)),
         TextField(controller:qty,
           inputFormatters:const [ErpGroupedNumberFormatter(maxIntegerDigits:12,maxFractionDigits:6)],
           keyboardType:const TextInputType.numberWithOptions(decimal:true),
