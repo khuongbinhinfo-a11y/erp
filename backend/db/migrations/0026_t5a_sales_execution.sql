@@ -209,3 +209,116 @@ BEGIN
 END; $$;
 CREATE CONSTRAINT TRIGGER t5a_allocation_guard AFTER INSERT ON payment_allocation
  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION erp_t5a_allocation_guard();
+
+-- Database-level integrity: a posted MANUAL fulfillment MUST reconcile to
+-- every canonical sale line, physical issue, return and exactly one SALE debit.
+-- Deferred checks work for a single atomic transaction without transient gaps.
+CREATE FUNCTION erp_t5a_manual_fulfillment_commit_guard() RETURNS trigger
+ LANGUAGE plpgsql AS $$
+DECLARE ctx record; l record; issue_qty numeric;return_qty numeric;
+ expected_amount numeric;posted_amount numeric;line_count integer;
+ posted_count integer;real_qty numeric:=0;total_amount numeric:=0;
+BEGIN
+ IF NEW.mode<>'MANUAL' THEN RETURN NULL; END IF;
+ SELECT o.status,v.delivery_choice,v.warehouse_id INTO ctx
+ FROM sales_order o JOIN sales_order_version_context v
+ ON v.installation_id=o.installation_id AND v.branch_id=o.branch_id
+ AND v.order_id=o.id AND v.version_no=NEW.version_no
+ WHERE o.installation_id=NEW.installation_id AND o.branch_id=NEW.branch_id
+ AND o.id=NEW.order_id;
+ IF ctx IS NULL OR ctx.status<>'CONFIRMED' OR ctx.delivery_choice<>'MANUAL'
+ OR ctx.warehouse_id<>NEW.warehouse_id THEN
+ RAISE EXCEPTION 'Manual fulfillment must match confirmed delivery context'; END IF;
+ SELECT count(*) INTO line_count FROM sales_order_line
+ WHERE installation_id=NEW.installation_id AND branch_id=NEW.branch_id
+ AND order_id=NEW.order_id AND version_no=NEW.version_no;
+ SELECT count(*) INTO posted_count FROM sales_manual_delivery_line
+ WHERE installation_id=NEW.installation_id AND branch_id=NEW.branch_id
+ AND fulfillment_id=NEW.id;
+ IF line_count<1 OR posted_count<>line_count THEN
+ RAISE EXCEPTION 'Manual fulfillment requires all actual delivery lines'; END IF;
+ FOR l IN SELECT d.order_line_no,d.product_id,d.ordered_base,d.issued_base,
+       d.returned_base,d.delivered_base,d.amount,s.line_total,
+       s.pricing_engine,s.price_snapshot,s.quantity,s.unit_code,p.base_unit
+ FROM sales_manual_delivery_line d
+ JOIN sales_order_line s ON s.installation_id=d.installation_id
+  AND s.branch_id=d.branch_id AND s.order_id=NEW.order_id
+  AND s.version_no=NEW.version_no AND s.line_no=d.order_line_no
+ JOIN catalog_product p ON p.installation_id=s.installation_id
+  AND p.branch_id=s.branch_id AND p.id=s.product_id
+ WHERE d.installation_id=NEW.installation_id AND d.branch_id=NEW.branch_id
+  AND d.fulfillment_id=NEW.id
+ LOOP
+  IF l.product_id IS DISTINCT FROM (
+    SELECT product_id FROM sales_order_line WHERE installation_id=NEW.installation_id
+    AND branch_id=NEW.branch_id AND order_id=NEW.order_id
+    AND version_no=NEW.version_no AND line_no=l.order_line_no)
+   OR l.ordered_base IS DISTINCT FROM (
+    CASE WHEN l.pricing_engine='R1' THEN
+      nullif(l.price_snapshot->>'normalizedBaseQuantity','')::numeric
+      WHEN l.unit_code=l.base_unit THEN l.quantity
+      ELSE NULL END)
+  THEN RAISE EXCEPTION 'Manual delivery line violates confirmed SKU or base quantity'; END IF;
+  SELECT coalesce(sum(k.quantity_base),0) INTO issue_qty
+  FROM sales_direct_issue h JOIN sales_direct_issue_line k ON
+   k.installation_id=h.installation_id AND k.branch_id=h.branch_id
+   AND k.issue_id=h.id
+  WHERE h.installation_id=NEW.installation_id AND h.branch_id=NEW.branch_id
+   AND h.order_id=NEW.order_id AND h.version_no=NEW.version_no
+   AND h.warehouse_id=NEW.warehouse_id AND k.order_line_no=l.order_line_no;
+  SELECT coalesce(sum(k.quantity_base),0) INTO return_qty
+  FROM sales_manual_return h JOIN sales_manual_return_line k ON
+   k.installation_id=h.installation_id AND k.branch_id=h.branch_id
+   AND k.return_id=h.id
+  WHERE h.installation_id=NEW.installation_id AND h.branch_id=NEW.branch_id
+   AND h.order_id=NEW.order_id AND h.version_no=NEW.version_no
+   AND h.warehouse_id=NEW.warehouse_id AND k.order_line_no=l.order_line_no;
+  IF l.issued_base<>issue_qty OR l.returned_base<>return_qty OR
+   l.delivered_base<>issue_qty-return_qty OR issue_qty<return_qty THEN
+   RAISE EXCEPTION 'Manual delivery line does not reconcile physical stock'; END IF;
+  expected_amount:=round(l.line_total*l.delivered_base/l.ordered_base,0);
+  IF l.amount<>expected_amount THEN
+   RAISE EXCEPTION 'Manual delivered amount differs from confirmed price'; END IF;
+  total_amount:=total_amount+l.amount;
+  real_qty:=real_qty+l.delivered_base;
+ END LOOP;
+ IF real_qty<=0 THEN RAISE EXCEPTION 'Manual fulfillment requires delivered goods'; END IF;
+ SELECT coalesce(sum(amount),0),count(*) INTO posted_amount,posted_count
+ FROM customer_receivable_ledger
+ WHERE installation_id=NEW.installation_id AND branch_id=NEW.branch_id
+ AND order_id=NEW.order_id AND kind='SALE' AND source_id=NEW.id;
+ IF (total_amount>0 AND (posted_amount<>total_amount OR posted_count<>1)) OR
+   (total_amount=0 AND posted_count<>0) THEN
+   RAISE EXCEPTION 'Manual fulfillment must match exactly one AR debit'; END IF;
+ RETURN NULL;
+END; $$;
+CREATE CONSTRAINT TRIGGER t5a_fulfillment_commit_guard
+ AFTER INSERT ON sales_fulfillment DEFERRABLE INITIALLY DEFERRED
+ FOR EACH ROW EXECUTE FUNCTION erp_t5a_manual_fulfillment_commit_guard();
+
+CREATE FUNCTION erp_t5a_receipt_commit_guard() RETURNS trigger
+ LANGUAGE plpgsql AS $$
+DECLARE matching_order uuid;payment_count integer;payment_amount numeric;
+ allocated_amount numeric;
+BEGIN
+ IF NEW.fulfillment_id IS NULL THEN RETURN NULL; END IF;
+ SELECT order_id INTO matching_order FROM sales_fulfillment WHERE
+ installation_id=NEW.installation_id AND branch_id=NEW.branch_id
+ AND id=NEW.fulfillment_id AND mode='MANUAL';
+ IF matching_order IS NULL OR matching_order<>NEW.order_id THEN
+  RAISE EXCEPTION 'MANUAL payment receipt must match fulfilled order'; END IF;
+ SELECT coalesce(sum(allocated),0) INTO allocated_amount
+ FROM payment_allocation WHERE installation_id=NEW.installation_id
+ AND branch_id=NEW.branch_id AND receipt_id=NEW.id;
+ SELECT count(*),coalesce(-sum(amount),0) INTO payment_count,payment_amount
+ FROM customer_receivable_ledger WHERE installation_id=NEW.installation_id
+ AND branch_id=NEW.branch_id AND order_id=NEW.order_id
+ AND kind='PAYMENT' AND source_id=NEW.id;
+ IF allocated_amount<>NEW.amount OR payment_count<>1 OR
+  payment_amount<>NEW.amount THEN
+  RAISE EXCEPTION 'MANUAL receipt must match one posted payment and allocation'; END IF;
+ RETURN NULL;
+END; $$;
+CREATE CONSTRAINT TRIGGER t5a_receipt_commit_guard
+ AFTER INSERT ON payment_receipt DEFERRABLE INITIALLY DEFERRED
+ FOR EACH ROW EXECUTE FUNCTION erp_t5a_receipt_commit_guard();
