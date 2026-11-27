@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:file_picker/file_picker.dart';
 import 'sales_print_document.dart';
 import 'sales_order_view.dart';
+import 'sales_execution_dialogs.dart';
 import 'sales_print_web_stub.dart' if (dart.library.js_interop) 'sales_print_web.dart';
 import 'app_update.dart';
 import 'package:material_ui/material_ui.dart';
@@ -127,6 +128,10 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   String? _selectedOrderId,_previewError;
   Map<String,dynamic>? _previewOrder;
   bool _previewLoading=false;
+  Map<String,dynamic>? _previewExecution;
+  String? _previewExecutionError;
+  bool _manualBusy=false;
+  final Set<String> _selectedBulkOrders=<String>{};
   int _selectionGeneration=0;
   final Map<String,String> retryKeys={};
   final Map<String,String?> _retryReasons={};
@@ -170,7 +175,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       _scheduleRecovery();
     });
   }
-  bool get _navigationLocked=>saving||localRecoveryBusy||
+  bool get _navigationLocked=>saving||localRecoveryBusy||_manualBusy||
     (!localRecoveryBlocked&&(pendingCreate!=null||pendingUpdate!=null||pendingConfirm!=null));
   // Unresolved local commands may permit navigation, but never a new lifecycle mutation.
   bool get _mutationBlocked=>_navigationLocked||localRecoveryBlocked||
@@ -262,6 +267,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     if(old.session.token!=widget.session.token||old.client!=widget.client){
       generation++;branches=[];orders=[];branchId=null;retryKeys.clear();_retryReasons.clear();_orderFilter='all';_deliveryFilter='all';_paymentFilter='all';
        _selectionGeneration++;_selectedOrderId=null;_previewOrder=null;_previewError=null;_previewLoading=false;
+      _previewExecution=null;_previewExecutionError=null;_selectedBulkOrders.clear();
       pendingCreate=null;pendingCreateKey=null;pendingConfirm=null;
       pendingConfirmKey=null;pendingUpdate=null;pendingUpdateKey=null;
       pendingCreateAutoConfirm=false;localRecoveryBusy=false;localRecoveryBlocked=false;pendingNeedsReceipt=false;
@@ -3076,12 +3082,28 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     if(branch==null||id is! String||(_navigationLocked&&!afterMutation))return;
     final request=++_selectionGeneration;
     setState((){_selectedOrderId=id;_previewOrder=null;
+      _previewExecution=null;_previewExecutionError=null;
       _previewLoading=true;_previewError=null;});
     try{
       // Details and permission scope are always fetched from the canonical API.
       final item=await widget.client.salesOrder(token,id,branch);
       if(!_sameScope(token,branch)||request!=_selectionGeneration)return;
-      setState((){_previewOrder=item;_previewLoading=false;});
+      Map<String,dynamic>? execution;
+      String? executionError;
+      final shipping=item['shipping'];
+      if(item['status']=='CONFIRMED'&&shipping is Map&&
+         shipping['deliveryChoice']=='MANUAL'&&shipping['warehouseId'] is String){
+        try{
+          execution=await widget.client.salesExecutionRead(token,
+            branchId:branch,warehouseId:shipping['warehouseId'].toString(),orderId:id);
+        }on ErpApiError catch(e){
+          executionError=e.code=='T5A_MIGRATION_REQUIRED'?
+            'T5-A chưa được nâng cấp trên backend.':e.message;
+        }catch(_){executionError='Chưa đối chiếu được dữ liệu giao hàng.';}
+      }
+      if(!_sameScope(token,branch)||request!=_selectionGeneration)return;
+      setState((){_previewOrder=item;_previewLoading=false;
+        _previewExecution=execution;_previewExecutionError=executionError;});
     }on ErpApiError catch(e){
       if(_sameScope(token,branch)&&request==_selectionGeneration)
         setState((){_previewError=e.message;_previewLoading=false;});
@@ -3105,6 +3127,10 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       ])));
     if(item==null)return const SizedBox.shrink();
     final shipping=item['shipping'] is Map?item['shipping'] as Map:const {};
+    final manual=item['status']=='CONFIRMED'&&shipping['deliveryChoice']=='MANUAL';
+    final execution=_previewExecution;
+    final hasReceivable=execution?['completed']==true;
+    final due=BigInt.tryParse((execution?['remaining']??'0').toString())??BigInt.zero;
     final lines=item['lines'] is List?item['lines'] as List:const [];
     final editable=item['status']!='CANCELLED'&&item['versionStatus']=='DRAFT';
     const modes={'MANUAL':'Giao thủ công','TRIP':'Giao theo chuyến','PICKUP':'Khách lấy'};
@@ -3169,6 +3195,24 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           if(editable&&can('orders.update'))OutlinedButton(
             onPressed:_navigationLocked?null:()=>updateOrder(item),
             child:const Text('Sửa đơn')),
+          if(manual&&_manualAllowed('issue',item))OutlinedButton.icon(
+            onPressed:_navigationLocked?null:()=>_manualAction(item,'issue'),
+            icon:const Icon(Icons.inventory_2_outlined,size:15),
+            label:const Text('Xuất kho')),
+          if(manual&&_manualAllowed('return',item)&&execution?['completed']!=true)OutlinedButton.icon(
+            onPressed:_navigationLocked||execution==null?null:()=>_manualAction(item,'return'),
+            icon:const Icon(Icons.assignment_return_outlined,size:15),
+            label:const Text('Nhập trả')),
+          if(manual&&_manualAllowed('complete',item)&&execution?['completed']!=true)FilledButton.icon(
+            onPressed:_navigationLocked||execution?['hasIssuedDelivery']!=true?null:
+              ()=>_manualAction(item,'complete'),
+            icon:const Icon(Icons.task_alt,size:15),label:const Text('Hoàn thành')),
+          if(manual&&hasReceivable&&due>BigInt.zero&&_manualAllowed('payment',item))...[
+            OutlinedButton(onPressed:_navigationLocked?null:
+              ()=>_manualAction(item,'payment'),child:const Text('Thu một phần / ghi nợ')),
+            FilledButton(onPressed:_navigationLocked?null:
+              ()=>_manualAction(item,'fullPayment'),child:const Text('Thu đủ')),
+          ],
           if(_canOpenWarehouse(item))OutlinedButton.icon(
             onPressed:_navigationLocked?null:()=>widget.onOpenWarehouse!(item),
             icon:const Icon(Icons.warehouse_outlined,size:15),
@@ -3201,6 +3245,32 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                 Icons.payments_outlined)),
             ]);
           }),
+          if(manual&&_previewExecutionError!=null)Padding(
+            padding:const EdgeInsets.only(top:10),
+            child:Text(_previewExecutionError!,style:TextStyle(fontSize:12,color:p.danger))),
+          if(manual&&execution!=null)Padding(
+            padding:const EdgeInsets.only(top:12),
+            child:Container(padding:const EdgeInsets.all(10),
+              decoration:BoxDecoration(border:Border.all(color:p.border),
+                borderRadius:BorderRadius.circular(5)),
+              child:Row(children:[
+                Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+                  Text('TỔNG TIỀN THỰC GIAO',style:TextStyle(color:p.muted,fontSize:10)),
+                  Text(erpVndText(hasReceivable?execution['grandTotal']:
+                    execution['expectedDeliveryTotal']),
+                    style:TextStyle(fontSize:15,fontWeight:FontWeight.w800,color:p.ink)),
+                ])),
+                Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+                  Text('ĐÃ THU',style:TextStyle(color:p.muted,fontSize:10)),
+                  Text(erpVndText(execution['paid']),
+                    style:TextStyle(fontSize:15,fontWeight:FontWeight.w800,color:p.ink)),
+                ])),
+                Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+                  Text('CÒN PHẢI THU',style:TextStyle(color:p.muted,fontSize:10)),
+                  Text(hasReceivable?erpVndText(execution['remaining']):'Chưa phát sinh',
+                    style:TextStyle(fontSize:15,fontWeight:FontWeight.w800,color:p.primary)),
+                ])),
+              ]))),
           const SizedBox(height:16),
           Text('THÔNG TIN GIAO HÀNG',style:TextStyle(fontSize:11,
             color:p.ink,fontWeight:FontWeight.w800)),
@@ -3270,6 +3340,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
               sum('Thuế',item['taxTotal']),
               Divider(height:1,color:p.border),
               sum('TỔNG CỘNG',item['total'],strong:true),
+          if(manual&&execution!=null&&hasReceivable)...[
+            sum('Tổng tiền thực giao',execution['grandTotal']),
+            sum('Đã thu',execution['paid']),
+            sum('Còn phải thu',execution['remaining'],strong:true),
+          ],
             ]))),
           if((item['note']??'').toString().trim().isNotEmpty)
             Padding(padding:const EdgeInsets.only(top:9),
