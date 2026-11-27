@@ -108,6 +108,25 @@ test("T5-A manual delivery, source-matched return, 0-debt and repeat AR payment"
   }finally{
    await fakeFulfillment.query("ROLLBACK").catch(()=>undefined);fakeFulfillment.release();
   }
+  // Forged line 99 cannot substitute commercial line 1 even when the
+  // delivery-line row count matches the order-line count.
+  const wrongLine=await pool.connect();
+  try{
+    await wrongLine.query("BEGIN");
+    const h=await wrongLine.query<{id:string}>(`INSERT INTO sales_fulfillment
+     (installation_id,branch_id,order_id,version_no,warehouse_id,mode,actor_id,request_id)
+     VALUES($1,$2,$3,1,$4,'MANUAL',$5,'forged-unmatched-line') RETURNING id`,
+     [t,b,orderId,w,actorId]);
+    await wrongLine.query(`INSERT INTO sales_manual_delivery_line
+     (installation_id,branch_id,fulfillment_id,order_line_no,product_id,
+      ordered_base,issued_base,returned_base,delivered_base,amount)
+     VALUES($1,$2,$3,99,$4,5,0,0,0,0)`,
+     [t,b,h.rows[0]!.id,product.body.id]);
+    await assert.rejects(wrongLine.query("COMMIT"),
+      /Manual delivery has unmatched commercial order lines/i);
+  }finally{
+    await wrongLine.query("ROLLBACK").catch(()=>undefined);wrongLine.release();
+  }
   const forged=await pool.connect();
   try{
    await forged.query("BEGIN");
