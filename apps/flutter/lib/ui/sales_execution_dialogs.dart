@@ -77,12 +77,59 @@ Future<bool> erpManualOrderAction({
  try{
   // An unresolved prior intent may have committed. Do not issue a new
   // payment/fulfillment/return before read-only receipt reconciliation.
-  await client.reconcileSalesExecution(session,
+  final recovered=await client.reconcileSalesExecution(session,
     branchId:branchId,warehouseId:warehouse,orderId:orderId);
+  if(recovered!=null){
+    _notice(context,'Đã đối soát chứng từ chờ. Tải lại đơn để kiểm tra số liệu.');
+    return true;
+  }
   final scope=client.localScope(session,branchId,warehouse:warehouse);
-  if(scope!=null&&await client.localStore?.executionPending(scope,orderId)!=null){
-    _notice(context,'Còn thao tác chưa đối soát. Không gửi lệnh mới.',
-      error:true);return false;
+  final pending=scope==null?null:await client.localStore?.executionPending(scope,orderId);
+  if(pending!=null){
+    final previousAction=pending['action'],previousRevision=pending['revision'],
+      previousKey=pending['key'],previousBody=pending['body'];
+    if(previousAction is! String||previousRevision is! int||
+       previousKey is! String||previousBody is! Map){
+      _notice(context,'Chứng từ chờ không hợp lệ. Cần đối soát trước.',error:true);
+      return false;
+    }
+    if(!context.mounted)return false;
+    final oldBody=Map<String,dynamic>.from(previousBody);
+    final label=previousAction=='return'?'Nhập trả kho':
+      previousAction=='complete'?'Hoàn thành giao hàng':
+      previousAction=='payment'?'Thu tiền':null;
+    if(label==null){
+      _notice(context,'Lệnh chờ không hợp lệ. Cần đối soát thủ công.',error:true);
+      return false;
+    }
+    final yes=await showDialog<bool>(context:context,builder:(c)=>AlertDialog(
+      title:const Text('Khôi phục thao tác chờ'),
+      content:Column(mainAxisSize:MainAxisSize.min,
+        crossAxisAlignment:CrossAxisAlignment.start,children:[
+         const Text('Máy chủ chưa có biên nhận cho lệnh trước. '
+           'Không gửi lệnh mới khi chưa đối soát xong.'),
+         const SizedBox(height:10),
+         Text('Lệnh gốc: '+label,style:const TextStyle(fontWeight:FontWeight.w700)),
+         if(previousAction=='payment')
+           Text('Số thu cũ: '+erpVndText(oldBody['amount'])),
+         const SizedBox(height:8),
+         const Text('Thử lại đúng nội dung, revision và Idempotency-Key đã lưu. '
+           'Ứng dụng kiểm tra biên nhận trước khi gửi lại.'),
+        ]),
+      actions:[
+        TextButton(onPressed:()=>Navigator.pop(c,false),
+          child:const Text('Giữ lệnh')),
+        FilledButton(onPressed:()=>Navigator.pop(c,true),
+          child:const Text('Thử lại lệnh gốc')),
+      ]));
+    if(yes!=true||!context.mounted)return false;
+    final receipt=await client.postSalesExecution(session,previousAction,
+      oldBody,previousRevision);
+    if(context.mounted)_notice(context,previousAction=='payment'?
+      'Đã xác nhận thu '+erpVndText(receipt['amount'])+
+        ' · Còn phải thu '+erpVndText(receipt['remaining']):
+      'Đã xác nhận thao tác '+label.toLowerCase()+'.');
+    return true;
   }
   final state=await client.salesExecutionRead(session.token,
     branchId:branchId,warehouseId:warehouse,orderId:orderId);
@@ -133,8 +180,8 @@ Future<Map<String,dynamic>?> _askComplete(BuildContext context,
  if(state['completed']==true){
   _notice(context,'Đơn này đã hoàn thành.',error:true);return null;
  }
- if(state['hasIssuedDelivery']!=true){
-  _notice(context,'Đơn chưa có hàng thực xuất. Cần xuất kho trước.',
+ if(state['hasIssuedHistory']!=true){
+  _notice(context,'Đơn chưa có lịch sử xuất kho. Cần xuất kho trước.',
     error:true);return null;
  }
  final rows=state['lines'] is List?state['lines'] as List:const [];
@@ -165,14 +212,17 @@ Future<Map<String,dynamic>?> _askComplete(BuildContext context,
          style:const TextStyle(fontSize:16,fontWeight:FontWeight.w800)),
       ]),
       const SizedBox(height:10),
-      Text(state['isFullDelivery']==true?'Giao đủ số lượng đặt.':
-       'Giao thiếu: số chưa giao không được tính công nợ.'),
+      Text(state['hasIssuedDelivery']!=true?
+        'Đã nhập trả toàn bộ: đóng đơn Trả hết, không phát sinh công nợ.':
+        state['isFullDelivery']==true?'Giao đủ số lượng đặt.':
+        'Giao thiếu: số chưa giao không được tính công nợ.'),
      ]),
    ))),
   actions:[
    TextButton(onPressed:()=>Navigator.pop(c,false),child:const Text('Hủy')),
    FilledButton(onPressed:()=>Navigator.pop(c,true),
-     child:const Text('Xác nhận thực giao')),
+     child:Text(state['hasIssuedDelivery']==true?'Xác nhận thực giao':
+       'Đóng đơn đã trả hết')),
   ],
  ));
  if(accepted!=true)return null;
