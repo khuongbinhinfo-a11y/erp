@@ -212,9 +212,25 @@ test("T3-B PostgreSQL: partial MANUAL issue, lot/location, scoped stock, negativ
    {branchId:b,warehouseId:w,productId:products[1],
     locationId:loc.body.id,lotId:lot.body.id,quantityBase:"4.000000"});
   assert.equal(assign.status,201,JSON.stringify(assign.body));
+  // Codex P2: >100 older empty lot/bin entries must never hide a later
+  // stock-bearing lot (expiry 2099) or its selected warehouse location.
+  await db.query(`INSERT INTO inventory_product_lot
+   (installation_id,branch_id,product_id,lot_code,expiry_date,created_by)
+   SELECT $1,$2,$3,'FILL-'||lpad(g::text,4,'0'),'2090-12-31'::date,$4
+   FROM generate_series(1,105) g`,[t,b,products[1],root.actorId]);
+  await db.query(`INSERT INTO inventory_storage_location
+   (installation_id,branch_id,warehouse_id,code,name,created_by)
+   SELECT $1,$2,$3,'ZONE-'||lpad(g::text,4,'0'),'Kệ phụ '||g::text,$4
+   FROM generate_series(1,105) g`,[t,b,w,root.actorId]);
   const scoped=await call("/v1/inventory/stock-scopes?branchId="+b+
    "&warehouseId="+w+"&productId="+products[1],"GET",undefined,token);
   assert.equal(scoped.status,200,JSON.stringify(scoped.body));
+  assert.equal(scoped.body.lots.length,106,"No silent 100-lot limit");
+  assert.equal(scoped.body.locations.length,107,"No silent 100-bin limit");
+  assert.equal(scoped.body.lots.at(-1).id,lot.body.id,
+    "The stocked lot must remain selectable after 105 older empty lots");
+  assert.equal(scoped.body.lots.some((x:any)=>x.id===lot.body.id),true);
+  assert.equal(scoped.body.locations.some((x:any)=>x.id===loc.body.id),true);
   assert.equal(scoped.body.scopes[0].quantityBase,"4.000000");
   assert.equal((await write("/v1/inventory/stock-scopes/assign",
    {branchId:b,warehouseId:w,productId:products[1],locationId:loc.body.id,
