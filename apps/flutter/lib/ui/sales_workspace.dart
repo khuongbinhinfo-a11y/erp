@@ -3030,7 +3030,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         inform(e.message,error:true);
       }
     }catch(_){if(_sameScope(token,branch))inform('Chưa nhận được kết quả. Vui lòng tải lại đơn.',error:true);}
-    finally{if(_sameScope(token,branch))setState(()=>saving=false);}
+    finally{if(mounted)setState(()=>saving=false);}
     if(editNext!=null&&_sameScope(token,branch)&&!_navigationLocked)await updateOrder(editNext);
   }
   Future<void> _printOrder(Map<String,dynamic> item)async{
