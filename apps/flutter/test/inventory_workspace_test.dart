@@ -14,6 +14,73 @@ const product='00000000-0000-4000-8000-000000000003';
 const actor='00000000-0000-4000-8000-000000000004';
 
 void main(){
+ testWidgets('T3-C whole trip hold requires explicit approval and order revision', (tester)async{
+   const order='00000000-0000-4000-8000-000000000013';
+   final writes=<Map<String,dynamic>>[];
+   final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+     httpClient:MockClient((req)async{
+       Map<String,dynamic> body;
+       switch(req.url.path){
+         case '/v1/catalog/branches':
+           body={'items':[{'id':branch,'name':'Chi nhánh chính'}]};
+         case '/v1/catalog/warehouses':
+           body={'items':[{'id':warehouse,'name':'Kho chính'}]};
+         case '/v1/sales/orders/$order':
+           body={'order':{'id':order,'branchId':branch,'documentNo':'SO-TRIP',
+             'status':'CONFIRMED','versionStatus':'CONFIRMED','version':1,'revision':3,
+             'fulfillmentStatus':'NOT_ALLOCATED','deliveryStatus':'NOT_DISPATCHED',
+             'paymentStatus':'NOT_DUE',
+             'shipping':{'warehouseId':warehouse,'deliveryChoice':'TRIP'},
+             'lines':[{'lineNo':1,'productName':'Hàng A','quantity':'4','unitCode':'cái'},
+               {'lineNo':2,'productName':'Hàng B','quantity':'3','unitCode':'cái'}]}};
+         case '/v1/inventory/trip-holds':
+           expect(req.method,'POST');
+           expect(req.headers['if-match'],'3');
+           expect(req.headers['idempotency-key'],isNotEmpty);
+           writes.add(jsonDecode(req.body) as Map<String,dynamic>);
+           body={'hasBackorder':true,'revision':4,'changedLines':2};
+         case '/v1/inventory/reservations':
+           expect(req.method,'GET');
+           body={'items':writes.isEmpty?[]:[
+             {'id':'hold-a','documentNo':'SO-TRIP','sku':'A','quantityBase':'2',
+               'backorderedBase':'2','state':'ACTIVE','revision':'0'}
+           ]};
+         default:
+           throw StateError('Unexpected request: ${req.url.path}');
+       }
+       return http.Response(jsonEncode(body),200,headers:const {'content-type':'application/json'});
+     }));
+   addTearDown(client.dispose);
+   tester.view.devicePixelRatio=1;
+   tester.view.physicalSize=const Size(1280,900);
+   addTearDown(tester.view.resetPhysicalSize);
+   addTearDown(tester.view.resetDevicePixelRatio);
+   final session=IdentitySession(actorId:actor,token:'synthetic-trip-token',
+     expiresAt:DateTime.now().add(const Duration(hours:1)),grants:[
+       for(final permission in ['inventory.read','inventory.reserve'])
+         IdentityGrant(roleId:permission,permission:permission,
+           branchId:branch,warehouseId:warehouse),
+       const IdentityGrant(roleId:'orders-read',permission:'orders.read',branchId:branch),
+     ]);
+   await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),home:Scaffold(
+     body:SingleChildScrollView(child:InventoryWorkspace(client:client,session:session,
+       initialOrder:{'id':order,'branchId':branch,'documentNo':'SO-TRIP',
+         'shipping':{'warehouseId':warehouse,'deliveryChoice':'TRIP'}})))));
+   await tester.pumpAndSettle();
+   await tester.tap(find.byKey(const ValueKey('inventory-linked-order-hold')));
+   await tester.pumpAndSettle();
+   expect(find.text('Giữ hàng toàn đơn'),findsOneWidget);
+   expect(find.text('Hàng A'),findsOneWidget);
+   expect(find.text('Hàng B'),findsOneWidget);
+   expect(writes,isEmpty);
+   await tester.tap(find.byKey(const ValueKey('inventory-trip-hold-all')));
+   await tester.pumpAndSettle();
+   expect(writes.single,{'branchId':branch,'warehouseId':warehouse,'orderId':order,'version':1});
+   expect(find.textContaining('Chờ hàng: 2'),findsOneWidget);
+   await tester.pump(const Duration(seconds:5));
+ });
+
+
 
  testWidgets('UX-C canonical warehouse shortcut preselects scope and only holds after user approval',
   (tester)async{
