@@ -30,6 +30,7 @@ void main(){
 
   testWidgets('POS has independent catalog and quote-driven basket, never confirms distribution order as paid',(tester)async{
     final calls=<String>[];
+     var guestPrepares=0;
     final session=IdentitySession(actorId:customer,token:'mock-token',
       expiresAt:DateTime.now().add(const Duration(hours:1)),
       grants:const [
@@ -53,14 +54,21 @@ void main(){
             return reply({'items':[{'id':warehouse,'name':'Kho chính','code':'MAIN'}]});
           case '/v1/catalog/price-lists':
             return reply({'items':[{'id':priceList,'name':'Giá bán lẻ','code':'RETAIL','active':true}]});
+          case '/v1/catalog/products/$product/media':
+            expect(request.url.queryParameters['branchId'],branch);
+            return reply({'items':[]});
           case '/v1/catalog/r1/skus':
             return reply({'items':[{'id':sku,'productId':product,'code':'SKU-01',
               'productName':'Hàng bán lẻ A','unitCode':'cái',
               'barcode':'8931234567890','active':true}]});
           case '/v1/sales/entry-settings':
             return reply({'settings':{'deliveryChoice':'TRIP',
-              'walkInCustomer':{'id':customer,'code':'WALK','name':'Khách lẻ','active':true}}});
-          case '/v1/sales/quote':
+              'walkInCustomer':null}});
+          case '/v1/sales/walk-in':
+             guestPrepares++;
+             expect(request.headers['idempotency-key'],isNotEmpty);
+             return reply({'customer':{'id':customer,'code':'WALK','name':'Khách lẻ','active':true}});
+           case '/v1/sales/quote':
             final body=jsonDecode(request.body) as Map<String,dynamic>;
             final lines=body['lines'] as List<dynamic>;
             final quantity=(lines.first as Map)['quantity'].toString();
@@ -75,6 +83,9 @@ void main(){
     addTearDown(client.dispose);
     tester.view.devicePixelRatio=1;
     tester.view.physicalSize=const Size(360,760);
+    // Android cutout/status bar must not cover the full-screen register controls.
+    tester.view.padding=const FakeViewPadding(top:36);
+    addTearDown(tester.view.resetPadding);
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:true,dark:true),
@@ -82,7 +93,16 @@ void main(){
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('erp-mobile-retail-workspace')),findsOneWidget);
     expect(find.byKey(const ValueKey('erp-pos-workspace')),findsOneWidget);
+    expect(tester.getTopLeft(find.byKey(const ValueKey('pos-fullscreen-back'))).dy,
+      greaterThanOrEqualTo(36),reason:'Status bar must not overlap POS back/toolbar');
     expect(find.byKey(const ValueKey('pos-sku-search')),findsOneWidget);
+     expect(find.byKey(const ValueKey('pos-walk-in-quick')),findsOneWidget);
+     await tester.tap(find.byKey(const ValueKey('pos-walk-in-quick')));
+     await tester.pumpAndSettle();
+     expect(guestPrepares,1);
+     await tester.tap(find.byKey(const ValueKey('pos-walk-in-quick')));
+     await tester.pumpAndSettle();
+     expect(guestPrepares,1);
     expect(find.byKey(const ValueKey('sales-sku-search')),findsNothing);
     expect(find.byKey(const ValueKey('sales-create')),findsNothing);
     expect(find.byKey(const ValueKey('pos-checkout-disabled')),findsOneWidget);
@@ -102,13 +122,38 @@ void main(){
     expect(calls.where((x)=>x=='POST /v1/sales/quote'),isNotEmpty);
     expect(calls.where((x)=>x.contains('/v1/sales/orders')||
       x.contains('/payment')||x.contains('/issue')||x.contains('/settle')),isEmpty);
+    expect(calls.where((x)=>x.contains('/media')),isEmpty,reason:'Mobile never requests photos');
     tester.view.physicalSize=const Size(1100,820);
     await tester.pumpAndSettle();
+    // Desktop register keeps product grid and quoted cart visible in parallel.
+    expect(find.byKey(const ValueKey('pos-products-grid')),findsOneWidget);
+    expect(find.byKey(const ValueKey('pos-grid-item-$sku')),findsOneWidget);
+    // Desktop cards give the photo most of the visible area; the old tiny
+    // 44px avatar must never return.
+    final cardSize=tester.getSize(find.byKey(const ValueKey('pos-grid-item-$sku')));
+    final imageSize=tester.getSize(find.byKey(const ValueKey('pos-product-image-$sku')));
+    expect(cardSize.height,greaterThanOrEqualTo(250));
+    expect(imageSize.width,greaterThanOrEqualTo(120));
+    expect(imageSize.height,greaterThanOrEqualTo(120));
+    expect(imageSize.height/cardSize.height,greaterThan(0.5));
+
+    expect(calls.where((x)=>x=='GET /v1/catalog/products/$product/media').length,1);
+    expect(find.byKey(const ValueKey('pos-cart')),findsOneWidget);
     expect(find.byKey(const ValueKey('pos-plus-0')),findsOneWidget);
     expect(find.textContaining('24,000 ₫'),findsWidgets);
     tester.view.physicalSize=const Size(360,760);
     await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('pos-products-grid')),findsNothing);
+    expect(find.byKey(const ValueKey('erp-mobile-navigation')),findsNothing);
+    expect(find.byKey(const ValueKey('pos-fullscreen-back')),findsOneWidget);
+    expect(find.byKey(const ValueKey('pos-cart')),findsOneWidget);
     expect(find.textContaining('24,000 ₫'),findsWidgets);
-    expect(tester.takeException(),isNull);
+    // Verify no RenderFlex overflow as the browser/tablet/device width changes.
+    for(final width in <double>[390,430,768,1024,1440,360]){
+      tester.view.physicalSize=Size(width,820);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('pos-cart')),findsOneWidget);
+      expect(tester.takeException(),isNull,reason:'POS width $width');
+    }
   });
 }

@@ -5,26 +5,38 @@ import 'erp_display.dart';
 import 'erp_number_input.dart';
 import 'erp_toast.dart';
 import 'identity_client.dart';
+import 'manual_stock_issue.dart';
+import 'stock_scope_setup.dart';
 
 /// Kho workspace: server-sourced facts, never a client-owned stock balance.
 class InventoryWorkspace extends StatefulWidget {
   final ErpIdentityClient client;
   final IdentitySession session;
-  const InventoryWorkspace({super.key,required this.client,required this.session});
+  final Map<String,dynamic>? initialOrder;
+  const InventoryWorkspace({super.key,required this.client,required this.session,this.initialOrder});
   @override State<InventoryWorkspace> createState()=>_InventoryWorkspaceState();
 }
 class _InventoryWorkspaceState extends State<InventoryWorkspace> {
   List<Map<String,dynamic>> branches=[],warehouses=[],rows=[];
   String? branchId,warehouseId,error;
+  Map<String,dynamic>? _linkedOrder;
+  String? get _linkedWarehouse=>_linkedOrder?['shipping'] is Map?
+    (_linkedOrder!['shipping'] as Map)['warehouseId'] as String?:null;
+  bool get _linkedScope=>_linkedOrder!=null&&branchId==_linkedOrder!['branchId']&&warehouseId==_linkedWarehouse;
   String tab='balances',reservationState='ACTIVE';
   bool busy=false,loading=true,loadingMore=false,hasMore=false;
   int serial=0;
   final warehouseLookup=TextEditingController();
-  @override void initState(){super.initState();loadBranches();}
+  @override void initState(){super.initState();_linkedOrder=widget.initialOrder;
+    if(_linkedOrder!=null)tab=
+      (_linkedOrder?['shipping'] is Map&&
+       (_linkedOrder!['shipping'] as Map)['deliveryChoice']=='MANUAL')
+         ?'balances':'reservations';
+    loadBranches();}
   @override void didUpdateWidget(covariant InventoryWorkspace old){
     super.didUpdateWidget(old);
     if(old.session.token!=widget.session.token || old.client!=widget.client){
-      ++serial;branches=[];warehouses=[];rows=[];branchId=null;warehouseId=null;
+      ++serial;branches=[];warehouses=[];rows=[];branchId=null;warehouseId=null;_linkedOrder=null;
       loadBranches();
     }
   }
@@ -51,7 +63,9 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
       if(!mounted||n!=serial)return;
       branches=data.where((b)=>widget.session.grants.any((g)=>
         g.branchId==b['id']&&g.permission.startsWith('inventory.'))).toList();
-      branchId=branches.isEmpty?null:branches.first['id'].toString();
+      final linkedBranch=_linkedOrder?['branchId'];
+      branchId=linkedBranch!=null?(branches.any((b)=>b['id']==linkedBranch)?linkedBranch.toString():null):
+        branches.isEmpty?null:branches.first['id'].toString();
       if(branchId==null)setState((){loading=false;error='Chưa có quyền kho.';});
       else await loadWarehouses();
     }on ErpApiError catch(e){
@@ -69,7 +83,9 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
       if(!mounted||n!=serial)return;
       warehouses=data.where((w)=>widget.session.grants.any((g)=>
         g.branchId==b&&g.warehouseId==w['id']&&g.permission.startsWith('inventory.'))).toList();
-      warehouseId=warehouses.isEmpty?null:warehouses.first['id'].toString();
+      final linkedWarehouse=_linkedWarehouse;
+      warehouseId=linkedWarehouse!=null?(warehouses.any((w)=>w['id']==linkedWarehouse)?linkedWarehouse:null):
+        warehouses.isEmpty?null:warehouses.first['id'].toString();
       if(warehouseId==null)setState((){loading=false;error='Không có kho được cấp quyền.';});
       else await reload();
     }on ErpApiError catch(e){
@@ -222,13 +238,44 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
         intent:'opening:'+selection['product']!);
     }finally{qty.dispose();lookupText.dispose();}
   }
-  Future<void> reserve()async{
-    final b=branchId,w=warehouseId;
+  Future<void> configureStockScopes()async{
+    final b=branchId,w=warehouseId,token=widget.session.token;
+    if(b==null||w==null||busy||hasPending||
+       (!can('inventory.policy.manage')&&!can('inventory.post')))return;
+    try{
+      await showStockScopeSetup(context:context,client:widget.client,
+        session:widget.session,branchId:b,warehouseId:w,
+        canManagePolicy:can('inventory.policy.manage'),canAssign:can('inventory.post'),
+        onSubmit:(action,body,revision)async{
+          if(!mounted||branchId!=b||warehouseId!=w||widget.session.token!=token)return;
+          await send(action,body,intent:'t3b-stock-scope',revision:revision);
+        });
+    }on ErpApiError catch(e){notify(e.message,bad:true);}
+    catch(_){notify('Không mở được quản lý lô và vị trí.',bad:true);}
+  }
+  Future<void> issueDirect({String? orderId})async{
+    final b=branchId,w=warehouseId,token=widget.session.token;
+    if(b==null||w==null||hasPending||busy||!can('inventory.post'))return;
+    try{
+      await showManualStockIssue(context:context,client:widget.client,session:widget.session,
+       branchId:b,warehouseId:w,orderId:orderId,
+       onSubmit:(body,revision)async{
+        if(!mounted||branchId!=b||warehouseId!=w||widget.session.token!=token)return;
+        await send('direct-issues',body,intent:'manual-direct-issue',revision:revision);
+       });
+    }on ErpApiError catch(e){notify(e.message,bad:true);}
+    catch(_){notify('Không mở được phiếu xuất kho. Hãy kiểm tra kết nối.',bad:true);}
+  }
+  Future<void> reserve({String? orderId})async{
+    final b=branchId,w=warehouseId,token=widget.session.token;
     if(b==null||w==null||hasPending||!can('inventory.reserve'))return;
+    String? picked=orderId;
+    if(picked==null){
     List<Map<String,dynamic>> orders;
     try{
       orders=(await widget.client.salesOrders(widget.session.token,b))
-        .where((o)=>o['status']=='CONFIRMED'&&o['versionStatus']=='CONFIRMED').toList();
+        .where((o)=>o['status']=='CONFIRMED'&&o['versionStatus']=='CONFIRMED'&&
+          (o['deliveryChoice']==null||o['deliveryChoice']=='TRIP')).toList();
     }on ErpApiError catch(e){
       notify('Cần quyền xem đơn đã xác nhận. '+e.message,bad:true);return;
     }
@@ -242,13 +289,13 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
         if(!mounted||!ctx.mounted)return;
         refresh((){
           orders=found.where((x)=>x['status']=='CONFIRMED'&&
-             x['versionStatus']=='CONFIRMED').toList();
+             x['versionStatus']=='CONFIRMED'&&
+             (x['deliveryChoice']==null||x['deliveryChoice']=='TRIP')).toList();
           chosen=orders.isEmpty?null:orders.first['id'].toString();
         });
       }on ErpApiError catch(e){notify(e.message,bad:true);}
       catch(_){notify('Không tra cứu được đơn bán.',bad:true);}
     }
-    String? picked;
     try{
       final route=DialogRoute<String>(context:context,builder:(ctx)=>
         StatefulBuilder(builder:(ctx,refresh)=>AlertDialog(
@@ -283,11 +330,22 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
       picked=await Navigator.of(context,rootNavigator:true).push(route);
       await route.completed; // The search field is no longer mounted.
     }finally{search.dispose();}
-    if(picked==null||!mounted||branchId!=b||warehouseId!=w)return;
+    }
+    if(picked==null||!mounted||branchId!=b||warehouseId!=w||widget.session.token!=token)return;
     Map<String,dynamic> detail;
     try{detail=await widget.client.salesOrder(widget.session.token,picked,b);}
     on ErpApiError catch(e){notify(e.message,bad:true);return;}
-    if(!mounted||branchId!=b||warehouseId!=w)return;
+    if(!mounted||branchId!=b||warehouseId!=w||widget.session.token!=token)return;
+    final shipping=detail['shipping'];
+    if(shipping is Map&&shipping['deliveryChoice']!=null&&shipping['deliveryChoice']!='TRIP'){
+      notify('Đơn giao thủ công hoặc tại quầy không cần giữ hàng. '
+        'Xuất kho trực tiếp sẽ thực hiện trên đơn hàng.',bad:true);
+      return;
+    }
+    if(detail['status']!='CONFIRMED'||detail['versionStatus']!='CONFIRMED'||
+      (shipping is Map&&shipping['warehouseId']!=w)){
+      notify('Đơn đã thay đổi trạng thái hoặc kho. Hãy mở lại đơn hàng.',bad:true);return;
+    }
     final lines=(detail['lines'] as List<dynamic>).map((v)=>
       Map<String,dynamic>.from(v as Map)).toList();
     if(lines.isEmpty){notify('Đơn không có dòng hàng.',bad:true);return;}
@@ -306,7 +364,7 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
         actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Đóng')),
           FilledButton(onPressed:()=>Navigator.pop(ctx,line),child:const Text('Giữ hàng'))],
       )));
-    if(selected==null||!mounted||branchId!=b||warehouseId!=w)return;
+    if(selected==null||!mounted||branchId!=b||warehouseId!=w||widget.session.token!=token)return;
     await send('reservations',{'branchId':b,'warehouseId':w,
       'orderId':picked,'version':detail['version'],'lineNo':selected},
       intent:'hold:'+picked+':'+selected.toString());
@@ -362,13 +420,13 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
           key:ValueKey('inv-branch-'+(branchId??'')),initialValue:branchId,isExpanded:true,decoration:const InputDecoration(labelText:'Chi nhánh'),
           items:branches.map((b)=>DropdownMenuItem<String>(value:b['id'].toString(),
             child:Text((b['name']??'').toString(),overflow:TextOverflow.ellipsis))).toList(),
-          onChanged:busy?null:(v){if(v!=null){setState(()=>branchId=v);loadWarehouses();}},
+          onChanged:busy?null:(v){if(v!=null){setState((){branchId=v;_linkedOrder=null;});loadWarehouses();}},
         )),
         SizedBox(width:small?300:204,child:DropdownButtonFormField<String>(
           key:ValueKey('inv-warehouse-'+(warehouseId??'')),initialValue:warehouseId,isExpanded:true,decoration:const InputDecoration(labelText:'Kho'),
           items:warehouses.map((w)=>DropdownMenuItem<String>(value:w['id'].toString(),
             child:Text((w['name']??'').toString(),overflow:TextOverflow.ellipsis))).toList(),
-          onChanged:busy?null:(v){if(v!=null){setState(()=>warehouseId=v);reload();}},
+          onChanged:busy?null:(v){if(v!=null){setState((){warehouseId=v;_linkedOrder=null;});reload();}},
         )),
         SizedBox(width:small?300:236,child:TextField(
           key:const ValueKey('inventory-warehouse-search'),
@@ -397,8 +455,32 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
         if(can('inventory.post'))OutlinedButton.icon(
           onPressed:busy||hasPending?null:openStock,icon:const Icon(Icons.add),
           label:const Text('Tồn đầu kỳ')),
+        if(_linkedScope&&can('inventory.reserve')&&
+          (_linkedOrder!['shipping'] is! Map ||
+            (_linkedOrder!['shipping'] as Map)['deliveryChoice']==null ||
+            (_linkedOrder!['shipping'] as Map)['deliveryChoice']=='TRIP'))FilledButton.icon(
+          key:const ValueKey('inventory-linked-order-hold'),
+          onPressed:busy||loading||hasPending?null:()=>reserve(orderId:_linkedOrder!['id'] as String),
+          icon:const Icon(Icons.inventory_2_outlined),label:Text('Giữ hàng · ${_linkedOrder!['documentNo']}')),
+        if(_linkedScope&&_linkedOrder?['shipping'] is Map&&
+            (_linkedOrder!['shipping'] as Map)['deliveryChoice']=='MANUAL'&&
+            can('inventory.post'))FilledButton.icon(
+          key:const ValueKey('inventory-linked-manual-issue'),
+          onPressed:busy||loading||hasPending?null:()=>issueDirect(orderId:_linkedOrder!['id'] as String),
+          icon:const Icon(Icons.local_shipping_outlined),
+          label:Text('Xuất kho · ${_linkedOrder!['documentNo']}')),
+        if(can('inventory.policy.manage')||can('inventory.post'))OutlinedButton.icon(
+          key:const ValueKey('inventory-stock-scope-setup'),
+          onPressed:busy||hasPending?null:configureStockScopes,
+          icon:const Icon(Icons.layers_outlined),
+          label:const Text('Lô và vị trí')),
+        if(can('inventory.post'))OutlinedButton.icon(
+          key:const ValueKey('inventory-manual-issue'),
+          onPressed:busy||hasPending?null:()=>issueDirect(),
+          icon:const Icon(Icons.local_shipping_outlined),
+          label:const Text('Xuất kho thủ công')),
         if(can('inventory.reserve'))OutlinedButton.icon(
-          onPressed:busy||hasPending?null:reserve,
+          onPressed:busy||hasPending?null:()=>reserve(),
           icon:const Icon(Icons.inventory_2_outlined),label:const Text('Giữ hàng')),
         IconButton(onPressed:busy?null:reload,
           tooltip:'Tải lại dữ liệu kho',icon:const Icon(Icons.refresh)),

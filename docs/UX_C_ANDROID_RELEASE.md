@@ -1,0 +1,12 @@
+# UX-C APK 0.5.0 — signed release/OTA plan (27/11/2026)
+
+- Source of truth: auxiliary main SHA after merging this reviewed PR and PR #87, and exact parity with primary main. Android versionCode=5, versionName=0.5.0; original signer SHA256 545d17fc51c8d24de4d73cb84ff7c3953f79c7d14efc7ada29b7075110d0c028. Do not rotate keystore or print credentials.
+- GitHub main commit marker `[erp-apk-ux-c-v5]` triggers signed release **only after all seven main CI jobs pass**. Signed workflow confirms exact SHA, APK package, code/name, original signer, AAB, and checksums. Marker is single-use: do not add to arbitrary commit.
+- v4 stage remains scoped to its own v4 marker. v5 stage workflow only accepts v5 marker and signed-build artifact from matching CI source, then GitHub OIDC exchanges short-lived token to stage the immutable `releases/5/erp-5.apk` in R2. Worker verifies protected repository/owner/environment/workflow/audience/source and the hash/signature metadata; full APK downloaded back and SHA/size compared. It does not mutate latest. No static R2 credential in client, workflow or Worker.
+- Once immutable R2 v5 readback and public-download Worker v5 readback verified, create immutable `releases/5/manifest.json`, activate `releases/latest.json` after authorized release gate and read back through both R2 and public updater. Public worker must whitelist SHA/size/source, preserve v1–v4 downloads and range/resume. Latest pointer must not point to unknown content. Never claim device UAT without owner verifying install-over-old, session/cart and update flow.
+- Pure Android release pipeline update does not require backend or DB migration; full distribution warehouse/delivery/AR business APIs remain independent tasks and require schema/migration/reconciliation gates.
+
+## Kích hoạt một lần bản 0.5.0
+
+- Sau khi PR phát hành và PR ảnh POS merge, workflow signed chỉ chạy khi **commit main đã kiểm CI 7/7** có marker `[erp-apk-ux-c-v5]`. PR title không thay thế marker trong commit message; bắt buộc xác minh message trên main và kiểm tra signed workflow run thực tế.
+- Commit kích hoạt chỉ chứa cập nhật tài liệu này, không có code/chứng từ/migration; APK ký chứa toàn bộ mã Android UX-C và bản sửa card đã review. Sau khi signed + staging R2 READBACK PASS, mới làm public delivery và latest manifest; báo UAT máy thật tách biệt.

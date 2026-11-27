@@ -14,6 +14,113 @@ const product='00000000-0000-4000-8000-000000000003';
 const actor='00000000-0000-4000-8000-000000000004';
 
 void main(){
+
+ testWidgets('UX-C canonical warehouse shortcut preselects scope and only holds after user approval',
+  (tester)async{
+   const otherBranch='00000000-0000-4000-8000-000000000011';
+   const otherWarehouse='00000000-0000-4000-8000-000000000012';
+   const order='00000000-0000-4000-8000-000000000013';
+   final writes=<Map<String,dynamic>>[];
+   var detailReads=0;
+   final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+     httpClient:MockClient((req)async{
+       http.Response reply(Map<String,dynamic> data,[int status=200])=>
+         http.Response(jsonEncode(data),status,headers:const {'content-type':'application/json; charset=utf-8'});
+       switch(req.url.path){
+         case '/v1/catalog/branches':
+           return reply({'items':[{'id':otherBranch,'name':'Chi nhánh khác'},
+             {'id':branch,'name':'Chi nhánh chính'}]});
+         case '/v1/catalog/warehouses':
+           expect(req.url.queryParameters['branchId'],branch);
+           return reply({'items':[{'id':otherWarehouse,'name':'Kho khác'},
+             {'id':warehouse,'name':'Kho chính'}]});
+         case '/v1/sales/orders/$order':
+           detailReads++;
+           expect(req.url.queryParameters['branchId'],branch);
+           return reply({'order':{'id':order,'branchId':branch,'status':'CONFIRMED',
+             'versionStatus':'CONFIRMED','version':2,'shipping':{'warehouseId':warehouse},
+             'lines':[{'lineNo':1,'sku':'SP01','productName':'Hàng A'}]}});
+         case '/v1/inventory/reservations':
+           if(req.method=='GET'){
+             expect(req.url.queryParameters['warehouseId'],warehouse);
+             return reply({'items':[]});
+           }
+           expect(req.headers['idempotency-key'],isNotEmpty);
+           writes.add(jsonDecode(req.body) as Map<String,dynamic>);
+           return reply({'id':'hold','state':'ACTIVE','quantityBase':'1','backorderedBase':'0'},201);
+         default:return reply({'error':{'code':'NOT_FOUND'}},404);
+       }
+     }));
+   addTearDown(client.dispose);
+   tester.view.devicePixelRatio=1;
+   tester.view.physicalSize=const Size(1280,900);
+   addTearDown(tester.view.resetPhysicalSize);
+   addTearDown(tester.view.resetDevicePixelRatio);
+   final session=IdentitySession(actorId:actor,token:'synthetic-token',
+     expiresAt:DateTime.now().add(const Duration(hours:1)),grants:[
+       for(final scope in [(otherBranch,otherWarehouse),(branch,otherWarehouse),(branch,warehouse)])
+         for(final permission in ['inventory.read','inventory.reserve'])
+           IdentityGrant(roleId:permission,permission:permission,branchId:scope.$1,warehouseId:scope.$2),
+     ]);
+   await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),home:Scaffold(
+     body:SingleChildScrollView(child:InventoryWorkspace(client:client,session:session,
+       initialOrder:{'id':order,'branchId':branch,'documentNo':'SO-TEST','shipping':{'warehouseId':warehouse}})))));
+   await tester.pumpAndSettle();
+   expect(writes,isEmpty);
+   final link=find.byKey(const ValueKey('inventory-linked-order-hold'));
+   expect(link,findsOneWidget);
+   expect(find.byKey(const ValueKey('inv-branch-$branch')),findsOneWidget);
+   expect(find.byKey(const ValueKey('inv-warehouse-$warehouse')),findsOneWidget);
+   await tester.tap(link);await tester.pumpAndSettle();
+   expect(detailReads,1);
+   expect(find.text('Chọn hàng cần giữ'),findsOneWidget);
+   expect(writes,isEmpty);
+   await tester.tap(find.descendant(of:find.byType(AlertDialog),matching:find.text('Giữ hàng')));
+   await tester.pumpAndSettle();
+   expect(writes.single,{'branchId':branch,'warehouseId':warehouse,'orderId':order,'version':2,'lineNo':1});
+ });
+
+ testWidgets('T3-A direct MANUAL/PICKUP orders have no trip-hold shortcut',(tester)async{
+   final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+     httpClient:MockClient((req)async{
+       Map<String,dynamic> response;
+       switch(req.url.path){
+         case '/v1/catalog/branches':
+           response={'items':[{'id':branch,'name':'Chi nhánh chính'}]};
+         case '/v1/catalog/warehouses':
+           response={'items':[{'id':warehouse,'name':'Kho chính'}]};
+         case '/v1/inventory/reservations':
+           response={'items':[]};
+         default:
+           throw StateError('Unexpected server request: ${req.url.path}');
+       }
+       return http.Response(jsonEncode(response),200,headers:const {
+         'content-type':'application/json; charset=utf-8'});
+     }));
+   addTearDown(client.dispose);
+   tester.view.devicePixelRatio=1;
+   tester.view.physicalSize=const Size(1280,900);
+   addTearDown(tester.view.resetPhysicalSize);
+   addTearDown(tester.view.resetDevicePixelRatio);
+   final session=IdentitySession(actorId:actor,token:'synthetic-token',
+     expiresAt:DateTime.now().add(const Duration(hours:1)),grants:[
+       for(final permission in ['inventory.read','inventory.reserve'])
+         IdentityGrant(roleId:permission,permission:permission,
+           branchId:branch,warehouseId:warehouse),
+     ]);
+   for(final mode in ['MANUAL','PICKUP']){
+     await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
+       home:Scaffold(body:InventoryWorkspace(
+         key:ValueKey('T3A-$mode'),client:client,session:session,initialOrder:{
+           'id':'00000000-0000-4000-8000-000000000013',
+           'branchId':branch,'documentNo':'SO-DIRECT',
+           'shipping':{'warehouseId':warehouse,'deliveryChoice':mode},
+         }))));
+     await tester.pumpAndSettle();
+     expect(find.byKey(const ValueKey('inventory-linked-order-hold')),findsNothing);
+   }
+ });
+
  testWidgets('R3 warehouse displays canonical balances and safely retries a lost ACK',
   (tester)async{
    var onHand=true,attempts=0;

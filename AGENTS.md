@@ -21,3 +21,5 @@
 Quy tắc trên thay thế hướng dẫn lịch sử direct-main và preview. Không thay thế bất biến an toàn dữ liệu trong Master Plan.
 
 - T2 release operator: xem [quy trình Android/PWA/offline](docs/T2_RELEASE_RUNBOOK.md). Workflow ký APK và workflow publish R2 tách riêng, môi trường được bảo vệ; không ghi nhận UAT/CI/owner approval giả. Không đặt latest trước khi tải lại và xác minh chính xác APK. Không đóng #46 khi chưa có bằng chứng máy thật.
+
+- **APK Definition of Done (27/11/2026):** đọc [T2 runbook](docs/T2_RELEASE_RUNBOOK.md#quy-tắc-hoàn-tất-apk-và-bàn-giao-bắt-buộc-27112026) và issue #46 ngay đầu mỗi chat. APK signed/upload R2 chỉ là STAGED; phát hành phải cập nhật `releases/latest.json` sau gate, đọc lại manifest, xác minh updater/OTA và báo chính xác version đang phát hành. Không hỏi lại quy trình hay approval đã có; không báo hoàn tất nếu latest còn cũ. UAT máy thật không được suy diễn từ CI/smoke.

@@ -25,8 +25,8 @@ test("T6 POS posts exactly once: PICKUP, inventory, AR, mixed payment and return
   const target=new URL(source!);target.pathname="/"+dbName;
   db=new Pool({connectionString:target.toString(),max:8,query_timeout:12000});
   db.on("error",()=>{});
-  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).applied.length,23);
-  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).skipped.length,23);
+  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).applied.length,24);
+  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).skipped.length,24);
   const password="Pos-Testing-"+randomUUID();
   const root=await bootstrapInstallation(db,{code:"pos-test",displayName:"POS integration",
    adminLogin:"owner",adminPassword:password});

@@ -11,6 +11,7 @@ import 'erp_number_input.dart';
 import 'erp_tokens.dart';
 import 'identity_client.dart';
 import 'sales_workspace.dart' show erpRetailStepQuantity;
+import 'pos_product_photo_cache.dart';
 
 /// POS is a separate task surface, not a cosmetic mode of the distribution
 /// order editor. Only an acknowledged, atomic server POS checkout can
@@ -18,7 +19,10 @@ import 'sales_workspace.dart' show erpRetailStepQuantity;
 class RetailPosWorkspace extends StatefulWidget {
   final ErpIdentityClient client;
   final IdentitySession session;
-  const RetailPosWorkspace({super.key,required this.client,required this.session});
+  final VoidCallback? onExit;
+  final VoidCallback? onOpenTab;
+  const RetailPosWorkspace({super.key,required this.client,required this.session,
+    this.onExit,this.onOpenTab});
   @override State<RetailPosWorkspace> createState()=>_RetailPosWorkspaceState();
 }
 
@@ -32,16 +36,27 @@ class _RetailLine {
 class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
   final _search=TextEditingController();
   final _searchFocus=FocusNode();
+  PosProductPhotoCache? _photoCache;
+  void _clearPhotoCache(){_photoCache?.dispose();_photoCache=null;}
+  Future<String?> _photoFor(Map<String,dynamic> sku){
+    final branch=_branch,session=widget.session,client=widget.client;
+    final productId=sku['productId'];
+    if(branch==null||productId is! String||!session.grants.any((g)=>
+      g.permission=='catalog.read'&&(g.branchId==null||g.branchId==branch)))return Future.value(null);
+    final cache=_photoCache??=PosProductPhotoCache((id)=>client.productPhotos(session.token,branch,id));
+    return cache.urlFor(productId);
+  }
   Timer? _debounce;
   Future<void> _pendingWrite=Future<void>.value();
-  int _generation=0,_quoteVersion=0,_searchVersion=0;
-  bool _loading=true,_searching=false,_quoting=false,_configOpen=false,_cached=false;
+  int _generation=0,_quoteVersion=0,_searchVersion=0,_catalogVersion=0,_customerChoiceVersion=0;
+  bool _loading=true,_searching=false,_quoting=false,_configOpen=false,_cached=false,_catalogLoading=false;
   String? _branch,_warehouse,_priceList,_walkIn,_error,_quoteError,_total;
-  List<Map<String,dynamic>> _branches=[],_warehouses=[],_priceLists=[],_customers=[],_matches=[];
+  List<Map<String,dynamic>> _branches=[],_warehouses=[],_priceLists=[],_customers=[],_matches=[],_catalog=[];
   List<_RetailLine> _lines=[];
   List<Map<String,dynamic>> _priced=[];
   Map<String,dynamic>? _shift,_pendingCheckout,_lastReceipt;
-  bool _busyAction=false;
+  bool _busyAction=false,_preparingWalkIn=false;
+   String? _canonicalWalkIn;
   String? _posError;
   String _nonce()=>DateTime.now().microsecondsSinceEpoch.toString()+'-'+
     Random.secure().nextInt(0x7fffffff).toRadixString(16);
@@ -55,17 +70,19 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
     super.didUpdateWidget(old);
     if(old.session.token!=widget.session.token||
         old.session.actorId!=widget.session.actorId||
-        old.session.installationId!=widget.session.installationId){
-      ++_generation;++_quoteVersion;++_searchVersion;
+        old.session.installationId!=widget.session.installationId||old.client!=widget.client){
+      _clearPhotoCache();
+      ++_generation;++_quoteVersion;++_searchVersion;++_catalogVersion;
       _debounce?.cancel();_search.clear();
-      _branch=null;_warehouse=null;_priceList=null;_walkIn=null;
-      _lines=[];_matches=[];_priced=[];_total=null;_error=null;
+      _branch=null;_warehouse=null;_priceList=null;_walkIn=null;_canonicalWalkIn=null;_preparingWalkIn=false;++_customerChoiceVersion;
+      _lines=[];_matches=[];_catalog=[];_priced=[];_total=null;_error=null;
       _shift=null;_pendingCheckout=null;_lastReceipt=null;
       unawaited(_loadBranches());
     }
   }
   @override void dispose(){
-    ++_generation;++_quoteVersion;++_searchVersion;
+    ++_generation;++_quoteVersion;++_searchVersion;++_catalogVersion;
+    _clearPhotoCache();
     _debounce?.cancel();_search.dispose();_searchFocus.dispose();
     super.dispose();
   }
@@ -93,11 +110,12 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
     }
   }
   Future<void> _loadBranch(String branch)async{
+    _clearPhotoCache();
     final g=++_generation;
-    ++_quoteVersion;++_searchVersion;_debounce?.cancel();
+    ++_quoteVersion;++_searchVersion;++_catalogVersion;_debounce?.cancel();
     setState((){
-      _branch=branch;_warehouse=null;_priceList=null;_walkIn=null;
-      _lines=[];_priced=[];_matches=[];_total=null;_quoteError=null;
+      _branch=branch;_warehouse=null;_priceList=null;_walkIn=null;_canonicalWalkIn=null;_preparingWalkIn=false;++_customerChoiceVersion;
+      _lines=[];_priced=[];_matches=[];_catalog=[];_total=null;_quoteError=null;
       _loading=true;_error=null;_search.clear();
       _shift=null;_pendingCheckout=null;_lastReceipt=null;
     });
@@ -125,11 +143,13 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
         _warehouses=warehouses;_priceLists=lists;_customers=customers;
         _warehouse=warehouses.isEmpty?null:warehouses.first['id'] as String;
         _priceList=(preferred??lists.firstOrNull)?['id'] as String?;
-        _walkIn=walkIn is Map&&walkIn['active']==true?walkIn['id'] as String?:null;
+        _canonicalWalkIn=walkIn is Map&&walkIn['active']==true?walkIn['id'] as String?:null;
+         _walkIn=_canonicalWalkIn;
         _loading=false;
       });
       await _restoreCart(g);
       await _loadPosState(g);
+      unawaited(_loadCatalog(g));
     }on ErpApiError catch(e){
       if(mounted&&g==_generation)setState((){_loading=false;_error=e.message;});
     }catch(_){
@@ -176,11 +196,33 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
     ++_quoteVersion;
     setState((){
       _warehouse=value;_lines=[];_priced=[];_total=null;
+       // The pending server command remains retryable with the same key.
+       // A warehouse switch must not leave the guest action disabled.
+       _preparingWalkIn=false;
       _matches=[];_quoteError=null;
     });
     await _pendingWrite;
     await _restoreCart(g);
     await _loadPosState(g);
+    unawaited(_loadCatalog(g));
+  }
+  Future<void> _loadCatalog(int generation)async{
+    final branch=_branch,request=++_catalogVersion;
+    if(branch==null)return;
+    if(mounted)setState(()=>_catalogLoading=true);
+    try{
+      // Bounded browsing is display data, not a verified price or stock fact.
+      final result=await widget.client.salesCatalog(widget.session,'r1/skus',branchId:branch);
+      if(!mounted||generation!=_generation||request!=_catalogVersion||branch!=_branch)return;
+      setState((){
+        _catalog=result.items.where((item)=>item['active']!=false).take(100).toList();
+        _catalogLoading=false;
+        _cached=_cached||result.cached;
+      });
+    }catch(_){
+      if(mounted&&generation==_generation&&request==_catalogVersion)
+        setState(()=>_catalogLoading=false);
+    }
   }
   Future<void> _loadPosState(int g)async{
     final scope=_scope,store=widget.client.localStore;
@@ -508,7 +550,48 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
     finally{if(mounted)setState(()=>_busyAction=false);}
   }
 
-  void _changePriceList(String value){
+  Future<void> _chooseWalkIn()async{
+     final branch=_branch,actor=widget.session.actorId;
+     if(branch==null||_loading||!_hasSalesGrant||_preparingWalkIn)return;
+     if(_canonicalWalkIn!=null){
+       setState((){++_customerChoiceVersion;_walkIn=_canonicalWalkIn;});
+       unawaited(_quote());
+       return;
+     }
+     final generation=_generation,choiceVersion=_customerChoiceVersion;
+     const kind='sales.walk-in.prepare';
+     final pending=widget.client.pendingR1(actor,branch,kind);
+     final key=pending?.key??'pos-walk-in-'+_nonce();
+     if(pending==null){
+       widget.client.retainR1(actor,branch,kind,{'branchId':branch},key);
+     }
+     setState((){_preparingWalkIn=true;_posError=null;});
+     try{
+       final customer=await widget.client.prepareSalesWalkIn(widget.session.token,branch,key:key);
+       if(!mounted||generation!=_generation||_branch!=branch||
+          widget.session.actorId!=actor)return;
+       final customerId=customer['id'];
+       if(customerId is! String||customerId.isEmpty)throw const FormatException('WALK_IN_ID');
+       widget.client.clearR1(actor,branch,kind);
+       setState((){
+         _canonicalWalkIn=customerId;
+         if(!_customers.any((x)=>x['id']==customerId))_customers.insert(0,customer);
+         // A later explicit customer choice always wins over the HTTP response.
+         if(choiceVersion==_customerChoiceVersion)_walkIn=customerId;
+       });
+       if(choiceVersion==_customerChoiceVersion)unawaited(_quote());
+     }on ErpApiError catch(e){
+       if(e.status==400||e.status==404||e.status==409)
+         widget.client.clearR1(actor,branch,kind);
+       if(mounted&&generation==_generation)setState(()=>_posError=e.message);
+     }catch(_){
+       if(mounted&&generation==_generation)setState(()=>
+         _posError='Chưa xác minh được khách lẻ. Bấm lại để kiểm tra cùng yêu cầu.');
+     }finally{
+       if(mounted&&generation==_generation)setState(()=>_preparingWalkIn=false);
+     }
+   }
+   void _changePriceList(String value){
     if(value==_priceList)return;
     setState((){_priceList=value;});
     unawaited(_quote());
@@ -559,7 +642,7 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
       setState(()=>_lines[at].quantity=next);
     }
     _queueSave();unawaited(_quote());
-    if(refocus){_search.clear();_matches=[];_searchFocus.requestFocus();}
+    if(refocus){_search.clear();_onSearch('');_searchFocus.requestFocus();}
   }
   void _remove(int i){
     setState(()=>_lines.removeAt(i));
@@ -568,7 +651,9 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
   void _onSearch(String query){
     _debounce?.cancel();
     final term=query.trim();
-    if(term.isEmpty){++_searchVersion;setState(()=>_matches=[]);return;}
+    ++_searchVersion;
+    setState((){_matches=[];_searching=term.isNotEmpty;});
+    if(term.isEmpty)return;
     _debounce=Timer(const Duration(milliseconds:230),()=>unawaited(_findSku(term)));
   }
   Future<List<Map<String,dynamic>>> _findSku(String term)async{
@@ -600,64 +685,13 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
     if(exact.length==1)_editCart(exact.single);
   }
 
-  @override Widget build(BuildContext context){
-    final palette=ErpPalette.of(context),wide=MediaQuery.sizeOf(context).width>=760;
-    final keyboardOpen=MediaQuery.viewInsetsOf(context).bottom>0;
-    final status=_branch==null?'Chọn chi nhánh':
-      _warehouses.where((x)=>x['id']==_warehouse).firstOrNull?['name']?.toString()??'Chọn kho';
-    return SafeArea(top:false,child:Padding(
-      key:const ValueKey('erp-pos-workspace'),
-      padding:EdgeInsets.symmetric(horizontal:wide?24:12,vertical:wide?18:8),
-      child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
-        Row(children:[
-          Icon(Icons.point_of_sale,color:palette.primary,size:24),
-          const SizedBox(width:8),
-          Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-            Text('Bán tại quầy',style:TextStyle(fontSize:19,fontWeight:FontWeight.w800,color:palette.ink)),
-            Text(status,maxLines:1,overflow:TextOverflow.ellipsis,
-              style:TextStyle(color:palette.muted,fontSize:12)),
-          ])),
-          IconButton(key:const ValueKey('pos-settings'),tooltip:'Chọn chi nhánh, kho, bảng giá',
-            onPressed:()=>setState(()=>_configOpen=!_configOpen),
-            icon:Icon(_configOpen?Icons.expand_less:Icons.tune)),
-        ]),
 
-        if(!keyboardOpen)Padding(padding:const EdgeInsets.only(top:5),child:Wrap(
-          crossAxisAlignment:WrapCrossAlignment.center,spacing:8,runSpacing:4,children:[
-            Text(_shift==null?'Chưa mở ca':('Đang bán · '+(_shift?['counterName']?.toString()??'Quầy')),
-              style:TextStyle(fontSize:12,color:palette.muted)),
-            if(_shift==null)TextButton.icon(
-              key:const ValueKey('pos-open-shift'),onPressed:_busyAction?null:_openShift,
-              icon:const Icon(Icons.play_circle_outline),label:const Text('Mở ca bán')),
-            if(_shift!=null)TextButton.icon(
-              key:const ValueKey('pos-close-shift'),
-              onPressed:_busyAction||_pendingCheckout!=null?null:_closeShift,
-              icon:const Icon(Icons.stop_circle_outlined),label:const Text('Đóng ca')),
-            TextButton.icon(key:const ValueKey('pos-history'),
-              onPressed:_busyAction?null:_showHistory,
-              icon:const Icon(Icons.history),label:const Text('Lịch sử quầy')),
-            if(_lastReceipt!=null)TextButton.icon(
-              key:const ValueKey('pos-last-receipt'),
-              onPressed:()=>_showReceipt(_lastReceipt!),icon:const Icon(Icons.receipt_long_outlined),
-              label:const Text('Phiếu vừa bán')),
-            if(_lastReceipt!=null&&_lastReceipt!['returnId']==null&&_shift!=null)TextButton(
-              key:const ValueKey('pos-return-last'),
-              onPressed:_busyAction?null:_returnLastSale,
-              child:const Text('Hoàn hàng')),
-          ])),
-        if(_posError!=null)Text(_posError!,style:TextStyle(color:palette.danger,fontSize:12)),
-        if(_configOpen)Padding(padding:const EdgeInsets.only(top:8),child:Column(children:[
-          _selector('Chi nhánh',_branch,_branches,(value)=>unawaited(_loadBranch(value))),
-          const SizedBox(height:6),
-          _selector('Kho bán',_warehouse,_warehouses,(value)=>unawaited(_setWarehouse(value))),
-          const SizedBox(height:6),
-          _selector('Bảng giá',_priceList,_priceLists,_changePriceList),
-          const SizedBox(height:6),
-          _selector('Khách hàng',_walkIn,_customers,(id){
-            setState(()=>_walkIn=id);unawaited(_quote());
-          }),
-        ])),
-        const SizedBox(height:8),
+  // Desktop: a real two-region register. Search/catalog stays visible while
+  // the right basket preserves quoted totals and a fixed payment footer.
+  Widget _catalogPanel(ErpPalette palette,bool wide,bool keyboardOpen){
+    final typing=_search.text.trim().isNotEmpty;
+    final rows=typing?_matches:(wide?_catalog:<Map<String,dynamic>>[]);
+    return Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
         TextField(key:const ValueKey('pos-sku-search'),controller:_search,focusNode:_searchFocus,
           enabled:!_loading&&_branch!=null&&_hasSalesGrant,
           textInputAction:TextInputAction.search,autocorrect:false,
@@ -670,25 +704,100 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
               _search.text.isNotEmpty?IconButton(tooltip:'Xóa tìm kiếm',
                 onPressed:(){_search.clear();_onSearch('');setState((){});},
                 icon:const Icon(Icons.close)):null)),
-        if(_matches.isNotEmpty)ConstrainedBox(constraints:BoxConstraints(maxHeight:keyboardOpen?140:190),
-          child:ListView.builder(key:const ValueKey('pos-search-results'),shrinkWrap:true,
-            itemCount:_matches.length,itemBuilder:(context,i){
-              final item=_matches[i];
-              return ListTile(key:ValueKey('pos-result-'+item['id'].toString()),
-                dense:true,visualDensity:VisualDensity.compact,
-                leading:const Icon(Icons.add_circle_outline),
-                title:Text(item['productName']?.toString()??item['name']?.toString()??'Sản phẩm',
-                  maxLines:1,overflow:TextOverflow.ellipsis),
-                subtitle:Text([item['code'],item['unitCode'],item['barcode']]
-                    .where((x)=>x!=null&&x.toString().isNotEmpty).join(' · '),
-                    maxLines:1,overflow:TextOverflow.ellipsis),
-                onTap:()=>_editCart(item));
-            })),
+
+      if(wide)Padding(padding:const EdgeInsets.symmetric(vertical:10),
+        child:Text(typing?'Kết quả tìm kiếm':'Danh mục sản phẩm',
+          style:TextStyle(fontWeight:FontWeight.w700,color:palette.ink))),
+      if(wide)Expanded(child:rows.isEmpty
+        ?Center(child:Text(_catalogLoading&&!typing||_searching
+          ?'Đang tìm sản phẩm…':typing?'Không tìm thấy sản phẩm':'Chưa có sản phẩm trong danh mục',
+          style:TextStyle(color:palette.muted)))
+        :LayoutBuilder(builder:(context,size)=>GridView.builder(
+          key:const ValueKey('pos-products-grid'),
+          gridDelegate:const SliverGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent:224,mainAxisExtent:256,crossAxisSpacing:10,mainAxisSpacing:10),
+          itemCount:rows.length,
+          itemBuilder:(context,i){
+            final item=rows[i];
+            final index=_lines.indexWhere((line)=>line.id==item['id']);
+            final quoted=index>=0&&index<_priced.length?_priced[index]:null;
+
+            return Material(color:palette.surface,clipBehavior:Clip.antiAlias,
+              shape:RoundedRectangleBorder(borderRadius:BorderRadius.circular(9),
+                side:BorderSide(color:palette.border)),
+              child:InkWell(
+                key:ValueKey('pos-grid-item-'+item['id'].toString()),
+                onTap:()=>_editCart(item),
+                child:Padding(padding:const EdgeInsets.all(8),child:Column(
+                  crossAxisAlignment:CrossAxisAlignment.start,children:[
+                    // Wide-screen catalog: photos take the main visual space
+                    // instead of a 44x44 avatar inside an oversized card.
+                    Expanded(child:SizedBox(
+                      key:ValueKey('pos-product-image-'+item['id'].toString()),
+                      width:double.infinity,
+                      child:ClipRRect(borderRadius:BorderRadius.circular(7),
+                        child:ColoredBox(color:palette.mint,
+                          child:FutureBuilder<String?>(
+                            future:_photoFor(item),
+                            key:ValueKey('pos-photo-${_generation}-${item['id']}'),
+                            builder:(context,snapshot){
+                              final url=snapshot.data;
+                              final placeholder=Center(child:Icon(
+                                Icons.inventory_2_outlined,size:42,color:palette.muted));
+                              if(snapshot.connectionState!=ConnectionState.done||url==null){
+                                return placeholder;
+                              }
+                              return Image.network(url,fit:BoxFit.contain,
+                                width:double.infinity,height:double.infinity,
+                                errorBuilder:(_,__,___)=>placeholder);
+                            }))))),
+                    const SizedBox(height:7),
+                    Text(item['productName']?.toString()??item['name']?.toString()??'Sản phẩm',
+                      maxLines:2,overflow:TextOverflow.ellipsis,
+                      style:TextStyle(fontWeight:FontWeight.w700,color:palette.ink,
+                        fontSize:13,height:1.15)),
+                    const SizedBox(height:4),
+                    Text([item['code'],item['unitCode']]
+                      .where((v)=>v!=null&&v.toString().isNotEmpty).join(' · '),
+                      maxLines:1,overflow:TextOverflow.ellipsis,
+                      style:TextStyle(color:palette.muted,fontSize:11)),
+                    const SizedBox(height:6),
+                    Row(children:[
+                      Expanded(child:Text(quoted==null?'Giá tra khi thêm':erpVndText(quoted['unitPrice']),
+                        maxLines:1,overflow:TextOverflow.ellipsis,
+                        style:TextStyle(color:quoted==null?palette.muted:palette.primary,
+                          fontWeight:FontWeight.w700,fontSize:12))),
+                      Icon(Icons.add_circle,color:palette.primary,size:23),
+                    ]),
+                  ]))),
+              );
+          }))),
+      if(!wide&&rows.isNotEmpty)ConstrainedBox(
+        constraints:BoxConstraints(maxHeight:keyboardOpen?140:190),
+        child:ListView.builder(key:const ValueKey('pos-search-results'),shrinkWrap:true,
+          itemCount:rows.length,itemBuilder:(context,i){
+            final item=rows[i];
+            return ListTile(key:ValueKey('pos-result-'+item['id'].toString()),
+              dense:true,visualDensity:VisualDensity.compact,
+              leading:const Icon(Icons.add_circle_outline),
+              title:Text(item['productName']?.toString()??item['name']?.toString()??'Sản phẩm',
+                maxLines:1,overflow:TextOverflow.ellipsis),
+              subtitle:Text([item['code'],item['unitCode'],item['barcode']]
+                .where((v)=>v!=null&&v.toString().isNotEmpty).join(' · '),
+                maxLines:1,overflow:TextOverflow.ellipsis),
+              onTap:()=>_editCart(item));
+          })),
         if(_loading)const LinearProgressIndicator(),
         if(_error!=null)Text(_error!,style:TextStyle(color:palette.danger)),
         if(_cached)Text('Dữ liệu danh mục lưu trên máy. Giá cần xác minh trực tuyến.',
           style:TextStyle(color:palette.warning,fontSize:12)),
         const SizedBox(height:8),
+
+    ]);
+  }
+
+  Widget _basketPanel(ErpPalette palette,bool keyboardOpen)=>Column(
+    crossAxisAlignment:CrossAxisAlignment.stretch,children:[
         Row(children:[
           Expanded(child:Text('Giỏ hàng · '+_lines.length.toString()+' mặt hàng',
             style:TextStyle(fontWeight:FontWeight.w700,color:palette.ink))),
@@ -704,36 +813,53 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
             separatorBuilder:(_,__)=>Divider(color:palette.border,height:1),
             itemBuilder:(context,i){
               final line=_lines[i],quoted=i<_priced.length?_priced[i]:null;
-              return Padding(padding:const EdgeInsets.symmetric(vertical:9),
-                child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-                  Text(line.sku['productName']?.toString()??line.sku['code']?.toString()??'Sản phẩm',
-                    maxLines:2,overflow:TextOverflow.ellipsis,
-                    style:TextStyle(color:palette.ink,fontWeight:FontWeight.w600)),
-                  Text((line.sku['code']?.toString()??'')+' · '+
-                    (line.sku['unitCode']?.toString()??''),
-                    style:TextStyle(fontSize:12,color:palette.muted)),
-                  const SizedBox(height:5),
+              return Padding(padding:const EdgeInsets.symmetric(vertical:7),
+                child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+                  Row(children:[
+                    Expanded(child:Text(line.sku['productName']?.toString()??
+                      line.sku['code']?.toString()??'Sản phẩm',
+                      maxLines:2,overflow:TextOverflow.ellipsis,
+                      style:TextStyle(color:palette.ink,fontWeight:FontWeight.w700))),
+                    const SizedBox(width:6),
+                    Text(erpVndText(quoted?['lineTotal']),
+                      style:TextStyle(color:palette.ink,fontWeight:FontWeight.w800)),
+                  ]),
+                  const SizedBox(height:3),
+                  Row(children:[
+                    Expanded(child:Text([line.sku['code'],line.sku['unitCode']]
+                      .where((v)=>v!=null&&v.toString().isNotEmpty).join(' · '),
+                      maxLines:1,overflow:TextOverflow.ellipsis,
+                      style:TextStyle(color:palette.muted,fontSize:11))),
+                    const SizedBox(width:6),
+                    Text(quoted==null?'Chưa xác minh giá':
+                      erpVndText(quoted['unitPrice'])+' / '+(line.sku['unitCode']?.toString()??''),
+                      style:TextStyle(color:palette.muted,fontSize:11)),
+                  ]),
+                  const SizedBox(height:3),
                   Row(children:[
                     IconButton(key:ValueKey('pos-minus-'+i.toString()),
+                      constraints:const BoxConstraints(minWidth:40,minHeight:40),
+                      padding:EdgeInsets.zero,iconSize:21,
                       onPressed:line.quantity=='1'?null:()=>_editCart(line.sku,delta:-1,refocus:false),
                       tooltip:'Giảm số lượng',icon:const Icon(Icons.remove_circle_outline)),
-                    Text(erpNumberText(line.quantity),style:const TextStyle(fontWeight:FontWeight.w700)),
+                    Padding(padding:const EdgeInsets.symmetric(horizontal:3),
+                      child:Text(erpNumberText(line.quantity),
+                        style:TextStyle(color:palette.ink,fontWeight:FontWeight.w800))),
                     IconButton(key:ValueKey('pos-plus-'+i.toString()),
-                      onPressed:()=>_editCart(line.sku,refocus:false),tooltip:'Tăng số lượng',
-                      icon:const Icon(Icons.add_circle_outline)),
-                    IconButton(key:ValueKey('pos-remove-'+i.toString()),
-                      onPressed:()=>_remove(i),tooltip:'Bỏ sản phẩm',icon:const Icon(Icons.delete_outline)),
+                      constraints:const BoxConstraints(minWidth:40,minHeight:40),
+                      padding:EdgeInsets.zero,iconSize:21,
+                      onPressed:()=>_editCart(line.sku,refocus:false),
+                      tooltip:'Tăng số lượng',icon:const Icon(Icons.add_circle_outline)),
                     const Spacer(),
-                    Flexible(child:Column(crossAxisAlignment:CrossAxisAlignment.end,children:[
-                      Text(erpVndText(quoted?['lineTotal']),textAlign:TextAlign.end,
-                        style:TextStyle(fontWeight:FontWeight.w700,color:palette.ink)),
-                      Text(quoted==null?'Chưa xác minh giá':
-                        erpVndText(quoted['unitPrice'])+' / '+(line.sku['unitCode']?.toString()??''),
-                        textAlign:TextAlign.end,style:TextStyle(fontSize:11,color:palette.muted)),
-                    ])),
+                    IconButton(key:ValueKey('pos-remove-'+i.toString()),
+                      constraints:const BoxConstraints(minWidth:40,minHeight:40),
+                      padding:EdgeInsets.zero,iconSize:21,
+                      onPressed:()=>_remove(i),
+                      tooltip:'Bỏ sản phẩm',icon:const Icon(Icons.delete_outline)),
                   ]),
                 ]));
             })),
+
         if(_quoting)const LinearProgressIndicator(),
         if(_quoteError!=null)Text(_quoteError!,style:TextStyle(color:palette.danger,fontSize:12)),
         if(!keyboardOpen)Divider(color:palette.border),
@@ -769,8 +895,105 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
           :'Chỉ xác nhận đã bán khi máy chủ ghi nhận đủ xuất kho và thanh toán.',
           key:const ValueKey('pos-no-fake-settlement'),
           textAlign:TextAlign.center,style:TextStyle(fontSize:11,color:palette.muted)),
-      ]),
-    ));
+
+    ]);
+
+  @override Widget build(BuildContext context){
+    final palette=ErpPalette.of(context);
+    return LayoutBuilder(builder:(context,bounds){
+      final wide=bounds.maxWidth>=700&&!erpAndroidUpdateSupported;
+      final keyboardOpen=MediaQuery.viewInsetsOf(context).bottom>0;
+      final status=_branch==null?'Chọn chi nhánh':
+        _warehouses.where((x)=>x['id']==_warehouse).firstOrNull?['name']?.toString()??'Chọn kho';
+      return SafeArea(top:true,child:Padding(
+        key:const ValueKey('erp-pos-workspace'),
+        padding:EdgeInsets.symmetric(horizontal:wide?16:12,vertical:wide?12:8),
+        child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+        Row(children:[
+          if(widget.onExit!=null)IconButton(
+            key:const ValueKey('pos-fullscreen-back'),tooltip:'Về ERP',
+            onPressed:widget.onExit,icon:const Icon(Icons.arrow_back)),
+          Icon(Icons.point_of_sale,color:palette.primary,size:24),
+          const SizedBox(width:8),
+          Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+            Text('Bán tại quầy',style:TextStyle(fontSize:19,fontWeight:FontWeight.w800,color:palette.ink)),
+            Text(status,maxLines:1,overflow:TextOverflow.ellipsis,
+              style:TextStyle(color:palette.muted,fontSize:12)),
+          ])),
+          if(widget.onOpenTab!=null&&wide)TextButton.icon(
+            key:const ValueKey('pos-open-tab'),onPressed:widget.onOpenTab,
+            icon:const Icon(Icons.open_in_new,size:18),label:const Text('Mở quầy bán')),
+          IconButton(key:const ValueKey('pos-settings'),tooltip:'Chọn chi nhánh, kho, bảng giá',
+            onPressed:()=>setState(()=>_configOpen=!_configOpen),
+            icon:Icon(_configOpen?Icons.expand_less:Icons.tune)),
+        ]),
+
+        if(!keyboardOpen)Padding(padding:const EdgeInsets.only(top:5),child:Wrap(
+          crossAxisAlignment:WrapCrossAlignment.center,spacing:8,runSpacing:4,children:[
+            Text(_shift==null?'Chưa mở ca':('Đang bán · '+(_shift?['counterName']?.toString()??'Quầy')),
+              style:TextStyle(fontSize:12,color:palette.muted)),
+            if(_shift==null)TextButton.icon(
+              key:const ValueKey('pos-open-shift'),onPressed:_busyAction?null:_openShift,
+              icon:const Icon(Icons.play_circle_outline),label:const Text('Mở ca bán')),
+            if(_shift!=null)TextButton.icon(
+              key:const ValueKey('pos-close-shift'),
+              onPressed:_busyAction||_pendingCheckout!=null?null:_closeShift,
+              icon:const Icon(Icons.stop_circle_outlined),label:const Text('Đóng ca')),
+            TextButton.icon(key:const ValueKey('pos-history'),
+              onPressed:_busyAction?null:_showHistory,
+              icon:const Icon(Icons.history),label:const Text('Lịch sử quầy')),
+            if(_lastReceipt!=null)TextButton.icon(
+              key:const ValueKey('pos-last-receipt'),
+              onPressed:()=>_showReceipt(_lastReceipt!),icon:const Icon(Icons.receipt_long_outlined),
+              label:const Text('Phiếu vừa bán')),
+            if(_lastReceipt!=null&&_lastReceipt!['returnId']==null&&_shift!=null)TextButton(
+              key:const ValueKey('pos-return-last'),
+              onPressed:_busyAction?null:_returnLastSale,
+              child:const Text('Hoàn hàng')),
+          ])),
+        if(_posError!=null)Text(_posError!,style:TextStyle(color:palette.danger,fontSize:12)),
+        if(_configOpen)Padding(padding:const EdgeInsets.only(top:8),
+          child:LayoutBuilder(builder:(context,size){
+            final compact=size.maxWidth<700;
+            final fieldWidth=compact?size.maxWidth:(size.maxWidth-24)/4;
+            return Wrap(spacing:8,runSpacing:6,children:[
+              SizedBox(width:fieldWidth,child:_selector('Chi nhánh',_branch,_branches,
+                (value)=>unawaited(_loadBranch(value)))),
+              SizedBox(width:fieldWidth,child:_selector('Kho bán',_warehouse,_warehouses,
+                (value)=>unawaited(_setWarehouse(value)))),
+              SizedBox(width:fieldWidth,child:_selector('Bảng giá',_priceList,_priceLists,_changePriceList)),
+              SizedBox(width:fieldWidth,child:_selector('Khách hàng',_walkIn,_customers,(id){
+                setState((){++_customerChoiceVersion;_walkIn=id;});unawaited(_quote());
+              })),
+            ]);
+          })),
+        const SizedBox(height:8),
+        Padding(padding:const EdgeInsets.only(top:4),child:Wrap(spacing:8,runSpacing:4,crossAxisAlignment:WrapCrossAlignment.center,children:[
+           TextButton.icon(key:const ValueKey('pos-walk-in-quick'),
+             onPressed:_branch==null||_loading||_preparingWalkIn||!_hasSalesGrant
+               ?null:()=>unawaited(_chooseWalkIn()),
+             icon:const Icon(Icons.person_outline,size:18),
+             label:Text(_preparingWalkIn?'Đang chuẩn bị…':'Khách lẻ')),
+           if(_canonicalWalkIn!=null&&_walkIn==_canonicalWalkIn)
+             Text('Đang chọn khách lẻ',style:TextStyle(color:palette.muted,fontSize:12)),
+         ])),
+         const SizedBox(height:8),
+ 
+          Expanded(child:wide
+            ?Row(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+                Expanded(flex:6,child:_catalogPanel(palette,true,keyboardOpen)),
+                const SizedBox(width:12),
+                VerticalDivider(width:1,color:palette.border),
+                const SizedBox(width:12),
+                Expanded(flex:4,child:_basketPanel(palette,keyboardOpen)),
+              ])
+            :Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+                _catalogPanel(palette,false,keyboardOpen),
+                Expanded(child:_basketPanel(palette,keyboardOpen)),
+              ])),
+        ]),
+      ));
+    });
   }
 
   Widget _selector(String label,String? value,List<Map<String,dynamic>> rows,

@@ -28,8 +28,8 @@ test("B1: real PostgreSQL order lifecycle, immutable versions, RBAC, replay and 
     pool=new Pool({connectionString:u.toString(),max:8,query_timeout:12000});
     pool.on("error",()=>{});
     const installed=await applyMigrations(pool,resolve(process.cwd(),"db/migrations"));
-    assert.equal(installed.applied.length,23);
-    assert.equal((await applyMigrations(pool,resolve(process.cwd(),"db/migrations"))).skipped.length,23);
+    assert.equal(installed.applied.length,24);
+    assert.equal((await applyMigrations(pool,resolve(process.cwd(),"db/migrations"))).skipped.length,24);
     const password="Sales-Testing-"+randomUUID();
     const root=await bootstrapInstallation(pool,{
       code:"sales-test",displayName:"Order integration test",
@@ -253,11 +253,50 @@ test("B1: real PostgreSQL order lifecycle, immutable versions, RBAC, replay and 
       shipping:{...shipping,requestedDeliveryDate:"2026-02-30"}},0,"t1-baddate-"+randomUUID())).status,400);
     assert.equal((await write("/v1/sales/orders/"+t1id+"/confirm",{branchId:b},0,"t1-confirm-"+randomUUID())).status,200);
     assert.equal((await readT1()).body.order.paymentStatus,"NOT_DUE");
+    // T3-A: MANUAL is a direct-issue lane, never a trip stock hold.
+    const reserveInput={branchId:b,warehouseId:root.warehouseId,
+      orderId:t1id,version:1,lineNo:1};
+    const manualHold=await write("/v1/inventory/reservations",reserveInput,0,
+      "t3a-manual-reserve-"+randomUUID());
+    assert.equal(manualHold.status,409,JSON.stringify(manualHold.body));
+    assert.equal(manualHold.body.error.code,"ORDER_DIRECT_ISSUE_ONLY");
+    assert.equal((await pool.query(
+      "SELECT count(*)::integer AS n FROM inventory_reservation WHERE installation_id=$1 AND order_id=$2",
+      [root.installationId,t1id])).rows[0]!.n,0);
+    const tripInput={...t1Payload,shipping:{...shipping,deliveryChoice:"TRIP",
+      rememberDeliveryChoice:false}};
+    const tripOrder=await write("/v1/sales/orders",tripInput,0,
+      "t3a-trip-create-"+randomUUID());
+    assert.equal(tripOrder.status,201,JSON.stringify(tripOrder.body));
+    const tripConfirm=await write("/v1/sales/orders/"+tripOrder.body.id+"/confirm",
+      {branchId:b},0,"t3a-trip-confirm-"+randomUUID());
+    assert.equal(tripConfirm.status,200,JSON.stringify(tripConfirm.body));
+    const tripHold=await write("/v1/inventory/reservations",
+      {...reserveInput,orderId:tripOrder.body.id},0,"t3a-trip-reserve-"+randomUUID());
+    assert.equal(tripHold.status,201,JSON.stringify(tripHold.body));
+    assert.equal(tripHold.body.quantityBase,"0.000000");
+    assert.equal(tripHold.body.backorderedBase,"2.000000");
+    const tripDetail=await call("/v1/sales/orders/"+tripOrder.body.id+
+      "?branchId="+b,"GET",undefined,token);
+    assert.equal(tripDetail.body.order.shipping.deliveryChoice,"TRIP");
     await assert.rejects(pool.query("UPDATE sales_order_version_context SET delivery_choice='TRIP' WHERE installation_id=$1 AND order_id=$2",
       [root.installationId,t1id]),/immutable/i);
     const t1Amend=await write("/v1/sales/orders/"+t1id+"/amend",{branchId:b,reason:"Sửa giao hàng"},1,"t1-amend-"+randomUUID());
     assert.equal(t1Amend.status,201,JSON.stringify(t1Amend.body));
     assert.equal((await readT1()).body.order.shipping.deliveryChoice,"MANUAL");
+    // Mode can change only by creating and editing a new draft version.
+    const changedLane=await write("/v1/sales/orders/"+t1id,{
+      ...t1Payload,shipping:{...shipping,deliveryChoice:"TRIP",
+        rememberDeliveryChoice:false}},2,"t3a-mode-edit-"+randomUUID(),"PATCH");
+    assert.equal(changedLane.status,200,JSON.stringify(changedLane.body));
+    assert.equal((await readT1()).body.order.shipping.deliveryChoice,"TRIP");
+    const changedConfirm=await write("/v1/sales/orders/"+t1id+"/confirm",
+      {branchId:b},3,"t3a-mode-confirm-"+randomUUID());
+    assert.equal(changedConfirm.status,200,JSON.stringify(changedConfirm.body));
+    assert.equal((await readT1()).body.order.shipping.deliveryChoice,"TRIP");
+    await assert.rejects(pool.query(
+      "UPDATE sales_order_version_context SET delivery_choice='MANUAL' WHERE installation_id=$1 AND order_id=$2 AND version_no=2",
+      [root.installationId,t1id]),/immutable/i);
     const walk=await Promise.all([1,2].map(()=>write("/v1/sales/walk-in",{branchId:b},0,"t1-walk-"+randomUUID())));
     assert.equal(walk[0]!.status,200,JSON.stringify(walk[0]!.body));
     assert.equal(walk[1]!.status,200,JSON.stringify(walk[1]!.body));
@@ -277,6 +316,10 @@ test("B1: real PostgreSQL order lifecycle, immutable versions, RBAC, replay and 
     assert.equal(walkDetail.body.order.paymentStatus,"NOT_DUE");
     assert.equal((await call("/v1/sales/last-purchase?branchId="+b+"&customerId="+walkId+"&sellSkuId="+sellSkuId,"GET",undefined,token)).body.price,null);
     assert.equal((await write("/v1/sales/orders/"+walkOrder.body.id+"/confirm",{branchId:b},0,"t1-walk-confirm-"+randomUUID())).status,200);
+    const pickupHold=await write("/v1/inventory/reservations",
+      {...reserveInput,orderId:walkOrder.body.id},0,"t3a-pickup-hold-"+randomUUID());
+    assert.equal(pickupHold.status,409,JSON.stringify(pickupHold.body));
+    assert.equal(pickupHold.body.error.code,"ORDER_DIRECT_ISSUE_ONLY");
     assert.equal((await call("/v1/sales/last-purchase?branchId="+b+"&customerId="+walkId+"&sellSkuId="+sellSkuId,"GET",undefined,token)).body.price,null);
     assert.equal((await call("/v1/sales/entry-settings?branchId="+b,"GET",undefined,token)).body.settings.deliveryChoice,"MANUAL");
     // T1 document discount uses the same server quote and save allocation;

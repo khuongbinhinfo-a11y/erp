@@ -31,10 +31,11 @@ class MainActivity : FlutterActivity() {
         // paper was printed unless the operator confirms at the printer.
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "erp/pos_receipt")
             .setMethodCallHandler { call, result ->
-                if (call.method != "printReceipt") {
+                if (call.method !in setOf("printReceipt", "printSalesOrder")) {
                     result.notImplemented()
                     return@setMethodCallHandler
                 }
+                val salesOrder = call.method == "printSalesOrder"
                 val html = call.argument<String>("html")
                 if (html == null || html.length !in 100..64000 ||
                     !html.startsWith("<!doctype html>") || html.contains("<script", true)) {
@@ -59,9 +60,10 @@ class MainActivity : FlutterActivity() {
                             try {
                                 if (isFinishing || isDestroyed) throw IllegalStateException()
                                 val manager = getSystemService(Context.PRINT_SERVICE) as PrintManager
-                                manager.print("ERP - Phiếu bán lẻ", page.createPrintDocumentAdapter("Phiếu bán lẻ"),
+                                val title = if (salesOrder) "Đơn bán hàng" else "Phiếu bán lẻ"
+                                manager.print("ERP - $title", page.createPrintDocumentAdapter(title),
                                     PrintAttributes.Builder()
-                                        .setMediaSize(PrintAttributes.MediaSize.ISO_A5).build())
+                                        .setMediaSize(if (salesOrder) PrintAttributes.MediaSize.ISO_A4 else PrintAttributes.MediaSize.ISO_A5).build())
                                 result.success(true)
                             } catch (_: Exception) {
                                 result.error("PRINT_UNAVAILABLE", "Không thể mở cửa sổ in.", null)

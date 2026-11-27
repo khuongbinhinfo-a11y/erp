@@ -2,6 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:file_picker/file_picker.dart';
 import 'sales_print_document.dart';
+import 'sales_order_view.dart';
+import 'sales_print_web_stub.dart' if (dart.library.js_interop) 'sales_print_web.dart';
+import 'app_update.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'erp_tokens.dart';
@@ -10,6 +13,17 @@ import 'erp_number_input.dart';
 import 'erp_toast.dart';
 import 'identity_client.dart';
 import '../local/local_store.dart';
+
+/// Shipping addresses on existing orders are immutable snapshots until the
+/// operator explicitly selects a different directory address.
+String erpSalesLocationLabel(Map<String,dynamic> location,
+    {String? snapshot,bool selected=false}){
+  final current=(location['address']??'').toString().trim();
+  final saved=snapshot?.trim()??'';
+  if(selected&&saved.isNotEmpty&&current!=saved)return 'Địa chỉ trên đơn · $saved';
+  final name=(location['name']??'').toString().trim();
+  return name.isEmpty||name=='Địa chỉ giao hàng'?current:'$name · $current';
+}
 
 /// Overlay an explicitly rejected or never-submitted edit onto the fresh
 /// canonical order. No old quote signatures are reused.
@@ -79,10 +93,11 @@ class SalesWorkspace extends StatefulWidget {
   final ValueChanged<String>? onOpenCatalog;
   final ValueChanged<bool>? onNavigationLockChanged;
   final VoidCallback? onOpenOrders;
+  final ValueChanged<Map<String,dynamic>>? onOpenWarehouse;
   final bool retailMode;
   const SalesWorkspace({super.key,required this.client,required this.session,
     this.onOpenCatalog,this.onNavigationLockChanged,
-    this.retailMode=false,this.onOpenOrders});
+    this.retailMode=false,this.onOpenOrders,this.onOpenWarehouse});
   @override State<SalesWorkspace> createState()=>_SalesWorkspaceState();
 }
 class _OrderLine {
@@ -108,7 +123,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   bool loading=true,saving=false;
   int generation=0,sequence=0;
   final search=TextEditingController();
+  String _orderFilter='all';
   final Map<String,String> retryKeys={};
+  final Map<String,String?> _retryReasons={};
   // Keep the original canonical body AND key together until the server ACKs.
   // A lost response must be replayed with exactly the same request, never a new form.
   Map<String,dynamic>? pendingCreate,pendingConfirm,pendingUpdate;
@@ -151,6 +168,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   }
   bool get _navigationLocked=>saving||localRecoveryBusy||
     (!localRecoveryBlocked&&(pendingCreate!=null||pendingUpdate!=null||pendingConfirm!=null));
+  // Unresolved local commands may permit navigation, but never a new lifecycle mutation.
+  bool get _mutationBlocked=>_navigationLocked||localRecoveryBlocked||
+    pendingCreate!=null||pendingUpdate!=null||pendingConfirm!=null;
   @override void setState(VoidCallback fn){
     super.setState(fn);
     final locked=_navigationLocked;
@@ -236,7 +256,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   @override void didUpdateWidget(covariant SalesWorkspace old){
     super.didUpdateWidget(old);
     if(old.session.token!=widget.session.token||old.client!=widget.client){
-      generation++;branches=[];orders=[];branchId=null;retryKeys.clear();
+      generation++;branches=[];orders=[];branchId=null;retryKeys.clear();_retryReasons.clear();_orderFilter='all';
       pendingCreate=null;pendingCreateKey=null;pendingConfirm=null;
       pendingConfirmKey=null;pendingUpdate=null;pendingUpdateKey=null;
       pendingCreateAutoConfirm=false;localRecoveryBusy=false;localRecoveryBlocked=false;pendingNeedsReceipt=false;
@@ -379,7 +399,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     var walkInName=(savedShipping['walkInName']??'').toString();
     var walkInPhone=(savedShipping['walkInPhone']??'').toString();
     var rememberDelivery=savedShipping['rememberDeliveryChoice']==true,walkInBusy=false,locationBusy=false;
-    int locationGeneration=0,addressGeneration=0,addressEditGeneration=0,customerChoiceGeneration=0;
+    int locationGeneration=0,addressGeneration=0,customerChoiceGeneration=0;
     List<Map<String,dynamic>> locations=[];
     Map<String,dynamic>? walkInCustomer=entrySettings['walkInCustomer'] is Map
       ?Map<String,dynamic>.from(entrySettings['walkInCustomer'] as Map):null;
@@ -528,6 +548,10 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         erpNumberCanonical(x.taxRate.text),x.discountMode,x.taxMode,x.discountEdited,x.taxEdited].join(':')),
     ].join('|');
     retailExtras=deliveryChoice!='PICKUP'||channel!=null||collectionPolicy!='COLLECT_ON_DELIVERY';
+    // Saved non-default settings remain visible on edit; new orders stay compact.
+    bool orderExtras=channel!=null||deliveryDate.isNotEmpty||rememberDelivery||
+      walkInName.isNotEmpty||walkInPhone.isNotEmpty||note.text.trim().isNotEmpty||
+      overrideReason.isNotEmpty||documentDiscountMode!='NONE';
     final originalStamp=stamp(),originalNote=note.text.trim();
     void invalidate(StateSetter refresh){
       quoteDebounce?.cancel();
@@ -641,8 +665,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     String shippingStamp()=>[warehouseId,deliveryChoice,collectionPolicy,customerMode,
       locationId,deliveryAddress,deliveryDate,walkInName,walkInPhone,rememberDelivery].join('|');
     final originalShippingStamp=shippingStamp();
-    Future<void> loadLocations(BuildContext ctx,StateSetter refresh,{bool selectDefault=false})async{
-      final run=++locationGeneration,id=customer,addressRun=addressGeneration,editRun=addressEditGeneration;
+    Future<void> loadLocations(BuildContext ctx,StateSetter refresh)async{
+      final run=++locationGeneration,id=customer;
       if(!modern||id==null||customerMode=='WALK_IN')return;
       refresh(()=>locationBusy=true);
       try{
@@ -652,14 +676,6 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           locations=found.where((x)=>x['active']!=false).toList();
           if(locationId!=null&&!locations.any((x)=>x['id']==locationId)){
             locations.add({'id':locationId,'name':'Địa chỉ đã lưu','address':deliveryAddress});
-          }
-          if(selectDefault&&addressRun==addressGeneration&&editRun==addressEditGeneration&&locationId==null){
-            final preferred=locations.where((x)=>x['isDefault']==true).firstOrNull;
-            if(preferred!=null){
-              locationId=preferred['id'] as String;
-              deliveryAddress=(preferred['address']??'').toString();
-              addressGeneration++;
-            }
           }
           locationBusy=false;
         });
@@ -961,7 +977,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       customerSearch.clear();customerMatches=[];
       customerSearchGeneration++;
       customerPricingChanged(ctx,refresh);
-      if(modern)loadLocations(ctx,refresh,selectDefault:true);
+      if(modern)loadLocations(ctx,refresh);
       skuFocus.requestFocus();
     }
     Future<void> chooseWalkIn(BuildContext ctx,StateSetter refresh)async{
@@ -1279,7 +1295,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
               if(ctx.mounted){
                 scheduleQuote(ctx,refresh);
                 if(modern&&customer!=null&&customerMode!='WALK_IN'){
-                  loadLocations(ctx,refresh,selectDefault:savedShipping.isEmpty);
+                  loadLocations(ctx,refresh);
                 }
               }
             });
@@ -1345,7 +1361,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         color:ErpPalette.of(ctx).ink,fontWeight:FontWeight.w700))),
                     Wrap(
                       key:const ValueKey('sales-order-context'),
-                      spacing:12,runSpacing:12,children:[
+                      spacing:8,runSpacing:6,children:[
                         if(stockWarehouses.isNotEmpty)SizedBox(width:narrow?((width-40)/2).clamp(108.0,240.0).toDouble():200,child:DropdownButtonFormField<String>(
                         key:ValueKey('sales-stock-warehouse-'+warehouseId.toString()),
                         initialValue:warehouseId,isExpanded:true,menuMaxHeight:240,
@@ -1382,7 +1398,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           if(v==null){customerPricingChanged(ctx,refresh);return;}
                           listResolveGeneration++;listManuallySelected=true;
                           list=v;pricingChanged(ctx,refresh);})),
-                        if(!retailMobile||retailExtras)SizedBox(width:narrow?((width-40)/2).clamp(108.0,240.0).toDouble():200,child:DropdownButtonFormField<String>(
+                        if((retailMobile?retailExtras:orderExtras))SizedBox(width:narrow?((width-40)/2).clamp(108.0,240.0).toDouble():200,child:DropdownButtonFormField<String>(
                         key:ValueKey('sales-channel-'+channel.toString()),
                         initialValue:channels.any((x)=>x['id']==channel)?channel:null,
                         isExpanded:true,menuMaxHeight:240,decoration:const InputDecoration(labelText:'Kênh bán',isDense:true,contentPadding:EdgeInsets.symmetric(horizontal:10,vertical:8),border:UnderlineInputBorder()),
@@ -1405,13 +1421,20 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                             .map((e)=>DropdownMenuItem(value:e.key,child:Text(e.value,overflow:TextOverflow.ellipsis))).toList(),
                           onChanged:(v){if(v!=null)refresh(()=>collectionPolicy=v);})),
                       ]),
+                    if(!retailMobile)Align(alignment:Alignment.centerLeft,
+                      child:TextButton.icon(
+                        key:const ValueKey('sales-order-more-settings'),
+                        onPressed:()=>refresh(()=>orderExtras=!orderExtras),
+                        icon:Icon(orderExtras?Icons.expand_less:Icons.tune,size:18),
+                        label:Text(orderExtras?'Thu gọn tùy chọn':
+                          'Thêm tùy chọn · Kênh bán · Ngày giao · Ghi chú'))),
                     if(retailMobile)TextButton.icon(
                       key:const ValueKey('sales-retail-more-settings'),
                       onPressed:()=>refresh(()=>retailExtras=!retailExtras),
                       icon:Icon(retailExtras?Icons.expand_less:Icons.tune),
                       label:Text(retailExtras?'Thu gọn tùy chọn':
                         'Kênh bán · Giao nhận · Thu tiền')),
-                    SizedBox(height:retailMobile?6:18),
+                    SizedBox(height:retailMobile?6:9),
                     Align(alignment:Alignment.centerLeft,child:ConstrainedBox(
                       constraints:const BoxConstraints(maxWidth:760),
                       child:Row(children:[
@@ -1581,7 +1604,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         OutlinedButton.icon(key:const ValueKey('sales-walk-in'),
                           onPressed:walkInBusy||quickCustomerBusy?null:()=>chooseWalkIn(ctx,refresh),
                           icon:const Icon(Icons.person_outline),label:Text(walkInBusy?'Đang kiểm tra':'Khách lẻ')),
-                        if(!retailMobile||retailExtras)OutlinedButton.icon(key:const ValueKey('sales-delivery-date'),
+                        if((retailMobile?retailExtras:orderExtras))OutlinedButton.icon(key:const ValueKey('sales-delivery-date'),
                           onPressed:()async{
                             final now=DateTime.now(),selected=DateTime.tryParse(deliveryDate)??now;
                             final date=await showDatePicker(context:ctx,
@@ -1589,13 +1612,13 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                             if(date!=null&&ctx.mounted)refresh(()=>deliveryDate=date.toIso8601String().substring(0,10));
                           },icon:const Icon(Icons.calendar_today_outlined,size:16),
                           label:Text(deliveryDate.isEmpty?'Ngày giao dự kiến':deliveryDate)),
-                        if((!retailMobile||retailExtras)&&deliveryDate.isNotEmpty)IconButton(tooltip:'Bỏ ngày giao',
+                        if((retailMobile?retailExtras:orderExtras)&&deliveryDate.isNotEmpty)IconButton(tooltip:'Bỏ ngày giao',
                           onPressed:()=>refresh(()=>deliveryDate=''),icon:const Icon(Icons.close,size:16)),
-                        if((!retailMobile||retailExtras)&&(order==null||copying))
+                        if((retailMobile?retailExtras:orderExtras)&&(order==null||copying))
                           FilterChip(label:const Text('Nhớ hình thức giao'),selected:rememberDelivery,
                             onSelected:(v)=>refresh(()=>rememberDelivery=v)),
                       ]),
-                      if(customerMode=='WALK_IN'&&(!retailMobile||retailExtras))Wrap(spacing:8,runSpacing:6,children:[
+                      if(customerMode=='WALK_IN'&&(retailMobile?retailExtras:orderExtras))Wrap(spacing:8,runSpacing:6,children:[
                         SizedBox(width:205,child:TextFormField(key:const ValueKey('sales-walk-in-name'),
                           initialValue:walkInName,decoration:const InputDecoration(labelText:'Tên khách (không bắt buộc)',isDense:true),
                           onChanged:(v)=>walkInName=v)),
@@ -1605,24 +1628,68 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           onChanged:(v)=>walkInPhone=v)),
                       ]),
                       if(customerMode!='WALK_IN'&&deliveryChoice!='PICKUP')...[
-                        if(locationBusy)const LinearProgressIndicator(minHeight:2),
-                        if(locations.isNotEmpty)DropdownButtonFormField<String>(
-                          key:ValueKey('sales-location-$customer-$locationId'),
-                          initialValue:locations.any((x)=>x['id']==locationId)?locationId:null,
-                          isExpanded:true,decoration:const InputDecoration(labelText:'Địa điểm giao hàng',isDense:true),
-                          items:[const DropdownMenuItem<String>(value:null,child:Text('Nhập địa chỉ')),
-                            ...locations.map((x)=>DropdownMenuItem<String>(value:x['id'] as String,
-                              child:Text((x['name']??x['address']??'').toString(),overflow:TextOverflow.ellipsis)))],
-                          onChanged:(v)=>refresh((){
-                            locationId=v;addressGeneration++;
-                            if(v!=null)deliveryAddress=(locations.firstWhere((x)=>x['id']==v)['address']??'').toString();
-                          })),
-                        TextFormField(key:ValueKey('sales-delivery-address-$customer-$addressGeneration'),
-                          initialValue:deliveryAddress,readOnly:locationId!=null,
-                          decoration:const InputDecoration(labelText:'Địa chỉ giao',isDense:true),
-                          onChanged:(v){deliveryAddress=v;addressEditGeneration++;}),
-                      ],
-                      if(!retailMobile||retailExtras)Text('Hạn thanh toán: ${customerMode=='WALK_IN'?0:customers.where((x)=>x['id']==customer).firstOrNull?['paymentTermsDays']??savedShipping['paymentTermsDays']??0} ngày · Chưa ghi nhận thu tiền',
+                         if(locationBusy)const LinearProgressIndicator(minHeight:2),
+                         Builder(builder:(_){
+                           final primary=(customers.where((x)=>x['id']==customer).firstOrNull?['deliveryAddress']??'').toString().trim();
+                           final selectedLocation=locations.where((x)=>x['id']==locationId).firstOrNull;
+                           final currentSelectedAddress=(selectedLocation?['address']??'').toString().trim();
+                           final historicalMismatch=order!=null&&locationId!=null&&selectedLocation!=null&&
+                             deliveryAddress.trim().isNotEmpty&&currentSelectedAddress!=deliveryAddress.trim();
+                           return Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+                             if(primary.isNotEmpty||locations.isNotEmpty)
+                               DropdownButtonFormField<String>(
+                                 key:ValueKey('sales-location-$customer-$locationId-$addressGeneration'),
+                                 initialValue:locations.any((x)=>x['id']==locationId)
+                                   ?locationId:(primary.isNotEmpty&&deliveryAddress==primary?'__primary__':'__manual__'),
+                                 isExpanded:true,menuMaxHeight:260,
+                                 decoration:const InputDecoration(labelText:'Chọn địa chỉ giao hàng',isDense:true),
+                                 selectedItemBuilder:(context)=>[
+                                   if(primary.isNotEmpty)Text('Địa chỉ chính · $primary',overflow:TextOverflow.ellipsis),
+                                   const Text('Nhập địa chỉ khác',overflow:TextOverflow.ellipsis),
+                                   ...locations.map((x)=>Text(erpSalesLocationLabel(x,
+                                     snapshot:historicalMismatch&&x['id']==locationId?deliveryAddress:null,
+                                     selected:historicalMismatch&&x['id']==locationId),
+                                     overflow:TextOverflow.ellipsis)),
+                                 ],
+                                 items:[
+                                   if(primary.isNotEmpty)DropdownMenuItem<String>(
+                                     value:'__primary__',
+                                     child:Text('Địa chỉ chính · $primary',overflow:TextOverflow.ellipsis)),
+                                   const DropdownMenuItem<String>(value:'__manual__',
+                                     child:Text('Nhập địa chỉ khác')),
+                                   ...locations.map((x)=>DropdownMenuItem<String>(
+                                     value:x['id'] as String,
+                                     child:Text(erpSalesLocationLabel(x),overflow:TextOverflow.ellipsis))),
+                                 ],
+                                 onChanged:(v)=>refresh((){
+                                   if(v=='__primary__'){
+                                     locationId=null;deliveryAddress=primary;
+                                   }else if(v=='__manual__'){
+                                     locationId=null;deliveryAddress='';
+                                   }else if(v!=null){
+                                     locationId=v;
+                                     deliveryAddress=(locations.firstWhere((x)=>x['id']==v)['address']??'').toString();
+                                   }
+                                   addressGeneration++;
+                                 })),
+                             if(historicalMismatch)Padding(
+                               key:ValueKey('sales-address-snapshot-$customer'),
+                               padding:const EdgeInsets.only(top:5,bottom:4),
+                               child:Text(
+                                 'Đơn đang dùng: $deliveryAddress. Danh mục đã đổi thành: $currentSelectedAddress. '
+                                 'Chọn lại địa chỉ để cập nhật, hoặc giữ nguyên địa chỉ trên đơn.',
+                                 style:TextStyle(fontSize:12,color:ErpPalette.of(ctx).warning))),
+                             // Saved addresses display their full text in the one selector.
+                             if((primary.isEmpty&&locations.isEmpty)||
+                               (locationId==null&&(primary.isEmpty||deliveryAddress!=primary)))
+                               TextFormField(key:ValueKey('sales-delivery-address-$customer-$addressGeneration'),
+                                 initialValue:deliveryAddress,
+                                 decoration:const InputDecoration(labelText:'Nhập địa chỉ khác',isDense:true),
+                                 onChanged:(v){deliveryAddress=v;}),
+                           ]);
+                         }),
+                       ],
+                       if((retailMobile?retailExtras:orderExtras))Text('Hạn thanh toán: ${customerMode=='WALK_IN'?0:customers.where((x)=>x['id']==customer).firstOrNull?['paymentTermsDays']??savedShipping['paymentTermsDays']??0} ngày · Chưa ghi nhận thu tiền',
                         style:TextStyle(fontSize:12,color:ErpPalette.of(ctx).muted)),
                     ],
                     if(!modern&&customers.any((x)=>x['id']==customer))
@@ -1712,7 +1779,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           Container(color:ErpPalette.of(ctx).mint,
                             padding:const EdgeInsets.symmetric(horizontal:12,vertical:8),
                             child:Row(children:[
-                              Expanded(child:Text('TÊN SẢN PHẨM · MÃ / ĐVT',
+                              Expanded(child:Text('CHỌN HÀNG ĐỂ THÊM · MÃ / ĐVT',
                                 style:TextStyle(fontSize:10,fontWeight:FontWeight.w800,
                                   color:ErpPalette.of(ctx).primary))),
                               Text('GIÁ / KHẢ DỤNG',
@@ -1720,7 +1787,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                                   color:ErpPalette.of(ctx).primary)),
                             ])),
                           ConstrainedBox(
-                            constraints:BoxConstraints(maxHeight:retailMobile?320:144),
+                            constraints:BoxConstraints(maxHeight:retailMobile?320:240),
                             child:ListView.builder(
                               controller:skuResultScroll,shrinkWrap:true,
                               itemExtent:retailMobile?72:48,itemCount:skuMatches.length,
@@ -2132,7 +2199,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       child:Text('Chưa có dòng hàng. Tìm theo mã, tên hoặc barcode rồi nhấn Enter để thêm.',
                         style:TextStyle(color:ErpPalette.of(ctx).muted))),
                     const Divider(height:12),
-                    if(modern&&canDiscount()&&(!retailMobile||retailExtras))...[
+                    if(modern&&canDiscount()&&(retailMobile?retailExtras:orderExtras))...[
                       Wrap(spacing:8,runSpacing:8,crossAxisAlignment:WrapCrossAlignment.center,children:[
                         SizedBox(width:210,child:DropdownButtonFormField<String>(
                           key:ValueKey('sales-document-discount-$documentDiscountMode'),
@@ -2161,11 +2228,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         decoration:const InputDecoration(labelText:'Lý do chiết khấu toàn đơn',isDense:true),
                         onChanged:(v)=>documentDiscountReason=v),
                     ],
-                    if(modern&&hasManualPrice()&&(!retailMobile||retailExtras))TextFormField(
+                    if(modern&&hasManualPrice()&&(retailMobile?retailExtras:orderExtras))TextFormField(
                       key:const ValueKey('sales-override-reason'),initialValue:overrideReason,maxLength:500,
                       decoration:const InputDecoration(labelText:'Lý do điều chỉnh (không bắt buộc)',isDense:true),
                       onChanged:(v)=>overrideReason=v),
-                    if(!retailMobile||retailExtras)TextField(controller:note,minLines:1,maxLines:2,selectAllOnFocus:true,
+                    if((retailMobile?retailExtras:orderExtras))TextField(controller:note,minLines:1,maxLines:2,selectAllOnFocus:true,
                       decoration:const InputDecoration(labelText:'Ghi chú',isDense:true,filled:false,border:UnderlineInputBorder(),enabledBorder:UnderlineInputBorder(),focusedBorder:UnderlineInputBorder())),
                     if(formError!=null)Padding(
                       padding:const EdgeInsets.only(top:10),
@@ -2889,80 +2956,121 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   }
   Future<String?> reasonDialog(String title)async{
     final controller=TextEditingController();
+    final route=DialogRoute<String>(context:context,builder:(ctx)=>AlertDialog(
+      title:Text(title),
+      content:TextField(controller:controller,maxLines:2,autofocus:true,
+        decoration:const InputDecoration(labelText:'Lý do')),
+      actions:[
+        TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Đóng')),
+        FilledButton(onPressed:()=>Navigator.pop(ctx,controller.text.trim()),
+          child:const Text('Tiếp tục')),
+      ],
+    ));
     try{
-      return await showDialog<String>(context:context,builder:(ctx)=>AlertDialog(
-        title:Text(title),
-        content:TextField(controller:controller,maxLines:2,autofocus:true,
-          decoration:const InputDecoration(labelText:'Lý do')),
-        actions:[
-          TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Đóng')),
-          FilledButton(onPressed:()=>Navigator.pop(ctx,controller.text.trim()),
-            child:const Text('Tiếp tục')),
-        ],
-      ));
+      final value=await Navigator.of(context,rootNavigator:true).push(route);
+      await route.completed;
+      return value;
     }finally{controller.dispose();}
   }
   Future<void> action(Map<String,dynamic> order,String action)async{
-    final branch=branchId;
-    if(branch==null||saving||localRecoveryBusy||localRecoveryBlocked||pendingCreate!=null||
-       pendingUpdate!=null||pendingConfirm!=null)return;
+    final branch=branchId,token=widget.session.token;
+    if(branch==null||_mutationBlocked||!can('orders.$action'))return;
+    final id=order['id'] as String,rev=order['revision'] as int;
+    final label='$branch:$action:$id:$rev';
+    final prior=retryKeys[label];
     String? reason;
-    if(action=='confirm'){
+    if(prior!=null){
+      // The previous request may have committed. Re-read the canonical
+      // revision before retry; retain both the exact key and original reason.
+      try{
+        final current=await widget.client.salesOrder(token,id,branch);
+        if(!_sameScope(token,branch)||_mutationBlocked)return;
+        if(current['revision']!=rev){
+          retryKeys.remove(label);_retryReasons.remove(label);
+          inform('Đơn đã thay đổi trên máy chủ. Kiểm tra lại chi tiết.');
+          await reload();return;
+        }
+        reason=_retryReasons[label];
+      }on ErpApiError catch(e){if(_sameScope(token,branch))inform(e.message,error:true);return;}
+      catch(_){if(_sameScope(token,branch))inform('Chưa xác minh được đơn. Chưa gửi lại.',error:true);return;}
+    }else if(action=='confirm'){
       final allow=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(
         title:const Text('Xác nhận đơn bán hàng'),
         content:Text('Xác nhận chứng từ với số tiền '+money(order['total'])+
-          '. Sau khi xác nhận, thay đổi phải qua phiên bản điều chỉnh. '+
-          'Thao tác này chưa xuất kho, giao hàng hoặc ghi nhận thu tiền.'),
+          '. Thao tác này chưa xuất kho, giao hàng hoặc ghi nhận thu tiền.'),
         actions:[
           TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Quay lại')),
           FilledButton(key:const ValueKey('sales-approve-confirm'),
             onPressed:()=>Navigator.pop(ctx,true),child:const Text('Xác nhận đơn')),
         ],
       ));
-      if(allow!=true||!mounted)return;
-    }
-    if(action!='confirm'){
+      if(allow!=true)return;
+    }else{
       reason=await reasonDialog(action=='amend'?'Điều chỉnh đơn hàng':'Hủy đơn hàng');
       if(reason==null)return;
       if(reason.length<3){inform('Vui lòng nhập lý do.',error:true);return;}
     }
-    if(!mounted)return;
+    if(!_sameScope(token,branch)||_mutationBlocked||!can('orders.$action'))return;
     setState(()=>saving=true);
-    final id=order['id'] as String,rev=order['revision'] as int;
-    final label=action+'-'+id+'-'+rev.toString();
     final key=retryKeys.putIfAbsent(label,newKey);
+    _retryReasons[label]=reason;
+    Map<String,dynamic>? editNext;
     try{
-      await widget.client.salesOrderAction(widget.session.token,id,action,branch,rev,
-        key:key,reason:reason);
-      retryKeys.remove(label);
+      await widget.client.salesOrderAction(token,id,action,branch,rev,key:key,reason:reason);
+      if(!_sameScope(token,branch))return;
+      retryKeys.remove(label);_retryReasons.remove(label);
       inform(action=='confirm'?'Đã xác nhận đơn hàng.':
         action=='amend'?'Đã mở điều chỉnh đơn hàng.':'Đã hủy đơn hàng.');
       await reload();
-    }on ErpApiError catch(e){inform(e.message,error:true);}
-    catch(_){inform('Chưa nhận được kết quả. Vui lòng tải lại đơn.',error:true);}
+      if(action=='amend'&&_sameScope(token,branch)&&can('orders.update')){
+        final next=await widget.client.salesOrder(token,id,branch);
+        if(_sameScope(token,branch)&&next['versionStatus']=='DRAFT'&&
+          next['version']==(order['version'] as int)+1)editNext=next;
+      }
+    }on ErpApiError catch(e){
+      if(_sameScope(token,branch)){
+        if(e.status>=400&&e.status<500){retryKeys.remove(label);_retryReasons.remove(label);}
+        inform(e.message,error:true);
+      }
+    }catch(_){if(_sameScope(token,branch))inform('Chưa nhận được kết quả. Vui lòng tải lại đơn.',error:true);}
     finally{if(mounted)setState(()=>saving=false);}
+    if(editNext!=null&&_sameScope(token,branch)&&!_navigationLocked)await updateOrder(editNext);
   }
-  Future<void> openOrder(Map<String,dynamic> row)async{
-    final branch=branchId;if(branch==null)return;
+  Future<void> _printOrder(Map<String,dynamic> item)async{
+    try{
+      final html=confirmedSalesPrintDocument(item);
+      if(erpSalesWebPrintSupported){erpOpenSalesPrint(html);return;}
+      if(erpAndroidUpdateSupported){
+        final opened=await const MethodChannel('erp/pos_receipt').invokeMethod<bool>('printSalesOrder',{'html':html});
+        if(opened!=true)throw const FormatException('Không mở được trình in');
+        return;
+      }
+      final path=await FilePicker.platform.saveFile(dialogTitle:'Lưu bản in đơn hàng',
+        fileName:'${item['documentNo']}.html',type:FileType.custom,
+        allowedExtensions:const ['html'],bytes:Uint8List.fromList(utf8.encode(html)));
+      if(path!=null&&mounted)inform('Mở bản in HTML đã lưu để in đơn hàng.');
+    }catch(_){if(mounted)inform('Không mở được bản in.',error:true);}
+  }
+  bool _canOpenWarehouse(Map<String,dynamic> item){
+    final shipping=item['shipping'];
+    if(widget.onOpenWarehouse==null||!erpSalesCanHold(item)||shipping is! Map||shipping['warehouseId'] is! String)return false;
+    final warehouse=shipping['warehouseId'];
+    return widget.session.grants.any((g)=>g.permission=='inventory.reserve'&&g.branchId==branchId&&g.warehouseId==warehouse)&&
+      widget.session.grants.any((g)=>g.permission=='inventory.read'&&g.branchId==branchId&&g.warehouseId==warehouse);
+  }
+  Future<void> openOrder(Map<String,dynamic> row,{String? quick})async{
+    final branch=branchId,token=widget.session.token;if(branch==null||_navigationLocked)return;
     Map<String,dynamic> item;
     try{item=await widget.client.salesOrder(widget.session.token,row['id'] as String,branch);}
     on ErpApiError catch(e){inform(e.message,error:true);return;}
     catch(_){inform('Không mở được đơn hàng.',error:true);return;}
-    if(!mounted)return;
-    String statusText(String code,String type){
-      if(type=='fulfillment')return switch(code){
-        'NOT_ALLOCATED'=>'Chưa giữ hàng','PARTIAL'=>'Giữ một phần',
-        'ALLOCATED'=>'Đã phân bổ',_=>'Chưa xử lý',
-      };
-      if(type=='delivery')return switch(code){
-        'NOT_DISPATCHED'=>'Chưa giao','PARTIAL'=>'Giao một phần',
-        'DELIVERED'=>'Đã giao',_=>'Chưa xử lý',
-      };
-      return switch(code){
-        'NOT_DUE'=>'Chưa phát sinh phải thu','PARTIAL'=>'Thu một phần',
-        'PAID'=>'Đã thanh toán',_=>'Chưa xử lý',
-      };
+    if(!_sameScope(token,branch)||_navigationLocked)return;
+    if(quick=='copy'&&can('orders.create')){await createOrder(source:item);return;}
+    if(quick=='edit'&&item['versionStatus']=='DRAFT'&&item['status']!='CANCELLED'&&can('orders.update')){
+      await updateOrder(item);return;
     }
+    if(quick=='amend'&&item['status']=='CONFIRMED'&&item['versionStatus']=='CONFIRMED'&&
+       erpSalesCanAmendOrCancel(item)&&can('orders.amend')){await action(item,'amend');return;}
     Widget statusInfo(BuildContext context,String title,String value,IconData icon)=>Container(
       width:195,padding:const EdgeInsets.all(12),
       decoration:BoxDecoration(
@@ -3012,15 +3120,20 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                 Wrap(spacing:8,runSpacing:8,children:[
                   statusInfo(ctx,'Thương mại',stateOf(item),Icons.assignment_turned_in_outlined),
                   statusInfo(ctx,'Kho',
-                    statusText((item['fulfillmentStatus']??'').toString(),'fulfillment'),
+                    erpSalesProgressText(item['fulfillmentStatus'],'warehouse'),
                     Icons.inventory_2_outlined),
                   statusInfo(ctx,'Giao hàng',
-                    statusText((item['deliveryStatus']??'').toString(),'delivery'),
+                    erpSalesProgressText(item['deliveryStatus'],'delivery'),
                     Icons.local_shipping_outlined),
                   statusInfo(ctx,'Thanh toán',
-                    statusText((item['paymentStatus']??'').toString(),'payment'),
+                    erpSalesProgressText(item['paymentStatus'],'payment'),
                     Icons.account_balance_wallet_outlined),
                 ]),
+                if(_canOpenWarehouse(item))Align(alignment:Alignment.centerLeft,
+                  child:OutlinedButton.icon(key:const ValueKey('sales-open-warehouse'),
+                    onPressed:(){if(!_sameScope(token,branch)||_navigationLocked)return;
+                      Navigator.pop(ctx);widget.onOpenWarehouse!(item);},
+                    icon:const Icon(Icons.warehouse_outlined,size:18),label:const Text('Giữ hàng tại kho'))),
                 const SizedBox(height:18),
                 if(item['shipping'] is Map)...[
                   Text('Kho xuất: ${item['shipping']['warehouseName']??'—'}'),
@@ -3031,10 +3144,34 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                   if(item['shipping']['customerMode']=='WALK_IN')Text('Khách lẻ: ${item['shipping']['walkInName']??''} ${item['shipping']['walkInPhone']??''}'),
                   const SizedBox(height:12),
                 ],
-                Text('Hàng hóa và giá đã lưu',style:TextStyle(
+                Text('Hàng hóa',style:TextStyle(
                   fontWeight:FontWeight.w800,color:ErpPalette.of(ctx).ink,fontSize:16)),
                 const SizedBox(height:8),
-                for(final line in (item['lines'] as List<dynamic>))
+                if(!narrow)SingleChildScrollView(scrollDirection:Axis.horizontal,
+                  child:DataTable(headingRowHeight:38,dataRowMinHeight:42,dataRowMaxHeight:58,
+                    headingRowColor:WidgetStatePropertyAll(ErpPalette.of(ctx).mint),
+                    columnSpacing:20,columns:const [
+                      DataColumn(label:Text('Sản phẩm / SKU')),
+                      DataColumn(label:Text('ĐVT')),
+                      DataColumn(label:Text('SL'),numeric:true),
+                      DataColumn(label:Text('Đơn giá'),numeric:true),
+                      DataColumn(label:Text('CK'),numeric:true),
+                      DataColumn(label:Text('Thuế'),numeric:true),
+                      DataColumn(label:Text('Thành tiền'),numeric:true),
+                    ],rows:[for(final line in (item['lines'] as List<dynamic>))DataRow(cells:[
+                      DataCell(SizedBox(width:230,child:Column(mainAxisAlignment:MainAxisAlignment.center,
+                        crossAxisAlignment:CrossAxisAlignment.start,children:[
+                          Text((line['productName']??'').toString(),maxLines:1,overflow:TextOverflow.ellipsis),
+                          Text((line['sku']??'').toString(),style:TextStyle(color:ErpPalette.of(ctx).muted,fontSize:11)),
+                        ]))),
+                      DataCell(Text((line['unitCode']??'').toString())),
+                      DataCell(Text(erpGroupedDecimalText(line['quantity']))),
+                      DataCell(Text(money(line['unitPrice']))),
+                      DataCell(Text(money(line['discountAmount']))),
+                      DataCell(Text(money(line['taxAmount']))),
+                      DataCell(Text(money(line['lineTotal']),style:const TextStyle(fontWeight:FontWeight.w700))),
+                    ])])),
+                if(narrow)for(final line in (item['lines'] as List<dynamic>))
                   Container(
                     padding:const EdgeInsets.symmetric(horizontal:6,vertical:12),
                     decoration:BoxDecoration(
@@ -3048,6 +3185,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       Wrap(spacing:16,runSpacing:6,children:[
                         Text('Số lượng: '+erpGroupedDecimalText(line['quantity'])+' '+line['unitCode'].toString()),
                         Text('Đơn giá: '+money(line['unitPrice'])),
+                        Text('CK: '+money(line['discountAmount'])),
+                        Text('Thuế: '+money(line['taxAmount'])),
                         Text('Thành tiền: '+money(line['lineTotal']),
                           style:const TextStyle(fontWeight:FontWeight.w700)),
                       ]),
@@ -3067,6 +3206,16 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                             style:TextStyle(fontSize:12,color:ErpPalette.of(ctx).muted))),
                     ]),
                   ),
+                if(!narrow)for(final line in (item['lines'] as List<dynamic>))
+                  if(line['priceSnapshot'] is Map&&(line['priceSnapshot']['overrideReason']!=null||
+                    line['priceSnapshot']['documentDiscount'] is Map))
+                    Padding(padding:const EdgeInsets.symmetric(vertical:3),child:Text(
+                      '${line['sku']}: '+[if(line['priceSnapshot']['overrideReason']!=null)
+                        'Điều chỉnh giá: ${line['priceSnapshot']['overrideReason']}',
+                        if(line['priceSnapshot']['documentDiscount'] is Map)
+                          'CK toàn đơn: '+money(line['priceSnapshot']['documentDiscount']['allocatedAmount'])+
+                            ' · '+(line['priceSnapshot']['documentDiscount']['reason']??'').toString()].join(' · '),
+                      style:TextStyle(fontSize:12,color:ErpPalette.of(ctx).muted))),
                 const Divider(height:24),
                 Wrap(spacing:18,runSpacing:7,alignment:WrapAlignment.spaceBetween,children:[
                   Text('Tiền hàng: '+money(item['subtotal'])),
@@ -3107,31 +3256,30 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                   TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Đóng')),
                   if(item['status']=='CONFIRMED'&&item['versionStatus']=='CONFIRMED'&&item['documentNo'] is String)
                     OutlinedButton.icon(key:const ValueKey('sales-print-order'),
-                      onPressed:()async{
-                        try{
-                          final html=confirmedSalesPrintDocument(item);
-                          await FilePicker.platform.saveFile(dialogTitle:'Lưu bản in đơn hàng',
-                            fileName:'${item['documentNo']}.html',type:FileType.custom,
-                            allowedExtensions:const ['html'],bytes:Uint8List.fromList(utf8.encode(html)));
-                          if(mounted)inform('Mở bản in HTML đã lưu để in đơn hàng.');
-                        }catch(_){if(mounted)inform('Không lưu được bản in.',error:true);}
-                      },icon:const Icon(Icons.print_outlined,size:16),label:const Text('Bản in')),
+                      onPressed:()=>_sameScope(token,branch)?_printOrder(item):Future<void>.value(),
+                      icon:const Icon(Icons.print_outlined,size:16),label:const Text('In đơn')),
                   if(can('orders.create'))
                     OutlinedButton.icon(key:const ValueKey('sales-copy-order'),
-                      onPressed:(){Navigator.pop(ctx);createOrder(source:item);},
+                      onPressed:(){if(!_sameScope(token,branch)||_navigationLocked)return;
+                        Navigator.pop(ctx);createOrder(source:item);},
                       icon:const Icon(Icons.copy_outlined,size:16),label:const Text('Sao chép đơn')),
-                  if(item['versionStatus']=='DRAFT'&&can('orders.update'))
-                    OutlinedButton(onPressed:(){Navigator.pop(ctx);updateOrder(item);},
+                  if(item['status']!='CANCELLED'&&item['versionStatus']=='DRAFT'&&can('orders.update'))
+                    OutlinedButton(onPressed:(){if(!_sameScope(token,branch)||_navigationLocked)return;
+                        Navigator.pop(ctx);updateOrder(item);},
                       child:const Text('Sửa đơn')),
-                  if(item['versionStatus']=='DRAFT'&&can('orders.confirm'))
+                  if(item['status']!='CANCELLED'&&item['versionStatus']=='DRAFT'&&can('orders.confirm'))
                     FilledButton(key:const ValueKey('sales-confirm'),
-                      onPressed:(){Navigator.pop(ctx);action(item,'confirm');},
+                      onPressed:(){if(!_sameScope(token,branch)||_navigationLocked)return;
+                        Navigator.pop(ctx);action(item,'confirm');},
                       child:const Text('Xác nhận')),
-                  if(item['status']=='CONFIRMED'&&item['versionStatus']=='CONFIRMED'&&can('orders.amend'))
-                    OutlinedButton(onPressed:(){Navigator.pop(ctx);action(item,'amend');},
+                  if(item['status']=='CONFIRMED'&&item['versionStatus']=='CONFIRMED'&&
+                     erpSalesCanAmendOrCancel(item)&&can('orders.amend'))
+                    OutlinedButton(onPressed:(){if(!_sameScope(token,branch)||_navigationLocked)return;
+                        Navigator.pop(ctx);action(item,'amend');},
                       child:const Text('Điều chỉnh')),
-                  if(item['status']!='CANCELLED'&&can('orders.cancel'))
-                    TextButton(onPressed:(){Navigator.pop(ctx);action(item,'cancel');},
+                  if(erpSalesCanAmendOrCancel(item)&&can('orders.cancel'))
+                    TextButton(onPressed:(){if(!_sameScope(token,branch)||_navigationLocked)return;
+                        Navigator.pop(ctx);action(item,'cancel');},
                       child:const Text('Hủy đơn')),
                 ]),
             ),
@@ -3143,6 +3291,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   }
   @override Widget build(BuildContext context){
     final retail=widget.retailMode&&MediaQuery.sizeOf(context).width<760;
+    final shown=orders.where((o)=>erpSalesMatchesFilter(o,_orderFilter)).toList();
     return Padding(
       padding:EdgeInsets.all(retail?8:18),
       child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
@@ -3195,20 +3344,43 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
             ]),
         ),
         if(localRecoveryBlocked)OutlinedButton(onPressed:_restorePending,child:const Text('Thử đọc lại dữ liệu chờ trên máy')),
-        if(branchId!=null)DropdownButtonFormField<String>(
-          key:ValueKey('sales-branch-'+branchId!),initialValue:branchId,isExpanded:true,
-          decoration:const InputDecoration(labelText:'Chi nhánh'),
-          items:branches.map((x)=>DropdownMenuItem<String>(
-            value:x['id'] as String,child:Text(x['name'] as String))).toList(),
-          onChanged:_navigationLocked?null:(value)async{setState(()=>branchId=value);await _restorePending();await reload();}),
-        if(!retail)const SizedBox(height:12),
-        if(!retail)TextField(key:const ValueKey('sales-search'),controller:search,
-          onSubmitted:(_)=>reload(),
-          decoration:InputDecoration(labelText:'Tìm mã đơn hoặc khách hàng',
-            prefixIcon:const Icon(Icons.search),
-            suffixIcon:IconButton(tooltip:'Tìm kiếm',onPressed:reload,
-              icon:const Icon(Icons.arrow_forward)))),
-        const SizedBox(height:14),
+        LayoutBuilder(builder:(context,bounds){
+          final compact=bounds.maxWidth<580;
+          return Wrap(spacing:10,runSpacing:8,crossAxisAlignment:WrapCrossAlignment.center,children:[
+            if(branchId!=null)SizedBox(width:compact?bounds.maxWidth:200,
+              child:DropdownButtonFormField<String>(
+                key:ValueKey('sales-branch-'+branchId!),initialValue:branchId,isExpanded:true,
+                decoration:const InputDecoration(labelText:'Chi nhánh',isDense:true),
+                items:branches.map((x)=>DropdownMenuItem<String>(value:x['id'] as String,
+                  child:Text(x['name'] as String,overflow:TextOverflow.ellipsis))).toList(),
+                onChanged:_navigationLocked?null:(value)async{
+                  setState((){branchId=value;_orderFilter='all';orders=[];});
+                  await _restorePending();await reload();})),
+            if(!retail)SizedBox(width:compact?bounds.maxWidth:300,
+              child:TextField(key:const ValueKey('sales-search'),controller:search,
+                onSubmitted:(_)=>reload(),decoration:InputDecoration(
+                  isDense:true,labelText:'Tìm mã đơn hoặc khách hàng',
+                  prefixIcon:const Icon(Icons.search),
+                  suffixIcon:IconButton(tooltip:'Tìm kiếm',onPressed:loading?null:reload,
+                    icon:const Icon(Icons.arrow_forward))))),
+            if(!retail)SizedBox(width:compact?bounds.maxWidth:190,child:DropdownButtonFormField<String>(
+              key:ValueKey('sales-status-filter-$_orderFilter'),initialValue:_orderFilter,isExpanded:true,
+              decoration:const InputDecoration(labelText:'Trạng thái',isDense:true),
+              items:const [DropdownMenuItem(value:'all',child:Text('Tất cả')),
+                DropdownMenuItem(value:'entry',child:Text('Đang lập / điều chỉnh')),
+                DropdownMenuItem(value:'confirmed',child:Text('Đã xác nhận')),
+                DropdownMenuItem(value:'warehouse',child:Text('Chờ xử lý kho')),
+                DropdownMenuItem(value:'delivery',child:Text('Chờ giao hàng')),
+                DropdownMenuItem(value:'payment',child:Text('Chờ thu tiền')),
+                DropdownMenuItem(value:'cancelled',child:Text('Đã hủy'))],
+              onChanged:(value){if(value!=null)setState(()=>_orderFilter=value);})),
+            if(!retail)IconButton(onPressed:loading?null:reload,tooltip:'Làm mới',icon:const Icon(Icons.refresh)),
+          ]);
+        }),
+        const SizedBox(height:12),
+        if(!retail&&!loading)Padding(padding:const EdgeInsets.only(bottom:8),
+          child:Text('${shown.length}/${orders.length} đơn đang hiển thị · tối đa 100 kết quả mỗi lần tra cứu',
+            style:TextStyle(color:ErpPalette.of(context).muted,fontSize:12))),
         if(error!=null)Padding(padding:const EdgeInsets.only(bottom:12),
           child:Text(error!,style:TextStyle(color:ErpPalette.of(context).danger))),
         if(loading)const Center(child:Padding(padding:EdgeInsets.all(22),
@@ -3217,13 +3389,13 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           padding:const EdgeInsets.symmetric(vertical:16),
           child:Text('Chọn Lập đơn hàng để tiếp tục giỏ đang lưu hoặc tạo đơn mới.',
             style:TextStyle(color:ErpPalette.of(context).muted)))
-        else if(orders.isEmpty)Center(child:Padding(
-          padding:EdgeInsets.all(26),child:Text('Chưa có đơn hàng.',
+        else if(shown.isEmpty)Center(child:Padding(
+          padding:EdgeInsets.all(26),child:Text(orders.isEmpty?'Chưa có đơn hàng.':'Không có đơn phù hợp.',
             style:TextStyle(color:ErpPalette.of(context).muted))))
         else if(MediaQuery.sizeOf(context).width<720)
           Column(children:[
-            for(final o in orders)InkWell(
-              onTap:saving?null:()=>openOrder(o),
+            for(final o in shown)InkWell(
+              onTap:_navigationLocked?null:()=>openOrder(o),
               child:Container(
                 padding:const EdgeInsets.symmetric(horizontal:8,vertical:11),
                 decoration:BoxDecoration(
@@ -3234,7 +3406,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       style:TextStyle(fontWeight:FontWeight.w700,color:ErpPalette.of(context).ink)),
                     Text((o['customerName']??'').toString(),maxLines:1,
                       overflow:TextOverflow.ellipsis),
-                    Text(stateOf(o),style:TextStyle(
+                    Text(stateOf(o)+' · '+erpSalesProgressText(o['fulfillmentStatus'],'warehouse'),style:TextStyle(
                       color:ErpPalette.of(context).muted,fontSize:12)),
                   ])),
                   const SizedBox(width:10),
@@ -3245,27 +3417,50 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
               )),
           ])
         else SingleChildScrollView(scrollDirection:Axis.horizontal,child:DataTable(
+          headingRowHeight:40,dataRowMinHeight:48,dataRowMaxHeight:60,columnSpacing:18,
           headingRowColor:WidgetStatePropertyAll(ErpPalette.of(context).mint),
           headingTextStyle:TextStyle(fontWeight:FontWeight.w700,color:ErpPalette.of(context).ink),
           columns:const [
-            DataColumn(label:Text('Số đơn')),
-            DataColumn(label:Text('Khách hàng')),
-            DataColumn(label:Text('Thành tiền')),
-            DataColumn(label:Text('Trạng thái')),
+            DataColumn(label:Text('Số đơn / Ngày')),
+            DataColumn(label:Text('Khách hàng / Kho')),
+            DataColumn(label:Text('Thành tiền'),numeric:true),
+            DataColumn(label:Text('Đơn hàng')),
+            DataColumn(label:Text('Kho')),
+            DataColumn(label:Text('Giao hàng')),
+            DataColumn(label:Text('Thanh toán')),
             DataColumn(label:Text('Thao tác')),
           ],
-          rows:orders.map((o)=>DataRow(cells:[
-            DataCell(Text(o['documentNo'] as String? ?? 'Chưa cấp số')),
-            DataCell(Text(o['customerName'] as String? ?? '')),
-            DataCell(Text(money(o['total']))),
+          rows:shown.map((o)=>DataRow(cells:[
+            DataCell(Column(mainAxisAlignment:MainAxisAlignment.center,crossAxisAlignment:CrossAxisAlignment.start,children:[
+              Text(o['documentNo'] as String? ?? 'Chưa cấp số',style:const TextStyle(fontWeight:FontWeight.w700)),
+              Text(erpDateTimeText(o['createdAt']),style:TextStyle(fontSize:11,color:ErpPalette.of(context).muted)),
+            ]),onTap:_navigationLocked?null:()=>openOrder(o)),
+            DataCell(SizedBox(width:155,child:Column(mainAxisAlignment:MainAxisAlignment.center,
+              crossAxisAlignment:CrossAxisAlignment.start,children:[
+                Text((o['customerName']??'').toString(),overflow:TextOverflow.ellipsis),
+                Text((o['warehouseName']??'—').toString(),overflow:TextOverflow.ellipsis,
+                  style:TextStyle(fontSize:11,color:ErpPalette.of(context).muted)),
+              ]))),
+            DataCell(Text(money(o['total']),style:const TextStyle(fontWeight:FontWeight.w700))),
             DataCell(Text(stateOf(o))),
-            DataCell(TextButton(onPressed:saving?null:()=>openOrder(o),
-              child:const Text('Chi tiết'))),
+            DataCell(Text(erpSalesProgressText(o['fulfillmentStatus'],'warehouse'))),
+            DataCell(Text(erpSalesProgressText(o['deliveryStatus'],'delivery'))),
+            DataCell(Text(erpSalesProgressText(o['paymentStatus'],'payment'))),
+            DataCell(Row(mainAxisSize:MainAxisSize.min,children:[
+              TextButton(onPressed:_navigationLocked?null:()=>openOrder(o),child:const Text('Chi tiết')),
+              PopupMenuButton<String>(enabled:!_navigationLocked,tooltip:'Thao tác đơn hàng',
+                onSelected:(value)=>openOrder(o,quick:value),itemBuilder:(context)=>[
+                  const PopupMenuItem(value:'detail',child:Text('Xem / In đơn')),
+                  if(can('orders.create'))const PopupMenuItem(value:'copy',child:Text('Sao chép')),
+                  if(o['status']!='CANCELLED'&&o['versionStatus']=='DRAFT'&&can('orders.update'))
+                    const PopupMenuItem(value:'edit',child:Text('Sửa đơn')),
+                  if(o['status']=='CONFIRMED'&&o['versionStatus']=='CONFIRMED'&&
+                    erpSalesCanAmendOrCancel(o)&&can('orders.amend'))
+                    const PopupMenuItem(value:'amend',child:Text('Điều chỉnh')),
+                ]),
+            ])),
           ])).toList(),
         )),
-        if(!retail)Align(alignment:Alignment.centerRight,child:TextButton.icon(
-          onPressed:loading?null:reload,icon:const Icon(Icons.refresh),
-          label:const Text('Làm mới'))),
       ]),
     );
   }
