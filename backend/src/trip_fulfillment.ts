@@ -5,7 +5,7 @@ import {InventoryFault,stockDecimalUnits,stockUnitsDecimal,validBaseQty,type War
 import {checkScope} from "./direct_stock_issue.ts";
 
 export type TripScope=WarehouseScope&{orderId:string;version:number};
-export type TripPrepareItem={lineNo:number;pickedBase:string;packedBase:string;locationId?:string;lotId?:string};
+export type TripPrepareItem={lineNo:number;reservationId?:string;pickedBase:string;packedBase:string;locationId?:string;lotId?:string};
 export type TripDispatchItem={preparationId:string;sourceLine:number;quantityBase:string};
 const q=stockDecimalUnits;
 function zeroOrPositive(value:unknown):value is string{
@@ -67,16 +67,19 @@ export async function tripWork(db:PoolClient,t:string,input:TripScope){
  if(!o||o.current_version!==v||o.delivery_choice!=="TRIP"||
   o.warehouse_id!==w)throw new InventoryFault(409,"TRIP_ORDER_UNAVAILABLE");
  const lines=await db.query<{line_no:number;product_id:string;sku:string;product_name:string;
-  unit_code:string;quantity:string;reservation_id:string|null;reserved:string;backordered:string}>(`
-  SELECT l.line_no,l.product_id,l.sku,l.product_name,l.unit_code,l.quantity::text,
-   r.id AS reservation_id,coalesce(r.quantity_base,0)::text AS reserved,
-   coalesce(r.backordered_base,0)::text AS backordered
-  FROM sales_order_line l LEFT JOIN inventory_reservation r
-   ON r.installation_id=l.installation_id AND r.branch_id=l.branch_id
-    AND r.order_id=l.order_id AND r.version_no=l.version_no
-    AND r.line_no=l.line_no AND r.state='ACTIVE'
-  WHERE l.installation_id=$1 AND l.branch_id=$2 AND l.order_id=$3
-    AND l.version_no=$4 ORDER BY l.line_no
+  unit_code:string;quantity:string;ordered_base:string;reservation_id:string|null;
+  held:string}>(`
+   SELECT l.line_no,l.product_id,l.sku,l.product_name,l.unit_code,l.quantity::text,
+     (CASE WHEN l.pricing_engine='R1' THEN
+       (l.price_snapshot->>'normalizedBaseQuantity')::numeric
+      ELSE l.quantity END)::text AS ordered_base,
+     r.id AS reservation_id,coalesce(r.quantity_base,0)::text AS held
+   FROM sales_order_line l LEFT JOIN inventory_reservation r
+    ON r.installation_id=l.installation_id AND r.branch_id=l.branch_id
+     AND r.order_id=l.order_id AND r.version_no=l.version_no
+     AND r.line_no=l.line_no AND r.state='ACTIVE'
+   WHERE l.installation_id=$1 AND l.branch_id=$2 AND l.order_id=$3
+    AND l.version_no=$4 ORDER BY l.line_no,r.created_at,r.id
  `,[t,b,id,v]);
  const prep=await db.query<{preparation_id:string;source_line:number;order_line_no:number;
   product_id:string;picked:string;packed:string;location_id:string|null;lot_id:string|null;
@@ -96,17 +99,30 @@ export async function tripWork(db:PoolClient,t:string,input:TripScope){
    AND h.order_id=$4 AND h.version_no=$5
   ORDER BY h.prepared_at,p.preparation_id,p.source_line
  `,[t,b,w,id,v]);
- const result=lines.rows.map(line=>{
+ const byLine=new Map<number,{line:(typeof lines.rows)[number];
+  held:bigint;reservations:{reservationId:string;reservedBase:string}[]}>();
+ for(const row of lines.rows){
+  let entry=byLine.get(row.line_no);
+  if(!entry){entry={line:row,held:0n,reservations:[]};byLine.set(row.line_no,entry);}
+  if(row.reservation_id){
+   entry.held+=q(row.held);
+   entry.reservations.push({reservationId:row.reservation_id,reservedBase:row.held});
+  }
+ }
+ const result=Array.from(byLine.values(),({line,held,reservations})=>{
   const parts=prep.rows.filter(x=>x.order_line_no===line.line_no);
   const picked=parts.reduce((n,p)=>n+q(p.picked),0n);
   const packed=parts.reduce((n,p)=>n+q(p.packed),0n);
   const issued=parts.reduce((n,p)=>n+q(p.dispatched),0n);
+  const ordered=q(line.ordered_base);
   return {lineNo:line.line_no,productId:line.product_id,sku:line.sku,
    productName:line.product_name,unitCode:line.unit_code,quantity:line.quantity,
-   reservationId:line.reservation_id,reservedBase:line.reserved,
-   backorderedBase:line.backordered,pickedBase:stockUnitsDecimal(picked),
-   packedBase:stockUnitsDecimal(packed),dispatchedBase:stockUnitsDecimal(issued),
-   readyBase:stockUnitsDecimal(packed-issued),
+   orderedBase:line.ordered_base,
+   reservationId:reservations[0]?.reservationId??null,
+   reservations,reservedBase:stockUnitsDecimal(held),
+   backorderedBase:stockUnitsDecimal(ordered>held?ordered-held:0n),
+   pickedBase:stockUnitsDecimal(picked),packedBase:stockUnitsDecimal(packed),
+   dispatchedBase:stockUnitsDecimal(issued),readyBase:stockUnitsDecimal(packed-issued),
    preparations:parts.map(p=>({preparationId:p.preparation_id,sourceLine:p.source_line,
     pickedBase:p.picked,packedBase:p.packed,dispatchedBase:p.dispatched,
     readyBase:stockUnitsDecimal(q(p.packed)-q(p.dispatched)),
@@ -132,26 +148,29 @@ export async function prepareTrip(db:PoolClient,c:MutationContext,input:TripScop
   WHERE l.installation_id=$1 AND l.branch_id=$2 AND l.order_id=$3
     AND l.version_no=$4 AND r.warehouse_id=$5 ORDER BY l.line_no FOR SHARE OF l,r
  `,[t,b,id,input.version,w]);
- const holds=new Map(active.rows.map(x=>[x.line_no,x]));
+ const picked:{line:TripPrepareItem;hold:(typeof active.rows)[number]}[]=[];
  const seen=new Set<string>();
  for(const line of input.lines){
-  const hold=holds.get(line.lineNo);
+  const matched=active.rows.filter(x=>x.line_no===line.lineNo);
+  const hold=line.reservationId
+   ?matched.find(x=>x.reservation_id===line.reservationId)
+   :(matched.length===1?matched[0]:undefined);
   if(!Number.isSafeInteger(line.lineNo)||!hold)
    throw new InventoryFault(409,"TRIP_HOLD_REQUIRED");
   if(!zeroOrPositive(line.pickedBase)||!zeroOrPositive(line.packedBase)||
     q(line.pickedBase)+q(line.packedBase)<=0n)
    throw new InventoryFault(400,"INVALID_QUANTITY");
-  const key=[line.lineNo,line.locationId??"",line.lotId??""].join(":");
+  const key=[line.lineNo,hold.reservation_id,line.locationId??"",line.lotId??""].join(":");
   if(seen.has(key))throw new InventoryFault(400,"DUPLICATE_PREPARATION_SCOPE");
   seen.add(key);
   await checkScope(db,t,input,hold.product_id,line.locationId,line.lotId);
+  picked.push({line,hold});
  }
  const documentId=randomUUID();
  await db.query(`INSERT INTO sales_trip_preparation(installation_id,branch_id,id,order_id,
   version_no,warehouse_id,actor_id,request_id)
   VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,[t,b,documentId,id,input.version,w,c.actorId,c.requestId]);
- for(const [i,line] of input.lines.entries()){
-  const hold=holds.get(line.lineNo)!;
+ for(const [i,{line,hold}] of picked.entries()){
   await db.query(`INSERT INTO sales_trip_preparation_line
    (installation_id,branch_id,preparation_id,source_line,order_line_no,
     reservation_id,product_id,picked_base,packed_base,location_id,lot_id)
