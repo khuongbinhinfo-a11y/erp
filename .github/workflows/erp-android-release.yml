@@ -1,6 +1,6 @@
 name: ERP Android signed release
 on:
-  # UX-B v4 build after reviewed CI-green main merge marker; no R2 pointer activation.
+  # UX-C v5 signed build after reviewed CI-green main merge marker. Latest remains gated.
   workflow_run:
     workflows: ['ERP quality gates']
     types: [completed]
@@ -34,14 +34,14 @@ jobs:
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_branch == 'main' &&
       github.event.workflow_run.conclusion == 'success' &&
-      contains(github.event.workflow_run.head_commit.message, '[erp-apk-ux-b-v4]')))
+      contains(github.event.workflow_run.head_commit.message, '[erp-apk-ux-c-v5]')))
     runs-on: ubuntu-latest
     environment: android-release
     env:
       GH_TOKEN: ${{ github.token }}
       APPROVED_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.approved_sha }}
-      BUILD_NUMBER: ${{ github.event_name == 'workflow_run' && '4' || inputs.build_number }}
-      VERSION_NAME: ${{ github.event_name == 'workflow_run' && '0.4.0' || inputs.version_name }}
+      BUILD_NUMBER: ${{ github.event_name == 'workflow_run' && '5' || inputs.build_number }}
+      VERSION_NAME: ${{ github.event_name == 'workflow_run' && '0.5.0' || inputs.version_name }}
     steps:
       - uses: actions/checkout@v4
         with:
