@@ -58,7 +58,7 @@ test("T3-B PostgreSQL: partial MANUAL issue, lot/location, scoped stock, negativ
   assert.equal(cust.status,201,JSON.stringify(cust.body));
   const list=await catalog("price-lists",{code:"T3BP",name:"Distribution price"});
   assert.equal(list.status,201,JSON.stringify(list.body));
-  const products=[];
+  const products:string[]=[];
   for(const code of ["T3B1","T3B2","T3B3"]){
    const p=await catalog("products",{code,name:code,baseUnit:"cai"});
    assert.equal(p.status,201,JSON.stringify(p.body));products.push(p.body.id as string);
@@ -67,7 +67,7 @@ test("T3-B PostgreSQL: partial MANUAL issue, lot/location, scoped stock, negativ
    assert.equal(price.status,201,JSON.stringify(price.body));
   }
   const shipping={warehouseId:w,deliveryChoice:"MANUAL",
-   collectionPolicy:"CREDIT_TERMS",customerMode:"EXISTING",paymentTermsDays:30};
+   collectionPolicy:"CREDIT_TERMS",customerMode:"EXISTING"};
   const makeOrder=async(p:string,qty:string,mode="MANUAL")=>{
    const created=await write("/v1/sales/orders",{
     branchId:b,customerId:cust.body.id,priceListId:list.body.id,
