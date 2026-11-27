@@ -209,6 +209,10 @@ export async function reserveStock(db:PoolClient,ctx:MutationContext,input:Reser
    throw new InventoryFault(409,"CONFIRMED_ORDER_REQUIRED");
  const context=await readOrderContext(db,t,b,input.orderId,input.version);
  if(context&&context.warehouseId!==w)throw new InventoryFault(409,"ORDER_WAREHOUSE_MISMATCH");
+ // T3-A: direct MANUAL/PICKUP never enters the trip reservation lane.
+ // Historical orders without a version context keep their existing contract.
+ if(context&&context.deliveryChoice!=="TRIP")
+  throw new InventoryFault(409,"ORDER_DIRECT_ISSUE_ONLY");
  const quantity=order.pricing_engine==="R1"
    ?order.price_snapshot?.normalizedBaseQuantity
    :order.unit_code===order.base_unit?order.quantity:null;
