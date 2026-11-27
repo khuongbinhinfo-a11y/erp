@@ -350,7 +350,7 @@ function attestPrimaryMainSha(e, sha){
 }
 // The additive release must preserve every preexisting row and permission.
 export function assertT5aSchemaState(row,empty=false){
- if(!row||row.tables!=="3"||row.guards!=="10"||row.invalid_links!=="0"||
+ if(!row||row.tables!=="3"||row.guards!=="11"||row.invalid_links!=="0"||
   row.payment_source_columns!=="1"||(empty&&row.new_rows!=="0"))
    fail("T5A_SCHEMA_RECONCILIATION_FAILED");
 }
@@ -363,7 +363,8 @@ async function verifyT5aSchema(pool,empty=false){
     't5a_return_commit_guard','t5a_return_immutable',
     't5a_return_line_immutable','t5a_delivery_line_immutable',
     't5a_allocation_guard','t5a_fulfillment_commit_guard',
-    't5a_receipt_commit_guard','t5a_return_header_commit_guard')) AS guards,
+    't5a_receipt_commit_guard','t5a_return_header_commit_guard',
+    't5a_manual_fulfillment_order_lock')) AS guards,
   (SELECT count(*)::text FROM information_schema.columns WHERE
    table_schema='public' AND table_name='payment_receipt'
    AND column_name='fulfillment_id') AS payment_source_columns,
