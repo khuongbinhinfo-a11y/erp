@@ -1,6 +1,11 @@
 -- T5-A: MANUAL delivery, partial warehouse return, and repeated canonical AR payments.
 -- Forward-only, append-only facts. CI/fresh-DB only until separate owner-approved
 -- Codespaces preflight + durable backup/restore/reconciliation for production.
+-- A fully returned shipment is a closed, non-revenue terminal state.
+ALTER TABLE sales_order DROP CONSTRAINT sales_order_delivery_status_check;
+ALTER TABLE sales_order ADD CONSTRAINT sales_order_delivery_status_check
+ CHECK(delivery_status IN ('NOT_DISPATCHED','PARTIAL','DELIVERED','RETURNED'));
+
 ALTER TABLE sales_fulfillment DROP CONSTRAINT sales_fulfillment_mode_check;
 ALTER TABLE sales_fulfillment ADD CONSTRAINT sales_fulfillment_mode_check
  CHECK(mode IN ('PICKUP','MANUAL'));
@@ -225,7 +230,7 @@ CREATE FUNCTION erp_t5a_manual_fulfillment_commit_guard() RETURNS trigger
  LANGUAGE plpgsql AS $$
 DECLARE ctx record; l record; issue_qty numeric;return_qty numeric;
  expected_amount numeric;posted_amount numeric;line_count integer;
- posted_count integer;real_qty numeric:=0;total_amount numeric:=0;
+ posted_count integer;real_qty numeric:=0;total_issued numeric:=0;total_amount numeric:=0;
 BEGIN
  IF NEW.mode<>'MANUAL' THEN RETURN NULL; END IF;
  SELECT o.status,v.delivery_choice,v.warehouse_id INTO ctx
@@ -289,8 +294,10 @@ BEGIN
    RAISE EXCEPTION 'Manual delivered amount differs from confirmed price'; END IF;
   total_amount:=total_amount+l.amount;
   real_qty:=real_qty+l.delivered_base;
+  total_issued:=total_issued+l.issued_base;
  END LOOP;
- IF real_qty<=0 THEN RAISE EXCEPTION 'Manual fulfillment requires delivered goods'; END IF;
+ IF real_qty<=0 AND total_issued<=0 THEN
+  RAISE EXCEPTION 'Manual fulfillment requires issued/returned stock history'; END IF;
  SELECT coalesce(sum(amount),0),count(*) INTO posted_amount,posted_count
  FROM customer_receivable_ledger
  WHERE installation_id=NEW.installation_id AND branch_id=NEW.branch_id
