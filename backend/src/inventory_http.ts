@@ -5,6 +5,8 @@ import { resolveSession } from "./auth.ts";
 import { hasPermission } from "./rbac.ts";
 import { executeMutation, MutationFault, type MutationContext } from "./mutation.ts";
 import { validIdempotencyKey } from "./contracts.ts";
+import { createLocation,createLot,setTrackingPolicy,assignStockScope,stockScopes,
+  directIssueHistory,issueManualStock,requireT3b,type DirectIssueItem } from "./direct_stock_issue.ts";
 import { InventoryFault, validBaseQty, balance, balances, movements, reservations,
   openStock, reserveStock, releaseStock, readInventoryGuardPolicy,
   setInventoryGuardPolicy, type ShortageMode, type WarehouseScope } from "./inventory.ts";
@@ -24,11 +26,22 @@ function send(res:ServerResponse,status:number,payload:unknown,id:string,origin?
  res.writeHead(status,headers);res.end(status===204?"":JSON.stringify(payload));
 }
 function fail(res:ServerResponse,status:number,code:string,id:string,origin?:string):void {
- const message=code==="ORDER_DIRECT_ISSUE_ONLY"
+ const message=({
+  T3B_MIGRATION_REQUIRED:"Cần nâng cấp dữ liệu kho T3-B trước khi xuất.",
+  CONFIRMED_MANUAL_ORDER_REQUIRED:"Chỉ xuất trực tiếp cho đơn MANUAL đã xác nhận đúng kho.",
+  ISSUE_EXCEEDS_ORDER_LINE:"Số xuất vượt lượng còn lại trên đơn.",
+  INSUFFICIENT_AVAILABLE_STOCK:"Tồn khả dụng không đủ. Vui lòng điều chỉnh số xuất.",
+  INSUFFICIENT_UNASSIGNED_STOCK:"Kho chưa có đủ hàng chưa phân lô/vị trí.",
+  NEGATIVE_ISSUE_REQUIRES_POLICY_ALLOW:"Kho đang cảnh báo tồn âm. Quản trị viên phải cho phép trước khi xuất.",
+  NEGATIVE_TRACKED_STOCK_DENIED:"Không được xuất âm khi hàng đã quản lý lô hoặc vị trí.",
+  STOCK_SCOPE_REQUIRED_OR_UNAVAILABLE:"Lô hoặc vị trí bắt buộc chưa hợp lệ, hoặc lô đã hết hạn.",
+  NEGATIVE_ISSUE_DENIED:"Nhân viên không có quyền xuất âm kho.",
+  RELEASE_ORDER_HOLDS_FIRST:"Đơn còn giữ hàng. Cần giải phóng trước khi xuất trực tiếp.",
+ } as Record<string,string>)[code]??(code==="ORDER_DIRECT_ISSUE_ONLY"
   ?"Đơn giao thủ công hoặc tại quầy không giữ hàng theo chuyến.":status===401?"Phiên đăng nhập không hợp lệ":
   status===403?"Bạn không có quyền trên kho này.":
   status===409?"Tồn kho hoặc chứng từ đã thay đổi. Vui lòng tải lại.":
-  status===503?"Nghiệp vụ kho chưa sẵn sàng.":"Thông tin kho không hợp lệ.";
+  status===503?"Nghiệp vụ kho chưa sẵn sàng.":"Thông tin kho không hợp lệ.");
  send(res,status,{error:{code,message,requestId:id}},id,origin);
 }
 function uuid(v:unknown):string{
@@ -47,6 +60,21 @@ function record(value:unknown):Record<string,unknown>{
 }
 function allowFields(x:Record<string,unknown>,fields:string[]):void{
  if(Object.keys(x).some(k=>!fields.includes(k)))throw new InventoryFault(400,"UNKNOWN_FIELD");
+}
+function optionalUuid(v:unknown):string|undefined{
+ return v===undefined||v===null?undefined:uuid(v);
+}
+function shortText(v:unknown,max:number):string{
+ if(typeof v!=="string"||v.trim().length<1||v.trim().length>max)
+  throw new InventoryFault(400,"INVALID_TEXT");
+ return v.trim();
+}
+function isoDate(v:unknown):string|null{
+ if(v===undefined||v===null)return null;
+ if(typeof v!=="string"||!/^\\d{4}-\\d{2}-\\d{2}$/.test(v)||
+  new Date(v).toISOString().slice(0,10)!==v)
+  throw new InventoryFault(400,"INVALID_DATE");
+ return v;
 }
 function scope(x:Record<string,unknown>):WarehouseScope{
  return {branchId:uuid(x.branchId),warehouseId:uuid(x.warehouseId)};
@@ -146,18 +174,133 @@ export async function handleInventoryHttp(req:IncomingMessage,res:ServerResponse
   }
   if(req.method==="POST"&&url.pathname==="/v1/inventory/guard-policy"){
    const raw=await parseBody(req);
-   allowFields(raw,["branchId","warehouseId","reserveShortageMode"]);
-   const s=scope(raw),mode=raw.reserveShortageMode;
+   allowFields(raw,["branchId","warehouseId","reserveShortageMode","negativeIssueMode"]);
+   const s=scope(raw),mode=raw.reserveShortageMode,negative=raw.negativeIssueMode;
    if(mode!=="ALLOW"&&mode!=="WARN"&&mode!=="BLOCK")
     throw new InventoryFault(400,"INVALID_RESERVE_POLICY");
-   const payload={...s,reserveShortageMode:mode};
+   if(negative!==undefined&&negative!=="ALLOW"&&negative!=="WARN"&&negative!=="BLOCK")
+    throw new InventoryFault(400,"INVALID_NEGATIVE_POLICY");
+   const payload={...s,reserveShortageMode:mode,...(negative===undefined?{}:{negativeIssueMode:negative})};
    const c=ctx(req,id,tenant,actorId,"inventory.guard-policy.set",payload,false);
    const outcome=await executeMutation(pool,c,{
     authorize:(db,m)=>hasPermission(db,{installationId:m.installationId,
       actorId:m.actorId,permission:"inventory.policy.manage",...s}),
-    execute:(db,m)=>setInventoryGuardPolicy(db,m,s,mode as ShortageMode),
+    execute:async(db,m)=>{
+      if(negative!==undefined)await requireT3b(db);
+      return setInventoryGuardPolicy(db,m,s,mode as ShortageMode,
+       negative as ShortageMode|undefined);
+    },
    });
    send(res,outcome.status,outcome.body,id,cors);return;
+  }
+  if(req.method==="GET"&&url.pathname==="/v1/inventory/stock-scopes"){
+   const q=scope({branchId:url.searchParams.get("branchId"),
+    warehouseId:url.searchParams.get("warehouseId")});
+   const productId=uuid(url.searchParams.get("productId"));
+   const db=await pool.connect();
+   try{
+    if(!await hasPermission(db,{installationId:tenant,actorId,
+      permission:"inventory.read",...q}))throw new InventoryFault(403,"INVENTORY_READ_DENIED");
+    send(res,200,{...await stockScopes(db,tenant,q,productId),requestId:id},id,cors);
+   }finally{db.release();}
+   return;
+  }
+  if(req.method==="GET"&&url.pathname==="/v1/inventory/direct-issues"){
+   const q=scope({branchId:url.searchParams.get("branchId"),
+    warehouseId:url.searchParams.get("warehouseId")});
+   const orderId=uuid(url.searchParams.get("orderId"));
+   const db=await pool.connect();
+   try{
+    if(!await hasPermission(db,{installationId:tenant,actorId,
+      permission:"inventory.read",...q})||
+       !await hasPermission(db,{installationId:tenant,actorId,
+        permission:"orders.read",branchId:q.branchId}))
+      throw new InventoryFault(403,"INVENTORY_READ_DENIED");
+    send(res,200,{items:await directIssueHistory(db,tenant,q,orderId),requestId:id},id,cors);
+   }finally{db.release();}
+   return;
+  }
+  if(req.method==="POST"&&url.pathname==="/v1/inventory/locations"){
+   const v=await parseBody(req);allowFields(v,["branchId","warehouseId","code","name"]);
+   const q=scope(v),code=shortText(v.code,40),name=shortText(v.name,120);
+   const payload={...q,code,name},c=ctx(req,id,tenant,actorId,"inventory.location.create",payload,true);
+   const out=await executeMutation(pool,c,{
+    authorize:(db,m)=>hasPermission(db,{installationId:m.installationId,actorId:m.actorId,
+      permission:"inventory.policy.manage",...q}),
+    execute:(db,m)=>createLocation(db,m,q,code,name),
+   });
+   send(res,out.status,out.body,id,cors);return;
+  }
+  if(req.method==="POST"&&url.pathname==="/v1/inventory/lots"){
+   const v=await parseBody(req);allowFields(v,["branchId","warehouseId","productId","lotCode","expiryDate"]);
+   const q=scope(v),productId=uuid(v.productId),lotCode=shortText(v.lotCode,80),
+    expiryDate=isoDate(v.expiryDate);
+   const payload={...q,productId,lotCode,expiryDate};
+   const c=ctx(req,id,tenant,actorId,"inventory.lot.create",payload,true);
+   const out=await executeMutation(pool,c,{
+    authorize:(db,m)=>hasPermission(db,{installationId:m.installationId,actorId:m.actorId,
+     permission:"inventory.policy.manage",...q}),
+    execute:(db,m)=>createLot(db,m,q,productId,lotCode,expiryDate),
+   });
+   send(res,out.status,out.body,id,cors);return;
+  }
+  if(req.method==="POST"&&url.pathname==="/v1/inventory/tracking-policy"){
+   const v=await parseBody(req);allowFields(v,
+    ["branchId","warehouseId","productId","requireLocation","requireLot"]);
+   const q=scope(v),productId=uuid(v.productId);
+   if(typeof v.requireLocation!=="boolean"||typeof v.requireLot!=="boolean")
+    throw new InventoryFault(400,"INVALID_TRACKING_POLICY");
+   const requireLocation=v.requireLocation,requireLot=v.requireLot;
+   const payload={...q,productId,requireLocation,requireLot};
+   const c=ctx(req,id,tenant,actorId,"inventory.tracking.set",payload,false);
+   const out=await executeMutation(pool,c,{
+    authorize:(db,m)=>hasPermission(db,{installationId:m.installationId,actorId:m.actorId,
+      permission:"inventory.policy.manage",...q}),
+    execute:(db,m)=>setTrackingPolicy(db,m,q,productId,requireLocation,requireLot),
+   });
+   send(res,out.status,out.body,id,cors);return;
+  }
+  if(req.method==="POST"&&url.pathname==="/v1/inventory/stock-scopes/assign"){
+   const v=await parseBody(req);allowFields(v,
+    ["branchId","warehouseId","productId","quantityBase","locationId","lotId"]);
+   if(!validBaseQty(v.quantityBase))throw new InventoryFault(400,"INVALID_QUANTITY");
+   const payload={...scope(v),productId:uuid(v.productId),
+     quantityBase:v.quantityBase,locationId:optionalUuid(v.locationId),
+     lotId:optionalUuid(v.lotId)};
+   const c=ctx(req,id,tenant,actorId,"inventory.stock-scope.assign",payload,true);
+   const out=await executeMutation(pool,c,{
+    authorize:(db,m)=>hasPermission(db,{installationId:m.installationId,actorId:m.actorId,
+      permission:"inventory.post",branchId:payload.branchId,warehouseId:payload.warehouseId}),
+    execute:(db,m)=>assignStockScope(db,m,payload),
+   });
+   send(res,out.status,out.body,id,cors);return;
+  }
+  if(req.method==="POST"&&url.pathname==="/v1/inventory/direct-issues"){
+   const v=await parseBody(req);allowFields(v,
+    ["branchId","warehouseId","orderId","version","lines","allowNegative"]);
+   if(!Array.isArray(v.lines)||v.lines.length<1||v.lines.length>100)
+    throw new InventoryFault(400,"INVALID_ISSUE_LINES");
+   const lines:DirectIssueItem[]=v.lines.map((x:unknown)=>{
+    const row=record(x);
+    allowFields(row,["lineNo","quantityBase","locationId","lotId"]);
+    if(!validBaseQty(row.quantityBase))throw new InventoryFault(400,"INVALID_QUANTITY");
+    return {lineNo:positiveInt(row.lineNo),quantityBase:row.quantityBase,
+     locationId:optionalUuid(row.locationId),lotId:optionalUuid(row.lotId)};
+   });
+   if(v.allowNegative!==undefined&&typeof v.allowNegative!=="boolean")
+    throw new InventoryFault(400,"INVALID_NEGATIVE_FLAG");
+   const input={...scope(v),orderId:uuid(v.orderId),version:positiveInt(v.version),
+    lines,allowNegative:v.allowNegative===true};
+   const c=ctx(req,id,tenant,actorId,"inventory.manual.issue",input,false);
+   const out=await executeMutation(pool,c,{
+    authorize:async(db,m)=>
+      await hasPermission(db,{installationId:m.installationId,actorId:m.actorId,
+       permission:"inventory.post",branchId:input.branchId,warehouseId:input.warehouseId})&&
+      await hasPermission(db,{installationId:m.installationId,actorId:m.actorId,
+       permission:"orders.update",branchId:input.branchId}),
+    execute:(db,m)=>issueManualStock(db,m,input),
+   });
+   send(res,out.status,out.body,id,cors);return;
   }
   if(req.method==="POST"&&url.pathname==="/v1/inventory/openings"){
    const raw=await parseBody(req);
