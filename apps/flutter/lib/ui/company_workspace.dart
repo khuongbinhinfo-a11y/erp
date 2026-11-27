@@ -107,7 +107,7 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
     super.didUpdateWidget(oldWidget);
     if(oldWidget.session?.token!=widget.session?.token||oldWidget.client!=widget.client)_warehouseOrder=null;
     final requested=widget.requestedSection;
-    if(requested!=null&&requested!=oldWidget.requestedSection&&canView(requested)&&!salesNavigationLocked){
+    if(requested!=null&&requested!=section&&requested!=oldWidget.requestedSection&&canView(requested)&&!salesNavigationLocked){
       section=requested;filter='';search.clear();_warehouseOrder=null;
     }
   }
