@@ -17,7 +17,12 @@ bool erpSalesCanAmendOrCancel(Map<String,dynamic> row)=>
   row['fulfillmentStatus']=='NOT_ALLOCATED'&&
   row['deliveryStatus']=='NOT_DISPATCHED'&&row['paymentStatus']=='NOT_DUE';
 
+Object? erpSalesDeliveryChoice(Map<String,dynamic> row){
+  final shipping=row['shipping'];
+  return row['deliveryChoice']??(shipping is Map?shipping['deliveryChoice']:null);
+}
 bool erpSalesCanHold(Map<String,dynamic> row)=>
+  (erpSalesDeliveryChoice(row)==null||erpSalesDeliveryChoice(row)=='TRIP')&&
   row['status']=='CONFIRMED'&&row['versionStatus']=='CONFIRMED'&&
   const ['NOT_ALLOCATED','PARTIAL','ALLOCATED'].contains(row['fulfillmentStatus'])&&
   row['deliveryStatus']=='NOT_DISPATCHED';
