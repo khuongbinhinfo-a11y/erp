@@ -26,8 +26,10 @@ IdentitySession loggedIn()=>IdentitySession(actorId:user,token:'local-test-token
   expiresAt:DateTime.now().add(const Duration(hours:1)),grants:rights);
 
 void main(){
-  testWidgets('Desktop order list uses a read-only split preview with compact filters', (tester)async{
-    var writes=0,details=0;
+  testWidgets('Desktop preview refreshes from canonical order after confirm, never mutates on select', (tester)async{
+    var writes=0,details=0,confirmed=false;
+    final grants=[...rights,
+      IdentityGrant(roleId:'confirm',permission:'orders.confirm',branchId:branch)];
     final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
       httpClient:MockClient((request)async{
         if(request.method!='GET')writes++;
@@ -37,21 +39,29 @@ void main(){
           return reply({'items':[{'id':branch,'name':'Chi nhánh chính'}]});
         if(request.url.path=='/v1/sales/orders')
           return reply({'items':[{'id':order,'documentNo':'SO-01',
-            'customerName':'Khách A','total':'12000','status':'CONFIRMED',
-            'versionStatus':'CONFIRMED','revision':1,
+            'customerName':'Khách A','total':'12000',
+            'status':confirmed?'CONFIRMED':'DRAFT',
+            'versionStatus':confirmed?'CONFIRMED':'DRAFT','revision':confirmed?2:1,
             'deliveryChoice':'MANUAL','fulfillmentStatus':'NOT_ALLOCATED',
             'deliveryStatus':'NOT_DISPATCHED','paymentStatus':'NOT_DUE'}]});
         if(request.url.path=='/v1/sales/orders/$order'){
           details++;
           return reply({'order':{'id':order,'documentNo':'SO-01',
             'customerName':'Khách A','total':'12000','subtotal':'12000',
-            'discountTotal':'0','taxTotal':'0','status':'CONFIRMED',
-            'versionStatus':'CONFIRMED','revision':1,
+            'discountTotal':'0','taxTotal':'0',
+            'status':confirmed?'CONFIRMED':'DRAFT',
+            'versionStatus':confirmed?'CONFIRMED':'DRAFT','revision':confirmed?2:1,
             'fulfillmentStatus':'NOT_ALLOCATED','deliveryStatus':'NOT_DISPATCHED',
             'paymentStatus':'NOT_DUE','shipping':{'deliveryChoice':'MANUAL',
               'warehouseName':'Kho chính'},'lines':[{'sku':'SP01','productName':'Sản phẩm A',
               'unitCode':'cái','quantity':'2','unitPrice':'6000','lineTotal':'12000'}],
             'history':[]}});
+        }
+        if(request.url.path=='/v1/sales/orders/$order/confirm'){
+          expect(request.method,'POST');
+          expect(request.headers['if-match'],'1');
+          confirmed=true;
+          return reply({'id':order,'revision':2,'status':'CONFIRMED'});
         }
         return http.Response(jsonEncode({'error':{'code':'NOT_FOUND'}}),404);
       }));
@@ -61,7 +71,9 @@ void main(){
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
-      home:Scaffold(body:SalesWorkspace(client:client,session:loggedIn()))));
+      home:Scaffold(body:SalesWorkspace(client:client,session:IdentitySession(
+        actorId:user,token:'preview-test-token',grants:grants,
+        expiresAt:DateTime.now().add(const Duration(hours:1)))))));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('sales-split-view')),findsOneWidget);
     expect(find.byKey(const ValueKey('sales-delivery-filter-all')),findsOneWidget);
@@ -72,9 +84,19 @@ void main(){
     expect(details,1);
     expect(find.byKey(const ValueKey('sales-preview-full')),findsOneWidget);
     expect(find.text('Sản phẩm A'),findsOneWidget);
+    expect(find.text('Đơn: Đang lập'),findsOneWidget);
     expect(writes,0,reason:'Selecting an order must never mutate inventory or sales');
+    await tester.tap(find.widgetWithText(FilledButton,'Xác nhận'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('sales-approve-confirm')));
+    await tester.pumpAndSettle();
+    expect(confirmed,isTrue);
+    expect(writes,1);
+    expect(details,greaterThanOrEqualTo(2),
+      reason:'Refresh detail after mutation while user navigation is locked');
+    expect(find.text('Đơn: Đã xác nhận'),findsOneWidget);
+    expect(find.text('Đơn: Đang lập'),findsNothing);
   });
-
 
   testWidgets('T1 modern order saves canonical walk-in and pickup context', (tester)async{
     const warehouse='00000000-0000-4000-8000-000000000009';
