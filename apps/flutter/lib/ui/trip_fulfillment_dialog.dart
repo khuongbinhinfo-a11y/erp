@@ -145,7 +145,10 @@ class _TripFulfillmentDialogState extends State<TripFulfillmentDialog> {
   @override Widget build(BuildContext context){
     return AlertDialog(
       title:Text(preparing?'Soạn & đóng hàng theo chuyến':'Xuất hàng theo chuyến'),
-      content:SizedBox(width:730,height:500,child:Column(
+      content:SizedBox(
+        width:(MediaQuery.sizeOf(context).width-140).clamp(150.0,730.0).toDouble(),
+        height:(MediaQuery.sizeOf(context).height*.56).clamp(260.0,500.0).toDouble(),
+        child:Column(
         crossAxisAlignment:CrossAxisAlignment.stretch,children:[
         if(widget.initialOrderId==null)Row(children:[
           Expanded(child:DropdownButtonFormField<String>(

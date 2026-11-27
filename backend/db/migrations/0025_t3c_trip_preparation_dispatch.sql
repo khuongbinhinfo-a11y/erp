@@ -193,20 +193,7 @@ BEGIN
  -- Remaining picked excludes physically dispatched units; a dispatch also
  -- decrements physical scope_balance and stock ledger by that same amount.
  IF NEW.picked_base>0 THEN
-  SELECT coalesce(sum(p.picked_base),0)-coalesce(sum(d.quantity_base),0)
-   INTO prior_scoped
-   FROM sales_trip_preparation_line p
-    JOIN sales_trip_preparation ph ON ph.installation_id=p.installation_id
-      AND ph.branch_id=p.branch_id AND ph.id=p.preparation_id
-    LEFT JOIN sales_trip_dispatch_line d ON d.installation_id=p.installation_id
-      AND d.branch_id=p.branch_id AND d.preparation_id=p.preparation_id
-      AND d.preparation_line_no=p.source_line
-   WHERE ph.installation_id=h.installation_id AND ph.branch_id=h.branch_id
-    AND ph.warehouse_id=h.warehouse_id AND p.product_id=NEW.product_id
-    AND p.location_id IS NOT DISTINCT FROM NEW.location_id
-    AND p.lot_id IS NOT DISTINCT FROM NEW.lot_id;
-  -- Use a separate aggregate when one preparation is dispatched in many lines:
-  -- the join above duplicates its picked value in that case. Recompute below.
+  -- One aggregate per preparation, even when an item was dispatched in many batches.
   SELECT coalesce(sum(x.picked_base-coalesce(x.issued,0)),0) INTO prior_scoped
    FROM (SELECT p.picked_base,
       (SELECT sum(d.quantity_base) FROM sales_trip_dispatch_line d

@@ -411,7 +411,7 @@ async function main(mode){
   const excluded=["schema_migrations"];
   await verifyOverrideGrants(pool,"before");
   const initial=await signature(pool,excluded);
-  console.log("ERP_T3C_BASE_0023_CHECKSUM_AND_DATA_PREFLIGHT_PASS "+sha.slice(0,12));
+  console.log("ERP_T3C_BASE_0024_CHECKSUM_AND_DATA_PREFLIGHT_PASS "+sha.slice(0,12));
   if(mode==="--check"){console.log("ERP_T3C_CHECK_ONLY_NO_DATABASE_WRITES");return;}
   required(e,["AWS_ACCESS_KEY_ID","AWS_SECRET_ACCESS_KEY","ERP_BACKUP_S3_ENDPOINT",
     "ERP_AGE_RECIPIENT","ERP_AGE_RECOVERY_IDENTITY"]);
