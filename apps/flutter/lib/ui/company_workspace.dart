@@ -97,6 +97,7 @@ class CompanyWorkspace extends StatefulWidget {
 class _CompanyWorkspaceState extends State<CompanyWorkspace> {
   CompanySection section = CompanySection.overview;
   bool salesNavigationLocked=false;
+  Map<String,dynamic>? _warehouseOrder;
   @override void initState(){
     super.initState();
     final requested=widget.requestedSection;
@@ -104,9 +105,10 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
   }
   @override void didUpdateWidget(covariant CompanyWorkspace oldWidget){
     super.didUpdateWidget(oldWidget);
+    if(oldWidget.session?.token!=widget.session?.token||oldWidget.client!=widget.client)_warehouseOrder=null;
     final requested=widget.requestedSection;
-    if(requested!=null&&requested!=oldWidget.requestedSection&&canView(requested)&&!salesNavigationLocked){
-      section=requested;filter='';search.clear();
+    if(requested!=null&&requested!=section&&requested!=oldWidget.requestedSection&&canView(requested)&&!salesNavigationLocked){
+      section=requested;filter='';search.clear();_warehouseOrder=null;
     }
   }
   bool canView(CompanySection target)=>erpCanViewCompanySection(target,widget.grants,previewOnly:widget.previewOnly);
@@ -134,6 +136,7 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
     }
     setState(() {
       section = value;
+      if(value!=CompanySection.warehouses)_warehouseOrder=null;
       filter = '';
       search.clear();
     });
@@ -191,6 +194,11 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
                     if(mounted)setState(()=>salesNavigationLocked=locked);
                     widget.onNavigationLockChanged?.call(locked);
                   },
+                  onOpenWarehouse:(order){
+                    if(!canView(CompanySection.warehouses)||salesNavigationLocked)return;
+                    setState(()=>_warehouseOrder=order);
+                    select(CompanySection.warehouses);
+                  },
                   onOpenCatalog:(area)=>select(switch(area){
                     'customers'=>CompanySection.customers,
                     'products'=>CompanySection.products,
@@ -198,8 +206,9 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
                   }))
             : (active == CompanySection.warehouses && !widget.previewOnly &&
                 widget.client != null && widget.session != null)
-              ? InventoryWorkspace(key:const ValueKey('inventory-workspace'),
-                  client:widget.client!,session:widget.session!)
+              ? InventoryWorkspace(key:ValueKey(_warehouseOrder==null?'inventory-workspace':
+                  'inventory-workspace-${_warehouseOrder!['id']}'),
+                  client:widget.client!,session:widget.session!,initialOrder:_warehouseOrder)
             : (active == CompanySection.purchases && !widget.previewOnly &&
                 widget.client != null && widget.session != null)
               ? PurchasingWorkspace(key:const ValueKey('purchasing-workspace'),
