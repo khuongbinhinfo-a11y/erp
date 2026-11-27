@@ -28,6 +28,11 @@ jobs:
           node --check backend/scripts/b1-production-migration.mjs
           node --check backend/scripts/r1-production-migration.mjs
           node --check backend/scripts/t6-0023-codespaces-migration.mjs
+           node --check backend/scripts/t3b-0024-codespaces-migration.mjs
+           if (cd backend && node --experimental-strip-types scripts/t3b-0024-codespaces-migration.mjs --check >/tmp/erp-t3b-operator-negative.log 2>&1); then
+             echo 'T3-B Codespaces-only migration operator ran inside CI' >&2
+             exit 1
+           fi
           # Even the read-only Codespaces preflight must reject GitHub Actions.
           if (cd backend && node --experimental-strip-types scripts/t6-0023-codespaces-migration.mjs --check               >/tmp/erp-t6-operator-negative.log 2>&1); then
             echo 'T6 Codespaces-only migration operator ran inside CI' >&2
@@ -154,12 +159,14 @@ jobs:
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='catalog_price_list' AND column_name IN ('effective_from','effective_to','priority')" | grep -qx 3
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM public.schema_migrations WHERE version='0019_p0_price_order_parity.sql'" | grep -qx 1
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.columns WHERE table_name='catalog_sku_price_rule' AND column_name IN ('imported_gross_amount','imported_discount_rate')" | grep -qx 2
-          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM public.schema_migrations" | grep -qx 23
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM public.schema_migrations" | grep -qx 24
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('catalog_brand','catalog_product_category','catalog_customer_location')" | grep -qx 3
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM schema_migrations WHERE version='0020_catalog_hierarchy_locations.sql'" | grep -qx 1
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM schema_migrations WHERE version='0021_t0_partial_reservation_policy.sql'" | grep -qx 1
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM schema_migrations WHERE version='0022_t1_sales_order_context.sql'" | grep -qx 1
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM schema_migrations WHERE version='0023_t6_pos_checkout.sql'" | grep -qx 1
+           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM schema_migrations WHERE version='0024_t3b_manual_direct_issue.sql'" | grep -qx 1
+           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('inventory_storage_location','inventory_product_lot','inventory_product_tracking','inventory_scope_assignment','sales_direct_issue','sales_direct_issue_line')" | grep -qx 6
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('retail_shift','sales_fulfillment','retail_checkout','customer_receivable_ledger','payment_receipt','payment_allocation','retail_return')" | grep -qx 7
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='inventory_guard_policy'" | grep -qx 1
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='inventory_reservation' AND column_name='backordered_base'" | grep -qx 1
