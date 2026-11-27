@@ -830,6 +830,14 @@ class ErpIdentityClient {
     _request('GET','/v1/inventory/stock-scopes?'+Uri(queryParameters:{
       'branchId':branchId,'warehouseId':warehouseId,'productId':productId}).query,
       token:token);
+  Future<List<Map<String,dynamic>>> inventoryDirectIssueTotals(String token,{
+    required String branchId,required String warehouseId,required String orderId})async{
+    final r=await _request('GET','/v1/inventory/direct-issues/totals?'+Uri(queryParameters:{
+      'branchId':branchId,'warehouseId':warehouseId,'orderId':orderId}).query,
+      token:token);
+    return (r['items'] as List<dynamic>).map((x)=>
+      Map<String,dynamic>.from(x as Map)).toList();
+  }
   Future<List<Map<String,dynamic>>> inventoryDirectIssues(String token,{
     required String branchId,required String warehouseId,required String orderId})async{
     final r=await _request('GET','/v1/inventory/direct-issues?'+Uri(queryParameters:{
