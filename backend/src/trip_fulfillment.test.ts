@@ -26,8 +26,8 @@ test("T3-C PostgreSQL: whole hold, partial pick/pack, physical dispatch, ledger,
   db=new Pool({connectionString:u.toString(),max:8,query_timeout:20000});
   db.on("error",()=>{});
   const installed=await applyMigrations(db,resolve(process.cwd(),"db/migrations"));
-  assert.equal(installed.applied.length,25);
-  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).skipped.length,25);
+  assert.equal(installed.applied.length,26);
+  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).skipped.length,26);
   const password="trip-secret-"+randomUUID();
   const root=await bootstrapInstallation(db,{code:"trip-ci",displayName:"Trip CI",
    adminLogin:"owner",adminPassword:password});
