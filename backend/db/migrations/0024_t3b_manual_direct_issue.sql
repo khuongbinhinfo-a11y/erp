@@ -464,7 +464,7 @@ BEGIN
  WHERE installation_id=NEW.installation_id AND branch_id=NEW.branch_id
   AND warehouse_id=NEW.warehouse_id AND product_id=NEW.product_id;
  IF has_negative_scope OR classified>greatest(available_now,0) THEN
-   RAISE EXCEPTION 'T3-B allocated lot/location stock exceeds available ledger balance';
+   RAISE EXCEPTION 'Scoped stock classification exceeds final available balance';
  END IF;
  RETURN NULL;
 END; $t3b$;
