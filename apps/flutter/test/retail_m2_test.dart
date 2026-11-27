@@ -116,10 +116,18 @@ void main(){
       x.contains('/payment')||x.contains('/issue')||x.contains('/settle')),isEmpty);
     tester.view.physicalSize=const Size(1100,820);
     await tester.pumpAndSettle();
+    // Desktop register keeps product grid and quoted cart visible in parallel.
+    expect(find.byKey(const ValueKey('pos-products-grid')),findsOneWidget);
+    expect(find.byKey(const ValueKey('pos-grid-item-$sku')),findsOneWidget);
+    expect(find.byKey(const ValueKey('pos-cart')),findsOneWidget);
     expect(find.byKey(const ValueKey('pos-plus-0')),findsOneWidget);
     expect(find.textContaining('24,000 ₫'),findsWidgets);
     tester.view.physicalSize=const Size(360,760);
     await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('pos-products-grid')),findsNothing);
+    expect(find.byKey(const ValueKey('erp-mobile-navigation')),findsNothing);
+    expect(find.byKey(const ValueKey('pos-fullscreen-back')),findsOneWidget);
+    expect(find.byKey(const ValueKey('pos-cart')),findsOneWidget);
     expect(find.textContaining('24,000 ₫'),findsWidgets);
     expect(tester.takeException(),isNull);
   });
