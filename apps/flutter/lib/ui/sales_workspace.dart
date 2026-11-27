@@ -3708,7 +3708,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                             ]),
                             const SizedBox(height:5),
                             Row(children:[
-                              Expanded(child:Text((o['documentNo']??'Đang lập').toString(),
+                              Expanded(child:Text((o['documentNo']??'Chưa cấp số').toString(),
                                 maxLines:1,overflow:TextOverflow.ellipsis,
                                 style:TextStyle(color:ErpPalette.of(ctx).muted,fontSize:11))),
                               const SizedBox(width:6),
