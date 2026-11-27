@@ -96,7 +96,7 @@ function ctx(req:IncomingMessage,rid:string,t:string,actor:string,action:string,
  return {installationId:t,actorId:actor,requestId:rid,idempotencyKey:key,
   expectedRevision,action:"sales.execution."+action,payload} satisfies MutationContext;
 }
-async function permitted(db:PoolClient,c:MutationContext,s:ExecutionScope,action:string){
+async function permitted(db:PoolClient,c:MutationContext,s:Pick<ExecutionScope,'branchId'|'warehouseId'|'orderId'>,action:string){
  const branch=s.branchId,warehouse=s.warehouseId,tenant=c.installationId,actor=c.actorId;
  const branchPerm=action==="payment"?["orders.read","finance.payments.record"]:
   action==="return"?["orders.update","delivery.update"]:["orders.read","delivery.update"];
