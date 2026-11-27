@@ -200,6 +200,44 @@ test("T3-B PostgreSQL: partial MANUAL issue, lot/location, scoped stock, negativ
    await scopeForger.query("ROLLBACK").catch(()=>undefined);
    scopeForger.release();
   }
+  // An orphan ISSUE committed before the header exists must not become a
+  // valid direct stock source by creating that header in a later transaction.
+  const delayedHeaderId=randomUUID();
+  const legacyOrphan=await db.query<{id:string}>(`INSERT INTO inventory_ledger
+   (installation_id,branch_id,warehouse_id,product_id,kind,source_type,
+    source_id,source_line,delta_base,actor_id,request_id)
+   VALUES($1,$2,$3,$4,'ISSUE','FULFILLMENT',$5,99,-1,$6,'precommitted-orphan')
+   RETURNING id`,[t,b,w,products[1],delayedHeaderId,root.actorId]);
+  const late=await db.connect();
+  try{
+   await late.query("BEGIN");
+   await late.query(`INSERT INTO sales_direct_issue
+     (installation_id,branch_id,id,order_id,version_no,warehouse_id,actor_id,request_id)
+     VALUES($1,$2,$3,$4,1,$5,$6,'late-header')`,
+     [t,b,delayedHeaderId,scopedOrder,w,root.actorId]);
+   await late.query(`INSERT INTO sales_direct_issue_line
+     (installation_id,branch_id,issue_id,source_line,order_line_no,product_id,quantity_base)
+     VALUES($1,$2,$3,1,1,$4,1)`,[t,b,delayedHeaderId,products[1]]);
+   await late.query(`INSERT INTO inventory_ledger
+     (installation_id,branch_id,warehouse_id,product_id,kind,source_type,
+      source_id,source_line,delta_base,actor_id,request_id)
+     VALUES($1,$2,$3,$4,'ISSUE','FULFILLMENT',$5,1,-1,$6,'late-matched-line')`,
+     [t,b,w,products[1],delayedHeaderId,root.actorId]);
+   await assert.rejects(late.query("COMMIT"),
+     /Direct issue header has unmatched historic ledger movement/i);
+  }finally{
+   await late.query("ROLLBACK").catch(()=>undefined);
+   late.release();
+  }
+  // Correct synthetic starting stock by REVERSAL; never rewrite a posted row.
+  await db.query(`INSERT INTO inventory_ledger
+   (installation_id,branch_id,warehouse_id,product_id,kind,source_type,source_id,
+    source_line,delta_base,reversal_of,actor_id,request_id)
+   VALUES($1,$2,$3,$4,'REVERSAL','REVERSAL',$5,1,1,$6,$7,'orphan-test-correction')`,
+   [t,b,w,products[1],randomUUID(),legacyOrphan.rows[0]!.id,root.actorId]);
+  assert.equal((await db.query<{n:string}>(`SELECT count(*)::text AS n
+    FROM sales_direct_issue WHERE installation_id=$1 AND id=$2`,
+    [t,delayedHeaderId])).rows[0]!.n,"0");
   const lot=await write("/v1/inventory/lots",
    {branchId:b,warehouseId:w,productId:products[1],lotCode:"LOT-A",
     expiryDate:"2099-12-31"});
