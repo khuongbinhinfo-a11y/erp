@@ -776,6 +776,97 @@ class ErpIdentityClient {
     final r=await _request('GET','/v1/sales/orders/$id?$q',token:token);
     return Map<String,dynamic>.from(r['order'] as Map);
   }
+  /// T5-A: canonical server-side stock/delivery and AR facts. No offline posts.
+  Future<Map<String,dynamic>> salesExecutionRead(String token,{
+      required String branchId,required String warehouseId,required String orderId})async{
+    final q=Uri(queryParameters:{'branchId':branchId,
+      'warehouseId':warehouseId,'orderId':orderId}).query;
+    final r=await _request('GET','/v1/sales/execution/read?$q',token:token);
+    return Map<String,dynamic>.from(r['execution'] as Map);
+  }
+  Future<Map<String,dynamic>?> salesExecutionRecovery(String token,
+      String action,Map<String,dynamic> fields,
+      {required String key,required int revision})async{
+    final r=await _request('POST','/v1/sales/execution/recovery',token:token,
+      body:{'action':action,'body':fields},revision:revision,idempotencyKey:key);
+    final receipt=r['receipt'];
+    return receipt==null?null:Map<String,dynamic>.from(receipt as Map);
+  }
+  /// The key/body/revision are persisted atomically before any network call.
+  /// Unresolved payment must NEVER be replaced with a fresh idempotency key.
+  Future<Map<String,dynamic>> postSalesExecution(IdentitySession session,
+      String action,Map<String,dynamic> fields,int revision)async{
+    if(!const {'complete','return','payment'}.contains(action))
+      throw const ErpApiError(400,'Thao tác đơn không hợp lệ.');
+    final branch=fields['branchId'] as String,warehouse=fields['warehouseId'] as String,
+      order=fields['orderId'] as String;
+    final scope=localScope(session,branch,warehouse:warehouse),store=localStore;
+    if(scope==null||store==null)
+      throw const ErpApiError(503,'Chưa có lưu trữ an toàn cho chứng từ chờ đối soát.');
+    final previous=await store.executionPending(scope,order);
+    String key;
+    if(previous!=null){
+      final pendingAction=previous['action'],pendingBody=previous['body'],
+        pendingRevision=previous['revision'],pendingKey=previous['key'];
+      if(pendingKey is! String||pendingBody is! Map<String,dynamic>||
+         pendingRevision is! int||pendingAction is! String)
+        throw const ErpApiError(409,'Chứng từ chờ bị lỗi. Chưa thể ghi sổ.');
+      final existing=await salesExecutionRecovery(session.token,pendingAction,
+        Map<String,dynamic>.from(pendingBody),key:pendingKey,revision:pendingRevision);
+      if(existing!=null){
+        await store.clearExecutionPending(scope,order,pendingKey);
+        if(pendingAction==action&&pendingRevision==revision&&
+            jsonEncode(pendingBody)==jsonEncode(fields))return existing;
+        throw const ErpApiError(409,'Đã đối soát chứng từ cũ. Tải lại đơn trước khi tiếp tục.');
+      }
+      if(pendingAction!=action||pendingRevision!=revision||
+         jsonEncode(pendingBody)!=jsonEncode(fields))
+        throw const ErpApiError(423,
+          'Chứng từ trước chưa xác nhận. Phải đối soát, không được gửi lệnh mới.');
+      key=pendingKey;
+    }else{
+      key=_key();
+      await store.saveExecutionPending(scope,order,{
+        'action':action,'body':fields,'revision':revision,'key':key});
+    }
+    try{
+      final path=action=='return'?'returns':action=='payment'?'payments':'complete';
+      final result=await _request('POST','/v1/sales/execution/$path',
+        token:session.token,body:fields,revision:revision,idempotencyKey:key);
+      await store.clearExecutionPending(scope,order,key);
+      return result;
+    }on ErpApiError catch(e){
+      try{
+        final receipt=await salesExecutionRecovery(session.token,action,fields,
+            key:key,revision:revision);
+        if(receipt!=null){
+          await store.clearExecutionPending(scope,order,key);
+          return receipt;
+        }
+        if(e.status>=400&&e.status<500&&e.status!=408&&e.status!=423&&e.status!=424){
+          await store.clearExecutionPending(scope,order,key);
+          rethrow;
+        }
+      }catch(_){/* Keep exact key/intent; an unavailable recovery is inconclusive. */}
+      throw const ErpApiError(424,
+        'Chưa xác minh được máy chủ đã ghi sổ hay chưa. Lệnh và khóa gốc đã được giữ; đối soát trước khi thử lại.');
+    }
+  }
+  /// Read without posting. Keep an unresolved original command until ACK.
+  Future<Map<String,dynamic>?> reconcileSalesExecution(IdentitySession session,
+      {required String branchId,required String warehouseId,required String orderId})async{
+    final scope=localScope(session,branchId,warehouse:warehouseId),store=localStore;
+    if(scope==null||store==null)return null;
+    final p=await store.executionPending(scope,orderId);
+    if(p==null)return null;
+    final action=p['action'],body=p['body'],key=p['key'],revision=p['revision'];
+    if(action is! String||body is! Map||key is! String||revision is! int)
+      throw const ErpApiError(409,'Lệnh chờ đối soát không hợp lệ.');
+    final receipt=await salesExecutionRecovery(session.token,action,
+      Map<String,dynamic>.from(body),key:key,revision:revision);
+    if(receipt!=null)await store.clearExecutionPending(scope,orderId,key);
+    return receipt;
+  }
   Future<Map<String,dynamic>?> salesRecovery(String token,String action,Map<String,dynamic> fields,{
     required String key,required int revision,String? orderId})async{
     final r=await _request('POST','/v1/sales/recovery',token:token,body:{
