@@ -82,13 +82,15 @@ DECLARE issue_row sales_direct_issue_line%ROWTYPE;source_order uuid;
  source_version integer;source_wh uuid;return_order uuid;
  return_version integer;return_wh uuid;returned numeric;
 BEGIN
- SELECT l.*,h.order_id,h.version_no,h.warehouse_id
- INTO issue_row,source_order,source_version,source_wh
- FROM sales_direct_issue_line l JOIN sales_direct_issue h
-  ON h.installation_id=l.installation_id AND h.branch_id=l.branch_id AND h.id=l.issue_id
+ SELECT l.* INTO issue_row
+ FROM sales_direct_issue_line l
  WHERE l.installation_id=NEW.installation_id AND l.branch_id=NEW.branch_id
   AND l.issue_id=NEW.issue_id AND l.source_line=NEW.issue_source_line
  FOR UPDATE OF l;
+ SELECT h.order_id,h.version_no,h.warehouse_id
+ INTO source_order,source_version,source_wh
+ FROM sales_direct_issue h WHERE h.installation_id=NEW.installation_id
+  AND h.branch_id=NEW.branch_id AND h.id=NEW.issue_id;
  SELECT order_id,version_no,warehouse_id INTO return_order,return_version,return_wh
  FROM sales_manual_return WHERE installation_id=NEW.installation_id
   AND branch_id=NEW.branch_id AND id=NEW.return_id;
