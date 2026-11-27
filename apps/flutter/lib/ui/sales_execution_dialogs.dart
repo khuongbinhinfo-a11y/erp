@@ -359,16 +359,37 @@ Future<Map<String,dynamic>?> _askReturn(BuildContext context,
               final row=current[i],q=erpInventoryBaseUnits(
                 (row['returnableBase']??'0').toString())??BigInt.zero;
               if(q<=BigInt.zero)return const SizedBox.shrink();
-              return Padding(padding:const EdgeInsets.symmetric(vertical:5),
-                child:Row(children:[
+              final issueId=(row['issueId']??'').toString();
+              final when=DateTime.tryParse((row['issuedAt']??'').toString())?.toLocal();
+              final timestamp=when==null?'Chưa có thời gian xuất':
+                '${when.day.toString().padLeft(2,'0')}/${when.month.toString().padLeft(2,'0')} '
+                '${when.hour.toString().padLeft(2,'0')}:${when.minute.toString().padLeft(2,'0')}';
+              final lotCode=(row['lotCode']??'').toString().trim();
+              final locCode=(row['locationCode']??'').toString().trim();
+              final locName=(row['locationName']??'').toString().trim();
+              final lot=lotCode.isEmpty?'Không gắn lô':lotCode;
+              final location=locCode.isEmpty?'Không gắn vị trí':
+                locName.isEmpty?locCode:'$locCode · $locName';
+              final shortId=issueId.length>=8?issueId.substring(issueId.length-8):issueId;
+              return Padding(padding:const EdgeInsets.symmetric(vertical:6),
+                child:Row(crossAxisAlignment:CrossAxisAlignment.start,children:[
                   Expanded(child:Column(
                     crossAxisAlignment:CrossAxisAlignment.start,children:[
-                    Text('Dòng '+row['lineNo'].toString(),
+                    Text((row['productName']??'Sản phẩm').toString()+
+                      ' · '+(row['productSku']??'').toString(),
                       style:const TextStyle(fontWeight:FontWeight.w700)),
-                    Text('Có thể trả: '+erpNumberText(row['returnableBase']),
+                    Tooltip(message:'Mã chứng từ xuất: '+issueId,
+                      child:Text('PX $shortId · Nguồn '+row['sourceLine'].toString()+
+                        ' · $timestamp',style:const TextStyle(fontSize:11))),
+                    Text('Lô: $lot · Vị trí: $location',
+                      style:const TextStyle(fontSize:12,fontWeight:FontWeight.w600)),
+                    Text('Dòng '+row['lineNo'].toString()+
+                      ' · Có thể trả: '+erpNumberText(row['returnableBase'])+
+                      ' '+(row['baseUnit']??'').toString(),
                       style:const TextStyle(fontSize:12)),
                   ])),
-                  SizedBox(width:160,child:TextField(controller:fields[i],
+                  const SizedBox(width:8),
+                  SizedBox(width:138,child:TextField(controller:fields[i],
                     onChanged:(_)=>update((){}),
                     inputFormatters:const [
                       ErpGroupedNumberFormatter(maxIntegerDigits:12,maxFractionDigits:6)],
