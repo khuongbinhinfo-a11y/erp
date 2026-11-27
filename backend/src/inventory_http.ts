@@ -7,6 +7,7 @@ import { executeMutation, MutationFault, type MutationContext } from "./mutation
 import { validIdempotencyKey } from "./contracts.ts";
 import { createLocation,createLot,setTrackingPolicy,assignStockScope,stockScopes,
   directIssueHistory,directIssueTotals,reconcileManualIssues,issueManualStock,requireT3b,type DirectIssueItem } from "./direct_stock_issue.ts";
+import { tripWork,prepareTrip,dispatchTrip,type TripPrepareItem,type TripDispatchItem } from "./trip_fulfillment.ts";
 import { InventoryFault, validBaseQty, balance, balances, movements, reservations,
   openStock, reserveStock, reserveTripOrder, releaseStock, readInventoryGuardPolicy,
   setInventoryGuardPolicy, type ShortageMode, type WarehouseScope } from "./inventory.ts";
@@ -27,6 +28,12 @@ function send(res:ServerResponse,status:number,payload:unknown,id:string,origin?
 }
 function fail(res:ServerResponse,status:number,code:string,id:string,origin?:string):void {
  const message=({
+  T3C_MIGRATION_REQUIRED:"Cần nâng cấp dữ liệu kho theo chuyến trước khi thao tác.",
+  TRIP_ORDER_NOT_READY:"Đơn đã thay đổi trạng thái hoặc không thuộc luồng giao theo chuyến.",
+  TRIP_ORDER_UNAVAILABLE:"Không tìm thấy đơn giao theo chuyến trong kho đã chọn.",
+  TRIP_LINES_REQUIRED:"Cần chọn ít nhất một dòng hàng hợp lệ.",
+  TRIP_HOLD_REQUIRED:"Dòng hàng chưa giữ tại kho. Hãy giữ hàng trước khi soạn.",
+  TRIP_DISPATCH_EXCEEDS_PACKED:"Số lượng xuất vượt phần đã đóng hàng.",
   TRIP_HOLD_MIGRATION_REQUIRED:"Cần nâng cấp dữ liệu giữ hàng trước khi xử lý đơn theo chuyến.",
   TRIP_ORDER_NOT_READY_FOR_HOLD:"Chỉ giữ hàng cho đơn giao theo chuyến đã xác nhận, đúng kho và chưa xử lý xuất kho.",
   TRIP_HOLD_SCOPE_CONFLICT:"Đơn có phiếu giữ hàng khác kho hoặc phiên bản. Hãy đối chiếu trước khi tiếp tục.",
@@ -194,6 +201,71 @@ export async function handleInventoryHttp(req:IncomingMessage,res:ServerResponse
       return setInventoryGuardPolicy(db,m,s,mode as ShortageMode,
        negative as ShortageMode|undefined);
     },
+   });
+   send(res,outcome.status,outcome.body,id,cors);return;
+  }
+  if(req.method==="GET"&&url.pathname==="/v1/inventory/trips/work"){
+   const q=scope({branchId:url.searchParams.get("branchId"),
+    warehouseId:url.searchParams.get("warehouseId")});
+   const rawVersion=url.searchParams.get("version"),version=positiveInt(Number(rawVersion));
+   const input={...q,orderId:uuid(url.searchParams.get("orderId")),version};
+   const db=await pool.connect();
+   try{
+    if(!await hasPermission(db,{installationId:tenant,actorId,
+       permission:"inventory.read",...q})||
+       !await hasPermission(db,{installationId:tenant,actorId,
+        permission:"orders.read",branchId:q.branchId}))
+      throw new InventoryFault(403,"INVENTORY_READ_DENIED");
+    send(res,200,{...await tripWork(db,tenant,input),requestId:id},id,cors);
+   }finally{db.release();}
+   return;
+  }
+  if(req.method==="POST"&&url.pathname==="/v1/inventory/trips/prepare"){
+   const raw=await parseBody(req);
+   allowFields(raw,["branchId","warehouseId","orderId","version","lines"]);
+   const q=scope(raw),orderId=uuid(raw.orderId),version=positiveInt(raw.version);
+   if(!Array.isArray(raw.lines)||raw.lines.length<1||raw.lines.length>100)
+    throw new InventoryFault(400,"TRIP_LINES_REQUIRED");
+   const lines:TripPrepareItem[]=raw.lines.map(x=>{
+     const v=record(x);
+     allowFields(v,["lineNo","pickedBase","packedBase","locationId","lotId"]);
+     if(typeof v.pickedBase!=="string"||typeof v.packedBase!=="string")
+       throw new InventoryFault(400,"INVALID_QUANTITY");
+     return {lineNo:positiveInt(v.lineNo),pickedBase:v.pickedBase,
+      packedBase:v.packedBase,locationId:optionalUuid(v.locationId),
+      lotId:optionalUuid(v.lotId)};
+   });
+   const input={...q,orderId,version,lines};
+   const c=ctx(req,id,tenant,actorId,"inventory.trip.prepare",input,false);
+   const outcome=await executeMutation(pool,c,{
+    authorize:async(db,m)=>await hasPermission(db,{installationId:m.installationId,
+      actorId:m.actorId,permission:"inventory.reserve",...q})&&
+      await hasPermission(db,{installationId:m.installationId,actorId:m.actorId,
+       permission:"orders.read",branchId:q.branchId}),
+    execute:(db,m)=>prepareTrip(db,m,input),
+   });
+   send(res,outcome.status,outcome.body,id,cors);return;
+  }
+  if(req.method==="POST"&&url.pathname==="/v1/inventory/trips/dispatch"){
+   const raw=await parseBody(req);
+   allowFields(raw,["branchId","warehouseId","orderId","version","lines"]);
+   const q=scope(raw),orderId=uuid(raw.orderId),version=positiveInt(raw.version);
+   if(!Array.isArray(raw.lines)||raw.lines.length<1||raw.lines.length>100)
+    throw new InventoryFault(400,"TRIP_LINES_REQUIRED");
+   const lines:TripDispatchItem[]=raw.lines.map(x=>{
+    const v=record(x);allowFields(v,["preparationId","sourceLine","quantityBase"]);
+    if(!validBaseQty(v.quantityBase))throw new InventoryFault(400,"INVALID_QUANTITY");
+    return {preparationId:uuid(v.preparationId),sourceLine:positiveInt(v.sourceLine),
+      quantityBase:v.quantityBase};
+   });
+   const input={...q,orderId,version,lines};
+   const c=ctx(req,id,tenant,actorId,"inventory.trip.dispatch",input,false);
+   const outcome=await executeMutation(pool,c,{
+    authorize:async(db,m)=>await hasPermission(db,{installationId:m.installationId,
+      actorId:m.actorId,permission:"inventory.post",...q})&&
+      await hasPermission(db,{installationId:m.installationId,actorId:m.actorId,
+        permission:"orders.read",branchId:q.branchId}),
+    execute:(db,m)=>dispatchTrip(db,m,input),
    });
    send(res,outcome.status,outcome.body,id,cors);return;
   }
