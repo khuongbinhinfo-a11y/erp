@@ -54,6 +54,9 @@ void main(){
             return reply({'items':[{'id':warehouse,'name':'Kho chính','code':'MAIN'}]});
           case '/v1/catalog/price-lists':
             return reply({'items':[{'id':priceList,'name':'Giá bán lẻ','code':'RETAIL','active':true}]});
+          case '/v1/catalog/products/$product/media':
+            expect(request.url.queryParameters['branchId'],branch);
+            return reply({'items':[]});
           case '/v1/catalog/r1/skus':
             return reply({'items':[{'id':sku,'productId':product,'code':'SKU-01',
               'productName':'Hàng bán lẻ A','unitCode':'cái',
@@ -119,11 +122,13 @@ void main(){
     expect(calls.where((x)=>x=='POST /v1/sales/quote'),isNotEmpty);
     expect(calls.where((x)=>x.contains('/v1/sales/orders')||
       x.contains('/payment')||x.contains('/issue')||x.contains('/settle')),isEmpty);
+    expect(calls.where((x)=>x.contains('/media')),isEmpty,reason:'Mobile never requests photos');
     tester.view.physicalSize=const Size(1100,820);
     await tester.pumpAndSettle();
     // Desktop register keeps product grid and quoted cart visible in parallel.
     expect(find.byKey(const ValueKey('pos-products-grid')),findsOneWidget);
     expect(find.byKey(const ValueKey('pos-grid-item-$sku')),findsOneWidget);
+    expect(calls.where((x)=>x=='GET /v1/catalog/products/$product/media').length,1);
     expect(find.byKey(const ValueKey('pos-cart')),findsOneWidget);
     expect(find.byKey(const ValueKey('pos-plus-0')),findsOneWidget);
     expect(find.textContaining('24,000 ₫'),findsWidgets);

@@ -11,6 +11,7 @@ import 'erp_number_input.dart';
 import 'erp_tokens.dart';
 import 'identity_client.dart';
 import 'sales_workspace.dart' show erpRetailStepQuantity;
+import 'pos_product_photo_cache.dart';
 
 /// POS is a separate task surface, not a cosmetic mode of the distribution
 /// order editor. Only an acknowledged, atomic server POS checkout can
@@ -35,6 +36,16 @@ class _RetailLine {
 class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
   final _search=TextEditingController();
   final _searchFocus=FocusNode();
+  PosProductPhotoCache? _photoCache;
+  void _clearPhotoCache(){_photoCache?.dispose();_photoCache=null;}
+  Future<String?> _photoFor(Map<String,dynamic> sku){
+    final branch=_branch,session=widget.session,client=widget.client;
+    final productId=sku['productId'];
+    if(branch==null||productId is! String||!session.grants.any((g)=>
+      g.permission=='catalog.read'&&(g.branchId==null||g.branchId==branch)))return Future.value(null);
+    final cache=_photoCache??=PosProductPhotoCache((id)=>client.productPhotos(session.token,branch,id));
+    return cache.urlFor(productId);
+  }
   Timer? _debounce;
   Future<void> _pendingWrite=Future<void>.value();
   int _generation=0,_quoteVersion=0,_searchVersion=0,_catalogVersion=0,_customerChoiceVersion=0;
@@ -59,7 +70,8 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
     super.didUpdateWidget(old);
     if(old.session.token!=widget.session.token||
         old.session.actorId!=widget.session.actorId||
-        old.session.installationId!=widget.session.installationId){
+        old.session.installationId!=widget.session.installationId||old.client!=widget.client){
+      _clearPhotoCache();
       ++_generation;++_quoteVersion;++_searchVersion;++_catalogVersion;
       _debounce?.cancel();_search.clear();
       _branch=null;_warehouse=null;_priceList=null;_walkIn=null;_canonicalWalkIn=null;_preparingWalkIn=false;++_customerChoiceVersion;
@@ -70,6 +82,7 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
   }
   @override void dispose(){
     ++_generation;++_quoteVersion;++_searchVersion;++_catalogVersion;
+    _clearPhotoCache();
     _debounce?.cancel();_search.dispose();_searchFocus.dispose();
     super.dispose();
   }
@@ -97,6 +110,7 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
     }
   }
   Future<void> _loadBranch(String branch)async{
+    _clearPhotoCache();
     final g=++_generation;
     ++_quoteVersion;++_searchVersion;++_catalogVersion;_debounce?.cancel();
     setState((){
@@ -707,8 +721,7 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
             final item=rows[i];
             final index=_lines.indexWhere((line)=>line.id==item['id']);
             final quoted=index>=0&&index<_priced.length?_priced[index]:null;
-            final rawImage=(item['imageUrl']??item['thumbnailUrl']??'').toString();
-            final uri=Uri.tryParse(rawImage);
+
             return Material(color:palette.surface,clipBehavior:Clip.antiAlias,
               shape:RoundedRectangleBorder(borderRadius:BorderRadius.circular(9),
                 side:BorderSide(color:palette.border)),
@@ -718,10 +731,16 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
                 child:Padding(padding:const EdgeInsets.all(9),child:Column(
                   crossAxisAlignment:CrossAxisAlignment.start,children:[
                     Row(children:[
-                      SizedBox(width:38,height:38,child:uri!=null&&uri.scheme=='https'
-                        ?Image.network(rawImage,fit:BoxFit.cover,
-                          errorBuilder:(_,__,___)=>Icon(Icons.inventory_2_outlined,color:palette.muted))
-                        :Icon(Icons.inventory_2_outlined,color:palette.muted)),
+                      SizedBox(width:44,height:44,child:ClipRRect(borderRadius:BorderRadius.circular(5),
+                        child:FutureBuilder<String?>(future:_photoFor(item),
+                          key:ValueKey('pos-photo-${_generation}-${item['id']}'),
+                          builder:(context,snapshot){
+                            final url=snapshot.data;
+                            final placeholder=Icon(Icons.inventory_2_outlined,color:palette.muted);
+                            if(snapshot.connectionState!=ConnectionState.done||url==null)return placeholder;
+                            return Image.network(url,fit:BoxFit.cover,
+                              errorBuilder:(_,__,___)=>placeholder);
+                          }))),
                       const SizedBox(width:7),
                       Expanded(child:Text(item['productName']?.toString()??item['name']?.toString()??'Sản phẩm',
                         maxLines:2,overflow:TextOverflow.ellipsis,
