@@ -53,7 +53,7 @@ function sameObject(obj,sha,size,source){
   return !!obj&&obj.size===size&&obj.customMetadata?.sha256===sha&&
     obj.customMetadata?.signersha256===SIGNER&&
     obj.customMetadata?.sourcesha===source&&
-    obj.customMetadata?.versioncode==="3"&&obj.customMetadata?.versionname==="0.4.0";
+    obj.customMetadata?.versioncode==="4"&&obj.customMetadata?.versionname==="0.4.0";
 }
 export default {
   async fetch(request,env){
