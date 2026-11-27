@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {BASE,RELEASE,checkVersions,assertExactOperatorMigrationFiles,checkOperator,assertT3cSchemaState} from "./t3c-0025-codespaces-migration.mjs";
+import {BASE,RELEASE,checkVersions,assertExactOperatorMigrationFiles,checkOperator,assertT3cSchemaState,preservedRowJsonExpression} from "./t3c-0025-codespaces-migration.mjs";
 test("T3-C permits exactly 0024 to 0025, no drift or future migration",()=>{
  assert.equal(BASE.length,24);
  assert.equal(BASE.at(-1),"0024_t3b_manual_direct_issue.sql");
@@ -28,4 +28,14 @@ test("T3-C verifies all four T3-C tables and nine guards, no invalid or backfill
  assert.throws(()=>assertT3cSchemaState({...valid,guards:"8"},true),/RECONCILIATION/);
  assert.throws(()=>assertT3cSchemaState({...valid,new_rows:"1"},true),/RECONCILIATION/);
  assert.doesNotThrow(()=>assertT3cSchemaState({...valid,new_rows:"1"},false));
+});
+
+test("0025 preserves populated 0024 reservation row fingerprint despite nullable new column",()=>{
+ assert.equal(preservedRowJsonExpression("inventory_reservation"),
+  "(to_jsonb(x) - 'replenishment_of')");
+ assert.equal(preservedRowJsonExpression("inventory_ledger"),"to_jsonb(x)");
+ const before={id:"hold",quantity_base:"2.000000",state:"ACTIVE"};
+ const migrated={...before,replenishment_of:null};
+ const normalize=x=>Object.fromEntries(Object.entries(x).filter(([k])=>k!=="replenishment_of"));
+ assert.deepEqual(normalize(migrated),before);
 });

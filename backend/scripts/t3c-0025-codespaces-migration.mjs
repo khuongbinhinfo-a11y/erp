@@ -296,6 +296,10 @@ async function verifyOverrideGrants(pool,stage){
   ORDER BY r.installation_id,r.id,p.code`,[T3C_PERMISSIONS])).rows;
  if(JSON.stringify(current)!==JSON.stringify(expected))fail("T3C_GRANT_RECONCILIATION_FAILED");
 }
+/** Same immutable 0024 row projection before/after adding 0025's nullable column. */
+export function preservedRowJsonExpression(table){
+ return table==="inventory_reservation"?"(to_jsonb(x) - 'replenishment_of')":"to_jsonb(x)";
+}
 async function signature(pool,exclusions=[]){
  const tables=(await pool.query(
  "SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE' ORDER BY table_name"
@@ -304,8 +308,8 @@ async function signature(pool,exclusions=[]){
  for(const table of tables){
   const safe=table.replaceAll('"','""');
   const sql='SELECT count(*)::text AS n,'+
-   'COALESCE(bit_xor(hashtextextended(to_jsonb(x)::text,0))::text,\'0\') AS xor,'+
-   'COALESCE(sum(hashtextextended(to_jsonb(x)::text,1)::numeric)::text,\'0\') AS total '+
+   'COALESCE(bit_xor(hashtextextended('+preservedRowJsonExpression(table)+'::text,0))::text,\'0\') AS xor,'+
+   'COALESCE(sum(hashtextextended('+preservedRowJsonExpression(table)+'::text,1)::numeric)::text,\'0\') AS total '+
    'FROM public."'+safe+'" x'+(table==="role_permission"?" WHERE NOT (permission_code=ANY($1::text[]))":"");
   result[table]=(await pool.query(sql,table==="role_permission"?[T3C_PERMISSIONS]:[])).rows[0];
  }
