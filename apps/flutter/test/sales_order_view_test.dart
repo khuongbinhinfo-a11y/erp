@@ -32,6 +32,17 @@ void main(){
     expect(erpSalesMatchesFilter(order,'payment'),isTrue);
     order['paymentStatus']='PAID';
     expect(erpSalesMatchesFilter(order,'payment'),isFalse);
+    order['status']='CONFIRMED';
+    order['paymentStatus']='PARTIAL';
+    order['deliveryStatus']='PARTIAL';
+    expect(erpSalesProgressText('PARTIAL','delivery'),'Giao một phần');
+    expect(erpSalesMatchesFilter(order,'payment'),isTrue); // T5-A partial AR
+    expect(erpSalesMatchesFilter(order,'delivery'),isFalse); // terminal delivery
+    order['deliveryStatus']='RETURNED';
+    order['paymentStatus']='PAID';
+    expect(erpSalesProgressText('RETURNED','delivery'),'Trả hết');
+    expect(erpSalesMatchesFilter(order,'payment'),isFalse);
+    expect(erpSalesMatchesFilter(order,'delivery'),isFalse);
     order['status']='CANCELLED';
     expect(erpSalesCanHold(order),isFalse);
     expect(erpSalesMatchesFilter(order,'cancelled'),isTrue);
