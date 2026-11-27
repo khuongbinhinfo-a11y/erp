@@ -1745,7 +1745,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           Container(color:ErpPalette.of(ctx).mint,
                             padding:const EdgeInsets.symmetric(horizontal:12,vertical:8),
                             child:Row(children:[
-                              Expanded(child:Text('TÊN SẢN PHẨM · MÃ / ĐVT',
+                              Expanded(child:Text('CHỌN HÀNG ĐỂ THÊM · MÃ / ĐVT',
                                 style:TextStyle(fontSize:10,fontWeight:FontWeight.w800,
                                   color:ErpPalette.of(ctx).primary))),
                               Text('GIÁ / KHẢ DỤNG',
@@ -1753,7 +1753,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                                   color:ErpPalette.of(ctx).primary)),
                             ])),
                           ConstrainedBox(
-                            constraints:BoxConstraints(maxHeight:retailMobile?320:144),
+                            constraints:BoxConstraints(maxHeight:retailMobile?320:240),
                             child:ListView.builder(
                               controller:skuResultScroll,shrinkWrap:true,
                               itemExtent:retailMobile?72:48,itemCount:skuMatches.length,
