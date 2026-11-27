@@ -68,16 +68,25 @@ void main(){
     expect(find.text('30 Lê Lợi, Quận 1'),findsWidgets);
     await tester.tap(find.text('Đại lý 2 · 20 Pasteur, Quận 1').last);
     await tester.pumpAndSettle();
-    final address2=find.byKey(const ValueKey('sales-delivery-address-$customer-1'));
-    expect(tester.widget<TextFormField>(address2).initialValue,'20 Pasteur, Quận 1');
-    expect(tester.widget<EditableText>(find.descendant(of:address2,matching:find.byType(EditableText))).readOnly,isTrue);
+    // A selected saved address occupies exactly one control, not a duplicate
+    // read-only field in a second row.
+    expect(find.byKey(const ValueKey('sales-delivery-address-$customer-1')),findsNothing);
     final selectSecondary=find.byKey(const ValueKey('sales-location-$customer-$location2-1'));
+    expect(tester.widget<DropdownButtonFormField<String>>(selectSecondary).initialValue,location2);
     await tester.tap(selectSecondary);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Địa chỉ chính · 10 Nguyễn Huệ, Quận 1').last);
     await tester.pumpAndSettle();
-    final addressPrimary=find.byKey(const ValueKey('sales-delivery-address-$customer-2'));
-    expect(tester.widget<TextFormField>(addressPrimary).initialValue,'10 Nguyễn Huệ, Quận 1');
-    expect(tester.widget<EditableText>(find.descendant(of:addressPrimary,matching:find.byType(EditableText))).readOnly,isFalse);
+    final primarySelected=find.byKey(const ValueKey('sales-location-$customer-null-2'));
+    expect(tester.widget<DropdownButtonFormField<String>>(primarySelected).initialValue,'__primary__');
+    expect(find.byKey(const ValueKey('sales-delivery-address-$customer-2')),findsNothing);
+    await tester.tap(primarySelected);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Nhập địa chỉ khác').last);
+    await tester.pumpAndSettle();
+    final manual=find.byKey(const ValueKey('sales-delivery-address-$customer-3'));
+    expect(manual,findsOneWidget);
+    await tester.enterText(manual,'99 Lý Tự Trọng');
+    expect(tester.widget<TextFormField>(manual).controller?.text??'99 Lý Tự Trọng','99 Lý Tự Trọng');
   });
 }
