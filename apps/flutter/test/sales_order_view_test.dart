@@ -5,6 +5,18 @@ void main(){
   test('order confirmation is not fulfillment, delivery or payment',(){
     final order=<String,dynamic>{'status':'CONFIRMED','versionStatus':'CONFIRMED',
       'fulfillmentStatus':'NOT_ALLOCATED','deliveryStatus':'NOT_DISPATCHED','paymentStatus':'NOT_DUE'};
+    expect(erpSalesCanHold(order),isTrue); // historical order without context
+    order['deliveryChoice']='MANUAL';
+    expect(erpSalesCanHold(order),isFalse);
+    expect(erpSalesMatchesFilter(order,'warehouse'),isFalse);
+    order['deliveryChoice']='PICKUP';
+    expect(erpSalesCanHold(order),isFalse);
+    order['deliveryChoice']='TRIP';
+    expect(erpSalesCanHold(order),isTrue);
+    order.remove('deliveryChoice');
+    order['shipping']={'deliveryChoice':'MANUAL'};
+    expect(erpSalesCanHold(order),isFalse); // detail projection
+    order['shipping']={'deliveryChoice':'TRIP'};
     expect(erpSalesCanHold(order),isTrue);
     expect(erpSalesCanAmendOrCancel(order),isTrue);
     expect(erpSalesMatchesFilter(order,'warehouse'),isTrue);
