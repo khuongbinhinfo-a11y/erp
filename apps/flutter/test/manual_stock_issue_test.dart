@@ -70,6 +70,9 @@ void main(){
    expect(find.textContaining('Còn phải xuất: 3 cai'),findsOneWidget);
    expect(writes,0);
    expect(acknowledged,false);
+   // Dismiss while quantity input owns focus: no disposed-controller frame.
+   await tester.tap(find.byType(TextField).last);
+   await tester.pumpAndSettle();
    await tester.tap(find.byKey(const ValueKey('manual-issue-confirm')));
    await tester.pumpAndSettle();
    expect(submitted?['lines'],[{'lineNo':1,'quantityBase':'3.000000'}]);
