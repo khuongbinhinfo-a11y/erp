@@ -59,13 +59,13 @@ void main(){
   await tester.pumpAndSettle();
   expect(find.text('Thiết lập lô/vị trí'),findsOneWidget);
   expect(selectedAction,isNull);
-  await tester.tap(find.text('Không chọn').first);
+  await tester.tap(find.text('Chọn Vị trí kho'));
   await tester.pumpAndSettle();
-  await tester.tap(find.text('A-1 · Kệ 1').last);
+  await tester.tap(find.byKey(const ValueKey('stock-scope-choice-location-$location')));
   await tester.pumpAndSettle();
-  await tester.tap(find.text('Không chọn').last);
+  await tester.tap(find.text('Chọn Lô hàng'));
   await tester.pumpAndSettle();
-  await tester.tap(find.text('LO-01').last);
+  await tester.tap(find.byKey(const ValueKey('stock-scope-choice-lot-$lot')));
   await tester.pumpAndSettle();
   await tester.enterText(find.byType(TextField).last,'2.5');
   await tester.tap(find.byKey(const ValueKey('t3b-scope-confirm')));
