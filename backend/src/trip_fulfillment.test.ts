@@ -250,6 +250,103 @@ test("T3-C PostgreSQL: whole hold, partial pick/pack, physical dispatch, ledger,
     AND warehouse_id=$3 AND product_id=$4`,[t,b,w,extraId]);
   assert.deepEqual(afterLate.rows[0],{onhand:"1.000000",reserved:"0.000000"});
 
+  // P2 regressions: exact location packing and MANUAL stock withdrawals may
+  // not consume another confirmed trip's picked physical stock.
+  const scopedProduct=await catalog("products",{
+   code:"TRIP-SCOPE",name:"Scoped truck cargo",baseUnit:"cai"});
+  assert.equal(scopedProduct.status,201,JSON.stringify(scopedProduct.body));
+  const scopedId=scopedProduct.body.id as string;
+  assert.equal((await catalog("prices",{priceListId:list.body.id,productId:scopedId,
+   amount:"1000",discountRate:"0",effectiveAt:"2026-01-01T00:00:00Z"})).status,201);
+  assert.equal((await write("/v1/inventory/openings",{
+   branchId:b,warehouseId:w,productId:scopedId,quantity:"6"})).status,201);
+  const locA=await write("/v1/inventory/locations",{
+   branchId:b,warehouseId:w,code:"TRIP-A",name:"Trip Rack A"});
+  const locB=await write("/v1/inventory/locations",{
+   branchId:b,warehouseId:w,code:"TRIP-B",name:"Trip Rack B"});
+  assert.equal(locA.status,201,JSON.stringify(locA.body));
+  assert.equal(locB.status,201,JSON.stringify(locB.body));
+  for(const locationId of [locA.body.id,locB.body.id]){
+   const assignment=await write("/v1/inventory/stock-scopes/assign",{
+    branchId:b,warehouseId:w,productId:scopedId,locationId,quantityBase:"3"});
+   assert.equal(assignment.status,201,JSON.stringify(assignment.body));
+  }
+  const scopedTrip=await write("/v1/sales/orders",{
+   branchId:b,customerId:customer.body.id,priceListId:list.body.id,
+   shipping:{warehouseId:w,deliveryChoice:"TRIP",
+    collectionPolicy:"CREDIT_TERMS",customerMode:"EXISTING"},
+   lines:[{productId:scopedId,quantity:"3"}]});
+  assert.equal(scopedTrip.status,201,JSON.stringify(scopedTrip.body));
+  const tId=scopedTrip.body.id as string;
+  assert.equal((await write("/v1/sales/orders/"+tId+"/confirm",{branchId:b})).status,200);
+  const tScope={branchId:b,warehouseId:w,orderId:tId,version:1};
+  const th=await write("/v1/inventory/trip-holds",tScope,1);
+  assert.equal(th.status,200,JSON.stringify(th.body));
+  const pp=await write("/v1/inventory/trips/prepare",{
+   ...tScope,lines:[{lineNo:1,locationId:locA.body.id,
+    pickedBase:"3",packedBase:"3"}]},2);
+  assert.equal(pp.status,201,JSON.stringify(pp.body));
+  assert.equal((await write("/v1/inventory/trips/prepare",{
+   ...tScope,lines:[{lineNo:1,locationId:locB.body.id,
+    pickedBase:"0",packedBase:"1"}]},3)).status,409);
+  const assignedHold=th.body.lines[0].reservationId as string;
+  // Reordering a valid dispatch-line insert, a classification assignment,
+  // and the matching OUT cannot evade the final deferred scope reconciliation.
+  const forgedId=randomUUID(),dbForger=await db.connect();
+  try{
+   await dbForger.query("BEGIN");
+   await dbForger.query(`INSERT INTO sales_trip_dispatch
+    (installation_id,branch_id,id,order_id,version_no,warehouse_id,actor_id,request_id)
+    VALUES($1,$2,$3,$4,1,$5,$6,'t3c-scoped-forgery')`,
+    [t,b,forgedId,tId,w,root.actorId]);
+   await dbForger.query(`INSERT INTO sales_trip_dispatch_line
+    (installation_id,branch_id,dispatch_id,source_line,preparation_id,
+     preparation_line_no,order_line_no,reservation_id,product_id,quantity_base,location_id)
+    VALUES($1,$2,$3,1,$4,1,1,$5,$6,3,$7)`,
+    [t,b,forgedId,pp.body.id,assignedHold,scopedId,locA.body.id]);
+   await dbForger.query(`INSERT INTO inventory_scope_assignment
+    (installation_id,branch_id,warehouse_id,product_id,location_id,
+     quantity_base,actor_id,request_id)
+    VALUES($1,$2,$3,$4,$5,3,$6,'t3c-fake-classification')`,
+    [t,b,w,scopedId,locB.body.id,root.actorId]);
+   await dbForger.query(`INSERT INTO inventory_ledger
+    (installation_id,branch_id,warehouse_id,product_id,kind,source_type,
+     source_id,source_line,delta_base,actor_id,request_id)
+    VALUES($1,$2,$3,$4,'ISSUE','FULFILLMENT',$5,1,-3,$6,'t3c-fake-out')`,
+    [t,b,w,scopedId,forgedId,root.actorId]);
+   await assert.rejects(dbForger.query("COMMIT"),
+     /Trip dispatch leaves invalid final physical scope coverage/i);
+  }finally{
+   await dbForger.query("ROLLBACK").catch(()=>undefined);
+   dbForger.release();
+  }
+  const manual=await write("/v1/sales/orders",{
+   branchId:b,customerId:customer.body.id,priceListId:list.body.id,
+   shipping:{warehouseId:w,deliveryChoice:"MANUAL",
+    collectionPolicy:"CREDIT_TERMS",customerMode:"EXISTING"},
+   lines:[{productId:scopedId,quantity:"3"}]});
+  assert.equal(manual.status,201,JSON.stringify(manual.body));
+  const manualId=manual.body.id as string;
+  assert.equal((await write("/v1/sales/orders/"+manualId+"/confirm",{branchId:b})).status,200);
+  const stolen=await write("/v1/inventory/direct-issues",{
+   branchId:b,warehouseId:w,orderId:manualId,version:1,
+   lines:[{lineNo:1,quantityBase:"3",locationId:locA.body.id}]},1);
+  assert.equal(stolen.status,409,JSON.stringify(stolen.body));
+  const legal=await write("/v1/inventory/direct-issues",{
+   branchId:b,warehouseId:w,orderId:manualId,version:1,
+   lines:[{lineNo:1,quantityBase:"3",locationId:locB.body.id}]},1);
+  assert.equal(legal.status,201,JSON.stringify(legal.body));
+  const correctDispatch=await write("/v1/inventory/trips/dispatch",{
+   ...tScope,lines:[{preparationId:pp.body.id,sourceLine:1,quantityBase:"3"}]},3);
+  assert.equal(correctDispatch.status,201,JSON.stringify(correctDispatch.body));
+  assert.equal(correctDispatch.body.fulfillmentStatus,"COMPLETED");
+  const finalScoped=await db.query<{onhand:string;reserved:string}>(`
+   SELECT on_hand::text AS onhand,reserved::text AS reserved
+   FROM inventory_stock_balance WHERE installation_id=$1 AND branch_id=$2
+    AND warehouse_id=$3 AND product_id=$4`,[t,b,w,scopedId]);
+  assert.deepEqual(finalScoped.rows[0],{onhand:"0.000000",reserved:"0.000000"});
+
+
  }finally{
   if(server)await new Promise<void>(ok=>server!.close(()=>ok()));
   if(db)await db.end();
