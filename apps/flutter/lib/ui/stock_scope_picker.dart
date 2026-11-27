@@ -31,7 +31,7 @@ class StockScopePicker extends StatelessWidget {
       onPressed:()async{
         final query=TextEditingController();
         try{
-          final chosen=await showDialog<String>(
+          final route=DialogRoute<String>(
             context:context,
             builder:(dialog)=>StatefulBuilder(builder:(dialog,refresh){
               final term=query.text.trim().toLowerCase();
@@ -73,6 +73,8 @@ class StockScopePicker extends StatelessWidget {
               );
             }),
           );
+          final chosen=await Navigator.of(context,rootNavigator:true).push(route);
+          await route.completed;
           if(chosen!=null&&context.mounted)onChanged(chosen);
         }finally{
           query.dispose();
