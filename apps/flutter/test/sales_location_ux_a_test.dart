@@ -15,6 +15,19 @@ const location3='00000000-0000-4000-8000-000000000005';
 const warehouse='00000000-0000-4000-8000-000000000009';
 
 void main(){
+  test('UX-B: old address snapshot is visible until explicit re-selection',(){
+    final location=<String,dynamic>{
+      'id':location2,'name':'Đại lý 2','address':'88 Nguyễn Du, Quận 1'};
+    const oldAddress='20 Pasteur, Quận 1';
+    // Selected label reflects the saved order, menu item offers current directory value.
+    expect(erpSalesLocationLabel(location,snapshot:oldAddress,selected:true),
+      'Địa chỉ trên đơn · 20 Pasteur, Quận 1');
+    expect(erpSalesLocationLabel(location),'Đại lý 2 · 88 Nguyễn Du, Quận 1');
+    expect(erpSalesLocationLabel(location,snapshot:location['address'] as String,selected:true),
+      'Đại lý 2 · 88 Nguyễn Du, Quận 1');
+  });
+
+
   testWidgets('UX-A: primary and secondary addresses coexist and do not overwrite the customer',
     (tester)async{
     final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
@@ -68,16 +81,26 @@ void main(){
     expect(find.text('30 Lê Lợi, Quận 1'),findsWidgets);
     await tester.tap(find.text('Đại lý 2 · 20 Pasteur, Quận 1').last);
     await tester.pumpAndSettle();
-    final address2=find.byKey(const ValueKey('sales-delivery-address-$customer-1'));
-    expect(tester.widget<TextFormField>(address2).initialValue,'20 Pasteur, Quận 1');
-    expect(tester.widget<EditableText>(find.descendant(of:address2,matching:find.byType(EditableText))).readOnly,isTrue);
+    // A selected saved address occupies exactly one control, not a duplicate
+    // read-only field in a second row.
+    expect(find.byKey(const ValueKey('sales-delivery-address-$customer-1')),findsNothing);
     final selectSecondary=find.byKey(const ValueKey('sales-location-$customer-$location2-1'));
+    expect(tester.widget<DropdownButtonFormField<String>>(selectSecondary).initialValue,location2);
     await tester.tap(selectSecondary);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Địa chỉ chính · 10 Nguyễn Huệ, Quận 1').last);
     await tester.pumpAndSettle();
-    final addressPrimary=find.byKey(const ValueKey('sales-delivery-address-$customer-2'));
-    expect(tester.widget<TextFormField>(addressPrimary).initialValue,'10 Nguyễn Huệ, Quận 1');
-    expect(tester.widget<EditableText>(find.descendant(of:addressPrimary,matching:find.byType(EditableText))).readOnly,isFalse);
+    final primarySelected=find.byKey(const ValueKey('sales-location-$customer-null-2'));
+    expect(tester.widget<DropdownButtonFormField<String>>(primarySelected).initialValue,'__primary__');
+    expect(find.byKey(const ValueKey('sales-delivery-address-$customer-2')),findsNothing);
+    await tester.tap(primarySelected);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Nhập địa chỉ khác').last);
+    await tester.pumpAndSettle();
+    final manual=find.byKey(const ValueKey('sales-delivery-address-$customer-3'));
+    expect(manual,findsOneWidget);
+    await tester.enterText(manual,'99 Lý Tự Trọng');
+    expect(tester.widget<EditableText>(find.descendant(of:manual,
+      matching:find.byType(EditableText))).controller.text,'99 Lý Tự Trọng');
   });
 }

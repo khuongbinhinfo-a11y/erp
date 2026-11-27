@@ -80,6 +80,9 @@ void main(){
     addTearDown(client.dispose);
     tester.view.devicePixelRatio=1;
     tester.view.physicalSize=const Size(360,760);
+    // Android cutout/status bar must not cover the full-screen register controls.
+    tester.view.padding=const FakeViewPadding(top:36);
+    addTearDown(tester.view.resetPadding);
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:true,dark:true),
@@ -87,6 +90,8 @@ void main(){
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('erp-mobile-retail-workspace')),findsOneWidget);
     expect(find.byKey(const ValueKey('erp-pos-workspace')),findsOneWidget);
+    expect(tester.getTopLeft(find.byKey(const ValueKey('pos-fullscreen-back'))).dy,
+      greaterThanOrEqualTo(36),reason:'Status bar must not overlap POS back/toolbar');
     expect(find.byKey(const ValueKey('pos-sku-search')),findsOneWidget);
      expect(find.byKey(const ValueKey('pos-walk-in-quick')),findsOneWidget);
      await tester.tap(find.byKey(const ValueKey('pos-walk-in-quick')));
@@ -116,11 +121,25 @@ void main(){
       x.contains('/payment')||x.contains('/issue')||x.contains('/settle')),isEmpty);
     tester.view.physicalSize=const Size(1100,820);
     await tester.pumpAndSettle();
+    // Desktop register keeps product grid and quoted cart visible in parallel.
+    expect(find.byKey(const ValueKey('pos-products-grid')),findsOneWidget);
+    expect(find.byKey(const ValueKey('pos-grid-item-$sku')),findsOneWidget);
+    expect(find.byKey(const ValueKey('pos-cart')),findsOneWidget);
     expect(find.byKey(const ValueKey('pos-plus-0')),findsOneWidget);
     expect(find.textContaining('24,000 ₫'),findsWidgets);
     tester.view.physicalSize=const Size(360,760);
     await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('pos-products-grid')),findsNothing);
+    expect(find.byKey(const ValueKey('erp-mobile-navigation')),findsNothing);
+    expect(find.byKey(const ValueKey('pos-fullscreen-back')),findsOneWidget);
+    expect(find.byKey(const ValueKey('pos-cart')),findsOneWidget);
     expect(find.textContaining('24,000 ₫'),findsWidgets);
-    expect(tester.takeException(),isNull);
+    // Verify no RenderFlex overflow as the browser/tablet/device width changes.
+    for(final width in <double>[390,430,768,1024,1440,360]){
+      tester.view.physicalSize=Size(width,820);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('pos-cart')),findsOneWidget);
+      expect(tester.takeException(),isNull,reason:'POS width $width');
+    }
   });
 }
