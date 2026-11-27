@@ -108,7 +108,7 @@ Future<void> showManualStockIssue({
    });
  List<Map<String,dynamic>>? accepted;
  try{
-  accepted=await showDialog<List<Map<String,dynamic>>>(context:context,
+  final route=DialogRoute<List<Map<String,dynamic>>>(context:context,
     builder:(dialog)=>StatefulBuilder(builder:(dialog,refresh)=>AlertDialog(
       title:const Text('Xuất kho trực tiếp'),
       content:SizedBox(width:580,height:420,child:ListView(children:[
@@ -178,6 +178,8 @@ Future<void> showManualStockIssue({
           Navigator.pop(dialog,result);
         },child:const Text('Xác nhận xuất kho'))],
   )));
+  accepted=await Navigator.of(context,rootNavigator:true).push(route);
+  await route.completed;
  }finally{
   for(final controller in quantities.values)controller.dispose();
  }
