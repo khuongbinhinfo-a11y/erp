@@ -141,7 +141,7 @@ Future<bool> erpManualOrderAction({
       _notice(context,'Đơn đã hoàn thành. Nhập trả phải dùng chứng từ điều chỉnh.',
         error:true);return false;
     }
-    fields=await _askReturn(context,state,branchId,warehouse,orderId);
+    fields=await _askReturn(context,state,branchId,warehouse,orderId,client,session);
   }else if(action=='complete'){
     fields=await _askComplete(context,state,branchId,warehouse,orderId);
   }else if(action=='payment'||action=='fullPayment'){
@@ -230,77 +230,172 @@ Future<Map<String,dynamic>?> _askComplete(BuildContext context,
    'version':state['version']};
 }
 Future<Map<String,dynamic>?> _askReturn(BuildContext context,
- Map<String,dynamic> state,String branch,String warehouse,String order)async{
- final sources=(state['sources'] as List? ??const [])
-   .whereType<Map>().where((r)=>
-     (erpInventoryBaseUnits((r['returnableBase']??'0').toString())??BigInt.zero)>BigInt.zero)
-   .toList();
- if(sources.isEmpty){
-  _notice(context,'Không có lượng đã xuất cần nhập trả.',error:true);return null;
- }
- if(sources.length>100){
-  _notice(context,'Số nguồn xuất quá nhiều; hãy đối soát/chia chứng từ nhập trả.',
-    error:true);return null;
- }
+ Map<String,dynamic> state,String branch,String warehouse,String order,
+ ErpIdentityClient client,IdentitySession session)async{
+ // Server returns deterministic pages of 100 source rows. Only checked
+ // quantities (up to 100 TOTAL across loaded pages) are ever posted.
+ final pages=<List<Map<String,dynamic>>>[
+   (state['sources'] as List? ??const [])
+     .whereType<Map>().map((r)=>Map<String,dynamic>.from(r)).toList()
+ ];
+ final nextOffsets=<int?>[
+   (state['nextSourceOffset'] as num?)?.toInt()
+ ];
+ final controllers=<List<TextEditingController>>[
+   List.generate(pages[0].length,(_)=>TextEditingController(text:'0'))
+ ];
  final reason=TextEditingController();
- final controllers=List<TextEditingController>.generate(
-   sources.length,(_)=>TextEditingController(text:'0'));
+ int page=0;
+ bool loading=false;
  String? fault;
  Map<String,dynamic>? selected;
  try{
   selected=await showDialog<Map<String,dynamic>>(context:context,
-   builder:(c)=>StatefulBuilder(builder:(c,update)=>AlertDialog(
-    title:const Text('Nhập trả hàng chưa giao'),
-    content:SizedBox(width:600,child:ConstrainedBox(
-      constraints:const BoxConstraints(maxHeight:480),
-      child:ListView(shrinkWrap:true,children:[
-       const Text('Chọn chính xác dòng xuất và số trả theo đơn vị gốc. '
-        'Lô, vị trí được khôi phục từ chứng từ xuất; không nhập tùy ý.'),
-       const SizedBox(height:12),
-       for(var i=0;i<sources.length;i++)...[
-        Row(children:[
-         Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-          Text('Dòng '+sources[i]['lineNo'].toString(),
-           style:const TextStyle(fontWeight:FontWeight.w700)),
-          Text('Có thể trả: '+erpNumberText(sources[i]['returnableBase']),
-           style:const TextStyle(fontSize:12)),
-         ])),
-         SizedBox(width:160,child:TextField(controller:controllers[i],
-          inputFormatters:const [ErpGroupedNumberFormatter(maxIntegerDigits:12,maxFractionDigits:6)],
-          keyboardType:const TextInputType.numberWithOptions(decimal:true),
-          decoration:const InputDecoration(isDense:true,labelText:'Số trả'))),
-        ]),
-        const Divider(height:16),
-       ],
-       TextField(controller:reason,maxLength:500,
-        decoration:const InputDecoration(labelText:'Lý do trả (bắt buộc)')),
-       if(fault!=null)Text(fault!,style:const TextStyle(color:Colors.red)),
-      ]))),
-    actions:[
-     TextButton(onPressed:()=>Navigator.pop(c),child:const Text('Hủy')),
-     FilledButton(onPressed:(){
-      if(reason.text.trim().length<3){update(()=>fault='Cần ghi lý do trả hàng.');return;}
-      final lines=<Map<String,dynamic>>[];
-      for(var i=0;i<sources.length;i++){
-       final q=erpInventoryBaseUnits(controllers[i].text),
-        max=erpInventoryBaseUnits(sources[i]['returnableBase'].toString());
-       if(q==null||max==null||q>max){
-        update(()=>fault='Lượng trả vượt lượng có thể trả hoặc sai định dạng.');
-        return;
-       }
-       if(q==BigInt.zero)continue;
-       lines.add({'issueId':sources[i]['issueId'],'sourceLine':sources[i]['sourceLine'],
-        'quantityBase':erpInventoryFormatUnits(q)});
+   builder:(dialogContext)=>StatefulBuilder(builder:(c,update){
+    final current=pages[page],fields=controllers[page];
+    var selectedCount=0;
+    for(final batch in controllers){
+      for(final ctrl in batch){
+        final q=erpInventoryBaseUnits(ctrl.text);
+        if(q!=null&&q>BigInt.zero)selectedCount++;
       }
-      if(lines.isEmpty){update(()=>fault='Chọn ít nhất một số lượng cần nhập trả.');return;}
+    }
+    Future<void> showNext()async{
+      if(loading||nextOffsets[page]==null)return;
+      final fromPage=page;
+      if(fromPage+1<pages.length){
+        update(()=>page=fromPage+1);
+        return;
+      }
+      final offset=nextOffsets[fromPage]!;
+      update(()=>loading=true);
+      try{
+        final result=await client.salesExecutionRead(session.token,
+          branchId:branch,warehouseId:warehouse,orderId:order,
+          sourceOffset:offset);
+        if(!c.mounted)return;
+        if(result['revision']!=state['revision']){
+          update(()=>fault='Đơn thay đổi trong khi chọn hàng. Hãy đóng và tải lại.');
+          return;
+        }
+        final incoming=(result['sources'] as List? ??const [])
+          .whereType<Map>().map((v)=>Map<String,dynamic>.from(v)).toList();
+        pages.add(incoming);
+        controllers.add(List.generate(incoming.length,
+           (_)=>TextEditingController(text:'0')));
+        nextOffsets.add((result['nextSourceOffset'] as num?)?.toInt());
+        update((){
+          page=fromPage+1;
+          fault=null;
+        });
+      }on ErpApiError catch(e){
+        if(c.mounted)update(()=>fault='Không tải được trang hàng: '+e.message);
+      }catch(_){
+        if(c.mounted)update(()=>fault='Chưa tải được trang hàng; chưa ghi chứng từ.');
+      }finally{
+        if(c.mounted)update(()=>loading=false);
+      }
+    }
+    void submit(){
+      if(loading)return;
+      if(reason.text.trim().length<3){
+        update(()=>fault='Cần ghi rõ lý do nhập trả.');return;
+      }
+      final lines=<Map<String,dynamic>>[];
+      for(var p=0;p<pages.length;p++){
+        for(var i=0;i<pages[p].length;i++){
+          final source=pages[p][i];
+          final q=erpInventoryBaseUnits(controllers[p][i].text);
+          final max=erpInventoryBaseUnits((source['returnableBase']??'0').toString());
+          if(q==null||max==null||q< BigInt.zero||q>max){
+            update((){
+              page=p;
+              fault='Dòng ở trang '+(p+1).toString()+
+                ' có số trả sai hoặc vượt số còn có thể trả.';
+            });
+            return;
+          }
+          if(q==BigInt.zero)continue;
+          lines.add({'issueId':source['issueId'],
+             'sourceLine':source['sourceLine'],
+             'quantityBase':erpInventoryFormatUnits(q)});
+        }
+      }
+      if(lines.isEmpty){
+        update(()=>fault='Chọn ít nhất một lượng cần nhập trả.');return;
+      }
+      if(lines.length>100){
+        update(()=>fault='Một phiếu tối đa 100 nguồn xuất. Hãy chia làm nhiều lần nhập trả.');
+        return;
+      }
       Navigator.pop(c,{'branchId':branch,'warehouseId':warehouse,'orderId':order,
-       'version':state['version'],'reason':reason.text.trim(),'lines':lines});
-     },child:const Text('Xác nhận nhập trả')),
-    ],
-   )));
+        'version':state['version'],'reason':reason.text.trim(),'lines':lines});
+    }
+    return AlertDialog(
+     title:const Text('Nhập trả hàng chưa giao'),
+     content:SizedBox(width:600,child:ConstrainedBox(
+       constraints:const BoxConstraints(maxHeight:490),
+       child:Column(mainAxisSize:MainAxisSize.min,
+         crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+         const Text('Đối chiếu dòng xuất và lượng trả theo đơn vị gốc. '
+           'Lô, vị trí sẽ khôi phục từ chứng từ xuất.',
+           style:TextStyle(fontSize:12)),
+         const SizedBox(height:6),
+         Row(children:[
+          Expanded(child:Text('Trang '+(page+1).toString()+
+            ' · Đã chọn '+selectedCount.toString()+'/100 nguồn',
+            style:const TextStyle(fontWeight:FontWeight.w700,fontSize:12))),
+          IconButton(tooltip:'Trang trước',onPressed:loading||page==0?
+            null:()=>update(()=>page--),
+            icon:const Icon(Icons.chevron_left)),
+          IconButton(tooltip:'Trang sau',
+            onPressed:loading||nextOffsets[page]==null?null:showNext,
+            icon:const Icon(Icons.chevron_right)),
+         ]),
+         if(loading)const LinearProgressIndicator(),
+         const Divider(height:10),
+         Expanded(child:ListView.builder(itemCount:current.length,
+            itemBuilder:(listContext,i){
+              final row=current[i],q=erpInventoryBaseUnits(
+                (row['returnableBase']??'0').toString())??BigInt.zero;
+              if(q<=BigInt.zero)return const SizedBox.shrink();
+              return Padding(padding:const EdgeInsets.symmetric(vertical:5),
+                child:Row(children:[
+                  Expanded(child:Column(
+                    crossAxisAlignment:CrossAxisAlignment.start,children:[
+                    Text('Dòng '+row['lineNo'].toString(),
+                      style:const TextStyle(fontWeight:FontWeight.w700)),
+                    Text('Có thể trả: '+erpNumberText(row['returnableBase']),
+                      style:const TextStyle(fontSize:12)),
+                  ])),
+                  SizedBox(width:160,child:TextField(controller:fields[i],
+                    onChanged:(_)=>update((){}),
+                    inputFormatters:const [
+                      ErpGroupedNumberFormatter(maxIntegerDigits:12,maxFractionDigits:6)],
+                    keyboardType:const TextInputType.numberWithOptions(decimal:true),
+                    decoration:const InputDecoration(
+                      isDense:true,labelText:'Số lượng trả'))),
+                ]));
+            })),
+         const SizedBox(height:8),
+         TextField(controller:reason,maxLength:500,
+           decoration:const InputDecoration(
+             isDense:true,labelText:'Lý do trả (bắt buộc)')),
+         if(fault!=null)Text(fault!,
+           style:const TextStyle(color:Colors.red,fontSize:12)),
+       ]))),
+     actions:[
+       TextButton(onPressed:loading?null:()=>Navigator.pop(c),
+         child:const Text('Hủy')),
+       FilledButton(onPressed:loading?null:submit,
+         child:const Text('Xác nhận nhập trả')),
+     ]);
+   }));
  }finally{
   reason.dispose();
-  for(final controller in controllers)controller.dispose();
+  for(final batch in controllers){
+    for(final controller in batch)controller.dispose();
+  }
  }
  return selected;
 }
