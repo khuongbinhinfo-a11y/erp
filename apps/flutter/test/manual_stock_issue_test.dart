@@ -42,6 +42,8 @@ void main(){
         '/v1/inventory/stock-scopes'=>{
           'policy':{'requireLocation':false,'requireLot':false},
           'locations':[],'lots':[],'scopes':[]},
+        '/v1/inventory/guard-policy'=>{'policy':{
+          'reserveShortageMode':'WARN','negativeIssueMode':'BLOCK','revision':0}},
         _=>throw StateError('Unexpected read ${request.url.path}'),
       };
       return http.Response(jsonEncode(data),200,headers:const {
