@@ -168,6 +168,88 @@ test("T3-C PostgreSQL: whole hold, partial pick/pack, physical dispatch, ledger,
   assert.equal((await db.query<{n:string}>(`SELECT count(*)::text AS n
     FROM inventory_reservation WHERE installation_id=$1 AND order_id=$2
       AND state='ACTIVE'`,[t,id])).rows[0]!.n,"1");
+
+  // P1 regression: an already prepared partial hold must not prevent later
+  // replenishment. Both the old and new immutable reservation facts remain ACTIVE.
+  const extraProduct=await catalog("products",{
+   code:"TRIP-LATE",name:"Deferred truck item",baseUnit:"cai"});
+  assert.equal(extraProduct.status,201,JSON.stringify(extraProduct.body));
+  const extraId=extraProduct.body.id as string;
+  assert.equal((await catalog("prices",{priceListId:list.body.id,productId:extraId,
+   amount:"1000",discountRate:"0",effectiveAt:"2026-01-01T00:00:00Z"})).status,201);
+  assert.equal((await write("/v1/inventory/openings",{
+   branchId:b,warehouseId:w,productId:extraId,quantity:"5"})).status,201);
+  const makeTrip=async(quantity:string)=>{
+   const created=await write("/v1/sales/orders",{
+    branchId:b,customerId:customer.body.id,priceListId:list.body.id,
+    shipping:{warehouseId:w,deliveryChoice:"TRIP",
+     collectionPolicy:"CREDIT_TERMS",customerMode:"EXISTING"},
+    lines:[{productId:extraId,quantity}]});
+   assert.equal(created.status,201,JSON.stringify(created.body));
+   const oid=created.body.id as string;
+   assert.equal((await write("/v1/sales/orders/"+oid+"/confirm",{branchId:b})).status,200);
+   return oid;
+  };
+  const competitor=await makeTrip("3");
+  const competitorHold=await write("/v1/inventory/trip-holds",{
+   branchId:b,warehouseId:w,orderId:competitor,version:1},1);
+  assert.equal(competitorHold.status,200,JSON.stringify(competitorHold.body));
+  const late=await makeTrip("4");
+  const lateScope={branchId:b,warehouseId:w,orderId:late,version:1};
+  const lateHold=await write("/v1/inventory/trip-holds",lateScope,1);
+  assert.equal(lateHold.status,200,JSON.stringify(lateHold.body));
+  assert.equal(lateHold.body.lines[0].quantityBase,"2.000000");
+  assert.equal(lateHold.body.lines[0].backorderedBase,"2.000000");
+  const latePrep=await write("/v1/inventory/trips/prepare",{
+   ...lateScope,lines:[{lineNo:1,pickedBase:"2",packedBase:"2"}]},2);
+  assert.equal(latePrep.status,201,JSON.stringify(latePrep.body));
+  assert.equal(latePrep.body.revision,3);
+  const cancelled=await write("/v1/sales/orders/"+competitor+"/cancel",
+   {branchId:b,reason:"Release shipment capacity"},2);
+  assert.equal(cancelled.status,200,JSON.stringify(cancelled.body));
+  const replenished=await write("/v1/inventory/trip-holds",lateScope,3);
+  assert.equal(replenished.status,200,JSON.stringify(replenished.body));
+  assert.equal(replenished.body.changedLines,1);
+  assert.equal(replenished.body.revision,4);
+  assert.equal(replenished.body.lines[0].quantityBase,"4.000000");
+  assert.equal(replenished.body.lines[0].backorderedBase,"0.000000");
+  const read=await call("/v1/inventory/trips/work?"+
+   new URLSearchParams({...lateScope,version:"1"}).toString(),"GET",undefined,token);
+  assert.equal(read.status,200,JSON.stringify(read.body));
+  assert.equal(read.body.lines[0].reservedBase,"4.000000");
+  assert.equal(read.body.lines[0].backorderedBase,"0.000000");
+  assert.equal(read.body.lines[0].reservations.length,2);
+  const supplemental=read.body.lines[0].reservations.find((x:Record<string,string>)=>
+   x.reservationId!==lateHold.body.lines[0].reservationId);
+  assert.ok(supplemental?.reservationId);
+  const preparedExtra=await write("/v1/inventory/trips/prepare",{
+   ...lateScope,lines:[{lineNo:1,reservationId:supplemental.reservationId,
+    pickedBase:"2",packedBase:"2"}]},4);
+  assert.equal(preparedExtra.status,201,JSON.stringify(preparedExtra.body));
+  assert.equal(preparedExtra.body.revision,5);
+  assert.equal(preparedExtra.body.lines[0].pickedBase,"4.000000");
+  const laterParts=preparedExtra.body.lines[0].preparations;
+  assert.equal(laterParts.length,2);
+  const both=await write("/v1/inventory/trips/dispatch",{
+   ...lateScope,lines:laterParts.map((x:Record<string,any>)=>({
+    preparationId:x.preparationId,sourceLine:x.sourceLine,
+    quantityBase:x.readyBase
+   }))},5);
+  assert.equal(both.status,201,JSON.stringify(both.body));
+  assert.equal(both.body.fulfillmentStatus,"COMPLETED");
+  assert.equal(both.body.deliveryPosted,false);
+  const heldHistory=await db.query<{state:string;quantity:string}>(`
+   SELECT state,quantity_base::text AS quantity FROM inventory_reservation
+   WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3
+   ORDER BY created_at,id`,[t,b,late]);
+  assert.deepEqual(heldHistory.rows,[{state:"ACTIVE",quantity:"2.000000"},
+   {state:"ACTIVE",quantity:"2.000000"}]);
+  const afterLate=await db.query<{onhand:string;reserved:string}>(`
+   SELECT on_hand::text AS onhand,reserved::text AS reserved
+   FROM inventory_stock_balance WHERE installation_id=$1 AND branch_id=$2
+    AND warehouse_id=$3 AND product_id=$4`,[t,b,w,extraId]);
+  assert.deepEqual(afterLate.rows[0],{onhand:"1.000000",reserved:"0.000000"});
+
  }finally{
   if(server)await new Promise<void>(ok=>server!.close(()=>ok()));
   if(db)await db.end();
