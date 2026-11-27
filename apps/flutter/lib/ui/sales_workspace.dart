@@ -124,6 +124,10 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   int generation=0,sequence=0;
   final search=TextEditingController();
   String _orderFilter='all',_deliveryFilter='all',_paymentFilter='all';
+  String? _selectedOrderId,_previewError;
+  Map<String,dynamic>? _previewOrder;
+  bool _previewLoading=false;
+  int _selectionGeneration=0;
   final Map<String,String> retryKeys={};
   final Map<String,String?> _retryReasons={};
   // Keep the original canonical body AND key together until the server ACKs.
@@ -257,6 +261,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     super.didUpdateWidget(old);
     if(old.session.token!=widget.session.token||old.client!=widget.client){
       generation++;branches=[];orders=[];branchId=null;retryKeys.clear();_retryReasons.clear();_orderFilter='all';_deliveryFilter='all';_paymentFilter='all';
+       _selectionGeneration++;_selectedOrderId=null;_previewOrder=null;_previewError=null;_previewLoading=false;
       pendingCreate=null;pendingCreateKey=null;pendingConfirm=null;
       pendingConfirmKey=null;pendingUpdate=null;pendingUpdateKey=null;
       pendingCreateAutoConfirm=false;localRecoveryBusy=false;localRecoveryBlocked=false;pendingNeedsReceipt=false;
@@ -295,7 +300,18 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     setState((){loading=true;error=null;});
     try{
       final values=await widget.client.salesOrders(widget.session.token,branch,query:search.text);
-      if(mounted&&generation==id)setState((){orders=values;loading=false;});
+      if(mounted&&generation==id){
+        setState((){orders=values;loading=false;});
+        if(_selectedOrderId!=null){
+          final stillVisible=values.where((o)=>o['id']==_selectedOrderId).firstOrNull;
+          if(stillVisible==null){
+            setState((){_selectionGeneration++;_selectedOrderId=null;
+              _previewOrder=null;_previewError=null;_previewLoading=false;});
+          }else{
+            unawaited(_selectOrder(stillVisible));
+          }
+        }
+      }
     }on ErpApiError catch(e){
       if(mounted&&generation==id)setState((){loading=false;error=e.message;});
     }catch(_){
@@ -3055,6 +3071,130 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       if(path!=null&&mounted)inform('Mở bản in HTML đã lưu để in đơn hàng.');
     }catch(_){if(mounted)inform('Không mở được bản in.',error:true);}
   }
+  Future<void> _selectOrder(Map<String,dynamic> row)async{
+    final branch=branchId,token=widget.session.token,id=row['id'];
+    if(branch==null||id is! String||_navigationLocked)return;
+    final request=++_selectionGeneration;
+    setState((){_selectedOrderId=id;_previewOrder=null;
+      _previewLoading=true;_previewError=null;});
+    try{
+      // Details and permission scope are always fetched from the canonical API.
+      final item=await widget.client.salesOrder(token,id,branch);
+      if(!_sameScope(token,branch)||request!=_selectionGeneration)return;
+      setState((){_previewOrder=item;_previewLoading=false;});
+    }on ErpApiError catch(e){
+      if(_sameScope(token,branch)&&request==_selectionGeneration)
+        setState((){_previewError=e.message;_previewLoading=false;});
+    }catch(_){
+      if(_sameScope(token,branch)&&request==_selectionGeneration)
+        setState((){_previewError='Không tải được nội dung đơn hàng.';_previewLoading=false;});
+    }
+  }
+
+  Widget _previewPane(BuildContext context){
+    final palette=ErpPalette.of(context),item=_previewOrder;
+    if(_selectedOrderId==null)return Center(child:Padding(
+      padding:const EdgeInsets.all(24),
+      child:Text('Chọn một đơn bên trái để xem trước chứng từ.',
+        style:TextStyle(color:palette.muted))));
+    if(_previewLoading)return const Center(child:CircularProgressIndicator());
+    if(_previewError!=null)return Center(child:Padding(
+      padding:const EdgeInsets.all(20),child:Column(mainAxisSize:MainAxisSize.min,children:[
+        Text(_previewError!,style:TextStyle(color:palette.danger)),
+        TextButton(onPressed:()=>_selectOrder({'id':_selectedOrderId}),child:const Text('Thử lại')),
+      ])));
+    if(item==null)return const SizedBox.shrink();
+    final shipping=item['shipping'] is Map?item['shipping'] as Map:const {};
+    final orderLines=item['lines'] is List?item['lines'] as List:const [];
+    const modes={'MANUAL':'Giao thủ công','TRIP':'Giao theo chuyến','PICKUP':'Khách lấy'};
+    return Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+      Padding(padding:const EdgeInsets.fromLTRB(16,12,12,8),
+        child:Row(children:[
+          Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+            Text((item['documentNo']??'Đơn đang lập').toString(),
+              style:TextStyle(fontWeight:FontWeight.w800,fontSize:17,color:palette.ink)),
+            Text((item['customerName']??'').toString(),maxLines:2,
+              overflow:TextOverflow.ellipsis,style:TextStyle(color:palette.muted)),
+          ])),
+          IconButton(tooltip:'Bỏ chọn đơn',onPressed:(){
+            setState((){_selectionGeneration++;_selectedOrderId=null;
+              _previewOrder=null;_previewError=null;});
+          },icon:const Icon(Icons.close)),
+        ])),
+      Divider(height:1,color:palette.border),
+      Expanded(child:ListView(padding:const EdgeInsets.all(16),children:[
+        Wrap(spacing:12,runSpacing:6,children:[
+          Text('Đơn: '+stateOf(item)),
+          Text('Kho: '+erpSalesProgressText(item['fulfillmentStatus'],'warehouse')),
+          Text('Giao: '+erpSalesProgressText(item['deliveryStatus'],'delivery')),
+          Text('Thu: '+erpSalesProgressText(item['paymentStatus'],'payment')),
+        ]),
+        const SizedBox(height:12),
+        if(shipping.isNotEmpty)...[
+          Text('Kho xuất: '+(shipping['warehouseName']??'—').toString()),
+          Text('Cách giao: '+(modes[shipping['deliveryChoice']]??'—')),
+          if((shipping['deliveryAddress']??'').toString().isNotEmpty)
+            Text('Địa chỉ: '+shipping['deliveryAddress'].toString()),
+          const SizedBox(height:12),
+        ],
+        Text('HÀNG HÓA',style:TextStyle(color:palette.ink,fontWeight:FontWeight.w800)),
+        const SizedBox(height:6),
+        for(final line in orderLines)Container(
+          padding:const EdgeInsets.symmetric(vertical:10),
+          decoration:BoxDecoration(border:Border(bottom:BorderSide(color:palette.border))),
+          child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+            Text((line['productName']??line['sku']??'').toString(),
+              style:const TextStyle(fontWeight:FontWeight.w700)),
+            Text((line['sku']??'').toString()+' · '+
+              erpGroupedDecimalText(line['quantity'])+' '+(line['unitCode']??'').toString(),
+              style:TextStyle(fontSize:12,color:palette.muted)),
+            Row(mainAxisAlignment:MainAxisAlignment.spaceBetween,children:[
+              Text('Đơn giá: '+money(line['unitPrice']),style:const TextStyle(fontSize:12)),
+              Text(money(line['lineTotal']),style:const TextStyle(fontWeight:FontWeight.w700)),
+            ]),
+          ])),
+        const SizedBox(height:14),
+        Row(mainAxisAlignment:MainAxisAlignment.spaceBetween,children:[
+          const Text('Tiền hàng'),Text(money(item['subtotal'])),
+        ]),
+        Row(mainAxisAlignment:MainAxisAlignment.spaceBetween,children:[
+          const Text('Chiết khấu'),Text(money(item['discountTotal'])),
+        ]),
+        Row(mainAxisAlignment:MainAxisAlignment.spaceBetween,children:[
+          const Text('Thuế'),Text(money(item['taxTotal'])),
+        ]),
+        const SizedBox(height:5),
+        Row(mainAxisAlignment:MainAxisAlignment.spaceBetween,children:[
+          const Text('TỔNG CỘNG',style:TextStyle(fontWeight:FontWeight.w800)),
+          Text(money(item['total']),style:TextStyle(color:palette.ink,
+            fontWeight:FontWeight.w800,fontSize:18)),
+        ]),
+        if((item['note']??'').toString().isNotEmpty)...[
+          const SizedBox(height:12),Text('Ghi chú: '+item['note'].toString()),
+        ],
+      ])),
+      Divider(height:1,color:palette.border),
+      Padding(padding:const EdgeInsets.all(10),child:Wrap(spacing:6,runSpacing:6,
+        alignment:WrapAlignment.end,children:[
+          if(_canOpenWarehouse(item))OutlinedButton.icon(
+            onPressed:_navigationLocked?null:()=>widget.onOpenWarehouse!(item),
+            icon:const Icon(Icons.warehouse_outlined,size:16),label:const Text('Xử lý kho')),
+          if(can('orders.create'))OutlinedButton.icon(
+            onPressed:_navigationLocked?null:()=>createOrder(source:item),
+            icon:const Icon(Icons.copy_outlined,size:16),label:const Text('Sao chép')),
+          if(item['status']!='CANCELLED'&&item['versionStatus']=='DRAFT'&&can('orders.update'))
+            OutlinedButton(onPressed:_navigationLocked?null:()=>updateOrder(item),
+              child:const Text('Sửa đơn')),
+          if(item['status']!='CANCELLED'&&item['versionStatus']=='DRAFT'&&can('orders.confirm'))
+            FilledButton(onPressed:_navigationLocked?null:()=>action(item,'confirm'),
+              child:const Text('Xác nhận')),
+          OutlinedButton.icon(key:const ValueKey('sales-preview-full'),
+            onPressed:_navigationLocked?null:()=>openOrder(item),
+            icon:const Icon(Icons.open_in_full,size:16),label:const Text('Chi tiết / In')),
+        ])),
+    ]);
+  }
+
   bool _canOpenWarehouse(Map<String,dynamic> item){
     final shipping=item['shipping'];
     if(widget.onOpenWarehouse==null||!erpSalesCanHold(item)||shipping is! Map||shipping['warehouseId'] is! String)return false;
@@ -3365,7 +3505,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                 items:branches.map((x)=>DropdownMenuItem<String>(value:x['id'] as String,
                   child:Text(x['name'] as String,overflow:TextOverflow.ellipsis))).toList(),
                 onChanged:_navigationLocked?null:(value)async{
-                  setState((){branchId=value;_orderFilter='all';_deliveryFilter='all';_paymentFilter='all';orders=[];});
+                  setState((){branchId=value;_orderFilter='all';_deliveryFilter='all';_paymentFilter='all';orders=[];
+                     _selectionGeneration++;_selectedOrderId=null;_previewOrder=null;_previewError=null;_previewLoading=false;});
                   await _restorePending();await reload();})),
             if(!retail)SizedBox(width:compact?bounds.maxWidth:230,
               child:TextField(key:const ValueKey('sales-search'),controller:search,
@@ -3444,7 +3585,52 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                 ]),
               )),
           ])
-        else SingleChildScrollView(scrollDirection:Axis.horizontal,child:DataTable(
+        else LayoutBuilder(builder:(ctx,bounds){
+          if(bounds.maxWidth>=900){
+            return SizedBox(key:const ValueKey('sales-split-view'),
+              height:(MediaQuery.sizeOf(ctx).height*.66).clamp(380.0,700.0).toDouble(),
+              child:Row(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+                Expanded(flex:43,child:Column(children:[
+                  Container(padding:const EdgeInsets.symmetric(horizontal:12,vertical:9),
+                    alignment:Alignment.centerLeft,color:ErpPalette.of(ctx).mint,
+                    child:const Text('ĐƠN HÀNG',style:TextStyle(fontWeight:FontWeight.w800))),
+                  Expanded(child:ListView.separated(
+                    itemCount:shown.length,
+                    separatorBuilder:(_,__)=>Divider(height:1,color:ErpPalette.of(ctx).border),
+                    itemBuilder:(listContext,index){
+                      final o=shown[index];
+                      final selected=o['id']==_selectedOrderId;
+                      return InkWell(
+                        key:ValueKey('sales-order-row-'+o['id'].toString()),
+                        onTap:_navigationLocked?null:()=>_selectOrder(o),
+                        child:Container(
+                          color:selected?ErpPalette.of(ctx).mint:null,
+                          padding:const EdgeInsets.symmetric(horizontal:12,vertical:12),
+                          child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+                            Row(children:[
+                              Expanded(child:Text((o['documentNo']??'Đang lập').toString(),
+                                style:const TextStyle(fontWeight:FontWeight.w800))),
+                              Text(money(o['total']),style:const TextStyle(fontWeight:FontWeight.w700)),
+                            ]),
+                            const SizedBox(height:4),
+                            Text((o['customerName']??'').toString(),maxLines:1,
+                              overflow:TextOverflow.ellipsis),
+                            const SizedBox(height:4),
+                            Text(stateOf(o)+' · '+erpSalesProgressText(o['fulfillmentStatus'],'warehouse'),
+                              style:TextStyle(color:ErpPalette.of(ctx).muted,fontSize:12)),
+                          ]),
+                        ),
+                      );
+                    })),
+                ])),
+                VerticalDivider(width:1,color:ErpPalette.of(ctx).border),
+                Expanded(flex:57,child:Container(
+                  key:const ValueKey('sales-order-preview'),
+                  color:ErpPalette.of(ctx).surface,
+                  child:_previewPane(ctx))),
+              ]));
+          }
+          return SingleChildScrollView(scrollDirection:Axis.horizontal,child:DataTable(
           headingRowHeight:40,dataRowMinHeight:48,dataRowMaxHeight:60,columnSpacing:18,
           headingRowColor:WidgetStatePropertyAll(ErpPalette.of(context).mint),
           headingTextStyle:TextStyle(fontWeight:FontWeight.w700,color:ErpPalette.of(context).ink),
@@ -3488,7 +3674,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                 ]),
             ])),
           ])).toList(),
-        )),
+        ));
+        }),
       ]),
     );
   }
