@@ -1,0 +1,55 @@
+name: ERP Android UX-B v4 public download UAT smoke
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/erp-android-v4-public-smoke.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  download-smoke:
+    if: github.repository == 'khuongbinhinfo-a11y/erp'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      BASE: https://erp-android-download.gustavjung24.workers.dev
+      V4_SHA: 1ad76237794d167df8d9b7fbe928879def8952c7451731e81bcc4421a0c12370
+      V4_BYTES: '64359714'
+      V3_SHA: 5bce59f3dea1143f148632f5bfc17552b2f4dd3d6a10d56cf5f4e4ef7c23f9f0
+    steps:
+      - name: Public HTTP HEAD and full v4 download with exact SHA-256
+        run: |
+          set -euo pipefail
+          url="$BASE/ERP-Android-0.4.0.apk"
+          curl -fsSIL --retry 2 --retry-delay 2 --max-time 30 "$url" -D "$RUNNER_TEMP/head.txt" -o /dev/null
+          tr -d '\r' < "$RUNNER_TEMP/head.txt" | grep -i -Eq '^x-erp-sha256: '"$V4_SHA"'$'
+          tr -d '\r' < "$RUNNER_TEMP/head.txt" | grep -i -Eq '^content-length: '"$V4_BYTES"'$'
+          curl -fsSL --retry 2 --retry-delay 2 --max-time 240 \
+            "$url" -D "$RUNNER_TEMP/get.txt" -o "$RUNNER_TEMP/erp-v4-public.apk"
+          test "$(wc -c < "$RUNNER_TEMP/erp-v4-public.apk" | tr -d ' ')" = "$V4_BYTES"
+          test "$(sha256sum "$RUNNER_TEMP/erp-v4-public.apk" | cut -d' ' -f1)" = "$V4_SHA"
+          echo "ERP_ANDROID_V4_PUBLIC_FULL_DOWNLOAD_PASS bytes=$V4_BYTES sha256=$V4_SHA"
+      - name: Public download resume and v3 backward compatibility
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 2 --max-time 45 -D "$RUNNER_TEMP/range.headers" \
+            -H 'Range: bytes=64359704-' \
+            "$BASE/releases/4/erp-4.apk" -o "$RUNNER_TEMP/range.part"
+          test "$(wc -c < "$RUNNER_TEMP/range.part" | tr -d ' ')" = 10
+          tr -d '\r' < "$RUNNER_TEMP/range.headers" | grep -Eq '^HTTP/[^ ]+ 206'
+          tr -d '\r' < "$RUNNER_TEMP/range.headers" | grep -i -Eq '^content-range: bytes 64359704-64359713/64359714$'
+          curl -fsSIL --retry 2 --max-time 30 \
+            "$BASE/ERP-Android-0.3.0.apk" -D "$RUNNER_TEMP/v3.headers" -o /dev/null
+          tr -d '\r' < "$RUNNER_TEMP/v3.headers" | grep -i -Eq '^x-erp-sha256: '"$V3_SHA"'$'
+          echo "ERP_ANDROID_V4_PUBLIC_RESUME_AND_V3_COMPAT_PASS"
+      - name: Current latest stays at v3; no early OTA
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 2 --max-time 30 "$BASE/releases/latest.json" > "$RUNNER_TEMP/latest.json"
+          jq -e --arg sha "$V3_SHA" \
+            '.schema == 1 and .versionCode == 3 and .versionName == "0.3.0" and .sha256 == $sha' \
+            "$RUNNER_TEMP/latest.json" > /dev/null
+          code="$(curl -sS -o /dev/null -w '%{http_code}' \
+            "$BASE/releases/4/erp-4.apk?untrusted=1")"
+          test "$code" = 404
+          echo "ERP_ANDROID_V4_PUBLIC_UAT_READY_LATEST_STILL_V3"
