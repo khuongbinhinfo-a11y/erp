@@ -3077,6 +3077,17 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       if(path!=null&&mounted)inform('Mở bản in HTML đã lưu để in đơn hàng.');
     }catch(_){if(mounted)inform('Không mở được bản in.',error:true);}
   }
+  bool _manualSelectable(Map<String,dynamic> row)=>
+    row['status']=='CONFIRMED'&&erpSalesDeliveryChoice(row)=='MANUAL';
+  Widget _manualCheckbox(Map<String,dynamic> row){
+    final id=row['id']?.toString(),allowed=_manualSelectable(row);
+    return Checkbox(value:id!=null&&_selectedBulkOrders.contains(id),
+      onChanged:_navigationLocked||id==null||!allowed?null:(value){
+        setState((){if(value==true){_selectedBulkOrders.add(id);}
+        else{_selectedBulkOrders.remove(id);}});
+      });
+  }
+
   bool _manualAllowed(String action,Map<String,dynamic> order){
     if(order['status']!='CONFIRMED'||order['versionStatus']!='CONFIRMED')return false;
     final s=order['shipping'];
@@ -3128,7 +3139,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     if(_navigationLocked||branchId==null||_selectedBulkOrders.isEmpty)return;
     final branch=branchId!,token=widget.session.token;
     final chosen=orders.where((o)=>_selectedBulkOrders.contains(o['id'])&&
-       _manualAllowed(action,o)).toList(growable:false);
+       _manualSelectable(o)).toList(growable:false);
     if(chosen.isEmpty){inform('Chọn các đơn MANUAL có quyền xử lý.',error:true);return;}
     final prompt=action=='complete'?'Hoàn thành thực giao':
        'Thu đủ công nợ theo từng đơn';
@@ -3809,6 +3820,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                   child:Text(x['name'] as String,overflow:TextOverflow.ellipsis))).toList(),
                 onChanged:_navigationLocked?null:(value)async{
                   setState((){branchId=value;_orderFilter='all';_deliveryFilter='all';_paymentFilter='all';orders=[];
+                    _selectedBulkOrders.clear();_previewExecution=null;_previewExecutionError=null;
                      _selectionGeneration++;_selectedOrderId=null;_previewOrder=null;_previewError=null;_previewLoading=false;});
                   await _restorePending();await reload();})),
             if(!retail)SizedBox(width:compact?bounds.maxWidth:230,
@@ -3849,6 +3861,21 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           ]);
         }),
         const SizedBox(height:12),
+        if(!retail&&!loading&&_selectedBulkOrders.isNotEmpty)Padding(
+          padding:const EdgeInsets.only(bottom:10),
+          child:Wrap(spacing:8,runSpacing:6,crossAxisAlignment:WrapCrossAlignment.center,
+            children:[
+              Text('Đã chọn '+_selectedBulkOrders.length.toString()+' đơn giao thủ công',
+                style:const TextStyle(fontWeight:FontWeight.w700)),
+              OutlinedButton.icon(onPressed:_navigationLocked?null:()=>_batchManual('complete'),
+                icon:const Icon(Icons.task_alt_outlined,size:16),
+                label:const Text('Hoàn thành hàng loạt')),
+              FilledButton.icon(onPressed:_navigationLocked?null:()=>_batchManual('payment'),
+                icon:const Icon(Icons.payments_outlined,size:16),
+                label:const Text('Thu đủ hàng loạt')),
+              TextButton(onPressed:_navigationLocked?null:()=>setState(()=>_selectedBulkOrders.clear()),
+                child:const Text('Bỏ chọn')),
+            ])),
         if(!retail&&!loading)Padding(padding:const EdgeInsets.only(bottom:8),
           child:Text('${shown.length}/${orders.length} đơn đang hiển thị · tối đa 100 kết quả mỗi lần tra cứu',
             style:TextStyle(color:ErpPalette.of(context).muted,fontSize:12))),
@@ -3872,6 +3899,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                 decoration:BoxDecoration(
                   border:Border(bottom:BorderSide(color:ErpPalette.of(context).border))),
                 child:Row(children:[
+                  _manualCheckbox(o),
                   Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
                     Text(o['documentNo'] as String? ?? 'Chưa cấp số',
                       style:TextStyle(fontWeight:FontWeight.w700,color:ErpPalette.of(context).ink)),
@@ -3917,6 +3945,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           padding:const EdgeInsets.fromLTRB(10,10,12,10),
                           child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
                             Row(children:[
+                              _manualCheckbox(o),
                               Expanded(child:Text((o['customerName']??'Khách lẻ').toString(),
                                 maxLines:1,overflow:TextOverflow.ellipsis,
                                 style:TextStyle(fontWeight:FontWeight.w800,fontSize:13,
@@ -3954,17 +3983,19 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           headingRowHeight:40,dataRowMinHeight:48,dataRowMaxHeight:60,columnSpacing:18,
           headingRowColor:WidgetStatePropertyAll(ErpPalette.of(context).mint),
           headingTextStyle:TextStyle(fontWeight:FontWeight.w700,color:ErpPalette.of(context).ink),
-          columns:const [
-            DataColumn(label:Text('Số đơn / Ngày')),
-            DataColumn(label:Text('Khách hàng / Kho')),
-            DataColumn(label:Text('Thành tiền'),numeric:true),
-            DataColumn(label:Text('Đơn hàng')),
-            DataColumn(label:Text('Kho')),
-            DataColumn(label:Text('Giao hàng')),
-            DataColumn(label:Text('Thanh toán')),
-            DataColumn(label:Text('Thao tác')),
+          columns:[
+            const DataColumn(label:Text('Chọn')),
+            const DataColumn(label:Text('Số đơn / Ngày')),
+            const DataColumn(label:Text('Khách hàng / Kho')),
+            const DataColumn(label:Text('Thành tiền'),numeric:true),
+            const DataColumn(label:Text('Đơn hàng')),
+            const DataColumn(label:Text('Kho')),
+            const DataColumn(label:Text('Giao hàng')),
+            const DataColumn(label:Text('Thanh toán')),
+            const DataColumn(label:Text('Thao tác')),
           ],
           rows:shown.map((o)=>DataRow(cells:[
+            DataCell(_manualCheckbox(o)),
             DataCell(Column(mainAxisAlignment:MainAxisAlignment.center,crossAxisAlignment:CrossAxisAlignment.start,children:[
               Text(o['documentNo'] as String? ?? 'Chưa cấp số',style:const TextStyle(fontWeight:FontWeight.w700)),
               Text(erpDateTimeText(o['createdAt']),style:TextStyle(fontSize:11,color:ErpPalette.of(context).muted)),
