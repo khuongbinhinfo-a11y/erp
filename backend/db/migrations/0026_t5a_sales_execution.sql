@@ -231,7 +231,7 @@ CREATE CONSTRAINT TRIGGER t5a_allocation_guard AFTER INSERT ON payment_allocatio
 -- complete/return mutations. Otherwise a concurrent return can pass its
 -- guard before an uncommitted MANUAL fulfillment becomes visible.
 CREATE FUNCTION erp_t5a_manual_fulfillment_order_lock() RETURNS trigger
- LANGUAGE plpgsql AS $
+ LANGUAGE plpgsql AS $$
 BEGIN
  IF NEW.mode='MANUAL' THEN
   PERFORM 1 FROM sales_order o
@@ -240,7 +240,7 @@ BEGIN
   IF NOT FOUND THEN RAISE EXCEPTION 'MANUAL order missing'; END IF;
  END IF;
  RETURN NEW;
-END; $;
+END; $$;
 CREATE TRIGGER t5a_manual_fulfillment_order_lock
  BEFORE INSERT ON sales_fulfillment FOR EACH ROW
  EXECUTE FUNCTION erp_t5a_manual_fulfillment_order_lock();
