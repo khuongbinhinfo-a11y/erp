@@ -303,7 +303,7 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
     on ErpApiError catch(e){notify(e.message,bad:true);return;}
     if(!mounted||branchId!=b||warehouseId!=w||widget.session.token!=token)return;
     final shipping=detail['shipping'];
-    if(shipping is Map&&shipping['deliveryChoice']!='TRIP'){
+    if(shipping is Map&&shipping['deliveryChoice']!=null&&shipping['deliveryChoice']!='TRIP'){
       notify('Đơn giao thủ công hoặc tại quầy không cần giữ hàng. '
         'Xuất kho trực tiếp sẽ thực hiện trên đơn hàng.',bad:true);
       return;
@@ -423,6 +423,7 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
           label:const Text('Tồn đầu kỳ')),
         if(_linkedScope&&can('inventory.reserve')&&
           (_linkedOrder!['shipping'] is! Map ||
+            (_linkedOrder!['shipping'] as Map)['deliveryChoice']==null ||
             (_linkedOrder!['shipping'] as Map)['deliveryChoice']=='TRIP'))FilledButton.icon(
           key:const ValueKey('inventory-linked-order-hold'),
           onPressed:busy||loading||hasPending?null:()=>reserve(orderId:_linkedOrder!['id'] as String),
