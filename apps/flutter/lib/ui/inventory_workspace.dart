@@ -6,6 +6,7 @@ import 'erp_number_input.dart';
 import 'erp_toast.dart';
 import 'identity_client.dart';
 import 'manual_stock_issue.dart';
+import 'trip_fulfillment_dialog.dart';
 import 'stock_scope_setup.dart';
 
 /// Kho workspace: server-sourced facts, never a client-owned stock balance.
@@ -413,6 +414,23 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
       'orderId':picked,'version':detail['version'],'lineNo':selected},
       intent:'hold:'+picked+':'+selected.toString());
   }
+  Future<void> openTrip(String mode)async{
+    final b=branchId,w=warehouseId,token=widget.session.token;
+    if(b==null||w==null||busy||hasPending)return;
+    final shipping=_linkedOrder?['shipping'];
+    final linked=_linkedScope&&shipping is Map&&shipping['deliveryChoice']=='TRIP'
+      ?_linkedOrder!['id'] as String?:null;
+    final command=await showDialog<TripCommand>(context:context,
+      builder:(ctx)=>TripFulfillmentDialog(
+        client:widget.client,session:widget.session,branchId:b,
+        warehouseId:w,mode:mode,initialOrderId:linked));
+    if(command==null||!mounted||branchId!=b||warehouseId!=w||
+      widget.session.token!=token)return;
+    await send(command.action,command.body,
+      intent:mode+':'+(command.body['orderId']??'').toString(),
+      revision:command.revision);
+  }
+
   Future<void> release(Map<String,dynamic> row)async{
     final b=branchId,w=warehouseId;
     if(b==null||w==null||hasPending||!can('inventory.reserve'))return;
@@ -524,6 +542,16 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
           onPressed:busy||hasPending?null:()=>issueDirect(),
           icon:const Icon(Icons.local_shipping_outlined),
           label:const Text('Xuất kho thủ công')),
+        if(can('inventory.reserve'))OutlinedButton.icon(
+          key:const ValueKey('inventory-trip-prepare'),
+          onPressed:busy||hasPending?null:()=>openTrip('prepare'),
+          icon:const Icon(Icons.inventory_2_outlined),
+          label:const Text('Soạn & đóng theo chuyến')),
+        if(can('inventory.post'))OutlinedButton.icon(
+          key:const ValueKey('inventory-trip-dispatch'),
+          onPressed:busy||hasPending?null:()=>openTrip('dispatch'),
+          icon:const Icon(Icons.local_shipping_outlined),
+          label:const Text('Xuất hàng theo chuyến')),
         if(can('inventory.reserve'))OutlinedButton.icon(
           onPressed:busy||hasPending?null:()=>reserve(),
           icon:const Icon(Icons.inventory_2_outlined),label:const Text('Giữ hàng')),
