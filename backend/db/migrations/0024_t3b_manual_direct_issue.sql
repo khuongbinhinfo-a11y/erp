@@ -396,7 +396,7 @@ END; $$;
 CREATE CONSTRAINT TRIGGER sales_direct_issue_posted_on_commit
  AFTER INSERT ON sales_direct_issue_line DEFERRABLE INITIALLY DEFERRED
  FOR EACH ROW EXECUTE FUNCTION erp_t3b_issue_commit_guard();
-CREATE FUNCTION erp_t3b_issue_header_commit_guard() RETURNS trigger LANGUAGE plpgsql AS $
+CREATE FUNCTION erp_t3b_issue_header_commit_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
  IF NOT EXISTS(SELECT 1 FROM sales_direct_issue_line WHERE installation_id=NEW.installation_id
   AND branch_id=NEW.branch_id AND issue_id=NEW.id) THEN
@@ -419,7 +419,7 @@ BEGIN
   RAISE EXCEPTION 'Direct issue header has unmatched historic ledger movement';
  END IF;
  RETURN NULL;
-END; $;
+END; $$;
 CREATE CONSTRAINT TRIGGER sales_direct_issue_header_on_commit
  AFTER INSERT ON sales_direct_issue DEFERRABLE INITIALLY DEFERRED
  FOR EACH ROW EXECUTE FUNCTION erp_t3b_issue_header_commit_guard();
