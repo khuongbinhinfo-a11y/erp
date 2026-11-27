@@ -37,8 +37,8 @@ void main(){
           'lines':[{'lineNo':1,'productId':product,'sku':'P1','productName':'Mì gói',
            'unitCode':'cai','quantity':'5',
            'priceSnapshot':{'normalizedBaseQuantity':'5.000000'}}]}},
-        '/v1/inventory/direct-issues'=>{'items':[{
-          'lineNo':1,'quantityBase':'2.000000','productId':product}]},
+        '/v1/inventory/direct-issues/totals'=>{'items':[{
+          'lineNo':1,'issuedBase':'2.000000','baseUnit':'cai','productId':product}]},
         '/v1/inventory/stock-scopes'=>{
           'policy':{'requireLocation':false,'requireLot':false},
           'locations':[],'lots':[],'scopes':[]},
@@ -65,7 +65,7 @@ void main(){
    await tester.tap(find.text('Mở xuất kho'));
    await tester.pumpAndSettle();
    expect(find.text('Xuất kho trực tiếp'),findsOneWidget);
-   expect(find.textContaining('Còn phải xuất: 3'),findsOneWidget);
+   expect(find.textContaining('Còn phải xuất: 3 cai'),findsOneWidget);
    expect(writes,0);
    expect(acknowledged,false);
    await tester.tap(find.byKey(const ValueKey('manual-issue-confirm')));
