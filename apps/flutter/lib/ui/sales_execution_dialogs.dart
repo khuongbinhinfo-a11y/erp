@@ -333,8 +333,8 @@ Future<Map<String,dynamic>?> _askReturn(BuildContext context,
     }
     return AlertDialog(
      title:const Text('Nhập trả hàng chưa giao'),
-     content:SizedBox(width:600,child:ConstrainedBox(
-       constraints:const BoxConstraints(maxHeight:490),
+     content:SizedBox(width:600,
+       height:MediaQuery.sizeOf(c).height>720?480:MediaQuery.sizeOf(c).height*0.62,
        child:Column(mainAxisSize:MainAxisSize.min,
          crossAxisAlignment:CrossAxisAlignment.stretch,children:[
          const Text('Đối chiếu dòng xuất và lượng trả theo đơn vị gốc. '
@@ -383,7 +383,7 @@ Future<Map<String,dynamic>?> _askReturn(BuildContext context,
              isDense:true,labelText:'Lý do trả (bắt buộc)')),
          if(fault!=null)Text(fault!,
            style:const TextStyle(color:Colors.red,fontSize:12)),
-       ]))),
+       ])),
      actions:[
        TextButton(onPressed:loading?null:()=>Navigator.pop(c),
          child:const Text('Hủy')),
