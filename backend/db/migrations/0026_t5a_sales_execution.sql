@@ -273,7 +273,7 @@ CREATE TRIGGER t5a_no_late_manual_issue BEFORE INSERT ON sales_direct_issue_line
 -- Every later INSERT into its immutable line table must revalidate the
 -- complete fact set; a distinct transaction cannot append phantom goods.
 CREATE FUNCTION erp_t5a_delivery_line_commit_guard() RETURNS trigger
- LANGUAGE plpgsql AS $
+ LANGUAGE plpgsql AS $$
 DECLARE f sales_fulfillment%ROWTYPE;commercial_count integer;
  delivery_count integer;matched_count integer;
  sale_amount numeric;delivered_amount numeric;
@@ -312,7 +312,7 @@ BEGIN
   RAISE EXCEPTION 'Manual delivery line ledger amount changed after completion';
  END IF;
  RETURN NULL;
-END; $;
+END; $$;
 CREATE CONSTRAINT TRIGGER t5a_delivery_line_commit_guard
  AFTER INSERT ON sales_manual_delivery_line DEFERRABLE INITIALLY DEFERRED
  FOR EACH ROW EXECUTE FUNCTION erp_t5a_delivery_line_commit_guard();
