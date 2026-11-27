@@ -79,6 +79,18 @@ test("T5-A manual delivery, source-matched return, 0-debt and repeat AR payment"
   let state=await read();
   assert.equal(state.status,200,JSON.stringify(state.body));
   assert.equal(state.body.execution.sources[0].returnableBase,"5.000000");
+
+  const sourceLabel=state.body.execution.sources[0];
+  assert.equal(sourceLabel.issueId,issue.body.id);
+  assert.equal(sourceLabel.productSku,"T5AS");
+  assert.equal(sourceLabel.productName,"Test product");
+  assert.equal(sourceLabel.baseUnit,"cai");
+  assert.equal(sourceLabel.sourceLine,1);
+  assert.ok(Number.isFinite(Date.parse(sourceLabel.issuedAt)));
+  assert.equal(sourceLabel.lotCode,null);
+  assert.equal(sourceLabel.locationCode,null);
+  assert.equal(sourceLabel.locationName,null);
+
   const initialRev=state.body.execution.revision as number;
   const payload={...scope,reason:"Khách không nhận đủ hàng",
     lines:[{issueId:issue.body.id,sourceLine:1,quantityBase:"2.000000"}]};
