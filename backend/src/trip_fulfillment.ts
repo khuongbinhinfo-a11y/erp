@@ -16,9 +16,9 @@ function mustQty(value:unknown):asserts value is string{
  if(!validBaseQty(value))throw new InventoryFault(400,"INVALID_QUANTITY");
 }
 export async function requireT3c(db:PoolClient):Promise<void>{
- const r=await db.query<{ok:boolean}>(\`SELECT EXISTS(
+ const r=await db.query<{ok:boolean}>(`SELECT EXISTS(
    SELECT 1 FROM schema_migrations WHERE version='0025_t3c_trip_preparation_dispatch.sql'
- ) AS ok\`);
+ ) AS ok`);
  if(!r.rows[0]?.ok)throw new InventoryFault(503,"T3C_MIGRATION_REQUIRED");
 }
 async function lockTrip(db:PoolClient,c:MutationContext,input:TripScope){
@@ -28,7 +28,7 @@ async function lockTrip(db:PoolClient,c:MutationContext,input:TripScope){
  if(!wh.rowCount)throw new InventoryFault(404,"WAREHOUSE_NOT_FOUND");
  const rows=await db.query<{revision:string;status:string;version_state:string;
   current_version:number;fulfillment_status:string;delivery_status:string;
-  payment_status:string;delivery_choice:string;chosen_warehouse:string}>(\`
+  payment_status:string;delivery_choice:string;chosen_warehouse:string}>(`
   SELECT o.revision::text,o.status,v.state AS version_state,o.current_version,
    o.fulfillment_status,o.delivery_status,o.payment_status,
    x.delivery_choice,x.warehouse_id AS chosen_warehouse
@@ -38,7 +38,7 @@ async function lockTrip(db:PoolClient,c:MutationContext,input:TripScope){
   JOIN sales_order_version_context x ON x.installation_id=v.installation_id
    AND x.branch_id=v.branch_id AND x.order_id=v.order_id AND x.version_no=v.version_no
   WHERE o.installation_id=$1 AND o.branch_id=$2 AND o.id=$3 FOR UPDATE OF o
- \`,[t,b,input.orderId]);
+ `,[t,b,input.orderId]);
  const row=rows.rows[0];
  if(!row||row.status!=="CONFIRMED"||row.version_state!=="CONFIRMED"||
     row.current_version!==input.version||row.delivery_choice!=="TRIP"||
@@ -55,19 +55,19 @@ export async function tripWork(db:PoolClient,t:string,input:TripScope){
  const b=input.branchId,w=input.warehouseId,id=input.orderId,v=input.version;
  const order=await db.query<{revision:string;status:string;current_version:number;
   delivery_choice:string;warehouse_id:string;fulfillment_status:string;
-  delivery_status:string;payment_status:string}>(\`
+  delivery_status:string;payment_status:string}>(`
   SELECT o.revision::text,o.status,o.current_version,c.delivery_choice,c.warehouse_id,
    o.fulfillment_status,o.delivery_status,o.payment_status
   FROM sales_order o JOIN sales_order_version_context c
    ON c.installation_id=o.installation_id AND c.branch_id=o.branch_id
     AND c.order_id=o.id AND c.version_no=o.current_version
   WHERE o.installation_id=$1 AND o.branch_id=$2 AND o.id=$3
- \`,[t,b,id]);
+ `,[t,b,id]);
  const o=order.rows[0];
  if(!o||o.current_version!==v||o.delivery_choice!=="TRIP"||
   o.warehouse_id!==w)throw new InventoryFault(409,"TRIP_ORDER_UNAVAILABLE");
  const lines=await db.query<{line_no:number;product_id:string;sku:string;product_name:string;
-  unit_code:string;quantity:string;reservation_id:string|null;reserved:string;backordered:string}>(\`
+  unit_code:string;quantity:string;reservation_id:string|null;reserved:string;backordered:string}>(`
   SELECT l.line_no,l.product_id,l.sku,l.product_name,l.unit_code,l.quantity::text,
    r.id AS reservation_id,coalesce(r.quantity_base,0)::text AS reserved,
    coalesce(r.backordered_base,0)::text AS backordered
@@ -77,10 +77,10 @@ export async function tripWork(db:PoolClient,t:string,input:TripScope){
     AND r.line_no=l.line_no AND r.state='ACTIVE'
   WHERE l.installation_id=$1 AND l.branch_id=$2 AND l.order_id=$3
     AND l.version_no=$4 ORDER BY l.line_no
- \`,[t,b,id,v]);
+ `,[t,b,id,v]);
  const prep=await db.query<{preparation_id:string;source_line:number;order_line_no:number;
   product_id:string;picked:string;packed:string;location_id:string|null;lot_id:string|null;
-  dispatched:string}>(\`
+  dispatched:string}>(`
   SELECT p.preparation_id,p.source_line,p.order_line_no,p.product_id,
    p.picked_base::text AS picked,p.packed_base::text AS packed,
    p.location_id,p.lot_id,coalesce(d.issued,0)::text AS dispatched
@@ -95,7 +95,7 @@ export async function tripWork(db:PoolClient,t:string,input:TripScope){
   WHERE h.installation_id=$1 AND h.branch_id=$2 AND h.warehouse_id=$3
    AND h.order_id=$4 AND h.version_no=$5
   ORDER BY h.prepared_at,p.preparation_id,p.source_line
- \`,[t,b,w,id,v]);
+ `,[t,b,w,id,v]);
  const result=lines.rows.map(line=>{
   const parts=prep.rows.filter(x=>x.order_line_no===line.line_no);
   const picked=parts.reduce((n,p)=>n+q(p.picked),0n);
@@ -123,7 +123,7 @@ export async function prepareTrip(db:PoolClient,c:MutationContext,input:TripScop
   throw new InventoryFault(400,"TRIP_LINES_REQUIRED");
  await lockTrip(db,c,input);
  const t=c.installationId,b=input.branchId,w=input.warehouseId,id=input.orderId;
- const active=await db.query<{line_no:number;product_id:string;reservation_id:string}>(\`
+ const active=await db.query<{line_no:number;product_id:string;reservation_id:string}>(`
   SELECT l.line_no,l.product_id,r.id AS reservation_id
   FROM sales_order_line l JOIN inventory_reservation r
    ON r.installation_id=l.installation_id AND r.branch_id=l.branch_id
@@ -131,7 +131,7 @@ export async function prepareTrip(db:PoolClient,c:MutationContext,input:TripScop
     AND r.state='ACTIVE'
   WHERE l.installation_id=$1 AND l.branch_id=$2 AND l.order_id=$3
     AND l.version_no=$4 AND r.warehouse_id=$5 ORDER BY l.line_no FOR SHARE OF l,r
- \`,[t,b,id,input.version,w]);
+ `,[t,b,id,input.version,w]);
  const holds=new Map(active.rows.map(x=>[x.line_no,x]));
  const seen=new Set<string>();
  for(const line of input.lines){
@@ -147,21 +147,21 @@ export async function prepareTrip(db:PoolClient,c:MutationContext,input:TripScop
   await checkScope(db,t,input,hold.product_id,line.locationId,line.lotId);
  }
  const documentId=randomUUID();
- await db.query(\`INSERT INTO sales_trip_preparation(installation_id,branch_id,id,order_id,
+ await db.query(`INSERT INTO sales_trip_preparation(installation_id,branch_id,id,order_id,
   version_no,warehouse_id,actor_id,request_id)
-  VALUES($1,$2,$3,$4,$5,$6,$7,$8)\`,[t,b,documentId,id,input.version,w,c.actorId,c.requestId]);
+  VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,[t,b,documentId,id,input.version,w,c.actorId,c.requestId]);
  for(const [i,line] of input.lines.entries()){
   const hold=holds.get(line.lineNo)!;
-  await db.query(\`INSERT INTO sales_trip_preparation_line
+  await db.query(`INSERT INTO sales_trip_preparation_line
    (installation_id,branch_id,preparation_id,source_line,order_line_no,
     reservation_id,product_id,picked_base,packed_base,location_id,lot_id)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$8::numeric,$9::numeric,$10,$11)\`,
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8::numeric,$9::numeric,$10,$11)`,
    [t,b,documentId,i+1,line.lineNo,hold.reservation_id,hold.product_id,
     line.pickedBase,line.packedBase,line.locationId??null,line.lotId??null]);
  }
- const updated=await db.query<{revision:string}>(\`UPDATE sales_order SET
+ const updated=await db.query<{revision:string}>(`UPDATE sales_order SET
     fulfillment_status='PARTIAL',revision=revision+1,updated_at=now()
-    WHERE installation_id=$1 AND branch_id=$2 AND id=$3 RETURNING revision::text\`,
+    WHERE installation_id=$1 AND branch_id=$2 AND id=$3 RETURNING revision::text`,
     [t,b,id]);
  return {status:201,body:{id:documentId,revision:Number(updated.rows[0]!.revision),
   ...(await tripWork(db,t,input)),inventoryPosted:false,deliveryPosted:false,receivablePosted:false}};
@@ -175,7 +175,7 @@ export async function dispatchTrip(db:PoolClient,c:MutationContext,input:TripSco
  const seen=new Set<string>();
  const source=await db.query<{preparation_id:string;source_line:number;product_id:string;
   order_line_no:number;reservation_id:string;location_id:string|null;lot_id:string|null;
-  packed:string;sent:string}>(\`
+  packed:string;sent:string}>(`
   SELECT p.preparation_id,p.source_line,p.product_id,p.order_line_no,p.reservation_id,
     p.location_id,p.lot_id,p.packed_base::text AS packed,
     coalesce((SELECT sum(dl.quantity_base) FROM sales_trip_dispatch_line dl
@@ -187,7 +187,7 @@ export async function dispatchTrip(db:PoolClient,c:MutationContext,input:TripSco
   WHERE h.installation_id=$1 AND h.branch_id=$2 AND h.warehouse_id=$3
    AND h.order_id=$4 AND h.version_no=$5
   ORDER BY p.preparation_id,p.source_line FOR SHARE OF p
- \`,[t,b,w,id,input.version]);
+ `,[t,b,w,id,input.version]);
  const available=new Map(source.rows.map(x=>[[x.preparation_id,x.source_line].join(":"),x]));
  for(const line of input.lines){
   mustQty(line.quantityBase);
@@ -199,32 +199,32 @@ export async function dispatchTrip(db:PoolClient,c:MutationContext,input:TripSco
    throw new InventoryFault(409,"TRIP_DISPATCH_EXCEEDS_PACKED");
  }
  const dispatchId=randomUUID();
- await db.query(\`INSERT INTO sales_trip_dispatch(installation_id,branch_id,id,order_id,
+ await db.query(`INSERT INTO sales_trip_dispatch(installation_id,branch_id,id,order_id,
   version_no,warehouse_id,actor_id,request_id)
-  VALUES($1,$2,$3,$4,$5,$6,$7,$8)\`,[t,b,dispatchId,id,input.version,w,c.actorId,c.requestId]);
+  VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,[t,b,dispatchId,id,input.version,w,c.actorId,c.requestId]);
  const posted=[];
  for(const [i,item] of input.lines.entries()){
   const row=available.get([item.preparationId,item.sourceLine].join(":"))!;
   const sourceLine=i+1;
-  await db.query(\`INSERT INTO sales_trip_dispatch_line
+  await db.query(`INSERT INTO sales_trip_dispatch_line
    (installation_id,branch_id,dispatch_id,source_line,preparation_id,
     preparation_line_no,order_line_no,reservation_id,product_id,
     quantity_base,location_id,lot_id)
-   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::numeric,$11,$12)\`,
+   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::numeric,$11,$12)`,
    [t,b,dispatchId,sourceLine,item.preparationId,item.sourceLine,row.order_line_no,
     row.reservation_id,row.product_id,item.quantityBase,row.location_id,row.lot_id]);
-  const movement=await db.query<{id:string}>(\`INSERT INTO inventory_ledger
+  const movement=await db.query<{id:string}>(`INSERT INTO inventory_ledger
     (installation_id,branch_id,warehouse_id,product_id,kind,source_type,source_id,
      source_line,delta_base,actor_id,request_id)
     VALUES($1,$2,$3,$4,'ISSUE','FULFILLMENT',$5,$6,-$7::numeric,$8,$9)
-    RETURNING id\`,[t,b,w,row.product_id,dispatchId,sourceLine,item.quantityBase,c.actorId,c.requestId]);
+    RETURNING id`,[t,b,w,row.product_id,dispatchId,sourceLine,item.quantityBase,c.actorId,c.requestId]);
   posted.push({movementId:movement.rows[0]!.id,productId:row.product_id,
    lineNo:row.order_line_no,quantityBase:item.quantityBase,
    locationId:row.location_id,lotId:row.lot_id});
  }
  // A TRIP is fully issued only when every canonical order line has been
  // physically dispatched. Packing/backorders do not count as shipped.
- const remaining=await db.query<{pending:string}>(\`
+ const remaining=await db.query<{pending:string}>(`
   SELECT count(*)::text AS pending FROM sales_order_line l
   JOIN catalog_product p ON p.installation_id=l.installation_id
    AND p.branch_id=l.branch_id AND p.id=l.product_id
@@ -238,11 +238,11 @@ export async function dispatchTrip(db:PoolClient,c:MutationContext,input:TripSco
           WHERE h.installation_id=l.installation_id AND h.branch_id=l.branch_id
            AND h.order_id=l.order_id AND h.version_no=l.version_no
            AND d.order_line_no=l.line_no),0)
- \`,[t,b,id,input.version]);
+ `,[t,b,id,input.version]);
  const done=remaining.rows[0]?.pending==="0";
- const revision=await db.query<{revision:string}>(\`UPDATE sales_order
+ const revision=await db.query<{revision:string}>(`UPDATE sales_order
    SET fulfillment_status=$4,revision=revision+1,updated_at=now()
-   WHERE installation_id=$1 AND branch_id=$2 AND id=$3 RETURNING revision::text\`,
+   WHERE installation_id=$1 AND branch_id=$2 AND id=$3 RETURNING revision::text`,
    [t,b,id,done?"COMPLETED":"PARTIAL"]);
  return {status:201,body:{id:dispatchId,orderId:id,version:input.version,
    warehouseId:w,revision:Number(revision.rows[0]!.revision),
