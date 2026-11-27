@@ -232,8 +232,9 @@ export async function handleInventoryHttp(req:IncomingMessage,res:ServerResponse
      if(typeof v.pickedBase!=="string"||typeof v.packedBase!=="string")
        throw new InventoryFault(400,"INVALID_QUANTITY");
      return {lineNo:positiveInt(v.lineNo),pickedBase:v.pickedBase,
-      packedBase:v.packedBase,locationId:optionalUuid(v.locationId),
-      lotId:optionalUuid(v.lotId)};
+      packedBase:v.packedBase,
+      ...(v.locationId==null?{}:{locationId:uuid(v.locationId)}),
+      ...(v.lotId==null?{}:{lotId:uuid(v.lotId)})};
    });
    const input={...q,orderId,version,lines};
    const c=ctx(req,id,tenant,actorId,"inventory.trip.prepare",input,false);
