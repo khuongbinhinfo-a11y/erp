@@ -168,6 +168,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   }
   bool get _navigationLocked=>saving||localRecoveryBusy||
     (!localRecoveryBlocked&&(pendingCreate!=null||pendingUpdate!=null||pendingConfirm!=null));
+  // Unresolved local commands may permit navigation, but never a new lifecycle mutation.
+  bool get _mutationBlocked=>_navigationLocked||localRecoveryBlocked||
+    pendingCreate!=null||pendingUpdate!=null||pendingConfirm!=null;
   @override void setState(VoidCallback fn){
     super.setState(fn);
     final locked=_navigationLocked;
@@ -2971,7 +2974,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   }
   Future<void> action(Map<String,dynamic> order,String action)async{
     final branch=branchId,token=widget.session.token;
-    if(branch==null||_navigationLocked||!can('orders.$action'))return;
+    if(branch==null||_mutationBlocked||!can('orders.$action'))return;
     final id=order['id'] as String,rev=order['revision'] as int;
     final label='$branch:$action:$id:$rev';
     final prior=retryKeys[label];
@@ -2981,7 +2984,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       // revision before retry; retain both the exact key and original reason.
       try{
         final current=await widget.client.salesOrder(token,id,branch);
-        if(!_sameScope(token,branch)||_navigationLocked)return;
+        if(!_sameScope(token,branch)||_mutationBlocked)return;
         if(current['revision']!=rev){
           retryKeys.remove(label);_retryReasons.remove(label);
           inform('Đơn đã thay đổi trên máy chủ. Kiểm tra lại chi tiết.');
@@ -3007,7 +3010,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       if(reason==null)return;
       if(reason.length<3){inform('Vui lòng nhập lý do.',error:true);return;}
     }
-    if(!_sameScope(token,branch)||_navigationLocked||!can('orders.$action'))return;
+    if(!_sameScope(token,branch)||_mutationBlocked||!can('orders.$action'))return;
     setState(()=>saving=true);
     final key=retryKeys.putIfAbsent(label,newKey);
     _retryReasons[label]=reason;
