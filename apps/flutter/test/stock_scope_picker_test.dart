@@ -27,6 +27,9 @@ void main(){
       onChanged:(v)=>selected=v)))));
   await tester.tap(find.text('A01 · Kệ A'));
   await tester.pumpAndSettle();
+  // Leave the search field focused while the dialog animates away.
+  await tester.tap(find.byKey(const ValueKey('stock-scope-search-location')));
+  await tester.pumpAndSettle();
   await tester.tap(find.text('Bỏ chọn'));
   await tester.pumpAndSettle();
   expect(selected,'');
