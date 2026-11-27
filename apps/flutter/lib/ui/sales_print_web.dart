@@ -10,6 +10,6 @@ void erpOpenSalesPrint(String html){
   final blob=web.Blob([html.toJS].toJS,web.BlobPropertyBag(type:'text/html;charset=utf-8'));
   final url=web.URL.createObjectURL(blob);
   final anchor=web.HTMLAnchorElement()..href=url..target='_blank'..rel='noopener noreferrer';
-  try{anchor.click();}
-  finally{Timer(const Duration(minutes:1),()=>web.URL.revokeObjectURL(url));}
+  try{web.document.body?.append(anchor);anchor.click();}
+  finally{anchor.remove();Timer(const Duration(minutes:1),()=>web.URL.revokeObjectURL(url));}
 }

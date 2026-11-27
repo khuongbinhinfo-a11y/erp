@@ -125,6 +125,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   final search=TextEditingController();
   String _orderFilter='all';
   final Map<String,String> retryKeys={};
+  final Map<String,String?> _retryReasons={};
   // Keep the original canonical body AND key together until the server ACKs.
   // A lost response must be replayed with exactly the same request, never a new form.
   Map<String,dynamic>? pendingCreate,pendingConfirm,pendingUpdate;
@@ -252,7 +253,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   @override void didUpdateWidget(covariant SalesWorkspace old){
     super.didUpdateWidget(old);
     if(old.session.token!=widget.session.token||old.client!=widget.client){
-      generation++;branches=[];orders=[];branchId=null;retryKeys.clear();_orderFilter='all';
+      generation++;branches=[];orders=[];branchId=null;retryKeys.clear();_retryReasons.clear();_orderFilter='all';
       pendingCreate=null;pendingCreateKey=null;pendingConfirm=null;
       pendingConfirmKey=null;pendingUpdate=null;pendingUpdateKey=null;
       pendingCreateAutoConfirm=false;localRecoveryBusy=false;localRecoveryBlocked=false;pendingNeedsReceipt=false;
@@ -2952,58 +2953,85 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   }
   Future<String?> reasonDialog(String title)async{
     final controller=TextEditingController();
+    final route=DialogRoute<String>(context:context,builder:(ctx)=>AlertDialog(
+      title:Text(title),
+      content:TextField(controller:controller,maxLines:2,autofocus:true,
+        decoration:const InputDecoration(labelText:'Lý do')),
+      actions:[
+        TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Đóng')),
+        FilledButton(onPressed:()=>Navigator.pop(ctx,controller.text.trim()),
+          child:const Text('Tiếp tục')),
+      ],
+    ));
     try{
-      return await showDialog<String>(context:context,builder:(ctx)=>AlertDialog(
-        title:Text(title),
-        content:TextField(controller:controller,maxLines:2,autofocus:true,
-          decoration:const InputDecoration(labelText:'Lý do')),
-        actions:[
-          TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Đóng')),
-          FilledButton(onPressed:()=>Navigator.pop(ctx,controller.text.trim()),
-            child:const Text('Tiếp tục')),
-        ],
-      ));
+      final value=await Navigator.of(context,rootNavigator:true).push(route);
+      await route.completed;
+      return value;
     }finally{controller.dispose();}
   }
   Future<void> action(Map<String,dynamic> order,String action)async{
-    final branch=branchId;
-    if(branch==null||saving||localRecoveryBusy||localRecoveryBlocked||pendingCreate!=null||
-       pendingUpdate!=null||pendingConfirm!=null)return;
+    final branch=branchId,token=widget.session.token;
+    if(branch==null||_navigationLocked||!can('orders.$action'))return;
+    final id=order['id'] as String,rev=order['revision'] as int;
+    final label='$branch:$action:$id:$rev';
+    final prior=retryKeys[label];
     String? reason;
-    if(action=='confirm'){
+    if(prior!=null){
+      // The previous request may have committed. Re-read the canonical
+      // revision before retry; retain both the exact key and original reason.
+      try{
+        final current=await widget.client.salesOrder(token,id,branch);
+        if(!_sameScope(token,branch)||_navigationLocked)return;
+        if(current['revision']!=rev){
+          retryKeys.remove(label);_retryReasons.remove(label);
+          inform('Đơn đã thay đổi trên máy chủ. Kiểm tra lại chi tiết.');
+          await reload();return;
+        }
+        reason=_retryReasons[label];
+      }on ErpApiError catch(e){if(_sameScope(token,branch))inform(e.message,error:true);return;}
+      catch(_){if(_sameScope(token,branch))inform('Chưa xác minh được đơn. Chưa gửi lại.',error:true);return;}
+    }else if(action=='confirm'){
       final allow=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(
         title:const Text('Xác nhận đơn bán hàng'),
         content:Text('Xác nhận chứng từ với số tiền '+money(order['total'])+
-          '. Sau khi xác nhận, thay đổi phải qua phiên bản điều chỉnh. '+
-          'Thao tác này chưa xuất kho, giao hàng hoặc ghi nhận thu tiền.'),
+          '. Thao tác này chưa xuất kho, giao hàng hoặc ghi nhận thu tiền.'),
         actions:[
           TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Quay lại')),
           FilledButton(key:const ValueKey('sales-approve-confirm'),
             onPressed:()=>Navigator.pop(ctx,true),child:const Text('Xác nhận đơn')),
         ],
       ));
-      if(allow!=true||!mounted)return;
-    }
-    if(action!='confirm'){
+      if(allow!=true)return;
+    }else{
       reason=await reasonDialog(action=='amend'?'Điều chỉnh đơn hàng':'Hủy đơn hàng');
       if(reason==null)return;
       if(reason.length<3){inform('Vui lòng nhập lý do.',error:true);return;}
     }
-    if(!mounted)return;
+    if(!_sameScope(token,branch)||_navigationLocked||!can('orders.$action'))return;
     setState(()=>saving=true);
-    final id=order['id'] as String,rev=order['revision'] as int;
-    final label=action+'-'+id+'-'+rev.toString();
     final key=retryKeys.putIfAbsent(label,newKey);
+    _retryReasons[label]=reason;
+    Map<String,dynamic>? editNext;
     try{
-      await widget.client.salesOrderAction(widget.session.token,id,action,branch,rev,
-        key:key,reason:reason);
-      retryKeys.remove(label);
+      await widget.client.salesOrderAction(token,id,action,branch,rev,key:key,reason:reason);
+      if(!_sameScope(token,branch))return;
+      retryKeys.remove(label);_retryReasons.remove(label);
       inform(action=='confirm'?'Đã xác nhận đơn hàng.':
         action=='amend'?'Đã mở điều chỉnh đơn hàng.':'Đã hủy đơn hàng.');
       await reload();
-    }on ErpApiError catch(e){inform(e.message,error:true);}
-    catch(_){inform('Chưa nhận được kết quả. Vui lòng tải lại đơn.',error:true);}
-    finally{if(mounted)setState(()=>saving=false);}
+      if(action=='amend'&&_sameScope(token,branch)&&can('orders.update')){
+        final next=await widget.client.salesOrder(token,id,branch);
+        if(_sameScope(token,branch)&&next['versionStatus']=='DRAFT'&&
+          next['version']==(order['version'] as int)+1)editNext=next;
+      }
+    }on ErpApiError catch(e){
+      if(_sameScope(token,branch)){
+        if(e.status>=400&&e.status<500){retryKeys.remove(label);_retryReasons.remove(label);}
+        inform(e.message,error:true);
+      }
+    }catch(_){if(_sameScope(token,branch))inform('Chưa nhận được kết quả. Vui lòng tải lại đơn.',error:true);}
+    finally{if(_sameScope(token,branch))setState(()=>saving=false);}
+    if(editNext!=null&&_sameScope(token,branch)&&!_navigationLocked)await updateOrder(editNext);
   }
   Future<void> _printOrder(Map<String,dynamic> item)async{
     try{
@@ -3229,21 +3257,26 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       icon:const Icon(Icons.print_outlined,size:16),label:const Text('In đơn')),
                   if(can('orders.create'))
                     OutlinedButton.icon(key:const ValueKey('sales-copy-order'),
-                      onPressed:(){Navigator.pop(ctx);createOrder(source:item);},
+                      onPressed:(){if(!_sameScope(token,branch)||_navigationLocked)return;
+                        Navigator.pop(ctx);createOrder(source:item);},
                       icon:const Icon(Icons.copy_outlined,size:16),label:const Text('Sao chép đơn')),
                   if(item['status']!='CANCELLED'&&item['versionStatus']=='DRAFT'&&can('orders.update'))
-                    OutlinedButton(onPressed:(){Navigator.pop(ctx);updateOrder(item);},
+                    OutlinedButton(onPressed:(){if(!_sameScope(token,branch)||_navigationLocked)return;
+                        Navigator.pop(ctx);updateOrder(item);},
                       child:const Text('Sửa đơn')),
                   if(item['status']!='CANCELLED'&&item['versionStatus']=='DRAFT'&&can('orders.confirm'))
                     FilledButton(key:const ValueKey('sales-confirm'),
-                      onPressed:(){Navigator.pop(ctx);action(item,'confirm');},
+                      onPressed:(){if(!_sameScope(token,branch)||_navigationLocked)return;
+                        Navigator.pop(ctx);action(item,'confirm');},
                       child:const Text('Xác nhận')),
                   if(item['status']=='CONFIRMED'&&item['versionStatus']=='CONFIRMED'&&
                      erpSalesCanAmendOrCancel(item)&&can('orders.amend'))
-                    OutlinedButton(onPressed:(){Navigator.pop(ctx);action(item,'amend');},
+                    OutlinedButton(onPressed:(){if(!_sameScope(token,branch)||_navigationLocked)return;
+                        Navigator.pop(ctx);action(item,'amend');},
                       child:const Text('Điều chỉnh')),
                   if(erpSalesCanAmendOrCancel(item)&&can('orders.cancel'))
-                    TextButton(onPressed:(){Navigator.pop(ctx);action(item,'cancel');},
+                    TextButton(onPressed:(){if(!_sameScope(token,branch)||_navigationLocked)return;
+                        Navigator.pop(ctx);action(item,'cancel');},
                       child:const Text('Hủy đơn')),
                 ]),
             ),
@@ -3328,7 +3361,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                   suffixIcon:IconButton(tooltip:'Tìm kiếm',onPressed:loading?null:reload,
                     icon:const Icon(Icons.arrow_forward))))),
             if(!retail)SizedBox(width:compact?bounds.maxWidth:190,child:DropdownButtonFormField<String>(
-              key:const ValueKey('sales-status-filter'),initialValue:_orderFilter,isExpanded:true,
+              key:ValueKey('sales-status-filter-$_orderFilter'),initialValue:_orderFilter,isExpanded:true,
               decoration:const InputDecoration(labelText:'Trạng thái',isDense:true),
               items:const [DropdownMenuItem(value:'all',child:Text('Tất cả')),
                 DropdownMenuItem(value:'entry',child:Text('Đang lập / điều chỉnh')),

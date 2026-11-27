@@ -11,6 +11,7 @@ void main(){
     expect(erpSalesMatchesFilter(order,'delivery'),isFalse);
     expect(erpSalesMatchesFilter(order,'payment'),isFalse);
     expect(erpSalesProgressText('NOT_DUE','payment'),'Chưa phát sinh phải thu');
+    expect(erpSalesProgressText('NOT_ALLOCATED','warehouse'),'Chưa phân bổ');
     order['fulfillmentStatus']='COMPLETED';
     expect(erpSalesCanAmendOrCancel(order),isFalse);
     expect(erpSalesMatchesFilter(order,'delivery'),isTrue);

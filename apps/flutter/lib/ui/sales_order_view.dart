@@ -2,8 +2,8 @@
 /// Do not infer goods issued or receivables from order confirmation.
 String erpSalesProgressText(Object? code,String type)=>switch(type){
   'warehouse'=>switch(code){
-    'NOT_ALLOCATED'=>'Chưa giữ hàng','PARTIAL'=>'Giữ một phần',
-    'ALLOCATED'=>'Đã giữ hàng','COMPLETED'=>'Đã xuất kho',_=>'Chưa xác định'},
+    'NOT_ALLOCATED'=>'Chưa phân bổ','PARTIAL'=>'Phân bổ một phần',
+    'ALLOCATED'=>'Đã phân bổ','COMPLETED'=>'Đã xuất kho',_=>'Chưa xác định'},
   'delivery'=>switch(code){
     'NOT_DISPATCHED'=>'Chưa giao','PARTIAL'=>'Giao một phần',
     'DELIVERED'=>'Đã giao',_=>'Chưa xác định'},

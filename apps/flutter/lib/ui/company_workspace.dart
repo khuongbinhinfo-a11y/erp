@@ -206,7 +206,8 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
                   }))
             : (active == CompanySection.warehouses && !widget.previewOnly &&
                 widget.client != null && widget.session != null)
-              ? InventoryWorkspace(key:ValueKey('inventory-workspace-${_warehouseOrder?['id']??''}'),
+              ? InventoryWorkspace(key:ValueKey(_warehouseOrder==null?'inventory-workspace':
+                  'inventory-workspace-${_warehouseOrder!['id']}'),
                   client:widget.client!,session:widget.session!,initialOrder:_warehouseOrder)
             : (active == CompanySection.purchases && !widget.previewOnly &&
                 widget.client != null && widget.session != null)
