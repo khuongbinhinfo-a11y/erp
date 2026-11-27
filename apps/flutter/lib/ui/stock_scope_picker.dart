@@ -25,7 +25,6 @@ class StockScopePicker extends StatelessWidget {
   @override Widget build(BuildContext context){
     final selected=items.whereType<Map>().where((x)=>x['id']==selectedId).firstOrNull;
     return OutlinedButton.icon(
-      key:ValueKey('stock-scope-picker-$kind'),
       icon:Icon(kind=='lot'?Icons.qr_code:Icons.place_outlined),
       label:Text(selected==null?'Chọn $label':titleOf(selected),
         overflow:TextOverflow.ellipsis,maxLines:1),
