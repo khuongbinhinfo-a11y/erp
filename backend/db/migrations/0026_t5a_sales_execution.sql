@@ -106,6 +106,11 @@ BEGIN
   AND issue_id=NEW.issue_id AND issue_source_line=NEW.issue_source_line;
  IF returned+NEW.quantity_base>issue_row.quantity_base THEN
   RAISE EXCEPTION 'Return exceeds original issued quantity'; END IF;
+ IF EXISTS(
+  SELECT 1 FROM sales_fulfillment f
+  WHERE f.installation_id=NEW.installation_id AND f.branch_id=NEW.branch_id
+   AND f.order_id=return_order AND f.mode='MANUAL'
+ ) THEN RAISE EXCEPTION 'Cannot return stock after MANUAL completion'; END IF;
  RETURN NEW;
 END; $$;
 CREATE TRIGGER t5a_return_line_guard BEFORE INSERT ON sales_manual_return_line
@@ -322,3 +327,18 @@ END; $$;
 CREATE CONSTRAINT TRIGGER t5a_receipt_commit_guard
  AFTER INSERT ON payment_receipt DEFERRABLE INITIALLY DEFERRED
  FOR EACH ROW EXECUTE FUNCTION erp_t5a_receipt_commit_guard();
+
+-- Reject empty return headers and orphan bookkeeping even when callers bypass
+-- the HTTP mutation endpoint.
+CREATE FUNCTION erp_t5a_return_header_commit_guard() RETURNS trigger
+ LANGUAGE plpgsql AS $$
+BEGIN
+ IF NOT EXISTS(SELECT 1 FROM sales_manual_return_line l WHERE
+   l.installation_id=NEW.installation_id AND l.branch_id=NEW.branch_id
+   AND l.return_id=NEW.id)
+ THEN RAISE EXCEPTION 'Posted manual return requires at least one line'; END IF;
+ RETURN NULL;
+END; $$;
+CREATE CONSTRAINT TRIGGER t5a_return_header_commit_guard
+ AFTER INSERT ON sales_manual_return DEFERRABLE INITIALLY DEFERRED
+ FOR EACH ROW EXECUTE FUNCTION erp_t5a_return_header_commit_guard();
