@@ -7,6 +7,7 @@ import { handleBulkHttp } from "./bulk_http.ts";
 import { handleCatalogMediaHttp } from "./catalog_media_http.ts";
 import { handleR1Http } from "./r1_catalog_http.ts";
 import { handleSalesHttp } from "./sales_http.ts";
+import { handleExecutionHttp } from "./sales_execution_http.ts";
 import { handlePosHttp } from "./pos_http.ts";
 import { handleInventoryHttp } from "./inventory_http.ts";
 import { handleTransferHttp } from "./transfer_http.ts";
@@ -126,6 +127,10 @@ export function buildApp(
     }
     if (url.pathname.startsWith("/v1/pos/")) {
       void handlePosHttp(req,res,id,url,identityOptions,checkReady);
+      return;
+    }
+    if (url.pathname.startsWith("/v1/sales/execution/")) {
+      void handleExecutionHttp(req,res,id,url,identityOptions,checkReady);
       return;
     }
     if (url.pathname.startsWith("/v1/sales/")) {

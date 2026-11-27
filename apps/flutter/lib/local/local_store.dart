@@ -72,6 +72,36 @@ class ErpLocalStore {
   }
 
 
+  /// T5-A order posting intent: one in-flight MANUAL delivery/return/payment
+  /// per installation+actor+branch+warehouse+order. The original key, revision
+  /// and full body are retained across process death and network loss.
+  Future<void> saveExecutionPending(LocalScope scope,String orderId,
+      Map<String,dynamic> command)async{
+    final path=_key(scope,'sales-execution',orderId);
+    final payload=jsonEncode(command),old=await driver.read(path);
+    if(old==payload)return;
+    if(old!=null||driver is! AtomicLocalDriver)throw const LocalRecoveryConflict();
+    if(!await (driver as AtomicLocalDriver).compareAndSwap(path,null,payload))
+      throw const LocalRecoveryConflict();
+  }
+  Future<Map<String,dynamic>?> executionPending(LocalScope scope,String orderId)async{
+    final raw=await driver.read(_key(scope,'sales-execution',orderId));
+    return raw==null?null:Map<String,dynamic>.from(jsonDecode(raw) as Map);
+  }
+  Future<void> clearExecutionPending(LocalScope scope,String orderId,String expectedKey)async{
+    final path=_key(scope,'sales-execution',orderId);
+    if(driver is! AtomicLocalDriver)throw const LocalRecoveryConflict();
+    for(var attempt=0;attempt<12;attempt++){
+      final before=await driver.read(path);
+      if(before==null)return;
+      final entry=Map<String,dynamic>.from(jsonDecode(before) as Map);
+      if(entry['key']!=expectedKey)throw const LocalRecoveryConflict();
+      if(await (driver as AtomicLocalDriver).compareAndSwap(path,before,null))return;
+    }
+    throw const LocalRecoveryConflict();
+  }
+
+
 
   // An editor owns one UUID-like token. Lease expiry permits crash recovery,
   // but the old editor can neither autosave nor submit after a takeover.

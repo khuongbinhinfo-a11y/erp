@@ -15,6 +15,30 @@ class Memory implements AtomicLocalDriver{
 void main(){
   const a=LocalScope(origin:'https://erp.example',installation:'i',actor:'a',branch:'b',warehouse:'w');
   const b=LocalScope(origin:'https://erp.example',installation:'i',actor:'other',branch:'b',warehouse:'w');
+  test('T5-A: concurrent tabs cannot overwrite, switch scope or replay stale payment',()async{
+    final driver=Memory(),aTab=ErpLocalStore(driver),bTab=ErpLocalStore(driver);
+    const order='00000000-0000-4000-8000-000000000008';
+    const altWarehouse=LocalScope(origin:'https://erp.example',
+      installation:'i',actor:'a',branch:'b',warehouse:'different');
+    final original={'action':'payment','key':'payment-1','revision':8,
+      'body':{'orderId':order,'amount':'1200','warehouseId':'w'}};
+    await aTab.saveExecutionPending(a,order,original);
+    expect((await bTab.executionPending(a,order))?['key'],'payment-1');
+    expect(await bTab.executionPending(b,order),isNull);
+    expect(await bTab.executionPending(altWarehouse,order),isNull);
+    await aTab.saveExecutionPending(a,order,original);
+    await expectLater(bTab.saveExecutionPending(a,order,{
+      ...original,'key':'payment-2'}),throwsA(isA<LocalRecoveryConflict>()));
+    await expectLater(bTab.clearExecutionPending(a,order,'payment-2'),
+      throwsA(isA<LocalRecoveryConflict>()));
+    expect((await aTab.executionPending(a,order))?['revision'],8);
+    await bTab.clearExecutionPending(a,order,'payment-1');
+    expect(await aTab.executionPending(a,order),isNull);
+    await aTab.saveExecutionPending(a,order,{
+      ...original,'key':'payment-3','revision':9,
+      'body':{'orderId':order,'amount':'200','warehouseId':'w'}});
+    expect((await bTab.executionPending(a,order))?['key'],'payment-3');
+  });
   test('pending POS payment is durable, actor scoped and CAS fenced',()async{
     final driver=Memory(),first=ErpLocalStore(driver),second=ErpLocalStore(driver);
     final command={'key':'pos-k-1','body':{'amount':'1000','quantity':'2'}};

@@ -6,7 +6,7 @@ String erpSalesProgressText(Object? code,String type)=>switch(type){
     'ALLOCATED'=>'Đã phân bổ','COMPLETED'=>'Đã xuất kho',_=>'Chưa xác định'},
   'delivery'=>switch(code){
     'NOT_DISPATCHED'=>'Chưa giao','PARTIAL'=>'Giao một phần',
-    'DELIVERED'=>'Đã giao',_=>'Chưa xác định'},
+    'DELIVERED'=>'Đã giao','RETURNED'=>'Trả hết',_=>'Chưa xác định'},
   'payment'=>switch(code){
     'NOT_DUE'=>'Chưa phát sinh phải thu','PARTIAL'=>'Thu một phần',
     'PAID'=>'Đã thanh toán',_=>'Chưa xác định'},
@@ -32,9 +32,12 @@ bool erpSalesMatchesFilter(Map<String,dynamic> row,String filter)=>switch(filter
   'confirmed'=>row['status']=='CONFIRMED'&&row['versionStatus']=='CONFIRMED',
   'warehouse'=>erpSalesCanHold(row),
   'delivery'=>row['status']=='CONFIRMED'&&row['versionStatus']=='CONFIRMED'&&
-    row['fulfillmentStatus']=='COMPLETED'&&row['deliveryStatus']!='DELIVERED',
+    row['fulfillmentStatus']=='COMPLETED'&&
+    row['deliveryStatus']=='NOT_DISPATCHED',
   'payment'=>row['status']=='CONFIRMED'&&row['versionStatus']=='CONFIRMED'&&
-    row['deliveryStatus']=='DELIVERED'&&row['paymentStatus']!='PAID',
+    row['fulfillmentStatus']=='COMPLETED'&&
+    const ['DELIVERED','PARTIAL'].contains(row['deliveryStatus'])&&
+    row['paymentStatus']!='PAID',
   'cancelled'=>row['status']=='CANCELLED',
   _=>true,
 };

@@ -1,6 +1,6 @@
 # T3-A — đối chiếu mode giao, kho và dependency T3/T5 (27/11/2026)
 
-## Baseline và phạm vi
+> **Cập nhật phạm vi 27/11/2026:** các dòng “MISSING T5-A” ở tài liệu T3-A này là ảnh chụp baseline **trước T5-A**, không phải kết luận hiện tại. Code PR #98 triển khai MANUAL direct completion/return/AR/payment; đối chiếu legacy SHA/path:line → ERP target/disposition/test tại [T5-A source mapping](T5_A_LEGACY_SOURCE_MAPPING_20261127.md). Bằng chứng release phụ thuộc CI/Codex/owner approval, migration 0026 production và device UAT; T5-B/C/D chưa được tuyên bố hoàn tất.\n\n## Baseline và phạm vi
 - ERP repo phụ `khuongbinhinfo-a11y/erp` main `62daff7dae999f1a0bf8bfab29b2706cc950f99d`.
 - ERP repo chính `gustavjung24-ops/ERP` main `6d290ca94447a75fd2a4f8c6ea1ca3191c35aaee`.
 - Legacy chỉ đọc `binhnxwjfjxm/NPP-Platform` main `d39e8a87cdc8905a85d92ee3a4b8c7427b3ecd35`.
