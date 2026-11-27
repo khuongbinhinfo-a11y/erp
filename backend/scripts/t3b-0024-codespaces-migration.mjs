@@ -347,7 +347,7 @@ function attestPrimaryMainSha(e, sha){
 }
 // The additive release must preserve every preexisting row and permission.
 export function assertT3bSchemaState(row,empty=false){
- if(!row||row.tables!=="6"||row.guards!=="10"||row.invalid_links!=="0"||
+ if(!row||row.tables!=="6"||row.guards!=="11"||row.invalid_links!=="0"||
     (empty&&row.new_rows!=="0"))fail("T3B_SCHEMA_RECONCILIATION_FAILED");
 }
 async function verifyT3bSchema(pool,empty=false){
@@ -360,7 +360,7 @@ async function verifyT3bSchema(pool,empty=false){
     'sales_direct_issue_line_immutable','inventory_product_lot_immutable',
     'inventory_storage_location_immutable','inventory_scope_assignment_guard',
     'sales_direct_issue_line_guard','t3b_inventory_ledger_scope_guard',
-    'sales_direct_issue_posted_on_commit','sales_direct_issue_header_on_commit')) AS guards,
+    'sales_direct_issue_posted_on_commit','sales_direct_issue_header_on_commit','t3b_inventory_ledger_direct_source_commit')) AS guards,
   (SELECT count(*)::text FROM sales_direct_issue_line l
    LEFT JOIN sales_direct_issue h ON h.installation_id=l.installation_id
     AND h.branch_id=l.branch_id AND h.id=l.issue_id WHERE h.id IS NULL) AS invalid_links,
