@@ -209,6 +209,22 @@ test("T5-A manual delivery, source-matched return, 0-debt and repeat AR payment"
    WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3`,
    [t,b,orderId])).rows[0]?.n,"2");
   assert.equal((await read()).body.execution.remaining,"0");
+  // Existing MANUAL fulfillment cannot receive extra lines in a later
+  // transaction, even when the caller bypasses authenticated API.
+  const append=await pool.connect();
+  try{
+    await append.query("BEGIN");
+    await append.query(`INSERT INTO sales_manual_delivery_line
+     (installation_id,branch_id,fulfillment_id,order_line_no,product_id,
+      ordered_base,issued_base,returned_base,delivered_base,amount)
+     VALUES($1,$2,$3,99,$4,1,1,0,1,1000)`,
+     [t,b,complete.body.id,product.body.id]);
+    await assert.rejects(append.query("COMMIT"),
+      /Manual delivery line set immutable after completion/);
+  }finally{
+    await append.query("ROLLBACK").catch(()=>undefined);append.release();
+  }
+
 
   // All issued goods returned: close with no fictitious sale, cash or delivery.
   const refused=await post("/v1/sales/orders",{branchId:b,

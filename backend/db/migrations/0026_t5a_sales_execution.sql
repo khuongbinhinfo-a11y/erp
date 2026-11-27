@@ -269,6 +269,54 @@ END; $$;
 CREATE TRIGGER t5a_no_late_manual_issue BEFORE INSERT ON sales_direct_issue_line
  FOR EACH ROW EXECUTE FUNCTION erp_t5a_no_late_manual_issue();
 
+-- The fulfillment header's deferred reconciliation runs on first COMMIT.
+-- Every later INSERT into its immutable line table must revalidate the
+-- complete fact set; a distinct transaction cannot append phantom goods.
+CREATE FUNCTION erp_t5a_delivery_line_commit_guard() RETURNS trigger
+ LANGUAGE plpgsql AS $
+DECLARE f sales_fulfillment%ROWTYPE;commercial_count integer;
+ delivery_count integer;matched_count integer;
+ sale_amount numeric;delivered_amount numeric;
+BEGIN
+ SELECT * INTO f FROM sales_fulfillment WHERE
+  installation_id=NEW.installation_id AND branch_id=NEW.branch_id
+  AND id=NEW.fulfillment_id;
+ IF NOT FOUND OR f.mode<>'MANUAL' THEN RETURN NULL; END IF;
+ -- Serialize with direct issue, return and MANUAL completion.
+ PERFORM 1 FROM sales_order WHERE installation_id=f.installation_id
+  AND branch_id=f.branch_id AND id=f.order_id FOR UPDATE;
+ SELECT count(*) INTO commercial_count FROM sales_order_line l WHERE
+  l.installation_id=f.installation_id AND l.branch_id=f.branch_id
+  AND l.order_id=f.order_id AND l.version_no=f.version_no;
+ SELECT count(*) INTO delivery_count FROM sales_manual_delivery_line d WHERE
+  d.installation_id=f.installation_id AND d.branch_id=f.branch_id
+  AND d.fulfillment_id=f.id;
+ SELECT count(*) INTO matched_count FROM sales_manual_delivery_line d
+ JOIN sales_order_line l ON l.installation_id=d.installation_id
+  AND l.branch_id=d.branch_id AND l.order_id=f.order_id
+  AND l.version_no=f.version_no AND l.line_no=d.order_line_no
+ WHERE d.installation_id=f.installation_id AND d.branch_id=f.branch_id
+  AND d.fulfillment_id=f.id;
+ IF commercial_count<1 OR delivery_count<>commercial_count OR
+  matched_count<>commercial_count THEN
+  RAISE EXCEPTION 'Manual delivery line set immutable after completion';
+ END IF;
+ SELECT coalesce(sum(amount),0) INTO delivered_amount
+ FROM sales_manual_delivery_line d WHERE d.installation_id=f.installation_id
+  AND d.branch_id=f.branch_id AND d.fulfillment_id=f.id;
+ SELECT coalesce(sum(amount),0) INTO sale_amount
+ FROM customer_receivable_ledger l WHERE l.installation_id=f.installation_id
+  AND l.branch_id=f.branch_id AND l.order_id=f.order_id AND l.kind='SALE'
+  AND l.source_id=f.id;
+ IF sale_amount<>delivered_amount THEN
+  RAISE EXCEPTION 'Manual delivery line ledger amount changed after completion';
+ END IF;
+ RETURN NULL;
+END; $;
+CREATE CONSTRAINT TRIGGER t5a_delivery_line_commit_guard
+ AFTER INSERT ON sales_manual_delivery_line DEFERRABLE INITIALLY DEFERRED
+ FOR EACH ROW EXECUTE FUNCTION erp_t5a_delivery_line_commit_guard();
+
 -- Database-level integrity: a posted MANUAL fulfillment MUST reconcile to
 -- every canonical sale line, physical issue, return and exactly one SALE debit.
 -- Deferred checks work for a single atomic transaction without transient gaps.
