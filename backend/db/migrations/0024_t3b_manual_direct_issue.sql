@@ -288,6 +288,35 @@ BEGIN
  RETURN NEW;
 END; $$;
 
+-- Deferred reverse link: a movement can arrive before its issue header in one
+-- transaction. At COMMIT, any movement whose source becomes a direct issue
+-- must have exactly one matching line. Legacy POS and historical non-T3-B
+-- inventory movements are not reclassified or rewritten.
+CREATE FUNCTION erp_t3b_ledger_direct_source_commit_guard() RETURNS trigger LANGUAGE plpgsql AS $
+BEGIN
+ IF NEW.kind='ISSUE' AND NEW.source_type='FULFILLMENT'
+    AND EXISTS(SELECT 1 FROM sales_direct_issue d WHERE
+     d.installation_id=NEW.installation_id AND d.branch_id=NEW.branch_id
+     AND d.id=NEW.source_id) THEN
+  IF NOT EXISTS(
+   SELECT 1 FROM sales_direct_issue d JOIN sales_direct_issue_line l
+    ON l.installation_id=d.installation_id AND l.branch_id=d.branch_id
+    AND l.issue_id=d.id
+   WHERE d.installation_id=NEW.installation_id
+    AND d.branch_id=NEW.branch_id AND d.id=NEW.source_id
+    AND d.warehouse_id=NEW.warehouse_id
+    AND l.source_line=NEW.source_line AND l.product_id=NEW.product_id
+    AND l.quantity_base=-NEW.delta_base
+  ) THEN
+   RAISE EXCEPTION 'Direct issue ledger movement has no matching source line';
+  END IF;
+ END IF;
+ RETURN NULL;
+END; $;
+CREATE CONSTRAINT TRIGGER t3b_inventory_ledger_direct_source_commit
+ AFTER INSERT ON inventory_ledger DEFERRABLE INITIALLY DEFERRED
+ FOR EACH ROW EXECUTE FUNCTION erp_t3b_ledger_direct_source_commit_guard();
+
 -- Protect physically assigned stock from all unscoped withdrawals including
 -- POS, transfer, corrections and direct SQL. A tracked MANUAL withdrawal needs
 -- enough exact scope balance (and also passes original warehouse-level guard).
