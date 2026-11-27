@@ -25,7 +25,7 @@ export async function requireT3b(db:PoolClient){
   "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version='0024_t3b_manual_direct_issue.sql') AS ok");
  if(!r.rows[0]?.ok)throw new InventoryFault(503,"T3B_MIGRATION_REQUIRED");
 }
-async function checkScope(db:PoolClient,t:string,s:WarehouseScope,p:string,
+export async function checkScope(db:PoolClient,t:string,s:WarehouseScope,p:string,
  locationId?:string,lotId?:string){
  const [policy,location,lot]=await Promise.all([
   db.query<{require_location:boolean;require_lot:boolean}>(
