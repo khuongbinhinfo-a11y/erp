@@ -286,6 +286,33 @@ test("T3-B PostgreSQL: partial MANUAL issue, lot/location, scoped stock, negativ
   assert.equal(coverageRead.status,200,JSON.stringify(coverageRead.body));
   assert.equal(coverageRead.body.scopes.length,1);
   assert.equal(coverageRead.body.scopes[0].quantityBase,"10.000000");
+  // A trip reservation is a logical hold, not stock leaving the physical bin.
+  // Adding a real warehouse movement after that hold must NOT fail a physical
+  // allocation coverage check merely because available < on_hand.
+  const reservedTrip=await makeOrder(coverageProduct.body.id,"5","TRIP");
+  const heldTrip=await write("/v1/inventory/reservations",{
+   branchId:b,warehouseId:w,orderId:reservedTrip,version:1,lineNo:1},0);
+  assert.equal(heldTrip.status,201,JSON.stringify(heldTrip.body));
+  assert.equal(heldTrip.body.quantityBase,"5.000000");
+  // Synthetic source ID isolates the SQL guard; purchase receipt lifecycle has
+  // independent tests. This only verifies reservation + positive ledger math.
+  await db.query(`INSERT INTO inventory_ledger
+    (installation_id,branch_id,warehouse_id,product_id,kind,source_type,
+     source_id,source_line,delta_base,actor_id,request_id)
+    VALUES($1,$2,$3,$4,'RECEIPT','PURCHASE_RECEIPT',$5,1,1,$6,'tracked-trip-replenishment')`,
+    [t,b,w,coverageProduct.body.id,randomUUID(),root.actorId]);
+  const preservedCoverage=await db.query<{onHand:string;available:string}>(`
+   SELECT on_hand::text AS "onHand",available::text AS available
+   FROM inventory_stock_balance WHERE installation_id=$1 AND branch_id=$2
+    AND warehouse_id=$3 AND product_id=$4`,
+    [t,b,w,coverageProduct.body.id]);
+  assert.equal(preservedCoverage.rows[0]!.onHand,"11.000000");
+  assert.equal(preservedCoverage.rows[0]!.available,"6.000000");
+  assert.equal((await db.query<{n:string}>(`SELECT coalesce(sum(quantity_base),0)::text AS n
+   FROM inventory_scope_balance WHERE installation_id=$1 AND branch_id=$2
+    AND warehouse_id=$3 AND product_id=$4`,
+    [t,b,w,coverageProduct.body.id])).rows[0]!.n,"10.000000");
+
   const lot=await write("/v1/inventory/lots",
    {branchId:b,warehouseId:w,productId:products[1],lotCode:"LOT-A",
     expiryDate:"2099-12-31"});
