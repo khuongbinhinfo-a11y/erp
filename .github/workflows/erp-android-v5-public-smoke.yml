@@ -1,0 +1,67 @@
+name: ERP Android v5 live public download and OTA smoke
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/erp-android-v5-public-smoke.yml'
+  issue_comment:
+    types: [created]
+permissions:
+  contents: read
+jobs:
+  public-smoke:
+    if: >-
+      github.repository == 'khuongbinhinfo-a11y/erp' &&
+      (github.event_name == 'push' ||
+        (github.event_name == 'issue_comment' &&
+         github.event.issue.number == 46 &&
+         github.event.comment.user.login == 'gustavjung24-ops' &&
+         github.event.comment.body == '/erp-android-v5-public-smoke'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    env:
+      BASE: https://erp-android-download.gustavjung24.workers.dev
+      SHA5: d050f77e19fa1ce4ba4ac4011442ed7955f7342252f2805ad9db61ddfe0616cf
+      BYTES5: '64605474'
+      SHA4: 1ad76237794d167df8d9b7fbe928879def8952c7451731e81bcc4421a0c12370
+      EXPECTED_LATEST: ${{ github.event_name == 'issue_comment' && '5' || '4' }}
+    steps:
+      - name: Verify immutable signed v5 public binary and metadata
+        run: |
+          set -euo pipefail
+          url="$BASE/ERP-Android-0.5.0.apk"
+          curl -fsSIL --retry 3 --retry-delay 2 --max-time 40 "$url" -D "$RUNNER_TEMP/head.txt" -o /dev/null
+          tr -d '\r' < "$RUNNER_TEMP/head.txt" | grep -i -Eq '^x-erp-sha256: '"$SHA5"'$'
+          tr -d '\r' < "$RUNNER_TEMP/head.txt" | grep -i -Eq '^content-length: '"$BYTES5"'$'
+          tr -d '\r' < "$RUNNER_TEMP/head.txt" | grep -i -Eq '^x-erp-signer-sha256: 545d17fc51c8d24de4d73cb84ff7c3953f79c7d14efc7ada29b7075110d0c028$'
+          curl -fsSL --retry 3 --retry-delay 2 --max-time 300 "$url" -o "$RUNNER_TEMP/erp-v5.apk"
+          test "$(wc -c < "$RUNNER_TEMP/erp-v5.apk" | tr -d ' ')" = "$BYTES5"
+          test "$(sha256sum "$RUNNER_TEMP/erp-v5.apk" | cut -d' ' -f1)" = "$SHA5"
+          echo "ERP_ANDROID_V5_PUBLIC_FULL_DOWNLOAD_PASS bytes=$BYTES5 sha256=$SHA5"
+      - name: Verify range resume, old release compatibility and reject unknown path
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 --max-time 45 -H 'Range: bytes=64605464-' \
+            -D "$RUNNER_TEMP/range.headers" "$BASE/releases/5/erp-5.apk" -o "$RUNNER_TEMP/part"
+          test "$(wc -c < "$RUNNER_TEMP/part" | tr -d ' ')" = 10
+          tr -d '\r' < "$RUNNER_TEMP/range.headers" | grep -Eq '^HTTP/[^ ]+ 206'
+          tr -d '\r' < "$RUNNER_TEMP/range.headers" | grep -i -Eq '^content-range: bytes 64605464-64605473/64605474$'
+          curl -fsSIL --retry 3 --max-time 40 "$BASE/ERP-Android-0.4.0.apk" \
+            -D "$RUNNER_TEMP/old.headers" -o /dev/null
+          tr -d '\r' < "$RUNNER_TEMP/old.headers" | grep -i -Eq '^x-erp-sha256: '"$SHA4"'$'
+          code="$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/releases/6/erp-6.apk")"
+          test "$code" = 404
+          echo "ERP_ANDROID_V5_PUBLIC_RESUME_AND_V4_COMPAT_PASS"
+      - name: Verify active OTA latest pointer matches immutable v4 or v5
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 --max-time 40 "$BASE/releases/latest.json" -o "$RUNNER_TEMP/latest.json"
+          case "$EXPECTED_LATEST" in
+            4) sha="$SHA4"; bytes=64359714; src=a3e2c8f514b23865cc3b6795230939189f092feb ;;
+            5) sha="$SHA5"; bytes="$BYTES5"; src=d97e58e9ea437420285cb9a563bf7bb4005f14f4 ;;
+            *) exit 1 ;;
+          esac
+          jq -e --argjson code "$EXPECTED_LATEST" --arg sha "$sha" --argjson bytes "$bytes" \
+            --arg src "$src" --arg signer '545d17fc51c8d24de4d73cb84ff7c3953f79c7d14efc7ada29b7075110d0c028' \
+            '.schema == 1 and .versionCode == $code and .versionName == ("0." + ($code|tostring) + ".0") and .sha256 == $sha and .size == $bytes and .sourceSha == $src and .signerSha256 == $signer and .packageName == "vn.erpdistribution.erp_distribution" and .objectKey == ("releases/" + ($code|tostring) + "/erp-" + ($code|tostring) + ".apk")' "$RUNNER_TEMP/latest.json" >/dev/null
+          echo "ERP_ANDROID_V5_PUBLIC_LATEST_PASS expectedVersionCode=$EXPECTED_LATEST (not device UAT)"
