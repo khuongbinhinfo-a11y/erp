@@ -12,7 +12,9 @@ const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]
 const MONEY=/^(?:0|[1-9][0-9]{0,15})$/;
 const POS=/^(?:0|[1-9][0-9]{0,8})(?:\.[0-9]{1,6})?$/;
 class InputFault extends Error {
- constructor(readonly httpStatus:number,readonly code:string){super(code);}
+ readonly httpStatus:number;
+ readonly code:string;
+ constructor(httpStatus:number,code:string){super(code);this.httpStatus=httpStatus;this.code=code;}
 }
 const id=(x:unknown):string=>{
  if(typeof x!=="string"||!UUID.test(x))throw new InputFault(400,"INVALID_ID");return x;
@@ -191,7 +193,7 @@ export async function handleExecutionHttp(req:IncomingMessage,res:ServerResponse
    const result=await executeMutation(pool,c,{
     authorize:(db,x)=>permitted(db,x,payload,action),
     execute:(db,x)=>action==="return"?returnManual(db,x,payload as ManualReturnInput):
-     action==="complete"?completeManual(db,x,payload):
+     action==="complete"?completeManual(db,x,payload as ExecutionScope):
      payManual(db,x,payload as ManualPaymentInput),
    });
    send(res,result.status,result.body,rid,cors);return;
