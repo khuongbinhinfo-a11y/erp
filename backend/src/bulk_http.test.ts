@@ -26,7 +26,7 @@ test("R1-B: real PG CSV mapping, revision-bound preview, all-or-nothing COMMIT a
   const u=new URL(source!);u.pathname="/"+dbName;
   db=new Pool({connectionString:u.toString(),max:9,query_timeout:20000});
   db.on("error",()=>{});
-  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).applied.length,24);
+  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).applied.length,25);
   const password="Bulk-"+randomUUID();
   const root=await bootstrapInstallation(db,{
    code:"bulk-"+randomUUID().slice(0,8),displayName:"R1-B synthetic bulk test",
