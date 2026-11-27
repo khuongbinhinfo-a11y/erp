@@ -284,6 +284,19 @@ test("B1: real PostgreSQL order lifecycle, immutable versions, RBAC, replay and 
     const t1Amend=await write("/v1/sales/orders/"+t1id+"/amend",{branchId:b,reason:"Sửa giao hàng"},1,"t1-amend-"+randomUUID());
     assert.equal(t1Amend.status,201,JSON.stringify(t1Amend.body));
     assert.equal((await readT1()).body.order.shipping.deliveryChoice,"MANUAL");
+    // Mode can change only by creating and editing a new draft version.
+    const changedLane=await write("/v1/sales/orders/"+t1id,{
+      ...t1Payload,shipping:{...shipping,deliveryChoice:"TRIP",
+        rememberDeliveryChoice:false}},2,"t3a-mode-edit-"+randomUUID(),"PATCH");
+    assert.equal(changedLane.status,200,JSON.stringify(changedLane.body));
+    assert.equal((await readT1()).body.order.shipping.deliveryChoice,"TRIP");
+    const changedConfirm=await write("/v1/sales/orders/"+t1id+"/confirm",
+      {branchId:b},3,"t3a-mode-confirm-"+randomUUID());
+    assert.equal(changedConfirm.status,200,JSON.stringify(changedConfirm.body));
+    assert.equal((await readT1()).body.order.shipping.deliveryChoice,"TRIP");
+    await assert.rejects(pool.query(
+      "UPDATE sales_order_version_context SET delivery_choice='MANUAL' WHERE installation_id=$1 AND order_id=$2 AND version_no=2",
+      [root.installationId,t1id]),/immutable/i);
     const walk=await Promise.all([1,2].map(()=>write("/v1/sales/walk-in",{branchId:b},0,"t1-walk-"+randomUUID())));
     assert.equal(walk[0]!.status,200,JSON.stringify(walk[0]!.body));
     assert.equal(walk[1]!.status,200,JSON.stringify(walk[1]!.body));
@@ -303,6 +316,10 @@ test("B1: real PostgreSQL order lifecycle, immutable versions, RBAC, replay and 
     assert.equal(walkDetail.body.order.paymentStatus,"NOT_DUE");
     assert.equal((await call("/v1/sales/last-purchase?branchId="+b+"&customerId="+walkId+"&sellSkuId="+sellSkuId,"GET",undefined,token)).body.price,null);
     assert.equal((await write("/v1/sales/orders/"+walkOrder.body.id+"/confirm",{branchId:b},0,"t1-walk-confirm-"+randomUUID())).status,200);
+    const pickupHold=await write("/v1/inventory/reservations",
+      {...reserveInput,orderId:walkOrder.body.id},0,"t3a-pickup-hold-"+randomUUID());
+    assert.equal(pickupHold.status,409,JSON.stringify(pickupHold.body));
+    assert.equal(pickupHold.body.error.code,"ORDER_DIRECT_ISSUE_ONLY");
     assert.equal((await call("/v1/sales/last-purchase?branchId="+b+"&customerId="+walkId+"&sellSkuId="+sellSkuId,"GET",undefined,token)).body.price,null);
     assert.equal((await call("/v1/sales/entry-settings?branchId="+b,"GET",undefined,token)).body.settings.deliveryChoice,"MANUAL");
     // T1 document discount uses the same server quote and save allocation;
