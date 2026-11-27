@@ -715,7 +715,7 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
         :LayoutBuilder(builder:(context,size)=>GridView.builder(
           key:const ValueKey('pos-products-grid'),
           gridDelegate:const SliverGridDelegateWithMaxCrossAxisExtent(
-            maxCrossAxisExtent:235,mainAxisExtent:151,crossAxisSpacing:9,mainAxisSpacing:9),
+            maxCrossAxisExtent:224,mainAxisExtent:256,crossAxisSpacing:10,mainAxisSpacing:10),
           itemCount:rows.length,
           itemBuilder:(context,i){
             final item=rows[i];
@@ -728,29 +728,40 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
               child:InkWell(
                 key:ValueKey('pos-grid-item-'+item['id'].toString()),
                 onTap:()=>_editCart(item),
-                child:Padding(padding:const EdgeInsets.all(9),child:Column(
+                child:Padding(padding:const EdgeInsets.all(8),child:Column(
                   crossAxisAlignment:CrossAxisAlignment.start,children:[
-                    Row(children:[
-                      SizedBox(width:44,height:44,child:ClipRRect(borderRadius:BorderRadius.circular(5),
-                        child:FutureBuilder<String?>(future:_photoFor(item),
-                          key:ValueKey('pos-photo-${_generation}-${item['id']}'),
-                          builder:(context,snapshot){
-                            final url=snapshot.data;
-                            final placeholder=Icon(Icons.inventory_2_outlined,color:palette.muted);
-                            if(snapshot.connectionState!=ConnectionState.done||url==null)return placeholder;
-                            return Image.network(url,fit:BoxFit.cover,
-                              errorBuilder:(_,__,___)=>placeholder);
-                          }))),
-                      const SizedBox(width:7),
-                      Expanded(child:Text(item['productName']?.toString()??item['name']?.toString()??'Sản phẩm',
-                        maxLines:2,overflow:TextOverflow.ellipsis,
-                        style:TextStyle(fontWeight:FontWeight.w700,color:palette.ink))),
-                    ]),
-                    const SizedBox(height:6),
-                    Text([item['code'],item['unitCode']].where((v)=>v!=null&&v.toString().isNotEmpty).join(' · '),
+                    // Wide-screen catalog: photos take the main visual space
+                    // instead of a 44x44 avatar inside an oversized card.
+                    Expanded(child:SizedBox(
+                      key:ValueKey('pos-product-image-'+item['id'].toString()),
+                      width:double.infinity,
+                      child:ClipRRect(borderRadius:BorderRadius.circular(7),
+                        child:ColoredBox(color:palette.mint,
+                          child:FutureBuilder<String?>(
+                            future:_photoFor(item),
+                            key:ValueKey('pos-photo-${_generation}-${item['id']}'),
+                            builder:(context,snapshot){
+                              final url=snapshot.data;
+                              final placeholder=Center(child:Icon(
+                                Icons.inventory_2_outlined,size:42,color:palette.muted));
+                              if(snapshot.connectionState!=ConnectionState.done||url==null){
+                                return placeholder;
+                              }
+                              return Image.network(url,fit:BoxFit.contain,
+                                width:double.infinity,height:double.infinity,
+                                errorBuilder:(_,__,___)=>placeholder);
+                            }))))),
+                    const SizedBox(height:7),
+                    Text(item['productName']?.toString()??item['name']?.toString()??'Sản phẩm',
+                      maxLines:2,overflow:TextOverflow.ellipsis,
+                      style:TextStyle(fontWeight:FontWeight.w700,color:palette.ink,
+                        fontSize:13,height:1.15)),
+                    const SizedBox(height:4),
+                    Text([item['code'],item['unitCode']]
+                      .where((v)=>v!=null&&v.toString().isNotEmpty).join(' · '),
                       maxLines:1,overflow:TextOverflow.ellipsis,
                       style:TextStyle(color:palette.muted,fontSize:11)),
-                    const Spacer(),
+                    const SizedBox(height:6),
                     Row(children:[
                       Expanded(child:Text(quoted==null?'Giá tra khi thêm':erpVndText(quoted['unitPrice']),
                         maxLines:1,overflow:TextOverflow.ellipsis,
