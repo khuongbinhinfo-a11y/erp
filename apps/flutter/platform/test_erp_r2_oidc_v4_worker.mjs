@@ -74,14 +74,23 @@ test("signed protected GitHub OIDC can stage only immutable APK v4 and read full
   await withJwt(async jwt=>{
     const env=store();
     assert.equal((await worker.fetch(upload(jwt),env)).status,201);
-    const result=await worker.fetch(new Request(READ,{headers:{authorization:"Bearer "+jwt}}),env);
+    const result=await worker.fetch(new Request(READ,{headers:{authorization:"Bearer "+jwt,"x-erp-source-sha":SOURCE}}),env);
     assert.equal(result.status,200);
     assert.equal(result.headers.get("x-erp-sha256"),HASH);
     assert.deepEqual(Buffer.from(await result.arrayBuffer()),bytes);
     assert.equal((await worker.fetch(upload(jwt),env)).status,200);
+    const wrongSource=await worker.fetch(new Request(READ,{headers:{authorization:"Bearer "+jwt,"x-erp-source-sha":"e".repeat(40)}}),env);
+    assert.equal(wrongSource.status,409);
     const changed=upload(jwt,{"x-erp-sha256":"b".repeat(64)});
     assert.equal((await worker.fetch(changed,env)).status,409);
   });
+});
+test("workflow_run OIDC context SHA may differ from signed APK source SHA",async()=>{
+  await withJwt(async jwt=>{
+    const env=store();
+    assert.equal((await worker.fetch(upload(jwt),env)).status,201);
+    assert.equal((await worker.fetch(new Request(READ,{headers:{authorization:"Bearer "+jwt,"x-erp-source-sha":SOURCE}}),env)).status,200);
+  },{sha:"a".repeat(40)});
 });
 test("foreign ref, workflow, owner, expired token, or unprotected job is denied",async()=>{
   for(const patch of [
@@ -91,7 +100,7 @@ test("foreign ref, workflow, owner, expired token, or unprotected job is denied"
     {workflow_ref:"khuongbinhinfo-a11y/erp/.github/workflows/ci.yml@refs/heads/main"}
   ]){
     await withJwt(async jwt=>{
-      assert.equal((await worker.fetch(new Request(READ,{headers:{authorization:"Bearer "+jwt}}),store())).status,403);
+      assert.equal((await worker.fetch(new Request(READ,{headers:{authorization:"Bearer "+jwt,"x-erp-source-sha":SOURCE}}),store())).status,403);
     },patch);
   }
 });
@@ -115,6 +124,6 @@ test("tampered R2 signer metadata fails closed",async()=>{
       size:bytes.length,customMetadata:{...metadata,signersha256:"bad"},
       body:new Response(bytes).body
     })}};
-    assert.equal((await worker.fetch(new Request(READ,{headers:{authorization:"Bearer "+jwt}}),bad)).status,409);
+    assert.equal((await worker.fetch(new Request(READ,{headers:{authorization:"Bearer "+jwt,"x-erp-source-sha":SOURCE}}),bad)).status,409);
   });
 });
