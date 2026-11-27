@@ -54,8 +54,10 @@ Future<void> showManualStockIssue({
    shipping is! Map||shipping['deliveryChoice']!='MANUAL'||
    shipping['warehouseId']!=warehouseId)
   throw const ErpApiError(409,'Đơn không còn đủ điều kiện xuất thủ công ở kho này.');
- final history=await client.inventoryDirectIssues(token,
+ // Server aggregate is complete regardless of the number of partial issues.
+ final totals=await client.inventoryDirectIssueTotals(token,
   branchId:branchId,warehouseId:warehouseId,orderId:selectedOrderId);
+ final byLine={for(final row in totals) (row['lineNo'] as num).toInt():row};
  final lines=(detail['lines'] as List<dynamic>).map((x)=>Map<String,dynamic>.from(x as Map)).toList();
  final pending=<Map<String,dynamic>>[];
  final scopes=<String,Map<String,dynamic>>{};
@@ -66,16 +68,20 @@ Future<void> showManualStockIssue({
     ?snapshot['normalizedBaseQuantity'].toString():row['quantity'].toString();
   final ordered=erpInventoryBaseUnits(original);
   if(ordered==null)throw const ErpApiError(409,'Đơn thiếu số lượng theo đơn vị gốc.');
-  var issued=BigInt.zero;
-  for(final item in history.where((x)=>x['lineNo']==n))
-    issued+=erpInventoryBaseUnits(item['quantityBase'].toString())??BigInt.zero;
+  final total=byLine[n];
+  if(total==null)throw const ErpApiError(409,'Không thể đối chiếu số thực xuất.');
+  final issued=erpInventoryBaseUnits(total['issuedBase'].toString());
+  final baseUnit=total['baseUnit']?.toString()??'';
+  if(issued==null||baseUnit.isEmpty)
+    throw const ErpApiError(409,'Thiếu đơn vị gốc hoặc tổng xuất kho.');
   final remaining=ordered-issued;
   if(remaining<=BigInt.zero)continue;
   final product=row['productId'].toString();
   if(!scopes.containsKey(product))
     scopes[product]=await client.inventoryStockScopes(token,
       branchId:branchId,warehouseId:warehouseId,productId:product);
-  pending.add({...row,'remainingBase':erpInventoryFormatUnits(remaining)});
+  pending.add({...row,'remainingBase':erpInventoryFormatUnits(remaining),
+    'baseUnit':baseUnit});
  }
  if(!context.mounted)return;
  if(pending.isEmpty)throw const ErpApiError(409,'Đơn đã xuất đủ hàng.');
@@ -98,11 +104,12 @@ Future<void> showManualStockIssue({
           Text((row['sku']??'').toString()+' · '+(row['productName']??'').toString(),
             style:const TextStyle(fontWeight:FontWeight.w600)),
           Text('Còn phải xuất: '+erpNumberText(row['remainingBase'])+
-            ' '+(row['unitCode']??'').toString()),
+            ' '+row['baseUnit'].toString()),
           TextField(controller:quantities[(row['lineNo'] as num).toInt()],
             inputFormatters:const [ErpGroupedNumberFormatter(maxIntegerDigits:12,maxFractionDigits:6)],
             keyboardType:const TextInputType.numberWithOptions(decimal:true),
-            decoration:const InputDecoration(labelText:'Số thực xuất (0 để bỏ qua)')),
+            decoration:InputDecoration(labelText:
+              'Số thực xuất theo ${row['baseUnit']} (0 để bỏ qua)')),
           if((scopes[row['productId'].toString()]?['locations'] as List?)?.isNotEmpty==true||
              (scopes[row['productId'].toString()]?['policy'] as Map?)?['requireLocation']==true)
             DropdownButtonFormField<String>(
