@@ -18,7 +18,10 @@ import 'sales_workspace.dart' show erpRetailStepQuantity;
 class RetailPosWorkspace extends StatefulWidget {
   final ErpIdentityClient client;
   final IdentitySession session;
-  const RetailPosWorkspace({super.key,required this.client,required this.session});
+  final VoidCallback? onExit;
+  final VoidCallback? onOpenTab;
+  const RetailPosWorkspace({super.key,required this.client,required this.session,
+    this.onExit,this.onOpenTab});
   @override State<RetailPosWorkspace> createState()=>_RetailPosWorkspaceState();
 }
 
@@ -861,6 +864,9 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
         padding:EdgeInsets.symmetric(horizontal:wide?16:12,vertical:wide?12:8),
         child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
         Row(children:[
+          if(widget.onExit!=null)IconButton(
+            key:const ValueKey('pos-fullscreen-back'),tooltip:'Về ERP',
+            onPressed:widget.onExit,icon:const Icon(Icons.arrow_back)),
           Icon(Icons.point_of_sale,color:palette.primary,size:24),
           const SizedBox(width:8),
           Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
@@ -868,6 +874,9 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
             Text(status,maxLines:1,overflow:TextOverflow.ellipsis,
               style:TextStyle(color:palette.muted,fontSize:12)),
           ])),
+          if(widget.onOpenTab!=null&&wide)TextButton.icon(
+            key:const ValueKey('pos-open-tab'),onPressed:widget.onOpenTab,
+            icon:const Icon(Icons.open_in_new,size:18),label:const Text('Mở quầy bán')),
           IconButton(key:const ValueKey('pos-settings'),tooltip:'Chọn chi nhánh, kho, bảng giá',
             onPressed:()=>setState(()=>_configOpen=!_configOpen),
             icon:Icon(_configOpen?Icons.expand_less:Icons.tune)),
