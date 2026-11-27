@@ -875,7 +875,7 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
       final keyboardOpen=MediaQuery.viewInsetsOf(context).bottom>0;
       final status=_branch==null?'Chọn chi nhánh':
         _warehouses.where((x)=>x['id']==_warehouse).firstOrNull?['name']?.toString()??'Chọn kho';
-      return SafeArea(top:false,child:Padding(
+      return SafeArea(top:true,child:Padding(
         key:const ValueKey('erp-pos-workspace'),
         padding:EdgeInsets.symmetric(horizontal:wide?16:12,vertical:wide?12:8),
         child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
