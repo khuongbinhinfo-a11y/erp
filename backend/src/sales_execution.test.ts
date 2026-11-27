@@ -95,6 +95,19 @@ test("T5-A manual delivery, source-matched return, 0-debt and repeat AR payment"
     FROM inventory_stock_balance WHERE installation_id=$1 AND branch_id=$2
      AND warehouse_id=$3 AND product_id=$4`,[t,b,w,product.body.id]);
   assert.equal(stock.rows[0]?.on_hand,"2.000000");
+  // A malicious SQL client cannot invent a fulfilled invoice without the
+  // underlying physical delivery and matching SALE ledger, even on COMMIT.
+  const fakeFulfillment=await pool.connect();
+  try{
+   await fakeFulfillment.query("BEGIN");
+   await fakeFulfillment.query(`INSERT INTO sales_fulfillment
+    (installation_id,branch_id,order_id,version_no,warehouse_id,mode,actor_id,request_id)
+    VALUES($1,$2,$3,1,$4,'MANUAL',$5,'forged-delivery')`,[t,b,orderId,w,actorId]);
+   await assert.rejects(fakeFulfillment.query("COMMIT"),
+      /Manual fulfillment requires all actual delivery lines/i);
+  }finally{
+   await fakeFulfillment.query("ROLLBACK").catch(()=>undefined);fakeFulfillment.release();
+  }
   const forged=await pool.connect();
   try{
    await forged.query("BEGIN");
@@ -120,6 +133,19 @@ test("T5-A manual delivery, source-matched return, 0-debt and repeat AR payment"
   assert.equal(state.body.execution.paid,"0");
   assert.equal(state.body.execution.remaining,"3000");
   assert.equal(state.body.execution.completed,true);
+  // No orphan receipt may be recorded after COMMIT without its matching
+  // canonical allocation and negative AR PAYMENT entry.
+  const orphan=await pool.connect();
+  try{
+   await orphan.query("BEGIN");
+   await orphan.query(`INSERT INTO payment_receipt
+    (installation_id,branch_id,fulfillment_id,order_id,method,amount,actor_id,request_id)
+    VALUES($1,$2,$3,$4,'CASH',100,$5,'forged-money')`,
+    [t,b,complete.body.id,orderId,actorId]);
+   await assert.rejects(orphan.query("COMMIT"),
+     /MANUAL receipt must match one posted payment and allocation/i);
+  }finally{await orphan.query("ROLLBACK").catch(()=>undefined);orphan.release();}
+
   assert.equal((await post("/v1/sales/execution/returns",payload,
     state.body.execution.revision)).status,409);
   const zero={branchId:b,warehouseId:w,orderId,amount:"0",method:"CASH"};
