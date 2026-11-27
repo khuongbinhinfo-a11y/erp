@@ -306,7 +306,7 @@ END; $$;
 -- transaction. At COMMIT, any movement whose source becomes a direct issue
 -- must have exactly one matching line. Legacy POS and historical non-T3-B
 -- inventory movements are not reclassified or rewritten.
-CREATE FUNCTION erp_t3b_ledger_direct_source_commit_guard() RETURNS trigger LANGUAGE plpgsql AS $
+CREATE FUNCTION erp_t3b_ledger_direct_source_commit_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
  IF NEW.kind='ISSUE' AND NEW.source_type='FULFILLMENT'
     AND EXISTS(SELECT 1 FROM sales_direct_issue d WHERE
@@ -326,7 +326,7 @@ BEGIN
   END IF;
  END IF;
  RETURN NULL;
-END; $;
+END; $$;
 CREATE CONSTRAINT TRIGGER t3b_inventory_ledger_direct_source_commit
  AFTER INSERT ON inventory_ledger DEFERRABLE INITIALLY DEFERRED
  FOR EACH ROW EXECUTE FUNCTION erp_t3b_ledger_direct_source_commit_guard();
