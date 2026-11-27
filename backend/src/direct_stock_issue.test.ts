@@ -172,6 +172,34 @@ test("T3-B PostgreSQL: partial MANUAL issue, lot/location, scoped stock, negativ
   const loc=await write("/v1/inventory/locations",
    {branchId:b,warehouseId:w,code:"A-01",name:"Kệ A"});
   assert.equal(loc.status,201,JSON.stringify(loc.body));
+  // Codex P2: a movement inserted before its source must not borrow
+  // unassigned warehouse stock by naming an empty physical location.
+  const emptyLoc=await write("/v1/inventory/locations",
+   {branchId:b,warehouseId:w,code:"EMPTY",name:"Kệ chưa phân hàng"});
+  assert.equal(emptyLoc.status,201,JSON.stringify(emptyLoc.body));
+  const scopedOrder=await makeOrder(products[1]!,"1");
+  const spoofId=randomUUID(),scopeForger=await db.connect();
+  try{
+   await scopeForger.query("BEGIN");
+   await scopeForger.query(`INSERT INTO inventory_ledger
+    (installation_id,branch_id,warehouse_id,product_id,kind,source_type,
+     source_id,source_line,delta_base,actor_id,request_id)
+    VALUES($1,$2,$3,$4,'ISSUE','FULFILLMENT',$5,1,-1,$6,'scoped-rogue-ledger')`,
+    [t,b,w,products[1],spoofId,root.actorId]);
+   await scopeForger.query(`INSERT INTO sales_direct_issue
+    (installation_id,branch_id,id,order_id,version_no,warehouse_id,actor_id,request_id)
+    VALUES($1,$2,$3,$4,1,$5,$6,'scoped-rogue-header')`,
+    [t,b,spoofId,scopedOrder,w,root.actorId]);
+   await assert.rejects(scopeForger.query(`INSERT INTO sales_direct_issue_line
+    (installation_id,branch_id,issue_id,source_line,order_line_no,
+     product_id,quantity_base,location_id)
+    VALUES($1,$2,$3,1,1,$4,1,$5)`,
+    [t,b,spoofId,products[1],emptyLoc.body.id]),
+     /Direct issue exceeds allocated stock at lot\/location/i);
+  }finally{
+   await scopeForger.query("ROLLBACK").catch(()=>undefined);
+   scopeForger.release();
+  }
   const lot=await write("/v1/inventory/lots",
    {branchId:b,warehouseId:w,productId:products[1],lotCode:"LOT-A",
     expiryDate:"2099-12-31"});
