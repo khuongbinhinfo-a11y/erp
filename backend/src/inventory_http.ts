@@ -474,6 +474,7 @@ export async function handleInventoryHttp(req:IncomingMessage,res:ServerResponse
   if(err instanceof MutationFault){fail(res,err.httpStatus,err.code,id,cors);return;}
   if(err&&typeof err==="object"&&"code" in err){
    if(err.code==="23505"){fail(res,409,"DUPLICATE_STOCK_DOCUMENT",id,cors);return;}
+   if(err.code==="P0001"){fail(res,409,"INVALID_STOCK_REFERENCE",id,cors);return;}
    if(err.code==="23503"||err.code==="23514"){
     fail(res,409,"INVALID_STOCK_REFERENCE",id,cors);return;}
   }
