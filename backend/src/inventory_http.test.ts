@@ -439,6 +439,70 @@ test("R3 real PostgreSQL: on-hand, hold, release, no oversell, exact replay, RBA
   assert.equal(cancelledWithReceipt.status,200,JSON.stringify(cancelledWithReceipt.body));
   assert.deepEqual((await make("/v1/sales/orders/"+orders[loser]+"/cancel",
     {branchId:b,reason:"No longer required"},1,closeKey)).body,cancelledWithReceipt.body);
+  // T3-C1: copy/adapt legacy replenishment regression, keeping the original
+  // immutable hold snapshots and the shared warehouse ledger.
+  const tripProducts:string[]=[];
+  for(const [code,qty] of [["TRIP-A","5"],["TRIP-B","2"]]){
+   const made=await catalog("products",{code,name:code,baseUnit:"cai"});
+   assert.equal(made.status,201,JSON.stringify(made.body));
+   const p=made.body.id as string;tripProducts.push(p);
+   assert.equal((await catalog("prices",{priceListId:priceList.body.id,
+    productId:p,amount:"1000",discountRate:"0",effectiveAt:"2026-01-01T00:00:00Z"})).status,201);
+   assert.equal((await make("/v1/inventory/openings",{...pScope,productId:p,quantity:qty})).status,201);
+  }
+  const tripData={...orderData,shipping:{warehouseId:w,deliveryChoice:"TRIP",
+    collectionPolicy:"CREDIT_TERMS",customerMode:"EXISTING"}};
+  const makeTrip=async(lines:{productId:string;quantity:string}[],mode="TRIP")=>{
+   const made=await make("/v1/sales/orders",{...tripData,
+    shipping:{...tripData.shipping,deliveryChoice:mode},lines});
+   assert.equal(made.status,201,JSON.stringify(made.body));
+   assert.equal((await make("/v1/sales/orders/"+made.body.id+"/confirm",{branchId:b})).status,200);
+   return made.body.id as string;
+  };
+  const competitor=await makeTrip([{productId:tripProducts[0]!,quantity:"3"}]);
+  const firstTripHold=await make("/v1/inventory/trip-holds",{...pScope,orderId:competitor,version:1},1);
+  assert.equal(firstTripHold.status,200,JSON.stringify(firstTripHold.body));
+  assert.equal(firstTripHold.body.revision,2);
+  const trip=await makeTrip([{productId:tripProducts[0]!,quantity:"4"},
+    {productId:tripProducts[1]!,quantity:"3"}]);
+  const tripInput={...pScope,orderId:trip,version:1};
+  const tripKey="trip-hold-"+randomUUID();
+  const partial=await make("/v1/inventory/trip-holds",tripInput,1,tripKey);
+  assert.equal(partial.status,200,JSON.stringify(partial.body));
+  assert.equal(partial.body.hasBackorder,true);
+  assert.deepEqual(partial.body.lines.map((x:Record<string,string>)=>[x.quantityBase,x.backorderedBase]),
+    [["2.000000","2.000000"],["2.000000","1.000000"]]);
+  assert.equal(partial.body.revision,2);
+  assert.deepEqual((await make("/v1/inventory/trip-holds",tripInput,1,tripKey)).body,partial.body);
+  assert.equal((await make("/v1/inventory/trip-holds",tripInput,1)).status,409);
+  const unchanged=await make("/v1/inventory/trip-holds",tripInput,2);
+  assert.equal(unchanged.status,200,JSON.stringify(unchanged.body));
+  assert.equal(unchanged.body.changedLines,0);
+  assert.equal(unchanged.body.revision,2);
+  assert.equal((await make("/v1/sales/orders/"+competitor+"/cancel",
+    {branchId:b,reason:"Release competing order"},2)).status,200);
+  const before=await pool.query(`SELECT product_id,on_hand::text FROM inventory_stock_balance
+   WHERE installation_id=$1 AND branch_id=$2 AND warehouse_id=$3 AND product_id=ANY($4::uuid[])
+   ORDER BY product_id`,[t,b,w,tripProducts]);
+  const replenished=await make("/v1/inventory/trip-holds",tripInput,2);
+  assert.equal(replenished.status,200,JSON.stringify(replenished.body));
+  assert.equal(replenished.body.changedLines,1);
+  assert.equal(replenished.body.revision,3);
+  assert.deepEqual(replenished.body.lines.map((x:Record<string,string>)=>[x.quantityBase,x.backorderedBase]),
+    [["4.000000","0.000000"],["2.000000","1.000000"]]);
+  const after=await pool.query(`SELECT product_id,on_hand::text FROM inventory_stock_balance
+   WHERE installation_id=$1 AND branch_id=$2 AND warehouse_id=$3 AND product_id=ANY($4::uuid[])
+   ORDER BY product_id`,[t,b,w,tripProducts]);
+  assert.deepEqual(after.rows,before.rows);
+  const histories=await pool.query(`SELECT state,quantity_base::text AS held FROM inventory_reservation
+   WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3 AND line_no=1 ORDER BY created_at,id`,[t,b,trip]);
+  assert.deepEqual(histories.rows,[{state:"RELEASED",held:"2.000000"},{state:"ACTIVE",held:"4.000000"}]);
+  const orderState=await pool.query(`SELECT fulfillment_status,delivery_status,payment_status FROM sales_order
+   WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,[t,b,trip]);
+  assert.deepEqual(orderState.rows[0],{fulfillment_status:"NOT_ALLOCATED",
+   delivery_status:"NOT_DISPATCHED",payment_status:"NOT_DUE"});
+  const manual=await makeTrip([{productId:tripProducts[0]!,quantity:"1"}],"MANUAL");
+  assert.equal((await make("/v1/inventory/trip-holds",{...pScope,orderId:manual,version:1},1)).status,409);
   // Simulate a production installation still on Sales 0010 while Inventory 0011 awaits approval.
   // Existing legitimate commercial actions must remain available without the new relation.
   await pool.query("DROP TABLE inventory_reservation CASCADE");
