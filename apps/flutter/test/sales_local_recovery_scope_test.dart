@@ -79,6 +79,12 @@ void main(){
     expect((await store.savedCarts(scope)).isNotEmpty,isTrue,
       reason:'Starting a new order must not erase the previously saved cart');
     expect(writes,0,reason:'Opening a new order must never post a sale');
+    // Close the dialog through its real lifecycle so the local cart autosave
+    // timer and route controllers are disposed only after route.completed.
+    await tester.tap(find.byTooltip('Đóng').last);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('sales-order-context')),findsNothing);
+    expect((await store.savedCarts(scope)).isNotEmpty,isTrue);
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pumpAndSettle();
   });
