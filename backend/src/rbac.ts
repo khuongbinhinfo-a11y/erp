@@ -18,6 +18,7 @@ export const PERMISSIONS = {
   "orders.cancel": "branch",
   "inventory.read": "warehouse",
   "inventory.post": "warehouse",
+  "inventory.negative.issue": "warehouse",
   "inventory.reserve": "warehouse",
   "inventory.policy.manage": "warehouse",
   "inventory.transfer.read": "warehouse",

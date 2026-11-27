@@ -5,6 +5,8 @@ import 'erp_display.dart';
 import 'erp_number_input.dart';
 import 'erp_toast.dart';
 import 'identity_client.dart';
+import 'manual_stock_issue.dart';
+import 'stock_scope_setup.dart';
 
 /// Kho workspace: server-sourced facts, never a client-owned stock balance.
 class InventoryWorkspace extends StatefulWidget {
@@ -26,7 +28,11 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
   int serial=0;
   final warehouseLookup=TextEditingController();
   @override void initState(){super.initState();_linkedOrder=widget.initialOrder;
-    if(_linkedOrder!=null)tab='reservations';loadBranches();}
+    if(_linkedOrder!=null)tab=
+      (_linkedOrder?['shipping'] is Map&&
+       (_linkedOrder!['shipping'] as Map)['deliveryChoice']=='MANUAL')
+         ?'balances':'reservations';
+    loadBranches();}
   @override void didUpdateWidget(covariant InventoryWorkspace old){
     super.didUpdateWidget(old);
     if(old.session.token!=widget.session.token || old.client!=widget.client){
@@ -232,6 +238,34 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
         intent:'opening:'+selection['product']!);
     }finally{qty.dispose();lookupText.dispose();}
   }
+  Future<void> configureStockScopes()async{
+    final b=branchId,w=warehouseId,token=widget.session.token;
+    if(b==null||w==null||busy||hasPending||
+       (!can('inventory.policy.manage')&&!can('inventory.post')))return;
+    try{
+      await showStockScopeSetup(context:context,client:widget.client,
+        session:widget.session,branchId:b,warehouseId:w,
+        canManagePolicy:can('inventory.policy.manage'),canAssign:can('inventory.post'),
+        onSubmit:(action,body,revision)async{
+          if(!mounted||branchId!=b||warehouseId!=w||widget.session.token!=token)return;
+          await send(action,body,intent:'t3b-stock-scope',revision:revision);
+        });
+    }on ErpApiError catch(e){notify(e.message,bad:true);}
+    catch(_){notify('Không mở được quản lý lô và vị trí.',bad:true);}
+  }
+  Future<void> issueDirect({String? orderId})async{
+    final b=branchId,w=warehouseId,token=widget.session.token;
+    if(b==null||w==null||hasPending||busy||!can('inventory.post'))return;
+    try{
+      await showManualStockIssue(context:context,client:widget.client,session:widget.session,
+       branchId:b,warehouseId:w,orderId:orderId,
+       onSubmit:(body,revision)async{
+        if(!mounted||branchId!=b||warehouseId!=w||widget.session.token!=token)return;
+        await send('direct-issues',body,intent:'manual-direct-issue',revision:revision);
+       });
+    }on ErpApiError catch(e){notify(e.message,bad:true);}
+    catch(_){notify('Không mở được phiếu xuất kho. Hãy kiểm tra kết nối.',bad:true);}
+  }
   Future<void> reserve({String? orderId})async{
     final b=branchId,w=warehouseId,token=widget.session.token;
     if(b==null||w==null||hasPending||!can('inventory.reserve'))return;
@@ -428,6 +462,23 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
           key:const ValueKey('inventory-linked-order-hold'),
           onPressed:busy||loading||hasPending?null:()=>reserve(orderId:_linkedOrder!['id'] as String),
           icon:const Icon(Icons.inventory_2_outlined),label:Text('Giữ hàng · ${_linkedOrder!['documentNo']}')),
+        if(_linkedScope&&_linkedOrder?['shipping'] is Map&&
+            (_linkedOrder!['shipping'] as Map)['deliveryChoice']=='MANUAL'&&
+            can('inventory.post'))FilledButton.icon(
+          key:const ValueKey('inventory-linked-manual-issue'),
+          onPressed:busy||loading||hasPending?null:()=>issueDirect(orderId:_linkedOrder!['id'] as String),
+          icon:const Icon(Icons.local_shipping_outlined),
+          label:Text('Xuất kho · ${_linkedOrder!['documentNo']}')),
+        if(can('inventory.policy.manage')||can('inventory.post'))OutlinedButton.icon(
+          key:const ValueKey('inventory-stock-scope-setup'),
+          onPressed:busy||hasPending?null:configureStockScopes,
+          icon:const Icon(Icons.layers_outlined),
+          label:const Text('Lô và vị trí')),
+        if(can('inventory.post'))OutlinedButton.icon(
+          key:const ValueKey('inventory-manual-issue'),
+          onPressed:busy||hasPending?null:()=>issueDirect(),
+          icon:const Icon(Icons.local_shipping_outlined),
+          label:const Text('Xuất kho thủ công')),
         if(can('inventory.reserve'))OutlinedButton.icon(
           onPressed:busy||hasPending?null:()=>reserve(),
           icon:const Icon(Icons.inventory_2_outlined),label:const Text('Giữ hàng')),
