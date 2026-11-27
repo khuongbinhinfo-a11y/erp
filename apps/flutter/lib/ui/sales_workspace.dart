@@ -3194,7 +3194,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
             branchId:branch,warehouseId:warehouse,orderId:id);
           Map<String,dynamic> payload;
           if(action=='complete'){
-            if(state['completed']==true||state['hasIssuedDelivery']!=true)
+            if(state['completed']==true||state['hasIssuedHistory']!=true)
               throw const ErpApiError(409,'Đơn chưa có lượng thực giao hoặc đã hoàn thành.');
             // Batch completion cannot guess a partial return. Physical issues
             // are explicitly shown in each order's return dialog in advance.
@@ -3378,7 +3378,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
             icon:const Icon(Icons.assignment_return_outlined,size:15),
             label:const Text('Nhập trả')),
           if(manual&&_manualAllowed('complete',item)&&execution?['completed']!=true)FilledButton.icon(
-            onPressed:_navigationLocked||execution?['hasIssuedDelivery']!=true?null:
+            onPressed:_navigationLocked||execution?['hasIssuedHistory']!=true?null:
               ()=>_manualAction(item,'complete'),
             icon:const Icon(Icons.task_alt,size:15),label:const Text('Hoàn thành')),
           if(manual&&hasReceivable&&due>BigInt.zero&&_manualAllowed('payment',item))...[
