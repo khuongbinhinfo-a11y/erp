@@ -297,7 +297,7 @@ async function verifyOverrideGrants(pool,stage){
 }
 /** Preserve every existing 0025 row while adding 0026 schema only. */
 export function preservedRowJsonExpression(table){
- return table==="inventory_reservation"?"(to_jsonb(x) - 'replenishment_of')":"to_jsonb(x)";
+ return table==="payment_receipt"?"(to_jsonb(x) - 'fulfillment_id')":"to_jsonb(x)";
 }
 async function signature(pool,exclusions=[]){
  const tables=(await pool.query(
@@ -410,7 +410,7 @@ async function main(mode){
  let tmp,container;
  try{
   const v=await versions(pool);
-  if(v.length===25){await validateSchema(pool,"after");await verifyT5aSchema(pool);
+  if(v.length===26){await validateSchema(pool,"after");await verifyT5aSchema(pool);
     // Existing assignments may now contain live rows; a completed migration
     // is not expected to remain empty on subsequent read-only checks.
     console.log("ERP_T5A_ALREADY_MIGRATED_26");return;}
@@ -508,7 +508,7 @@ async function main(mode){
     await verifyOverrideGrants(testPool,"before");
     checkPreserved(initial,await signature(testPool,excluded),"RESTORE");
     const rehearsal=await applyMigrations(testPool,resolve("db/migrations"));
-    if(JSON.stringify(rehearsal.applied)!==JSON.stringify(RELEASE)||rehearsal.skipped.length!==24)
+    if(JSON.stringify(rehearsal.applied)!==JSON.stringify(RELEASE)||rehearsal.skipped.length!==25)
       fail("REHEARSAL_MIGRATION_SET_INVALID");
     await validateSchema(testPool,"after");
     await verifyT5aSchema(testPool,true);
@@ -527,7 +527,7 @@ async function main(mode){
   checkPreserved(initial,await signature(pool,excluded),"PRODUCTION_PRECOMMIT");
   await checkpoint();
   const result=await applyMigrations(pool,resolve("db/migrations"));
-  if(JSON.stringify(result.applied)!==JSON.stringify(RELEASE)||result.skipped.length!==24)
+  if(JSON.stringify(result.applied)!==JSON.stringify(RELEASE)||result.skipped.length!==25)
     fail("PRODUCTION_APPLIED_VERSION_SET_INVALID");
   await checkpoint();
   await validateSchema(pool,"after");
