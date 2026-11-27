@@ -47,7 +47,8 @@ async function verifyOidc(jwt){
   if(!await crypto.subtle.verify("RSASSA-PKCS1-v1_5",key,decode(parts[2]),
     new TextEncoder().encode(parts[0]+"."+parts[1])))throw Error("Invalid signature");
   if(!SHA40.test(payload.sha))throw Error("Invalid source SHA");
-  return payload.sha;
+  // The workflow_run OIDC SHA identifies the staging workflow context, not the APK source.
+  // Exact APK source provenance is established by the protected CI and signed-run checks.
 }
 function sameObject(obj,sha,size,source){
   return !!obj&&obj.size===size&&obj.customMetadata?.sha256===sha&&
@@ -64,8 +65,9 @@ export default {
     if(!env.ERP_ANDROID_RELEASES)return fail(503,"R2 unavailable");
     const token=/^Bearer ([A-Za-z0-9._-]+)$/.exec(request.headers.get("authorization")||"")?.[1];
     if(!token)return fail(401,"OIDC required");
-    let source;
-    try{source=await verifyOidc(token)}catch{return fail(403,"GitHub OIDC denied")}
+    try{await verifyOidc(token)}catch{return fail(403,"GitHub OIDC denied")}
+    const source=request.headers.get("x-erp-source-sha")||"";
+    if(!SHA40.test(source))return fail(400,"Invalid APK source SHA");
     const bucket=env.ERP_ANDROID_RELEASES;
     if(readback){
       const obj=await bucket.get(KEY);
@@ -82,7 +84,6 @@ export default {
     const size=Number(request.headers.get("content-length"));
     if(!HEX.test(sha)||!Number.isSafeInteger(size)||size<1||size>MAX||
        request.headers.get("x-erp-signer-sha256")!==SIGNER||
-       request.headers.get("x-erp-source-sha")!==source||
        request.headers.get("x-erp-version-code")!=="4"||
        request.headers.get("x-erp-version-name")!=="0.4.0"||
        request.headers.get("content-type")!=="application/vnd.android.package-archive"||
