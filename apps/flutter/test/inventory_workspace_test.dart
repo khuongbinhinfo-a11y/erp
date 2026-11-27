@@ -80,6 +80,47 @@ void main(){
    expect(writes.single,{'branchId':branch,'warehouseId':warehouse,'orderId':order,'version':2,'lineNo':1});
  });
 
+ testWidgets('T3-A direct MANUAL/PICKUP orders have no trip-hold shortcut',(tester)async{
+   final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+     httpClient:MockClient((req)async{
+       Map<String,dynamic> response;
+       switch(req.url.path){
+         case '/v1/catalog/branches':
+           response={'items':[{'id':branch,'name':'Chi nhánh chính'}]};
+         case '/v1/catalog/warehouses':
+           response={'items':[{'id':warehouse,'name':'Kho chính'}]};
+         case '/v1/inventory/reservations':
+           response={'items':[]};
+         default:
+           throw StateError('Unexpected server request: ${req.url.path}');
+       }
+       return http.Response(jsonEncode(response),200,headers:const {
+         'content-type':'application/json; charset=utf-8'});
+     }));
+   addTearDown(client.dispose);
+   tester.view.devicePixelRatio=1;
+   tester.view.physicalSize=const Size(1280,900);
+   addTearDown(tester.view.resetPhysicalSize);
+   addTearDown(tester.view.resetDevicePixelRatio);
+   final session=IdentitySession(actorId:actor,token:'synthetic-token',
+     expiresAt:DateTime.now().add(const Duration(hours:1)),grants:[
+       for(final permission in ['inventory.read','inventory.reserve'])
+         IdentityGrant(roleId:permission,permission:permission,
+           branchId:branch,warehouseId:warehouse),
+     ]);
+   for(final mode in ['MANUAL','PICKUP']){
+     await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
+       home:Scaffold(body:InventoryWorkspace(
+         key:ValueKey('T3A-$mode'),client:client,session:session,initialOrder:{
+           'id':'00000000-0000-4000-8000-000000000013',
+           'branchId':branch,'documentNo':'SO-DIRECT',
+           'shipping':{'warehouseId':warehouse,'deliveryChoice':mode},
+         }))));
+     await tester.pumpAndSettle();
+     expect(find.byKey(const ValueKey('inventory-linked-order-hold')),findsNothing);
+   }
+ });
+
  testWidgets('R3 warehouse displays canonical balances and safely retries a lost ACK',
   (tester)async{
    var onHand=true,attempts=0;
