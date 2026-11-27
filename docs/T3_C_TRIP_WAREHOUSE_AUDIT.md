@@ -1,0 +1,20 @@
+# T3-C — TRIP warehouse execution audit and staged implementation (27/11/2026)
+
+## Verified source
+- Auxiliary ERP baseline: `583dc8d1a2cab0fb2b589749482822cf2fce30c1`; primary baseline `3e48afcba363a1e0fb978d327f9b81a8895710d8`. Legacy NPP-Platform read-only main `d39e8a87cdc8905a85d92ee3a4b8c7427b3ecd35`.
+- MASTER_PLAN § business modes: TRIP holds/allocates, one combined soạn–đóng workflow, then dispatch actual quantity; no OUT at pack, no AR until actual delivery. T3-B MANUAL remains independent. Actual provider/migration/UAT not established by source inspection.
+
+| Legacy source at above SHA | ERP target | Decision / acceptance |
+| --- | --- | --- |
+| sales-fulfillment.js:178–200; sales-fulfillment-replenishment.js:114–164; sales-order-fulfillment-postgres.test.js:303–379,467+ | inventory.ts, inventory_http.ts, inventory_workspace.dart, inventory_http.test.ts | KEEP existing ledger, COPY/ADAPT replenishment: lock warehouse → order → existing reservations; explicit whole-order operation; release prior immutable snapshot and reinsert larger hold in same transaction; no change to on-hand; strict revision, current version/mode/scope. Legacy inbound automatic FIFO replenishment is NOT implemented by this slice; manual explicit replenishment is the first step. |
+| sales-fulfillment-operations.js:272–387,413–685; sales-fulfillment-operations.test.js:26–132 | Future T3-C2 scoped allocation | MISSING: port deterministic FEFO/FIFO policy, override reasons, exact lot/bin capacity, reservation lineage. Current inventory_scope_balance covers T3-B direct issues, not TRIP allocations. No second warehouse ledger. |
+| sales-fulfillment-operations.js:687–831; phase-6d2-allocation-pick-pack-decisions.md | Future T3-C2 one soạn–đóng UI | MISSING: immutable positive deltas, packed ≤ picked ≤ allocated; partial quantities, correction/release lineage and concurrency. One UI transaction instead of two mandatory tabs; no OUT or delivery facts. |
+| sales-delivery-orders.js; phase-6d3-delivery-order-handover-decisions.md | Future T3-C3 dispatch source | MISSING: immutable canonical delivery document/version/warehouse and packed claims, actual OUT once on physical dispatch; partial and remainder. T5 handles driver/trip/attempt, accepted qty, COD/POD, AR and returns. |
+
+## T3-C1 implemented scope
+- POST /v1/inventory/trip-holds: current confirmed TRIP order, exact warehouse and expected order revision, existing `inventory.reserve` + `orders.read`. Shared mutation receipt/audit; atomic all-line action; no double hold, no stock movements.
+- Reuses reserveStock and existing 0021 policy; released snapshots stay immutable. If no new availability, do not churn history. Existing legacy per-line endpoint retained for historical orders. Scope conflicts and progressed orders reject.
+- Flutter warehouse shortcut: one approval for all lines, show held/waiting quantities; no automatic posting or per-line dialog for explicit TRIP. Request uses server revision and existing pending command handling. UI does not imply allocated, packed, issued, delivered or paid.
+- No schema migration in C1; 0021–0024 remain immutable. C2/C3 require additive schema with guards against direct SQL, cross-transaction forged movement, over-claim, release/amend/cancel after execution; extend migration operator and verify fresh/replay/drift/restore. Avoid reusing MANUAL source tables or treating existing reservation release as inventory OUT.
+- Tests: PostgreSQL competing hold, partial across two SKUs, replay and stale revision, no churn, replenishment after release, immutable prior snapshot, no on-hand/state changes, MANUAL rejection; Flutter explicit approval, all lines and backorder. CI/Codex/UAT results must be read back for the actual final SHA; this audit does not certify them.
+- Remaining gate: complete C2/C3 and T5 dependencies before declaring T3-C DONE. Automatic oldest-first replenishment on inbound and policy exception handling need dedicated regression; do not report as implemented. No production DB/backend/frontend/APK change until approved gates. T3-C1 backend deployment precedes frontend that calls new route.
