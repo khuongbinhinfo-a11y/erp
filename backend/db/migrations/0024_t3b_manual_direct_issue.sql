@@ -176,7 +176,7 @@ CREATE FUNCTION erp_t3b_issue_line_guard() RETURNS trigger LANGUAGE plpgsql AS $
 DECLARE h sales_direct_issue%ROWTYPE; o_status text;v_state text;
  current_ver integer;choice text;ctx_wh uuid;expected_product uuid;
  requested numeric;previous numeric;pricing text;unit_code text;base_unit text;
- snapshot jsonb;ordered numeric;
+ snapshot jsonb;ordered numeric;scoped_available numeric;
 BEGIN
  SELECT * INTO h FROM sales_direct_issue
  WHERE installation_id=NEW.installation_id AND branch_id=NEW.branch_id
@@ -218,6 +218,20 @@ BEGIN
   RAISE EXCEPTION 'Direct issue exceeds commercial line quantity'; END IF;
  PERFORM erp_t3b_validate_scope(h.installation_id,h.branch_id,h.warehouse_id,
   NEW.product_id,NEW.location_id,NEW.lot_id);
+ IF NEW.location_id IS NOT NULL OR NEW.lot_id IS NOT NULL THEN
+  -- BEFORE INSERT: scope balance still contains the unissued slice.
+  -- Re-evaluate under warehouse lock even if someone inserted the warehouse
+  -- ISSUE movement before creating the T3-B source header.
+  SELECT coalesce(sum(quantity_base),0) INTO scoped_available
+   FROM inventory_scope_balance
+   WHERE installation_id=h.installation_id AND branch_id=h.branch_id
+    AND warehouse_id=h.warehouse_id AND product_id=NEW.product_id
+    AND location_id IS NOT DISTINCT FROM NEW.location_id
+    AND lot_id IS NOT DISTINCT FROM NEW.lot_id;
+  IF scoped_available<NEW.quantity_base THEN
+   RAISE EXCEPTION 'Direct issue exceeds allocated stock at lot/location';
+  END IF;
+ END IF;
  IF h.allow_negative AND (NEW.location_id IS NOT NULL OR NEW.lot_id IS NOT NULL) THEN
   RAISE EXCEPTION 'Negative issue prohibited for tracked scope'; END IF;
  RETURN NEW;
