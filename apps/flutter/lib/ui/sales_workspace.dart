@@ -3143,17 +3143,36 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     if(chosen.isEmpty){inform('Chọn các đơn MANUAL có quyền xử lý.',error:true);return;}
     final prompt=action=='complete'?'Hoàn thành thực giao':
        'Thu đủ công nợ theo từng đơn';
-    final yes=await showDialog<bool>(context:context,builder:(c)=>AlertDialog(
+    var paymentMethod='CASH';
+    final yes=await showDialog<bool>(context:context,builder:(c)=>StatefulBuilder(
+      builder:(c,change)=>AlertDialog(
       title:Text(prompt+' hàng loạt'),
-      content:Text('Sẽ đối chiếu và xử lý tối đa '+chosen.length.toString()+
-        ' đơn riêng biệt trên máy chủ. Từng đơn cần đủ hàng thực giao/quyền, '+
-        'các đơn lỗi không ảnh hưởng đơn đã ghi nhận. '+
-        (action=='payment'?'Thu bằng phương thức tiền mặt.':'Không tạo phiếu thu tự động.')),
+      content:SizedBox(width:480,child:Column(mainAxisSize:MainAxisSize.min,
+       crossAxisAlignment:CrossAxisAlignment.start,children:[
+        Text('Đối chiếu '+chosen.length.toString()+
+          ' đơn riêng biệt với máy chủ. Đơn không đủ điều kiện được báo lỗi riêng.'),
+        if(action=='payment')...[
+          const SizedBox(height:12),
+          DropdownButtonFormField<String>(initialValue:paymentMethod,
+            decoration:const InputDecoration(labelText:'Phương thức thu tiền'),
+            items:const [
+              DropdownMenuItem(value:'CASH',child:Text('Tiền mặt')),
+              DropdownMenuItem(value:'BANK_TRANSFER',child:Text('Chuyển khoản')),
+            ],
+            onChanged:(v)=>change(()=>paymentMethod=v??'CASH')),
+          const SizedBox(height:8),
+          const Text('Từng khoản thu được ghi sổ riêng, không gộp hoặc tự tạo phiếu 0 đồng.',
+            style:TextStyle(fontSize:12)),
+        ]else
+          const Padding(padding:EdgeInsets.only(top:8),
+            child:Text('Không tự ghi thu tiền khi hoàn thành giao.',
+              style:TextStyle(fontSize:12))),
+       ])),
       actions:[
         TextButton(onPressed:()=>Navigator.pop(c,false),child:const Text('Hủy')),
         FilledButton(onPressed:()=>Navigator.pop(c,true),child:const Text('Xác nhận')),
       ],
-    ));
+    )));
     if(yes!=true||!mounted||!_sameScope(token,branch))return;
     setState(()=>_manualBusy=true);
     final outcomes=<({String label,bool success,String message})>[];
@@ -3187,7 +3206,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
             final due=BigInt.tryParse((state['remaining']??'0').toString())??BigInt.zero;
             if(due<=BigInt.zero)throw const ErpApiError(409,'Không còn công nợ.');
             payload={'branchId':branch,'warehouseId':warehouse,
-              'orderId':id,'method':'CASH','amount':due.toString()};
+              'orderId':id,'method':paymentMethod,'amount':due.toString()};
           }
           final response=await widget.client.postSalesExecution(widget.session,
             action,payload,(state['revision'] as num).toInt());
