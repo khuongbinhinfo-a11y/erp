@@ -20,14 +20,14 @@
 - `inventory_storage_location`, `inventory_product_lot`, `inventory_product_tracking`: warehouse+product scope.
 - `inventory_scope_assignment` and view `inventory_scope_balance`: **classification, not additional stock**. Only quantities already available may be assigned; assignments cannot be updated/deleted. For future inbound stock by lot/bin, T3-C / purchase integration should use source-lineage movements and avoid duplicate aggregation.
 - `sales_direct_issue`, `sales_direct_issue_line`: immutable fulfillment source per partial shipment, linking to canonical sales version and exact inventory movements. Multiple partial issues per order, no double-post by replay.
-- Database guards: confirmed MANUAL/current version, quantity <= original snapshot, non-expired lots, source/ledger match, no consumption of classified stock by unscoped POS/transfer; deferred posted-on-commit checks.
+- Database guards: confirmed MANUAL/current version, quantity <= original snapshot, non-expired lots, **bidirectional** source/ledger match (including forged movement before header exists), no consumption of classified stock by unscoped POS/transfer; deferred posted-on-commit checks.
 - Negative stock is disabled by default even when reserve shortage is WARN; only explicit warehouse policy `ALLOW` plus `inventory.negative.issue` RBAC and a matching MANUAL source permits untracked issue below zero. No negative issue in lot/location-tracked stock.
 
 ## API and UX
 - `POST /v1/inventory/direct-issues`: branchId, warehouseId, orderId, version, lines `[{lineNo,quantityBase,locationId?,lotId?}]`, `allowNegative`. Requires `inventory.post` warehouse and `orders.update` branch, expected revision in If-Match and Idempotency-Key.
-- Readback `GET /v1/inventory/direct-issues` and `GET /v1/inventory/direct-issues/reconcile`: ledger facts and stock balance projection checked against immutable posted movements.
+- Readback `GET /v1/inventory/direct-issues`, `GET /v1/inventory/direct-issues/totals` and `GET /v1/inventory/direct-issues/reconcile`: complete issued totals via server aggregate (no 500-event truncation), canonical base unit, and bidirectional source/ledger/warehouse balance checks.
 - Lot/bin endpoints: `POST /v1/inventory/locations`, `/lots`, `/tracking-policy`, `/stock-scopes/assign`; `GET /v1/inventory/stock-scopes`.
-- Flutter: linked MANUAL button on warehouse workspace, explicit dialog for partial quantity and optional required lot/bin, no optimistic 'success' before server response. Existing TRIP reservation is preserved.
+- Flutter: linked MANUAL button on warehouse workspace, explicit dialog for partial quantity in **product base unit** and optional required lot/bin, setup UI for location/lot/tracking/stock classification, no optimistic 'success' before server response. Existing TRIP reservation is preserved.
 
 ## Gate and provider
 - CI: backend typecheck, unit/PG integration, Flutter analyze/widget, Android native and Windows native build, Prisma Compute build-only, isolation gate. **Only exact final-head SUCCESS is releasable**.
@@ -40,7 +40,7 @@
 - Replay same key+body no duplicate, same key+different body denied, stale revision denied, concurrent same order one winner, amount exceeding remaining denied.
 - Scope assignment cannot exceed available, wrong/unavailable/expired lot or missing required location rejected; untracked issuing cannot consume classified bins.
 - Negative stock strict BLOCK and WARN rejected, ALLOW requires actor permission and explicit intent, never for lot/bin tracking.
-- Reconciliation on source/line and overall on-hand is exact ledger projection, not client-maintained totals.
+- Reconciliation on source/line **in both directions** and overall on-hand is exact ledger projection, not client-maintained totals. Deferred trigger rejects a forged movement posted before its direct issue source header.
 - PostgreSQL migration fresh/replay/drift and operator 0023→0024 validation, no production SQL until backup+restore gate.
 
 ## Dependencies
