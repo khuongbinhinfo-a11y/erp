@@ -290,6 +290,10 @@ export async function reserveTripOrder(db:PoolClient,ctx:MutationContext,
  input:WarehouseScope&{orderId:string;version:number}){
  const t=ctx.installationId,b=input.branchId,w=input.warehouseId,id=input.orderId;
  if(!await hasInventoryGuardSchema(db))throw new InventoryFault(503,"TRIP_HOLD_MIGRATION_REQUIRED");
+ const ready=await db.query<{ok:boolean}>(`SELECT EXISTS(
+   SELECT 1 FROM schema_migrations WHERE version='0025_t3c_trip_preparation_dispatch.sql'
+ ) AS ok`);
+ if(!ready.rows[0]?.ok)throw new InventoryFault(503,"TRIP_HOLD_MIGRATION_REQUIRED");
  await lockWarehouse(db,t,input);
  const sale=await db.query<{revision:string;status:string;current_version:number;
   version_state:string;fulfillment_status:string;delivery_status:string;payment_status:string}>(

@@ -26,3 +26,9 @@
 - `backend/src/trip_fulfillment.test.ts`: fresh PG migration, replay, concurrency, phát hành 2 đợt, lượng giữ còn lại, hậu quả trên ledger và không lập giao/thu giả. `backend/scripts/t3c-0025-codespaces-migration.mjs` cần đúng SHA, Codespaces chính, maintenance, backup mã hóa bền và restore cách ly trước khi apply. Chưa chạy production migration trong PR.
 - Còn ngoài T3-C: xe/tài xế/tuyến giao, giao đủ/một phần/thất bại, POD/COD, nhận khách, công nợ/thu tiền, nhập trả thuộc T5; không được báo đã hoạt động.
 - Thông tin triển khai: Flutter/backend mới không được coi là production cho đến khi owner duyệt migration 0025 và backend Codespaces đã xác minh READY, rồi Vercel thủ công; APK bản mới phải ký, R2 readback, latest activation có approval/UAT riêng. v5 hiện chỉ là phát hành trước T3-C.
+
+### Đã xử lý review bảo mật TRIP (PR #95)
+- Backorder sau khi đã soạn được bổ sung bằng **reservation row mới liên kết parent**; không phát sinh RELEASE/UPDATE lên reservation đã soạn. Group lại active holds theo canonical order line và chọn hold cụ thể khi soạn.
+- DB chặn đóng ở lô/vị trí khác lô/vị trí đã soạn; scoped MANUAL không được lấy hàng đang được chuẩn bị cho chuyến khác; kiểm final classified stock ở COMMIT của từng dispatch, kể cả SQL xếp thứ tự bất thường.
+- Flutter clear dữ liệu cũ đồng thời với controller khi reload mất mạng, tránh lỗi RangeError; dialog giới hạn chiều rộng Android.
+- Tất cả giới hạn và chứng từ mới phải được thử thật trong PostgreSQL CI trên SHA cuối; điều chỉnh này không phải bằng chứng UAT thực địa.

@@ -492,6 +492,18 @@ BEGIN
   IF NEW.quantity_base+NEW.backordered_base<>demand THEN
    RAISE EXCEPTION 'Reservation base quantity differs from snapshot'; END IF;
  ELSE
+  -- Only an actual TRIP may append a new hold; direct MANUAL/PICKUP and
+  -- completed/cancelled orders must not bypass the warehouse execution mode.
+  PERFORM 1 FROM sales_order o JOIN sales_order_version_context c
+   ON c.installation_id=o.installation_id AND c.branch_id=o.branch_id
+    AND c.order_id=o.id AND c.version_no=NEW.version_no
+  WHERE o.installation_id=NEW.installation_id AND o.branch_id=NEW.branch_id
+   AND o.id=NEW.order_id AND o.status='CONFIRMED'
+   AND o.current_version=NEW.version_no
+   AND o.fulfillment_status<>'COMPLETED'
+   AND o.delivery_status='NOT_DISPATCHED'
+   AND c.delivery_choice='TRIP' AND c.warehouse_id=NEW.warehouse_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Trip replenishment mode or lifecycle invalid'; END IF;
   SELECT * INTO parent FROM inventory_reservation
    WHERE installation_id=NEW.installation_id AND branch_id=NEW.branch_id
     AND id=NEW.replenishment_of FOR SHARE;
