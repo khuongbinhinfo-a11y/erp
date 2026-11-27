@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 import 'erp_display.dart';
 import 'erp_number_input.dart';
 import 'identity_client.dart';
+import 'stock_scope_picker.dart';
 
 /// Exact six-decimal stock quantities. UI never uses floating point.
 BigInt? erpInventoryBaseUnits(String input){
@@ -131,25 +132,16 @@ Future<void> showManualStockIssue({
               'Số thực xuất theo ${row['baseUnit']} (0 để bỏ qua)')),
           if((scopes[row['productId'].toString()]?['locations'] as List?)?.isNotEmpty==true||
              (scopes[row['productId'].toString()]?['policy'] as Map?)?['requireLocation']==true)
-            DropdownButtonFormField<String>(
-              initialValue:selectedLocation[(row['lineNo'] as num).toInt()]??'',
-              isExpanded:true,decoration:const InputDecoration(labelText:'Vị trí kho'),
-              items:[const DropdownMenuItem(value:'',child:Text('Chưa chọn vị trí')),
-                for(final x in scopes[row['productId'].toString()]!['locations'] as List)
-                  DropdownMenuItem(value:(x as Map)['id'].toString(),
-                    child:Text((x['code']??'').toString()+' · '+(x['name']??'').toString()))],
-              onChanged:(v)=>refresh(()=>selectedLocation[(row['lineNo'] as num).toInt()]=v??'')),
+            StockScopePicker(kind:'location',
+              items:scopes[row['productId'].toString()]?['locations'] as List? ??const [],
+              selectedId:selectedLocation[(row['lineNo'] as num).toInt()]??'',
+              onChanged:(v)=>refresh(()=>selectedLocation[(row['lineNo'] as num).toInt()]=v)),
           if((scopes[row['productId'].toString()]?['lots'] as List?)?.isNotEmpty==true||
              (scopes[row['productId'].toString()]?['policy'] as Map?)?['requireLot']==true)
-            DropdownButtonFormField<String>(
-              initialValue:selectedLot[(row['lineNo'] as num).toInt()]??'',
-              isExpanded:true,decoration:const InputDecoration(labelText:'Lô hàng'),
-              items:[const DropdownMenuItem(value:'',child:Text('Chưa chọn lô')),
-                for(final x in scopes[row['productId'].toString()]!['lots'] as List)
-                  DropdownMenuItem(value:(x as Map)['id'].toString(),
-                    child:Text((x['lotCode']??'').toString()+
-                      (x['expiryDate']!=null?' · HSD '+x['expiryDate'].toString().split('T').first:'')))],
-              onChanged:(v)=>refresh(()=>selectedLot[(row['lineNo'] as num).toInt()]=v??'')),
+            StockScopePicker(kind:'lot',
+              items:scopes[row['productId'].toString()]?['lots'] as List? ??const [],
+              selectedId:selectedLot[(row['lineNo'] as num).toInt()]??'',
+              onChanged:(v)=>refresh(()=>selectedLot[(row['lineNo'] as num).toInt()]=v)),
           const Divider(height:24),
         ],
         if(dialogError!=null)Text(dialogError!,style:const TextStyle(color:Colors.red)),
