@@ -108,7 +108,7 @@ test("release signer, source commit, version and declared byte hash cannot chang
   await withJwt(async jwt=>{
     for(const headers of [
       {"x-erp-signer-sha256":"c".repeat(64)},
-      {"x-erp-source-sha":"d".repeat(40)},
+      {"x-erp-source-sha":"invalid"},
       {"x-erp-version-code":"5"},
       {"x-erp-version-name":"0.5.0"},
       {"x-erp-sha256":"broken"}
