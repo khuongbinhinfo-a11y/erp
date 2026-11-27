@@ -24,7 +24,8 @@ function send(res:ServerResponse,status:number,payload:unknown,id:string,origin?
  res.writeHead(status,headers);res.end(status===204?"":JSON.stringify(payload));
 }
 function fail(res:ServerResponse,status:number,code:string,id:string,origin?:string):void {
- const message=status===401?"Phiên đăng nhập không hợp lệ":
+ const message=code==="ORDER_DIRECT_ISSUE_ONLY"
+  ?"Đơn giao thủ công hoặc tại quầy không giữ hàng theo chuyến.":status===401?"Phiên đăng nhập không hợp lệ":
   status===403?"Bạn không có quyền trên kho này.":
   status===409?"Tồn kho hoặc chứng từ đã thay đổi. Vui lòng tải lại.":
   status===503?"Nghiệp vụ kho chưa sẵn sàng.":"Thông tin kho không hợp lệ.";
