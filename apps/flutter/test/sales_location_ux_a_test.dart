@@ -87,6 +87,7 @@ void main(){
     final manual=find.byKey(const ValueKey('sales-delivery-address-$customer-3'));
     expect(manual,findsOneWidget);
     await tester.enterText(manual,'99 Lý Tự Trọng');
-    expect(tester.widget<TextFormField>(manual).controller?.text??'99 Lý Tự Trọng','99 Lý Tự Trọng');
+    expect(tester.widget<EditableText>(find.descendant(of:manual,
+      matching:find.byType(EditableText))).controller.text,'99 Lý Tự Trọng');
   });
 }
