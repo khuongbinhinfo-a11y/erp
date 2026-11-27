@@ -14,7 +14,6 @@ export type DirectIssueInput=WarehouseScope&{
 export type ScopeAssignInput=WarehouseScope&{
  productId:string;quantityBase:string;locationId?:string;lotId?:string;
 };
-const sum=(xs:Iterable<bigint>)=>Array.from(xs).reduce((a,b)=>a+b,0n);
 const q=(v:string)=>stockDecimalUnits(v);
 async function locked(db:PoolClient,t:string,s:WarehouseScope){
  const r=await db.query("SELECT 1 FROM warehouse WHERE installation_id=$1 AND branch_id=$2 AND id=$3 FOR UPDATE",
@@ -199,6 +198,8 @@ export async function issueManualStock(db:PoolClient,c:MutationContext,input:Dir
  GROUP BY l.order_line_no`,[t,b,input.orderId,input.version]);
  const prev=new Map(previous.rows.map(row=>[row.line_no,q(row.issued)]));
  const requested=new Map<number,bigint>(),byProduct=new Map<string,bigint>(),seen=new Set<string>();
+ const byScope=new Map<string,{productId:string;locationId?:string;lotId?:string;qty:bigint}>();
+ const byUntracked=new Map<string,bigint>();
  for(const line of input.lines){
   const source=all.get(line.lineNo);
   if(!source)throw new InventoryFault(409,"ORDER_LINE_UNAVAILABLE");
@@ -209,10 +210,38 @@ export async function issueManualStock(db:PoolClient,c:MutationContext,input:Dir
   const qty=q(line.quantityBase);
   requested.set(line.lineNo,(requested.get(line.lineNo)??0n)+qty);
   byProduct.set(source.productId,(byProduct.get(source.productId)??0n)+qty);
+  if(!line.locationId&&!line.lotId)
+   byUntracked.set(source.productId,(byUntracked.get(source.productId)??0n)+qty);
+  else{
+   const scopeKey=[source.productId,line.locationId??"",line.lotId??""].join(":");
+   const old=byScope.get(scopeKey);
+   byScope.set(scopeKey,{productId:source.productId,
+    locationId:line.locationId,lotId:line.lotId,qty:(old?.qty??0n)+qty});
+  }
  }
  for(const [lineNo,qty] of requested){
   if((prev.get(lineNo)??0n)+qty>all.get(lineNo)!.ordered)
    throw new InventoryFault(409,"ISSUE_EXCEEDS_ORDER_LINE");
+ }
+ // A scoped issue cannot borrow from another lot/bin. Unscoped stock must
+ // never consume previously classified stock, even when warehouse total is high.
+ for(const item of byScope.values()){
+  const r=await db.query<{n:string}>(`SELECT coalesce(sum(quantity_base),0)::text AS n
+    FROM inventory_scope_balance WHERE installation_id=$1 AND branch_id=$2
+    AND warehouse_id=$3 AND product_id=$4
+    AND location_id IS NOT DISTINCT FROM $5::uuid
+    AND lot_id IS NOT DISTINCT FROM $6::uuid`,
+    [t,b,w,item.productId,item.locationId??null,item.lotId??null]);
+  if(q(r.rows[0]?.n??"0")<item.qty)
+   throw new InventoryFault(409,"INSUFFICIENT_SCOPED_STOCK");
+ }
+ for(const [productId,quantity] of byUntracked){
+  const stock=await balance(db,t,input,productId);
+  const r=await db.query<{n:string}>(`SELECT coalesce(sum(quantity_base),0)::text AS n
+    FROM inventory_scope_balance WHERE installation_id=$1 AND branch_id=$2
+    AND warehouse_id=$3 AND product_id=$4`,[t,b,w,productId]);
+  if(q(r.rows[0]?.n??"0")>0n&&q(stock.available)-q(r.rows[0]!.n)<quantity)
+   throw new InventoryFault(409,"STOCK_CLASSIFIED_IN_OTHER_SCOPE");
  }
  let negativeRequired=false;
  for(const [productId,quantity] of byProduct){
