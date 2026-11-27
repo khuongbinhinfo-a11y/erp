@@ -80,6 +80,9 @@ void main(){
     addTearDown(client.dispose);
     tester.view.devicePixelRatio=1;
     tester.view.physicalSize=const Size(360,760);
+    // Android cutout/status bar must not cover the full-screen register controls.
+    tester.view.padding=const FakeViewPadding(top:36);
+    addTearDown(tester.view.resetPadding);
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:true,dark:true),
@@ -87,6 +90,8 @@ void main(){
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('erp-mobile-retail-workspace')),findsOneWidget);
     expect(find.byKey(const ValueKey('erp-pos-workspace')),findsOneWidget);
+    expect(tester.getTopLeft(find.byKey(const ValueKey('pos-fullscreen-back'))).dy,
+      greaterThanOrEqualTo(36),reason:'Status bar must not overlap POS back/toolbar');
     expect(find.byKey(const ValueKey('pos-sku-search')),findsOneWidget);
      expect(find.byKey(const ValueKey('pos-walk-in-quick')),findsOneWidget);
      await tester.tap(find.byKey(const ValueKey('pos-walk-in-quick')));
