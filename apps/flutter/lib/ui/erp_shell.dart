@@ -5,7 +5,7 @@ import 'erp_tokens.dart';
 import 'erp_navigation_ui.dart';
 import 'company_workspace.dart';
 import 'retail_pos_workspace.dart';
-import 'pos_window_stub.dart' if (dart.library.html) 'pos_window_web.dart';
+import 'pos_window_stub.dart' if (dart.library.js_interop) 'pos_window_web.dart';
 import 'admin_workspace.dart';
 import 'identity_client.dart';
 import 'erp_toast.dart';
