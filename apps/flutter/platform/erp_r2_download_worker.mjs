@@ -18,11 +18,16 @@ const RELEASES={
   "/releases/4/erp-4.apk":{key:"releases/4/erp-4.apk",name:"ERP-Android-0.4.0.apk",
     sha:"1ad76237794d167df8d9b7fbe928879def8952c7451731e81bcc4421a0c12370",size:64359714,
     source:"a3e2c8f514b23865cc3b6795230939189f092feb"},
+  "/ERP-Android-0.5.0.apk":{key:"releases/5/erp-5.apk",name:"ERP-Android-0.5.0.apk",
+    sha:"d050f77e19fa1ce4ba4ac4011442ed7955f7342252f2805ad9db61ddfe0616cf",size:64605474,source:"d97e58e9ea437420285cb9a563bf7bb4005f14f4"},
+  "/releases/5/erp-5.apk":{key:"releases/5/erp-5.apk",name:"ERP-Android-0.5.0.apk",
+    sha:"d050f77e19fa1ce4ba4ac4011442ed7955f7342252f2805ad9db61ddfe0616cf",size:64605474,source:"d97e58e9ea437420285cb9a563bf7bb4005f14f4"},
 };
 const PKG="vn.erpdistribution.erp_distribution";
 const SOURCE_2="9963be10fd6d648474b826bcb5e917adbde03b5c";
 const SOURCE_3="56384b325b55129f028906edf3d9b2b33e20b6bb";
 const SOURCE_4="a3e2c8f514b23865cc3b6795230939189f092feb";
+const SOURCE_5="d97e58e9ea437420285cb9a563bf7bb4005f14f4";
 function fail(status,message){return new Response(message,{status,headers:{
   "content-type":"text/plain; charset=utf-8","cache-control":"no-store",
   "x-content-type-options":"nosniff"
@@ -35,8 +40,8 @@ function same(meta,release){
 function releaseValid(x){
   if(!x||typeof x!=="object")return false;
   const r=RELEASES["/releases/"+x.versionCode+"/erp-"+x.versionCode+".apk"];
-  const versionName=x.versionCode===2?"0.2.0":x.versionCode===3?"0.3.0":x.versionCode===4?"0.4.0":null;
-  const sourceSha=x.versionCode===2?SOURCE_2:x.versionCode===3?SOURCE_3:x.versionCode===4?SOURCE_4:null;
+  const versionName=x.versionCode===2?"0.2.0":x.versionCode===3?"0.3.0":x.versionCode===4?"0.4.0":x.versionCode===5?"0.5.0":null;
+  const sourceSha=x.versionCode===2?SOURCE_2:x.versionCode===3?SOURCE_3:x.versionCode===4?SOURCE_4:x.versionCode===5?SOURCE_5:null;
   return !!r&&!!versionName&&x.schema===1&&x.versionName===versionName&&
     x.packageName===PKG&&x.sha256===r.sha&&x.signerSha256===SIGNER&&
     x.size===r.size&&x.objectKey===r.key&&x.sourceSha===sourceSha&&
