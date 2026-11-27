@@ -57,6 +57,11 @@ Future<void> showManualStockIssue({
  // Server aggregate is complete regardless of the number of partial issues.
  final totals=await client.inventoryDirectIssueTotals(token,
   branchId:branchId,warehouseId:warehouseId,orderId:selectedOrderId);
+ final guard=await client.inventoryGuardPolicy(token,
+   branchId:branchId,warehouseId:warehouseId);
+ final negativePermission=session.grants.any((g)=>
+   g.permission=='inventory.negative.issue'&&
+   g.branchId==branchId&&g.warehouseId==warehouseId);
  final byLine={for(final row in totals) (row['lineNo'] as num).toInt():row};
  final lines=(detail['lines'] as List<dynamic>).map((x)=>Map<String,dynamic>.from(x as Map)).toList();
  final pending=<Map<String,dynamic>>[];
@@ -92,13 +97,27 @@ Future<void> showManualStockIssue({
   quantities[n]=TextEditingController(text:erpGroupedDecimalText(row['remainingBase']));
  }
  String? dialogError;
+ var allowNegative=false;
+ final negativeEligible=negativePermission&&
+   (guard['policy'] is Map)&&
+   (guard['policy'] as Map)['negativeIssueMode']=='ALLOW'&&
+   pending.every((line){
+     final policy=scopes[line['productId'].toString()]?['policy'];
+     return policy is! Map||(policy['requireLot']!=true&&policy['requireLocation']!=true);
+   });
  List<Map<String,dynamic>>? accepted;
  try{
   accepted=await showDialog<List<Map<String,dynamic>>>(context:context,
     builder:(dialog)=>StatefulBuilder(builder:(dialog,refresh)=>AlertDialog(
       title:const Text('Xuất kho trực tiếp'),
       content:SizedBox(width:580,height:420,child:ListView(children:[
-        const Text('Số lượng thực xuất. Có thể nhập một phần; không tạo chuyến giao.'),
+        const Text('Số lượng thực xuất theo đơn vị gốc. Có thể xuất một phần; không tạo chuyến giao.'),
+        if(negativeEligible)CheckboxListTile(
+          key:const ValueKey('manual-issue-negative'),
+          value:allowNegative,
+          title:const Text('Cho phép xuất âm theo chính sách kho'),
+          subtitle:const Text('Chỉ khi có quyền và kho cho phép; không áp dụng lô/vị trí.'),
+          onChanged:(v)=>refresh(()=>allowNegative=v??false)),
         const SizedBox(height:12),
         for(final row in pending)...[
           Text((row['sku']??'').toString()+' · '+(row['productName']??'').toString(),
@@ -159,6 +178,11 @@ Future<void> showManualStockIssue({
              if((selectedLot[n]??'').isNotEmpty)'lotId':selectedLot[n]});
           }
           if(result.isEmpty){refresh(()=>dialogError='Nhập ít nhất một dòng cần xuất.');return;}
+          if(allowNegative&&result.any((x)=>
+             x.containsKey('locationId')||x.containsKey('lotId'))){
+             refresh(()=>dialogError='Không xuất âm hàng theo dõi lô hoặc vị trí.');
+             return;
+          }
           Navigator.pop(dialog,result);
         },child:const Text('Xác nhận xuất kho'))],
   )));
@@ -167,6 +191,6 @@ Future<void> showManualStockIssue({
  }
  if(accepted==null||!context.mounted)return;
  await onSubmit({'branchId':branchId,'warehouseId':warehouseId,'orderId':chosen,
-  'version':detail['version'],'lines':accepted,'allowNegative':false},
+  'version':detail['version'],'lines':accepted,'allowNegative':allowNegative},
    (detail['revision'] as num).toInt());
 }
