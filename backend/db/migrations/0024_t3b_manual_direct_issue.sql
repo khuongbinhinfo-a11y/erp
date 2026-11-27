@@ -396,13 +396,30 @@ END; $$;
 CREATE CONSTRAINT TRIGGER sales_direct_issue_posted_on_commit
  AFTER INSERT ON sales_direct_issue_line DEFERRABLE INITIALLY DEFERRED
  FOR EACH ROW EXECUTE FUNCTION erp_t3b_issue_commit_guard();
-CREATE FUNCTION erp_t3b_issue_header_commit_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE FUNCTION erp_t3b_issue_header_commit_guard() RETURNS trigger LANGUAGE plpgsql AS $
 BEGIN
  IF NOT EXISTS(SELECT 1 FROM sales_direct_issue_line WHERE installation_id=NEW.installation_id
   AND branch_id=NEW.branch_id AND issue_id=NEW.id) THEN
   RAISE EXCEPTION 'Direct issue requires posted lines'; END IF;
+ -- Check historic/precommitted orphan movements as well. The deferred
+ -- ledger trigger alone cannot catch an orphan inserted in an earlier
+ -- transaction and only later linked to a newly created direct-issue header.
+ IF EXISTS(
+   SELECT 1 FROM inventory_ledger m
+   WHERE m.installation_id=NEW.installation_id AND m.branch_id=NEW.branch_id
+    AND m.source_id=NEW.id AND m.source_type='FULFILLMENT' AND m.kind='ISSUE'
+    AND NOT EXISTS(
+     SELECT 1 FROM sales_direct_issue_line l
+     WHERE l.installation_id=m.installation_id AND l.branch_id=m.branch_id
+      AND l.issue_id=NEW.id AND l.source_line=m.source_line
+      AND l.product_id=m.product_id AND l.quantity_base=-m.delta_base
+      AND m.warehouse_id=NEW.warehouse_id
+    )
+ ) THEN
+  RAISE EXCEPTION 'Direct issue header has unmatched historic ledger movement';
+ END IF;
  RETURN NULL;
-END; $$;
+END; $;
 CREATE CONSTRAINT TRIGGER sales_direct_issue_header_on_commit
  AFTER INSERT ON sales_direct_issue DEFERRABLE INITIALLY DEFERRED
  FOR EACH ROW EXECUTE FUNCTION erp_t3b_issue_header_commit_guard();
