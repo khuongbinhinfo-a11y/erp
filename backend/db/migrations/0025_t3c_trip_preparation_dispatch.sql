@@ -2,6 +2,16 @@
 -- Forward-only. No production execution without backup, restore, reconciliation and approval.
 -- Legacy characterization: NPP-Platform sales-fulfillment-operations.js / phase 6D2 and 6D3.
 -- Packaging is NOT an inventory OUT, customer delivery, payment or receivable fact.
+-- Immutable primary holds remain the lineage for appended replenishment rows.
+ALTER TABLE inventory_reservation ADD COLUMN replenishment_of uuid;
+ALTER TABLE inventory_reservation ADD CONSTRAINT inventory_trip_replenishment_parent_fk
+ FOREIGN KEY(installation_id,branch_id,replenishment_of)
+ REFERENCES inventory_reservation(installation_id,branch_id,id);
+DROP INDEX inventory_reservation_one_active_orderline;
+CREATE UNIQUE INDEX inventory_reservation_one_active_orderline
+ ON inventory_reservation(installation_id,branch_id,order_id,version_no,line_no)
+ WHERE state='ACTIVE' AND replenishment_of IS NULL;
+
 CREATE TABLE sales_trip_preparation (
  installation_id uuid NOT NULL,branch_id uuid NOT NULL,
  id uuid NOT NULL DEFAULT gen_random_uuid(),order_id uuid NOT NULL,
@@ -139,11 +149,11 @@ BEGIN
       AND p.reservation_id=OLD.id)
     OR (NEW.installation_id,NEW.branch_id,NEW.warehouse_id,NEW.id,NEW.product_id,
         NEW.order_id,NEW.version_no,NEW.line_no,NEW.quantity_base,NEW.backordered_base,
-        NEW.actor_id,NEW.request_id,NEW.created_at)
+        NEW.actor_id,NEW.request_id,NEW.created_at,NEW.replenishment_of)
        IS DISTINCT FROM
        (OLD.installation_id,OLD.branch_id,OLD.warehouse_id,OLD.id,OLD.product_id,
         OLD.order_id,OLD.version_no,OLD.line_no,OLD.quantity_base,OLD.backordered_base,
-        OLD.actor_id,OLD.request_id,OLD.created_at)
+        OLD.actor_id,OLD.request_id,OLD.created_at,OLD.replenishment_of)
  THEN RAISE EXCEPTION 'Prepared inventory reservation cannot be rewritten or released'; END IF;
  RETURN NEW;
 END; $$;
@@ -184,9 +194,17 @@ BEGIN
   INTO prior_pick,prior_pack FROM sales_trip_preparation_line p
   WHERE p.installation_id=NEW.installation_id AND p.branch_id=NEW.branch_id
     AND p.reservation_id=NEW.reservation_id;
- IF prior_pick+NEW.picked_base>r.quantity_base
-    OR prior_pack+NEW.packed_base>prior_pick+NEW.picked_base
- THEN RAISE EXCEPTION 'Trip picked/packed quantity exceeds reservation'; END IF;
+ IF prior_pick+NEW.picked_base>r.quantity_base THEN
+  RAISE EXCEPTION 'Trip pick exceeds reservation'; END IF;
+ -- Packing cannot borrow picked units from another location or lot.
+ SELECT coalesce(sum(p.picked_base),0),coalesce(sum(p.packed_base),0)
+  INTO prior_pick,prior_pack FROM sales_trip_preparation_line p
+  WHERE p.installation_id=NEW.installation_id AND p.branch_id=NEW.branch_id
+   AND p.reservation_id=NEW.reservation_id
+   AND p.location_id IS NOT DISTINCT FROM NEW.location_id
+   AND p.lot_id IS NOT DISTINCT FROM NEW.lot_id;
+ IF prior_pack+NEW.packed_base>prior_pick+NEW.picked_base THEN
+  RAISE EXCEPTION 'Trip pack exceeds picked quantity at exact lot/location'; END IF;
  PERFORM erp_t3b_validate_scope(h.installation_id,h.branch_id,h.warehouse_id,
   NEW.product_id,NEW.location_id,NEW.lot_id);
  -- Picked stock is protected by its *physical* location/lot, even across orders.
@@ -285,7 +303,7 @@ CREATE TRIGGER t3c_dispatch_line_guard BEFORE INSERT ON sales_trip_dispatch_line
 CREATE OR REPLACE FUNCTION erp_t3b_ledger_scope_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE h sales_direct_issue%ROWTYPE;line sales_direct_issue_line%ROWTYPE;
  th sales_trip_dispatch%ROWTYPE;tl sales_trip_dispatch_line%ROWTYPE;
- available_now numeric;classified numeric;scoped_now numeric;physical_now numeric;
+ available_now numeric;classified numeric;scoped_now numeric;physical_now numeric;trip_picked numeric;
 BEGIN
  IF NEW.delta_base>=0 THEN RETURN NEW; END IF;
  SELECT * INTO h FROM sales_direct_issue WHERE installation_id=NEW.installation_id
@@ -345,6 +363,22 @@ BEGIN
     AND location_id IS NOT DISTINCT FROM line.location_id
     AND lot_id IS NOT DISTINCT FROM line.lot_id;
   IF scoped_now<0 THEN RAISE EXCEPTION 'Insufficient stock at lot/location'; END IF;
+  -- MANUAL source may use only unpicked physical stock at this exact lot/bin;
+  -- warehouse-wide available can include another untouched location.
+  SELECT coalesce(sum(p.picked_base-coalesce((
+    SELECT sum(d.quantity_base) FROM sales_trip_dispatch_line d
+    WHERE d.installation_id=p.installation_id AND d.branch_id=p.branch_id
+     AND d.preparation_id=p.preparation_id AND d.preparation_line_no=p.source_line
+  ),0)),0) INTO trip_picked
+  FROM sales_trip_preparation_line p JOIN sales_trip_preparation ph
+   ON ph.installation_id=p.installation_id AND ph.branch_id=p.branch_id
+    AND ph.id=p.preparation_id
+  WHERE ph.installation_id=NEW.installation_id AND ph.branch_id=NEW.branch_id
+   AND ph.warehouse_id=NEW.warehouse_id AND p.product_id=NEW.product_id
+   AND p.location_id IS NOT DISTINCT FROM line.location_id
+   AND p.lot_id IS NOT DISTINCT FROM line.lot_id;
+  IF scoped_now<trip_picked THEN
+   RAISE EXCEPTION 'Physical scope reserved for trip picking'; END IF;
  ELSE
   IF classified>0 AND available_now-classified<(-NEW.delta_base) THEN
    RAISE EXCEPTION 'Assigned stock cannot be consumed without lot/location'; END IF;
@@ -365,6 +399,24 @@ BEGIN
   WHERE d.installation_id=NEW.installation_id AND d.branch_id=NEW.branch_id
     AND d.id=NEW.dispatch_id
  ) THEN RAISE EXCEPTION 'Trip dispatch line missing matching posted inventory movement'; END IF;
+ -- Guard final classified physical stock after ALL source/ledger changes in
+ -- this transaction, not merely when the dispatch line is inserted.
+ IF EXISTS(
+  SELECT 1 FROM sales_trip_dispatch h
+  WHERE h.installation_id=NEW.installation_id AND h.branch_id=NEW.branch_id
+   AND h.id=NEW.dispatch_id AND (
+    coalesce((SELECT sum(v.quantity_base) FROM inventory_scope_balance v
+      WHERE v.installation_id=h.installation_id AND v.branch_id=h.branch_id
+       AND v.warehouse_id=h.warehouse_id AND v.product_id=NEW.product_id),0)
+    >greatest(coalesce((SELECT z.on_hand FROM inventory_stock_balance z
+      WHERE z.installation_id=h.installation_id AND z.branch_id=h.branch_id
+       AND z.warehouse_id=h.warehouse_id AND z.product_id=NEW.product_id),0),0)
+    OR EXISTS(SELECT 1 FROM inventory_scope_balance v
+      WHERE v.installation_id=h.installation_id AND v.branch_id=h.branch_id
+       AND v.warehouse_id=h.warehouse_id AND v.product_id=NEW.product_id
+       AND v.quantity_base<0)
+   )
+ ) THEN RAISE EXCEPTION 'Trip dispatch leaves invalid final physical scope coverage'; END IF;
  RETURN NULL;
 END; $$;
 CREATE CONSTRAINT TRIGGER trip_dispatch_line_commit AFTER INSERT ON sales_trip_dispatch_line
@@ -405,3 +457,67 @@ BEGIN
 END; $$;
 CREATE CONSTRAINT TRIGGER trip_dispatch_header_commit AFTER INSERT ON sales_trip_dispatch
  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION erp_t3c_header_commit_guard();
+
+-- Reinstate the original full-demand snapshot guard for primary holds while
+-- allowing append-only extra quantities, capped by the canonical order demand.
+CREATE OR REPLACE FUNCTION erp_inventory_reservation_insert_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE ord_status text;vstate text;version_now integer;pricing text;
+ qty numeric;unit_code text;base_unit text;snapshot jsonb;demand numeric;
+ available_now numeric;shortage_mode text;already numeric;parent inventory_reservation%ROWTYPE;
+BEGIN
+ PERFORM 1 FROM warehouse WHERE installation_id=NEW.installation_id
+  AND branch_id=NEW.branch_id AND id=NEW.warehouse_id FOR UPDATE;
+ IF NOT FOUND THEN RAISE EXCEPTION 'Warehouse scope invalid'; END IF;
+ SELECT o.status,v.state,o.current_version,l.pricing_engine,l.quantity,
+  l.unit_code,p.base_unit,l.price_snapshot
+ INTO ord_status,vstate,version_now,pricing,qty,unit_code,base_unit,snapshot
+ FROM sales_order o JOIN sales_order_version v
+  ON v.installation_id=o.installation_id AND v.branch_id=o.branch_id
+   AND v.order_id=o.id AND v.version_no=NEW.version_no
+ JOIN sales_order_line l ON l.installation_id=v.installation_id AND l.branch_id=v.branch_id
+  AND l.order_id=v.order_id AND l.version_no=v.version_no
+  AND l.line_no=NEW.line_no AND l.product_id=NEW.product_id
+ JOIN catalog_product p ON p.installation_id=l.installation_id
+  AND p.branch_id=l.branch_id AND p.id=l.product_id
+ WHERE o.installation_id=NEW.installation_id AND o.branch_id=NEW.branch_id
+  AND o.id=NEW.order_id FOR SHARE OF o;
+ IF ord_status IS DISTINCT FROM 'CONFIRMED' OR vstate IS DISTINCT FROM 'CONFIRMED'
+  OR version_now IS DISTINCT FROM NEW.version_no THEN
+  RAISE EXCEPTION 'Reservation requires current confirmed Sales version'; END IF;
+ IF pricing='R1' THEN demand:=(snapshot->>'normalizedBaseQuantity')::numeric;
+ ELSIF pricing='LEGACY' AND unit_code=base_unit THEN demand:=qty;
+ ELSE RAISE EXCEPTION 'Reservation lacks immutable base quantity'; END IF;
+ IF demand IS NULL OR demand<=0 THEN RAISE EXCEPTION 'Reservation demand invalid'; END IF;
+ IF NEW.replenishment_of IS NULL THEN
+  IF NEW.quantity_base+NEW.backordered_base<>demand THEN
+   RAISE EXCEPTION 'Reservation base quantity differs from snapshot'; END IF;
+ ELSE
+  SELECT * INTO parent FROM inventory_reservation
+   WHERE installation_id=NEW.installation_id AND branch_id=NEW.branch_id
+    AND id=NEW.replenishment_of FOR SHARE;
+  IF NOT FOUND OR parent.replenishment_of IS NOT NULL OR parent.state<>'ACTIVE'
+   OR parent.order_id<>NEW.order_id OR parent.version_no<>NEW.version_no
+   OR parent.line_no<>NEW.line_no OR parent.warehouse_id<>NEW.warehouse_id
+   OR parent.product_id<>NEW.product_id OR NEW.quantity_base<=0
+   OR NEW.backordered_base<>0 THEN
+   RAISE EXCEPTION 'Trip replenishment parent or scope invalid'; END IF;
+  SELECT coalesce(sum(r.quantity_base),0) INTO already
+   FROM inventory_reservation r WHERE r.installation_id=NEW.installation_id
+    AND r.branch_id=NEW.branch_id AND r.order_id=NEW.order_id
+    AND r.version_no=NEW.version_no AND r.line_no=NEW.line_no AND r.state='ACTIVE';
+  IF already+NEW.quantity_base>demand THEN
+   RAISE EXCEPTION 'Trip replenishment exceeds confirmed order quantity'; END IF;
+ END IF;
+ SELECT coalesce((SELECT available FROM inventory_stock_balance WHERE
+  installation_id=NEW.installation_id AND branch_id=NEW.branch_id
+   AND warehouse_id=NEW.warehouse_id AND product_id=NEW.product_id),0)
+ INTO available_now;
+ IF available_now<NEW.quantity_base THEN
+  RAISE EXCEPTION 'Reservation exceeds available stock'; END IF;
+ SELECT reserve_shortage_mode INTO shortage_mode FROM inventory_guard_policy
+ WHERE installation_id=NEW.installation_id AND branch_id=NEW.branch_id
+  AND warehouse_id=NEW.warehouse_id FOR SHARE;
+ IF NEW.backordered_base>0 AND coalesce(shortage_mode,'WARN')='BLOCK' THEN
+  RAISE EXCEPTION 'Reservation backorder blocked by warehouse policy'; END IF;
+ RETURN NEW;
+END; $$;
