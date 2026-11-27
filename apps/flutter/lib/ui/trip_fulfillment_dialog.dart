@@ -1,6 +1,5 @@
 import 'package:material_ui/material_ui.dart';
 import 'erp_number_input.dart';
-import 'erp_display.dart';
 import 'identity_client.dart';
 
 /// A requested server command, not a completed warehouse posting.
