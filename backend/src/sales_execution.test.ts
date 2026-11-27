@@ -190,6 +190,56 @@ test("T5-A manual delivery, source-matched return, 0-debt and repeat AR payment"
    WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3`,
    [t,b,orderId])).rows[0]?.n,"2");
   assert.equal((await read()).body.execution.remaining,"0");
+
+  // All issued goods returned: close with no fictitious sale, cash or delivery.
+  const refused=await post("/v1/sales/orders",{branchId:b,
+    customerId:cust.body.id,priceListId:list.body.id,
+    shipping:{warehouseId:w,deliveryChoice:"MANUAL",
+      collectionPolicy:"CREDIT_TERMS",customerMode:"EXISTING"},
+    lines:[{productId:product.body.id,quantity:"2"}]});
+  assert.equal(refused.status,201,JSON.stringify(refused.body));
+  const refusedId=refused.body.id as string;
+  assert.equal((await post("/v1/sales/orders/"+refusedId+"/confirm",
+    {branchId:b},0)).status,200);
+  const refusedScope={branchId:b,warehouseId:w,orderId:refusedId,version:1};
+  const refusedIssue=await post("/v1/inventory/direct-issues",{
+    ...refusedScope,lines:[{lineNo:1,quantityBase:"2.000000"}]},1);
+  assert.equal(refusedIssue.status,201,JSON.stringify(refusedIssue.body));
+  const refusedQuery=new URLSearchParams({branchId:b,warehouseId:w,
+    orderId:refusedId});
+  const refusedRead=()=>call("/v1/sales/execution/read?"+
+     refusedQuery,"GET",undefined,token);
+  const beforeReturn=await refusedRead();
+  assert.equal(beforeReturn.status,200,JSON.stringify(beforeReturn.body));
+  const allBack=await post("/v1/sales/execution/returns",{
+    ...refusedScope,reason:"Khách hoàn trả toàn bộ hàng",
+    lines:[{issueId:refusedIssue.body.id,sourceLine:1,
+      quantityBase:"2.000000"}]},beforeReturn.body.execution.revision);
+  assert.equal(allBack.status,201,JSON.stringify(allBack.body));
+  const fullyReturned=await refusedRead();
+  assert.equal(fullyReturned.body.execution.hasIssuedHistory,true);
+  assert.equal(fullyReturned.body.execution.hasIssuedDelivery,false);
+  assert.equal(fullyReturned.body.execution.expectedDeliveryTotal,"0");
+  const closed=await post("/v1/sales/execution/complete",refusedScope,
+    fullyReturned.body.execution.revision);
+  assert.equal(closed.status,201,JSON.stringify(closed.body));
+  assert.equal(closed.body.deliveryStatus,"RETURNED");
+  assert.equal(closed.body.grandTotal,"0");
+  assert.equal(closed.body.remaining,"0");
+  const finalState=await refusedRead();
+  assert.equal(finalState.body.execution.completed,true);
+  assert.equal(finalState.body.execution.grandTotal,"0");
+  assert.equal(finalState.body.execution.paid,"0");
+  assert.equal(finalState.body.execution.remaining,"0");
+  assert.equal((await pool.query<{n:string}>(`
+     SELECT count(*)::text AS n FROM customer_receivable_ledger
+     WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3`,
+     [t,b,refusedId])).rows[0]?.n,"0");
+  assert.equal((await pool.query<{n:string}>(`
+     SELECT count(*)::text AS n FROM payment_receipt
+     WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3`,
+     [t,b,refusedId])).rows[0]?.n,"0");
+
  }finally{
   if(server)await new Promise<void>(done=>server!.close(()=>done()));
   if(pool)await pool.end();
