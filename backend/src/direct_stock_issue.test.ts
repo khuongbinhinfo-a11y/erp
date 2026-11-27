@@ -238,6 +238,54 @@ test("T3-B PostgreSQL: partial MANUAL issue, lot/location, scoped stock, negativ
   assert.equal((await db.query<{n:string}>(`SELECT count(*)::text AS n
     FROM sales_direct_issue WHERE installation_id=$1 AND id=$2`,
     [t,delayedHeaderId])).rows[0]!.n,"0");
+  // Codex P2: in one transaction, a scoped issue line decreases the scope
+  // projection before its inventory movement decreases warehouse on-hand.
+  // A later scope assignment must not double-classify that interim quantity.
+  const coverageProduct=await catalog("products",{
+   code:"T3BCOVER",name:"Scope coverage product",baseUnit:"cai"});
+  assert.equal(coverageProduct.status,201,JSON.stringify(coverageProduct.body));
+  assert.equal((await catalog("prices",{
+   priceListId:list.body.id,productId:coverageProduct.body.id,
+   amount:"1000.0000",discountRate:"0",effectiveAt:"2026-01-01T00:00:00Z"})).status,201);
+  assert.equal((await opening(coverageProduct.body.id,"10.000000")).status,201);
+  const originalCoverage=await write("/v1/inventory/stock-scopes/assign",{
+   branchId:b,warehouseId:w,productId:coverageProduct.body.id,
+   locationId:loc.body.id,quantityBase:"10.000000"});
+  assert.equal(originalCoverage.status,201,JSON.stringify(originalCoverage.body));
+  const coverageOrder=await makeOrder(coverageProduct.body.id,"5");
+  const coverageId=randomUUID(),concurrent=await db.connect();
+  try{
+   await concurrent.query("BEGIN");
+   await concurrent.query(`INSERT INTO sales_direct_issue
+    (installation_id,branch_id,id,order_id,version_no,warehouse_id,actor_id,request_id)
+    VALUES($1,$2,$3,$4,1,$5,$6,'coverage-header')`,
+    [t,b,coverageId,coverageOrder,w,root.actorId]);
+   await concurrent.query(`INSERT INTO sales_direct_issue_line
+    (installation_id,branch_id,issue_id,source_line,order_line_no,
+     product_id,quantity_base,location_id)
+    VALUES($1,$2,$3,1,1,$4,5,$5)`,
+    [t,b,coverageId,coverageProduct.body.id,loc.body.id]);
+   await concurrent.query(`INSERT INTO inventory_scope_assignment
+    (installation_id,branch_id,warehouse_id,product_id,location_id,
+     quantity_base,actor_id,request_id)
+    VALUES($1,$2,$3,$4,$5,5,$6,'coverage-fake-reassignment')`,
+    [t,b,w,coverageProduct.body.id,emptyLoc.body.id,root.actorId]);
+   await concurrent.query(`INSERT INTO inventory_ledger
+    (installation_id,branch_id,warehouse_id,product_id,kind,source_type,source_id,
+     source_line,delta_base,actor_id,request_id)
+    VALUES($1,$2,$3,$4,'ISSUE','FULFILLMENT',$5,1,-5,$6,'coverage-ledger')`,
+    [t,b,w,coverageProduct.body.id,coverageId,root.actorId]);
+   await assert.rejects(concurrent.query("COMMIT"),
+    /Scoped stock classification exceeds final available balance/i);
+  }finally{
+   await concurrent.query("ROLLBACK").catch(()=>undefined);
+   concurrent.release();
+  }
+  const coverageRead=await call("/v1/inventory/stock-scopes?branchId="+b+
+    "&warehouseId="+w+"&productId="+coverageProduct.body.id,"GET",undefined,token);
+  assert.equal(coverageRead.status,200,JSON.stringify(coverageRead.body));
+  assert.equal(coverageRead.body.scopes.length,1);
+  assert.equal(coverageRead.body.scopes[0].quantityBase,"10.000000");
   const lot=await write("/v1/inventory/lots",
    {branchId:b,warehouseId:w,productId:products[1],lotCode:"LOT-A",
     expiryDate:"2099-12-31"});
