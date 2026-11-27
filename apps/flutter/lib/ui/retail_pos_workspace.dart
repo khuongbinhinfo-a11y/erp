@@ -668,15 +668,198 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
     if(exact.length==1)_editCart(exact.single);
   }
 
+
+  // Desktop: a real two-region register. Search/catalog stays visible while
+  // the right basket preserves quoted totals and a fixed payment footer.
+  Widget _catalogPanel(ErpPalette palette,bool wide,bool keyboardOpen){
+    final typing=_search.text.trim().isNotEmpty;
+    final rows=typing?_matches:(wide?_catalog:<Map<String,dynamic>>[]);
+    return Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+        TextField(key:const ValueKey('pos-sku-search'),controller:_search,focusNode:_searchFocus,
+          enabled:!_loading&&_branch!=null&&_hasSalesGrant,
+          textInputAction:TextInputAction.search,autocorrect:false,
+          onChanged:_onSearch,onSubmitted:(value)=>unawaited(_onScan(value)),
+          decoration:InputDecoration(
+            prefixIcon:const Icon(Icons.qr_code_scanner),hintText:'Quét mã vạch hoặc tìm sản phẩm',
+            isDense:true,border:const OutlineInputBorder(),
+            suffixIcon:_searching?const Padding(padding:EdgeInsets.all(12),
+              child:SizedBox(height:16,width:16,child:CircularProgressIndicator(strokeWidth:2))):
+              _search.text.isNotEmpty?IconButton(tooltip:'Xóa tìm kiếm',
+                onPressed:(){_search.clear();_onSearch('');setState((){});},
+                icon:const Icon(Icons.close)):null)),
+
+      if(wide)Padding(padding:const EdgeInsets.symmetric(vertical:10),
+        child:Text(typing?'Kết quả tìm kiếm':'Danh mục sản phẩm',
+          style:TextStyle(fontWeight:FontWeight.w700,color:palette.ink))),
+      if(wide)Expanded(child:rows.isEmpty
+        ?Center(child:Text(_catalogLoading&&!typing||_searching
+          ?'Đang tìm sản phẩm…':typing?'Không tìm thấy sản phẩm':'Chưa có sản phẩm trong danh mục',
+          style:TextStyle(color:palette.muted)))
+        :LayoutBuilder(builder:(context,size)=>GridView.builder(
+          key:const ValueKey('pos-products-grid'),
+          gridDelegate:const SliverGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent:235,mainAxisExtent:151,crossAxisSpacing:9,mainAxisSpacing:9),
+          itemCount:rows.length,
+          itemBuilder:(context,i){
+            final item=rows[i];
+            final index=_lines.indexWhere((line)=>line.id==item['id']);
+            final quoted=index>=0&&index<_priced.length?_priced[index]:null;
+            final rawImage=(item['imageUrl']??item['thumbnailUrl']??'').toString();
+            final uri=Uri.tryParse(rawImage);
+            return Material(color:palette.surface,clipBehavior:Clip.antiAlias,
+              shape:RoundedRectangleBorder(borderRadius:BorderRadius.circular(9),
+                side:BorderSide(color:palette.border)),
+              child:InkWell(
+                key:ValueKey('pos-grid-item-'+item['id'].toString()),
+                onTap:()=>_editCart(item),
+                child:Padding(padding:const EdgeInsets.all(9),child:Column(
+                  crossAxisAlignment:CrossAxisAlignment.start,children:[
+                    Row(children:[
+                      SizedBox(width:38,height:38,child:uri!=null&&uri.scheme=='https'
+                        ?Image.network(rawImage,fit:BoxFit.cover,
+                          errorBuilder:(_,__,___)=>Icon(Icons.inventory_2_outlined,color:palette.muted))
+                        :Icon(Icons.inventory_2_outlined,color:palette.muted)),
+                      const SizedBox(width:7),
+                      Expanded(child:Text(item['productName']?.toString()??item['name']?.toString()??'Sản phẩm',
+                        maxLines:2,overflow:TextOverflow.ellipsis,
+                        style:TextStyle(fontWeight:FontWeight.w700,color:palette.ink))),
+                    ]),
+                    const SizedBox(height:6),
+                    Text([item['code'],item['unitCode']].where((v)=>v!=null&&v.toString().isNotEmpty).join(' · '),
+                      maxLines:1,overflow:TextOverflow.ellipsis,
+                      style:TextStyle(color:palette.muted,fontSize:11)),
+                    const Spacer(),
+                    Row(children:[
+                      Expanded(child:Text(quoted==null?'Giá tra khi thêm':erpVndText(quoted['unitPrice']),
+                        maxLines:1,overflow:TextOverflow.ellipsis,
+                        style:TextStyle(color:quoted==null?palette.muted:palette.primary,
+                          fontWeight:FontWeight.w700,fontSize:12))),
+                      Icon(Icons.add_circle,color:palette.primary,size:23),
+                    ]),
+                  ]))),
+              ));
+          }))),
+      if(!wide&&rows.isNotEmpty)ConstrainedBox(
+        constraints:BoxConstraints(maxHeight:keyboardOpen?140:190),
+        child:ListView.builder(key:const ValueKey('pos-search-results'),shrinkWrap:true,
+          itemCount:rows.length,itemBuilder:(context,i){
+            final item=rows[i];
+            return ListTile(key:ValueKey('pos-result-'+item['id'].toString()),
+              dense:true,visualDensity:VisualDensity.compact,
+              leading:const Icon(Icons.add_circle_outline),
+              title:Text(item['productName']?.toString()??item['name']?.toString()??'Sản phẩm',
+                maxLines:1,overflow:TextOverflow.ellipsis),
+              subtitle:Text([item['code'],item['unitCode'],item['barcode']]
+                .where((v)=>v!=null&&v.toString().isNotEmpty).join(' · '),
+                maxLines:1,overflow:TextOverflow.ellipsis),
+              onTap:()=>_editCart(item));
+          })),
+        if(_loading)const LinearProgressIndicator(),
+        if(_error!=null)Text(_error!,style:TextStyle(color:palette.danger)),
+        if(_cached)Text('Dữ liệu danh mục lưu trên máy. Giá cần xác minh trực tuyến.',
+          style:TextStyle(color:palette.warning,fontSize:12)),
+        const SizedBox(height:8),
+
+    ]);
+  }
+
+  Widget _basketPanel(ErpPalette palette,bool keyboardOpen)=>Column(
+    crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+        Row(children:[
+          Expanded(child:Text('Giỏ hàng · '+_lines.length.toString()+' mặt hàng',
+            style:TextStyle(fontWeight:FontWeight.w700,color:palette.ink))),
+          if(_lines.isNotEmpty)TextButton(
+            key:const ValueKey('pos-clear-cart'),onPressed:(){
+              setState(()=>_lines=[]);_queueSave();unawaited(_quote());
+            },child:const Text('Xóa giỏ')),
+        ]),
+        Expanded(child:_lines.isEmpty
+          ?Center(child:Text('Quét mã hoặc chọn sản phẩm để bắt đầu',
+            style:TextStyle(color:palette.muted)))
+          :ListView.separated(key:const ValueKey('pos-cart'),itemCount:_lines.length,
+            separatorBuilder:(_,__)=>Divider(color:palette.border,height:1),
+            itemBuilder:(context,i){
+              final line=_lines[i],quoted=i<_priced.length?_priced[i]:null;
+              return Padding(padding:const EdgeInsets.symmetric(vertical:9),
+                child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+                  Text(line.sku['productName']?.toString()??line.sku['code']?.toString()??'Sản phẩm',
+                    maxLines:2,overflow:TextOverflow.ellipsis,
+                    style:TextStyle(color:palette.ink,fontWeight:FontWeight.w600)),
+                  Text((line.sku['code']?.toString()??'')+' · '+
+                    (line.sku['unitCode']?.toString()??''),
+                    style:TextStyle(fontSize:12,color:palette.muted)),
+                  const SizedBox(height:5),
+                  Row(children:[
+                    IconButton(key:ValueKey('pos-minus-'+i.toString()),
+                      onPressed:line.quantity=='1'?null:()=>_editCart(line.sku,delta:-1,refocus:false),
+                      tooltip:'Giảm số lượng',icon:const Icon(Icons.remove_circle_outline)),
+                    Text(erpNumberText(line.quantity),style:const TextStyle(fontWeight:FontWeight.w700)),
+                    IconButton(key:ValueKey('pos-plus-'+i.toString()),
+                      onPressed:()=>_editCart(line.sku,refocus:false),tooltip:'Tăng số lượng',
+                      icon:const Icon(Icons.add_circle_outline)),
+                    IconButton(key:ValueKey('pos-remove-'+i.toString()),
+                      onPressed:()=>_remove(i),tooltip:'Bỏ sản phẩm',icon:const Icon(Icons.delete_outline)),
+                    const Spacer(),
+                    Flexible(child:Column(crossAxisAlignment:CrossAxisAlignment.end,children:[
+                      Text(erpVndText(quoted?['lineTotal']),textAlign:TextAlign.end,
+                        style:TextStyle(fontWeight:FontWeight.w700,color:palette.ink)),
+                      Text(quoted==null?'Chưa xác minh giá':
+                        erpVndText(quoted['unitPrice'])+' / '+(line.sku['unitCode']?.toString()??''),
+                        textAlign:TextAlign.end,style:TextStyle(fontSize:11,color:palette.muted)),
+                    ])),
+                  ]),
+                ]));
+            })),
+
+        if(_quoting)const LinearProgressIndicator(),
+        if(_quoteError!=null)Text(_quoteError!,style:TextStyle(color:palette.danger,fontSize:12)),
+        if(!keyboardOpen)Divider(color:palette.border),
+        if(!keyboardOpen)Row(children:[
+          Text('Tạm tính',style:TextStyle(fontWeight:FontWeight.w700,color:palette.ink)),
+          const SizedBox(width:8),
+          Expanded(child:Text(erpVndText(_total),key:const ValueKey('pos-grand-total'),
+            textAlign:TextAlign.end,maxLines:1,overflow:TextOverflow.ellipsis,
+            style:TextStyle(fontSize:20,fontWeight:FontWeight.w800,color:palette.primary))),
+        ]),
+        if(keyboardOpen)Align(alignment:Alignment.centerRight,
+          child:Text('Tạm tính: '+erpVndText(_total),
+            style:TextStyle(fontWeight:FontWeight.w700,color:palette.primary))),
+        if(!keyboardOpen)const SizedBox(height:6),
+        if(_busyAction)const LinearProgressIndicator(),
+        if(!keyboardOpen&&_pendingCheckout!=null)FilledButton.icon(
+          key:const ValueKey('pos-reconcile'),
+          onPressed:_busyAction?null:_resolvePendingCheckout,
+          icon:const Icon(Icons.sync),
+          label:const Text('Kiểm tra giao dịch chưa có xác nhận')),
+        if(!keyboardOpen&&_pendingCheckout!=null)OutlinedButton.icon(
+          key:const ValueKey('pos-cancel-intent'),
+          onPressed:_busyAction?null:_cancelPendingCheckout,
+          icon:const Icon(Icons.cancel_outlined),
+          label:const Text('Hủy lệnh sau đối soát để sửa giỏ')),
+        if(!keyboardOpen&&_pendingCheckout==null)FilledButton.icon(key:const ValueKey('pos-checkout-disabled'),
+          onPressed:_canSettle?_checkoutDialog:null,icon:const Icon(Icons.point_of_sale),
+          label:Text(_shift==null?'Mở ca trước khi thanh toán':
+            _canSettle?'Thanh toán và hoàn tất bán':'Chọn hàng và xác minh giá để thanh toán')),
+        if(!keyboardOpen)const SizedBox(height:3),
+        if(!keyboardOpen)Text(_pendingCheckout!=null
+          ?'Không tạo giao dịch mới khi chưa đối soát kết quả máy chủ.'
+          :'Chỉ xác nhận đã bán khi máy chủ ghi nhận đủ xuất kho và thanh toán.',
+          key:const ValueKey('pos-no-fake-settlement'),
+          textAlign:TextAlign.center,style:TextStyle(fontSize:11,color:palette.muted)),
+
+    ]);
+
   @override Widget build(BuildContext context){
-    final palette=ErpPalette.of(context),wide=MediaQuery.sizeOf(context).width>=760;
-    final keyboardOpen=MediaQuery.viewInsetsOf(context).bottom>0;
-    final status=_branch==null?'Chọn chi nhánh':
-      _warehouses.where((x)=>x['id']==_warehouse).firstOrNull?['name']?.toString()??'Chọn kho';
-    return SafeArea(top:false,child:Padding(
-      key:const ValueKey('erp-pos-workspace'),
-      padding:EdgeInsets.symmetric(horizontal:wide?24:12,vertical:wide?18:8),
-      child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+    final palette=ErpPalette.of(context);
+    return LayoutBuilder(builder:(context,bounds){
+      final wide=bounds.maxWidth>=700&&!erpAndroidUpdateSupported;
+      final keyboardOpen=MediaQuery.viewInsetsOf(context).bottom>0;
+      final status=_branch==null?'Chọn chi nhánh':
+        _warehouses.where((x)=>x['id']==_warehouse).firstOrNull?['name']?.toString()??'Chọn kho';
+      return SafeArea(top:false,child:Padding(
+        key:const ValueKey('erp-pos-workspace'),
+        padding:EdgeInsets.symmetric(horizontal:wide?16:12,vertical:wide?12:8),
+        child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
         Row(children:[
           Icon(Icons.point_of_sale,color:palette.primary,size:24),
           const SizedBox(width:8),
@@ -736,119 +919,22 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
              Text('Đang chọn khách lẻ',style:TextStyle(color:palette.muted,fontSize:12)),
          ])),
          const SizedBox(height:8),
-         TextField(key:const ValueKey('pos-sku-search'),controller:_search,focusNode:_searchFocus,
-          enabled:!_loading&&_branch!=null&&_hasSalesGrant,
-          textInputAction:TextInputAction.search,autocorrect:false,
-          onChanged:_onSearch,onSubmitted:(value)=>unawaited(_onScan(value)),
-          decoration:InputDecoration(
-            prefixIcon:const Icon(Icons.qr_code_scanner),hintText:'Quét mã vạch hoặc tìm sản phẩm',
-            isDense:true,border:const OutlineInputBorder(),
-            suffixIcon:_searching?const Padding(padding:EdgeInsets.all(12),
-              child:SizedBox(height:16,width:16,child:CircularProgressIndicator(strokeWidth:2))):
-              _search.text.isNotEmpty?IconButton(tooltip:'Xóa tìm kiếm',
-                onPressed:(){_search.clear();_onSearch('');setState((){});},
-                icon:const Icon(Icons.close)):null)),
-        if(_matches.isNotEmpty)ConstrainedBox(constraints:BoxConstraints(maxHeight:keyboardOpen?140:190),
-          child:ListView.builder(key:const ValueKey('pos-search-results'),shrinkWrap:true,
-            itemCount:_matches.length,itemBuilder:(context,i){
-              final item=_matches[i];
-              return ListTile(key:ValueKey('pos-result-'+item['id'].toString()),
-                dense:true,visualDensity:VisualDensity.compact,
-                leading:const Icon(Icons.add_circle_outline),
-                title:Text(item['productName']?.toString()??item['name']?.toString()??'Sản phẩm',
-                  maxLines:1,overflow:TextOverflow.ellipsis),
-                subtitle:Text([item['code'],item['unitCode'],item['barcode']]
-                    .where((x)=>x!=null&&x.toString().isNotEmpty).join(' · '),
-                    maxLines:1,overflow:TextOverflow.ellipsis),
-                onTap:()=>_editCart(item));
-            })),
-        if(_loading)const LinearProgressIndicator(),
-        if(_error!=null)Text(_error!,style:TextStyle(color:palette.danger)),
-        if(_cached)Text('Dữ liệu danh mục lưu trên máy. Giá cần xác minh trực tuyến.',
-          style:TextStyle(color:palette.warning,fontSize:12)),
-        const SizedBox(height:8),
-        Row(children:[
-          Expanded(child:Text('Giỏ hàng · '+_lines.length.toString()+' mặt hàng',
-            style:TextStyle(fontWeight:FontWeight.w700,color:palette.ink))),
-          if(_lines.isNotEmpty)TextButton(
-            key:const ValueKey('pos-clear-cart'),onPressed:(){
-              setState(()=>_lines=[]);_queueSave();unawaited(_quote());
-            },child:const Text('Xóa giỏ')),
+ 
+          Expanded(child:wide
+            ?Row(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+                Expanded(flex:6,child:_catalogPanel(palette,true,keyboardOpen)),
+                const SizedBox(width:12),
+                VerticalDivider(width:1,color:palette.border),
+                const SizedBox(width:12),
+                Expanded(flex:4,child:_basketPanel(palette,keyboardOpen)),
+              ])
+            :Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+                _catalogPanel(palette,false,keyboardOpen),
+                Expanded(child:_basketPanel(palette,keyboardOpen)),
+              ])),
         ]),
-        Expanded(child:_lines.isEmpty
-          ?Center(child:Text('Quét mã hoặc chọn sản phẩm để bắt đầu',
-            style:TextStyle(color:palette.muted)))
-          :ListView.separated(key:const ValueKey('pos-cart'),itemCount:_lines.length,
-            separatorBuilder:(_,__)=>Divider(color:palette.border,height:1),
-            itemBuilder:(context,i){
-              final line=_lines[i],quoted=i<_priced.length?_priced[i]:null;
-              return Padding(padding:const EdgeInsets.symmetric(vertical:9),
-                child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-                  Text(line.sku['productName']?.toString()??line.sku['code']?.toString()??'Sản phẩm',
-                    maxLines:2,overflow:TextOverflow.ellipsis,
-                    style:TextStyle(color:palette.ink,fontWeight:FontWeight.w600)),
-                  Text((line.sku['code']?.toString()??'')+' · '+
-                    (line.sku['unitCode']?.toString()??''),
-                    style:TextStyle(fontSize:12,color:palette.muted)),
-                  const SizedBox(height:5),
-                  Row(children:[
-                    IconButton(key:ValueKey('pos-minus-'+i.toString()),
-                      onPressed:line.quantity=='1'?null:()=>_editCart(line.sku,delta:-1,refocus:false),
-                      tooltip:'Giảm số lượng',icon:const Icon(Icons.remove_circle_outline)),
-                    Text(erpNumberText(line.quantity),style:const TextStyle(fontWeight:FontWeight.w700)),
-                    IconButton(key:ValueKey('pos-plus-'+i.toString()),
-                      onPressed:()=>_editCart(line.sku,refocus:false),tooltip:'Tăng số lượng',
-                      icon:const Icon(Icons.add_circle_outline)),
-                    IconButton(key:ValueKey('pos-remove-'+i.toString()),
-                      onPressed:()=>_remove(i),tooltip:'Bỏ sản phẩm',icon:const Icon(Icons.delete_outline)),
-                    const Spacer(),
-                    Flexible(child:Column(crossAxisAlignment:CrossAxisAlignment.end,children:[
-                      Text(erpVndText(quoted?['lineTotal']),textAlign:TextAlign.end,
-                        style:TextStyle(fontWeight:FontWeight.w700,color:palette.ink)),
-                      Text(quoted==null?'Chưa xác minh giá':
-                        erpVndText(quoted['unitPrice'])+' / '+(line.sku['unitCode']?.toString()??''),
-                        textAlign:TextAlign.end,style:TextStyle(fontSize:11,color:palette.muted)),
-                    ])),
-                  ]),
-                ]));
-            })),
-        if(_quoting)const LinearProgressIndicator(),
-        if(_quoteError!=null)Text(_quoteError!,style:TextStyle(color:palette.danger,fontSize:12)),
-        if(!keyboardOpen)Divider(color:palette.border),
-        if(!keyboardOpen)Row(children:[
-          Text('Tạm tính',style:TextStyle(fontWeight:FontWeight.w700,color:palette.ink)),
-          const SizedBox(width:8),
-          Expanded(child:Text(erpVndText(_total),key:const ValueKey('pos-grand-total'),
-            textAlign:TextAlign.end,maxLines:1,overflow:TextOverflow.ellipsis,
-            style:TextStyle(fontSize:20,fontWeight:FontWeight.w800,color:palette.primary))),
-        ]),
-        if(keyboardOpen)Align(alignment:Alignment.centerRight,
-          child:Text('Tạm tính: '+erpVndText(_total),
-            style:TextStyle(fontWeight:FontWeight.w700,color:palette.primary))),
-        if(!keyboardOpen)const SizedBox(height:6),
-        if(_busyAction)const LinearProgressIndicator(),
-        if(!keyboardOpen&&_pendingCheckout!=null)FilledButton.icon(
-          key:const ValueKey('pos-reconcile'),
-          onPressed:_busyAction?null:_resolvePendingCheckout,
-          icon:const Icon(Icons.sync),
-          label:const Text('Kiểm tra giao dịch chưa có xác nhận')),
-        if(!keyboardOpen&&_pendingCheckout!=null)OutlinedButton.icon(
-          key:const ValueKey('pos-cancel-intent'),
-          onPressed:_busyAction?null:_cancelPendingCheckout,
-          icon:const Icon(Icons.cancel_outlined),
-          label:const Text('Hủy lệnh sau đối soát để sửa giỏ')),
-        if(!keyboardOpen&&_pendingCheckout==null)FilledButton.icon(key:const ValueKey('pos-checkout-disabled'),
-          onPressed:_canSettle?_checkoutDialog:null,icon:const Icon(Icons.point_of_sale),
-          label:Text(_shift==null?'Mở ca trước khi thanh toán':
-            _canSettle?'Thanh toán và hoàn tất bán':'Chọn hàng và xác minh giá để thanh toán')),
-        if(!keyboardOpen)const SizedBox(height:3),
-        if(!keyboardOpen)Text(_pendingCheckout!=null
-          ?'Không tạo giao dịch mới khi chưa đối soát kết quả máy chủ.'
-          :'Chỉ xác nhận đã bán khi máy chủ ghi nhận đủ xuất kho và thanh toán.',
-          key:const ValueKey('pos-no-fake-settlement'),
-          textAlign:TextAlign.center,style:TextStyle(fontSize:11,color:palette.muted)),
-      ]),
-    ));
+      ));
+    });
   }
 
   Widget _selector(String label,String? value,List<Map<String,dynamic>> rows,
