@@ -14,8 +14,8 @@ void main(){
   expect(find.byKey(const ValueKey('stock-scope-search-lot')),findsOneWidget);
   await tester.enterText(find.byKey(const ValueKey('stock-scope-search-lot')),'LOT-114');
   await tester.pumpAndSettle();
-  expect(find.text('LOT-114'),findsOneWidget);
-  await tester.tap(find.text('LOT-114'));
+  expect(find.byKey(const ValueKey('stock-scope-choice-lot-lot-114')),findsOneWidget);
+  await tester.tap(find.byKey(const ValueKey('stock-scope-choice-lot-lot-114')));
   await tester.pumpAndSettle();
   expect(selected,'lot-114');
  });
