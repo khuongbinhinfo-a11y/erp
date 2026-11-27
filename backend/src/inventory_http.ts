@@ -8,7 +8,7 @@ import { validIdempotencyKey } from "./contracts.ts";
 import { createLocation,createLot,setTrackingPolicy,assignStockScope,stockScopes,
   directIssueHistory,directIssueTotals,reconcileManualIssues,issueManualStock,requireT3b,type DirectIssueItem } from "./direct_stock_issue.ts";
 import { InventoryFault, validBaseQty, balance, balances, movements, reservations,
-  openStock, reserveStock, releaseStock, readInventoryGuardPolicy,
+  openStock, reserveStock, reserveTripOrder, releaseStock, readInventoryGuardPolicy,
   setInventoryGuardPolicy, type ShortageMode, type WarehouseScope } from "./inventory.ts";
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -27,6 +27,9 @@ function send(res:ServerResponse,status:number,payload:unknown,id:string,origin?
 }
 function fail(res:ServerResponse,status:number,code:string,id:string,origin?:string):void {
  const message=({
+  TRIP_HOLD_MIGRATION_REQUIRED:"Cần nâng cấp dữ liệu giữ hàng trước khi xử lý đơn theo chuyến.",
+  TRIP_ORDER_NOT_READY_FOR_HOLD:"Chỉ giữ hàng cho đơn giao theo chuyến đã xác nhận, đúng kho và chưa xử lý xuất kho.",
+  TRIP_HOLD_SCOPE_CONFLICT:"Đơn có phiếu giữ hàng khác kho hoặc phiên bản. Hãy đối chiếu trước khi tiếp tục.",
   T3B_MIGRATION_REQUIRED:"Cần nâng cấp dữ liệu kho T3-B trước khi xuất.",
   CONFIRMED_MANUAL_ORDER_REQUIRED:"Chỉ xuất trực tiếp cho đơn MANUAL đã xác nhận đúng kho.",
   ISSUE_EXCEEDS_ORDER_LINE:"Số xuất vượt lượng còn lại trên đơn.",
@@ -350,6 +353,20 @@ export async function handleInventoryHttp(req:IncomingMessage,res:ServerResponse
     authorize:(db,m)=>hasPermission(db,{installationId:m.installationId,
      actorId:m.actorId,permission:"inventory.post",...input}),
     execute:(db,m)=>openStock(db,m,input),
+   });
+   send(res,outcome.status,outcome.body,id,cors);return;
+  }
+  if(req.method==="POST"&&url.pathname==="/v1/inventory/trip-holds"){
+   const raw=await parseBody(req);
+   allowFields(raw,["branchId","warehouseId","orderId","version"]);
+   const input={...scope(raw),orderId:uuid(raw.orderId),version:positiveInt(raw.version)};
+   const c=ctx(req,id,tenant,actorId,"inventory.trip-hold.reconcile",input,false);
+   const outcome=await executeMutation(pool,c,{
+    authorize:async(db,m)=>await hasPermission(db,{installationId:m.installationId,
+     actorId:m.actorId,permission:"inventory.reserve",...input})&&
+     await hasPermission(db,{installationId:m.installationId,actorId:m.actorId,
+      permission:"orders.read",branchId:input.branchId}),
+    execute:(db,m)=>reserveTripOrder(db,m,input),
    });
    send(res,outcome.status,outcome.body,id,cors);return;
   }
