@@ -110,19 +110,22 @@ export async function assignStockScope(db:PoolClient,c:MutationContext,input:Sco
   locationId:input.locationId??null,lotId:input.lotId??null,
   quantityBase:input.quantityBase,stock:await balance(db,t,input,p)}};
 }
+/** Returns all eligible lot/location choices, never silently truncates
+ * source-critical stock selectors after 100 rows. The UI can search/filter
+ * the complete result without inventing a stock fact. */
 export async function stockScopes(db:PoolClient,t:string,s:WarehouseScope,p:string){
  await requireT3b(db);
  const locations=await db.query(`SELECT id,code,name FROM inventory_storage_location
   WHERE installation_id=$1 AND branch_id=$2 AND warehouse_id=$3 AND active
-  ORDER BY code LIMIT 100`,[t,s.branchId,s.warehouseId]);
+  ORDER BY code`,[t,s.branchId,s.warehouseId]);
  const lots=await db.query(`SELECT id,lot_code AS "lotCode",expiry_date AS "expiryDate"
   FROM inventory_product_lot WHERE installation_id=$1 AND branch_id=$2
   AND product_id=$3 AND (expiry_date IS NULL OR expiry_date>=CURRENT_DATE)
-  ORDER BY expiry_date NULLS LAST,lot_code LIMIT 100`,[t,s.branchId,p]);
+  ORDER BY expiry_date NULLS LAST,lot_code`,[t,s.branchId,p]);
  const scoped=await db.query(`SELECT location_id AS "locationId",lot_id AS "lotId",
   quantity_base::text AS "quantityBase" FROM inventory_scope_balance
   WHERE installation_id=$1 AND branch_id=$2 AND warehouse_id=$3 AND product_id=$4
-  AND quantity_base>0 ORDER BY location_id NULLS FIRST,lot_id NULLS FIRST LIMIT 100`,
+  AND quantity_base>0 ORDER BY location_id NULLS FIRST,lot_id NULLS FIRST`,
   [t,s.branchId,s.warehouseId,p]);
  const tracking=await db.query(`SELECT require_location AS "requireLocation",
   require_lot AS "requireLot",revision::text FROM inventory_product_tracking
