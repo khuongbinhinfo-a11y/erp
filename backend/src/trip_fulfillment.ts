@@ -163,8 +163,9 @@ export async function prepareTrip(db:PoolClient,c:MutationContext,input:TripScop
     fulfillment_status='PARTIAL',revision=revision+1,updated_at=now()
     WHERE installation_id=$1 AND branch_id=$2 AND id=$3 RETURNING revision::text`,
     [t,b,id]);
- return {status:201,body:{id:documentId,revision:Number(updated.rows[0]!.revision),
-  ...(await tripWork(db,t,input)),inventoryPosted:false,deliveryPosted:false,receivablePosted:false}};
+ return {status:201,body:{id:documentId,
+  ...(await tripWork(db,t,input)),revision:Number(updated.rows[0]!.revision),
+  inventoryPosted:false,deliveryPosted:false,receivablePosted:false}};
 }
 export async function dispatchTrip(db:PoolClient,c:MutationContext,input:TripScope&{lines:TripDispatchItem[]}){
  await requireT3c(db);
