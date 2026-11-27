@@ -528,6 +528,10 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         erpNumberCanonical(x.taxRate.text),x.discountMode,x.taxMode,x.discountEdited,x.taxEdited].join(':')),
     ].join('|');
     retailExtras=deliveryChoice!='PICKUP'||channel!=null||collectionPolicy!='COLLECT_ON_DELIVERY';
+    // Saved non-default settings remain visible on edit; new orders stay compact.
+    bool orderExtras=channel!=null||deliveryDate.isNotEmpty||rememberDelivery||
+      walkInName.isNotEmpty||walkInPhone.isNotEmpty||note.text.trim().isNotEmpty||
+      overrideReason.isNotEmpty||documentDiscountMode!='NONE';
     final originalStamp=stamp(),originalNote=note.text.trim();
     void invalidate(StateSetter refresh){
       quoteDebounce?.cancel();
@@ -1337,7 +1341,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         color:ErpPalette.of(ctx).ink,fontWeight:FontWeight.w700))),
                     Wrap(
                       key:const ValueKey('sales-order-context'),
-                      spacing:12,runSpacing:12,children:[
+                      spacing:8,runSpacing:6,children:[
                         if(stockWarehouses.isNotEmpty)SizedBox(width:narrow?((width-40)/2).clamp(108.0,240.0).toDouble():200,child:DropdownButtonFormField<String>(
                         key:ValueKey('sales-stock-warehouse-'+warehouseId.toString()),
                         initialValue:warehouseId,isExpanded:true,menuMaxHeight:240,
@@ -1374,7 +1378,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           if(v==null){customerPricingChanged(ctx,refresh);return;}
                           listResolveGeneration++;listManuallySelected=true;
                           list=v;pricingChanged(ctx,refresh);})),
-                        if(!retailMobile||retailExtras)SizedBox(width:narrow?((width-40)/2).clamp(108.0,240.0).toDouble():200,child:DropdownButtonFormField<String>(
+                        if((retailMobile?retailExtras:orderExtras))SizedBox(width:narrow?((width-40)/2).clamp(108.0,240.0).toDouble():200,child:DropdownButtonFormField<String>(
                         key:ValueKey('sales-channel-'+channel.toString()),
                         initialValue:channels.any((x)=>x['id']==channel)?channel:null,
                         isExpanded:true,menuMaxHeight:240,decoration:const InputDecoration(labelText:'Kênh bán',isDense:true,contentPadding:EdgeInsets.symmetric(horizontal:10,vertical:8),border:UnderlineInputBorder()),
@@ -1397,13 +1401,20 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                             .map((e)=>DropdownMenuItem(value:e.key,child:Text(e.value,overflow:TextOverflow.ellipsis))).toList(),
                           onChanged:(v){if(v!=null)refresh(()=>collectionPolicy=v);})),
                       ]),
+                    if(!retailMobile)Align(alignment:Alignment.centerLeft,
+                      child:TextButton.icon(
+                        key:const ValueKey('sales-order-more-settings'),
+                        onPressed:()=>refresh(()=>orderExtras=!orderExtras),
+                        icon:Icon(orderExtras?Icons.expand_less:Icons.tune,size:18),
+                        label:Text(orderExtras?'Thu gọn tùy chọn':
+                          'Thêm tùy chọn · Kênh bán · Ngày giao · Ghi chú'))),
                     if(retailMobile)TextButton.icon(
                       key:const ValueKey('sales-retail-more-settings'),
                       onPressed:()=>refresh(()=>retailExtras=!retailExtras),
                       icon:Icon(retailExtras?Icons.expand_less:Icons.tune),
                       label:Text(retailExtras?'Thu gọn tùy chọn':
                         'Kênh bán · Giao nhận · Thu tiền')),
-                    SizedBox(height:retailMobile?6:18),
+                    SizedBox(height:retailMobile?6:9),
                     Align(alignment:Alignment.centerLeft,child:ConstrainedBox(
                       constraints:const BoxConstraints(maxWidth:760),
                       child:Row(children:[
@@ -1573,7 +1584,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         OutlinedButton.icon(key:const ValueKey('sales-walk-in'),
                           onPressed:walkInBusy||quickCustomerBusy?null:()=>chooseWalkIn(ctx,refresh),
                           icon:const Icon(Icons.person_outline),label:Text(walkInBusy?'Đang kiểm tra':'Khách lẻ')),
-                        if(!retailMobile||retailExtras)OutlinedButton.icon(key:const ValueKey('sales-delivery-date'),
+                        if((retailMobile?retailExtras:orderExtras))OutlinedButton.icon(key:const ValueKey('sales-delivery-date'),
                           onPressed:()async{
                             final now=DateTime.now(),selected=DateTime.tryParse(deliveryDate)??now;
                             final date=await showDatePicker(context:ctx,
@@ -1581,13 +1592,13 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                             if(date!=null&&ctx.mounted)refresh(()=>deliveryDate=date.toIso8601String().substring(0,10));
                           },icon:const Icon(Icons.calendar_today_outlined,size:16),
                           label:Text(deliveryDate.isEmpty?'Ngày giao dự kiến':deliveryDate)),
-                        if((!retailMobile||retailExtras)&&deliveryDate.isNotEmpty)IconButton(tooltip:'Bỏ ngày giao',
+                        if((retailMobile?retailExtras:orderExtras)&&deliveryDate.isNotEmpty)IconButton(tooltip:'Bỏ ngày giao',
                           onPressed:()=>refresh(()=>deliveryDate=''),icon:const Icon(Icons.close,size:16)),
-                        if((!retailMobile||retailExtras)&&(order==null||copying))
+                        if((retailMobile?retailExtras:orderExtras)&&(order==null||copying))
                           FilterChip(label:const Text('Nhớ hình thức giao'),selected:rememberDelivery,
                             onSelected:(v)=>refresh(()=>rememberDelivery=v)),
                       ]),
-                      if(customerMode=='WALK_IN'&&(!retailMobile||retailExtras))Wrap(spacing:8,runSpacing:6,children:[
+                      if(customerMode=='WALK_IN'&&(retailMobile?retailExtras:orderExtras))Wrap(spacing:8,runSpacing:6,children:[
                         SizedBox(width:205,child:TextFormField(key:const ValueKey('sales-walk-in-name'),
                           initialValue:walkInName,decoration:const InputDecoration(labelText:'Tên khách (không bắt buộc)',isDense:true),
                           onChanged:(v)=>walkInName=v)),
@@ -1634,14 +1645,17 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                                    }
                                    addressGeneration++;
                                  })),
-                             TextFormField(key:ValueKey('sales-delivery-address-$customer-$addressGeneration'),
-                               initialValue:deliveryAddress,readOnly:locationId!=null,
-                               decoration:const InputDecoration(labelText:'Địa chỉ giao',isDense:true),
-                               onChanged:(v){deliveryAddress=v;}),
+                             // Saved addresses display their full text in the one selector.
+                             if((primary.isEmpty&&locations.isEmpty)||
+                               (locationId==null&&(primary.isEmpty||deliveryAddress!=primary)))
+                               TextFormField(key:ValueKey('sales-delivery-address-$customer-$addressGeneration'),
+                                 initialValue:deliveryAddress,
+                                 decoration:const InputDecoration(labelText:'Nhập địa chỉ khác',isDense:true),
+                                 onChanged:(v){deliveryAddress=v;}),
                            ]);
                          }),
                        ],
-                       if(!retailMobile||retailExtras)Text('Hạn thanh toán: ${customerMode=='WALK_IN'?0:customers.where((x)=>x['id']==customer).firstOrNull?['paymentTermsDays']??savedShipping['paymentTermsDays']??0} ngày · Chưa ghi nhận thu tiền',
+                       if((retailMobile?retailExtras:orderExtras))Text('Hạn thanh toán: ${customerMode=='WALK_IN'?0:customers.where((x)=>x['id']==customer).firstOrNull?['paymentTermsDays']??savedShipping['paymentTermsDays']??0} ngày · Chưa ghi nhận thu tiền',
                         style:TextStyle(fontSize:12,color:ErpPalette.of(ctx).muted)),
                     ],
                     if(!modern&&customers.any((x)=>x['id']==customer))
@@ -2151,7 +2165,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                       child:Text('Chưa có dòng hàng. Tìm theo mã, tên hoặc barcode rồi nhấn Enter để thêm.',
                         style:TextStyle(color:ErpPalette.of(ctx).muted))),
                     const Divider(height:12),
-                    if(modern&&canDiscount()&&(!retailMobile||retailExtras))...[
+                    if(modern&&canDiscount()&&(retailMobile?retailExtras:orderExtras))...[
                       Wrap(spacing:8,runSpacing:8,crossAxisAlignment:WrapCrossAlignment.center,children:[
                         SizedBox(width:210,child:DropdownButtonFormField<String>(
                           key:ValueKey('sales-document-discount-$documentDiscountMode'),
@@ -2180,11 +2194,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         decoration:const InputDecoration(labelText:'Lý do chiết khấu toàn đơn',isDense:true),
                         onChanged:(v)=>documentDiscountReason=v),
                     ],
-                    if(modern&&hasManualPrice()&&(!retailMobile||retailExtras))TextFormField(
+                    if(modern&&hasManualPrice()&&(retailMobile?retailExtras:orderExtras))TextFormField(
                       key:const ValueKey('sales-override-reason'),initialValue:overrideReason,maxLength:500,
                       decoration:const InputDecoration(labelText:'Lý do điều chỉnh (không bắt buộc)',isDense:true),
                       onChanged:(v)=>overrideReason=v),
-                    if(!retailMobile||retailExtras)TextField(controller:note,minLines:1,maxLines:2,selectAllOnFocus:true,
+                    if((retailMobile?retailExtras:orderExtras))TextField(controller:note,minLines:1,maxLines:2,selectAllOnFocus:true,
                       decoration:const InputDecoration(labelText:'Ghi chú',isDense:true,filled:false,border:UnderlineInputBorder(),enabledBorder:UnderlineInputBorder(),focusedBorder:UnderlineInputBorder())),
                     if(formError!=null)Padding(
                       padding:const EdgeInsets.only(top:10),
