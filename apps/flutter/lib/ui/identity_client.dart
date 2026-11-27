@@ -824,6 +824,19 @@ class ErpIdentityClient {
       required String state,required int offset})=>
     inventoryPage(token,'reservations',branchId:branchId,
       warehouseId:warehouseId,state:state,offset:offset);
+  /// T3-B: scoped on-hand and source issues are server-derived facts only.
+  Future<Map<String,dynamic>> inventoryStockScopes(String token,{
+    required String branchId,required String warehouseId,required String productId})=>
+    _request('GET','/v1/inventory/stock-scopes?'+Uri(queryParameters:{
+      'branchId':branchId,'warehouseId':warehouseId,'productId':productId}).query,
+      token:token);
+  Future<List<Map<String,dynamic>>> inventoryDirectIssues(String token,{
+    required String branchId,required String warehouseId,required String orderId})async{
+    final r=await _request('GET','/v1/inventory/direct-issues?'+Uri(queryParameters:{
+      'branchId':branchId,'warehouseId':warehouseId,'orderId':orderId}).query,
+      token:token);
+    return (r['items'] as List<dynamic>).map((x)=>Map<String,dynamic>.from(x as Map)).toList();
+  }
   /// A pending request uses an identical command body and key until the server ACKs.
   // Keep the entire exact request when POST may have COMMITTED without an ACK.
   final Map<String,({Map<String,dynamic> payload,String key,String? action,int? revision})>
