@@ -240,7 +240,8 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
     List<Map<String,dynamic>> orders;
     try{
       orders=(await widget.client.salesOrders(widget.session.token,b))
-        .where((o)=>o['status']=='CONFIRMED'&&o['versionStatus']=='CONFIRMED').toList();
+        .where((o)=>o['status']=='CONFIRMED'&&o['versionStatus']=='CONFIRMED'&&
+          (o['deliveryChoice']==null||o['deliveryChoice']=='TRIP')).toList();
     }on ErpApiError catch(e){
       notify('Cần quyền xem đơn đã xác nhận. '+e.message,bad:true);return;
     }
@@ -254,7 +255,8 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
         if(!mounted||!ctx.mounted)return;
         refresh((){
           orders=found.where((x)=>x['status']=='CONFIRMED'&&
-             x['versionStatus']=='CONFIRMED').toList();
+             x['versionStatus']=='CONFIRMED'&&
+             (x['deliveryChoice']==null||x['deliveryChoice']=='TRIP')).toList();
           chosen=orders.isEmpty?null:orders.first['id'].toString();
         });
       }on ErpApiError catch(e){notify(e.message,bad:true);}
@@ -301,6 +303,11 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
     on ErpApiError catch(e){notify(e.message,bad:true);return;}
     if(!mounted||branchId!=b||warehouseId!=w||widget.session.token!=token)return;
     final shipping=detail['shipping'];
+    if(shipping is Map&&shipping['deliveryChoice']!='TRIP'){
+      notify('Đơn giao thủ công hoặc tại quầy không cần giữ hàng. '
+        'Xuất kho trực tiếp sẽ thực hiện trên đơn hàng.',bad:true);
+      return;
+    }
     if(detail['status']!='CONFIRMED'||detail['versionStatus']!='CONFIRMED'||
       (shipping is Map&&shipping['warehouseId']!=w)){
       notify('Đơn đã thay đổi trạng thái hoặc kho. Hãy mở lại đơn hàng.',bad:true);return;
@@ -414,7 +421,9 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
         if(can('inventory.post'))OutlinedButton.icon(
           onPressed:busy||hasPending?null:openStock,icon:const Icon(Icons.add),
           label:const Text('Tồn đầu kỳ')),
-        if(_linkedScope&&can('inventory.reserve'))FilledButton.icon(
+        if(_linkedScope&&can('inventory.reserve')&&
+          (_linkedOrder!['shipping'] is! Map ||
+            (_linkedOrder!['shipping'] as Map)['deliveryChoice']=='TRIP'))FilledButton.icon(
           key:const ValueKey('inventory-linked-order-hold'),
           onPressed:busy||loading||hasPending?null:()=>reserve(orderId:_linkedOrder!['id'] as String),
           icon:const Icon(Icons.inventory_2_outlined),label:Text('Giữ hàng · ${_linkedOrder!['documentNo']}')),
