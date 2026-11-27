@@ -26,6 +26,56 @@ IdentitySession loggedIn()=>IdentitySession(actorId:user,token:'local-test-token
   expiresAt:DateTime.now().add(const Duration(hours:1)),grants:rights);
 
 void main(){
+  testWidgets('Desktop order list uses a read-only split preview with compact filters', (tester)async{
+    var writes=0,details=0;
+    final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+      httpClient:MockClient((request)async{
+        if(request.method!='GET')writes++;
+        http.Response reply(Map<String,dynamic> data)=>http.Response(jsonEncode(data),200,
+          headers:const {'content-type':'application/json; charset=utf-8'});
+        if(request.url.path=='/v1/catalog/branches')
+          return reply({'items':[{'id':branch,'name':'Chi nhánh chính'}]});
+        if(request.url.path=='/v1/sales/orders')
+          return reply({'items':[{'id':order,'documentNo':'SO-01',
+            'customerName':'Khách A','total':'12000','status':'CONFIRMED',
+            'versionStatus':'CONFIRMED','revision':1,
+            'deliveryChoice':'MANUAL','fulfillmentStatus':'NOT_ALLOCATED',
+            'deliveryStatus':'NOT_DISPATCHED','paymentStatus':'NOT_DUE'}]});
+        if(request.url.path=='/v1/sales/orders/$order'){
+          details++;
+          return reply({'order':{'id':order,'documentNo':'SO-01',
+            'customerName':'Khách A','total':'12000','subtotal':'12000',
+            'discountTotal':'0','taxTotal':'0','status':'CONFIRMED',
+            'versionStatus':'CONFIRMED','revision':1,
+            'fulfillmentStatus':'NOT_ALLOCATED','deliveryStatus':'NOT_DISPATCHED',
+            'paymentStatus':'NOT_DUE','shipping':{'deliveryChoice':'MANUAL',
+              'warehouseName':'Kho chính'},'lines':[{'sku':'SP01','productName':'Sản phẩm A',
+              'unitCode':'cái','quantity':'2','unitPrice':'6000','lineTotal':'12000'}],
+            'history':[]}});
+        }
+        return http.Response(jsonEncode({'error':{'code':'NOT_FOUND'}}),404);
+      }));
+    addTearDown(client.dispose);
+    tester.view.devicePixelRatio=1;
+    tester.view.physicalSize=const Size(1440,900);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
+      home:Scaffold(body:SalesWorkspace(client:client,session:loggedIn()))));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('sales-split-view')),findsOneWidget);
+    expect(find.byKey(const ValueKey('sales-delivery-filter-all')),findsOneWidget);
+    expect(find.byKey(const ValueKey('sales-payment-filter-all')),findsOneWidget);
+    expect(find.text('Chọn một đơn bên trái để xem trước chứng từ.'),findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('sales-order-row-'+order)));
+    await tester.pumpAndSettle();
+    expect(details,1);
+    expect(find.byKey(const ValueKey('sales-preview-full')),findsOneWidget);
+    expect(find.text('Sản phẩm A'),findsOneWidget);
+    expect(writes,0,reason:'Selecting an order must never mutate inventory or sales');
+  });
+
+
   testWidgets('T1 modern order saves canonical walk-in and pickup context', (tester)async{
     const warehouse='00000000-0000-4000-8000-000000000009';
     const walkId='00000000-0000-4000-8000-000000000010';
@@ -76,6 +126,8 @@ void main(){
     await tester.tap(find.byKey(const ValueKey('sales-create')));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('sales-delivery-MANUAL')),findsOneWidget);
+    expect(find.byKey(const ValueKey('sales-remember-delivery')),findsOneWidget);
+    expect(tester.widget<FilterChip>(find.byKey(const ValueKey('sales-remember-delivery'))).selected,isFalse);
     await tester.tap(find.byKey(const ValueKey('sales-walk-in')));
     await tester.pumpAndSettle();
     expect(prepares,1);
