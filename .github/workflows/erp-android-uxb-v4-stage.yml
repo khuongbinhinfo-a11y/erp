@@ -1,0 +1,106 @@
+name: ERP Android UX-B v4 R2 immutable staging
+on:
+  workflow_run:
+    workflows: ['ERP Android signed release']
+    types: [completed]
+    branches: [main]
+permissions:
+  contents: read
+  actions: read
+  issues: write
+  id-token: write
+concurrency:
+  group: erp-android-uxb-v4-stage
+  cancel-in-progress: false
+jobs:
+  stage:
+    if: >-
+      github.repository == 'khuongbinhinfo-a11y/erp' &&
+      github.event.workflow_run.event == 'workflow_run' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment: android-r2-publish
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SIGNED_RUN: ${{ github.event.workflow_run.id }}
+      SIGNED_SHA: ${{ github.event.workflow_run.head_sha }}
+      SIGNER: '545d17fc51c8d24de4d73cb84ff7c3953f79c7d14efc7ada29b7075110d0c028'
+      OIDC_AUD: 'erp-android-r2-stage-v4'
+      UPLOADER: 'https://erp-android-r2-stage-v4.gustavjung24.workers.dev'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - name: Verify reviewed CI, exact release run and original signer
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SIGNED_SHA"
+          [[ "$SIGNED_SHA" =~ ^[a-f0-9]{40}$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SIGNED_RUN" > "$RUNNER_TEMP/uxb-signed-run.json"
+          jq -e --arg sha "$SIGNED_SHA" '.head_sha == $sha and .head_branch == "main" and .conclusion == "success" and .event == "workflow_run" and .path == ".github/workflows/erp-android-release.yml"' "$RUNNER_TEMP/uxb-signed-run.json" >/dev/null
+          gh api "repos/$GITHUB_REPOSITORY/commits/$SIGNED_SHA" --jq '.commit.message' | grep -Fq '[erp-apk-ux-b-v4]'
+          ci_run="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SIGNED_SHA&event=push&status=success" --jq '.workflow_runs[0].id')"
+          test -n "$ci_run"
+          test "$ci_run" != null
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ci_run/jobs?per_page=100" --jq '.jobs[] | select(.conclusion == "success") | .name' > "$RUNNER_TEMP/uxb-ci-jobs"
+          for job in backend-types-and-unit postgres-fresh-schema prisma-compute-build-only \
+            verify-db-isolation-and-ci-gated-release flutter-analyze-widget \
+            flutter-android-native-build flutter-windows-native-build; do
+            grep -Fxq "$job" "$RUNNER_TEMP/uxb-ci-jobs"
+          done
+          gh run download "$SIGNED_RUN" --repo "$GITHUB_REPOSITORY" -n erp-android-signed -D signed
+          test "$(cat signed/commit.txt)" = "$SIGNED_SHA"
+          test "$(cat signed/signer.txt)" = "$SIGNER"
+          (cd signed && sed 's|signed/||g' SHA256SUMS | sha256sum -c -)
+          test -s signed/erp.apk
+          test -s signed/erp.aab
+          tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          bash apps/flutter/platform/verify_android_signed.sh signed/erp.apk "$tools" vn.erpdistribution.erp_distribution 4 0.4.0 "$SIGNER"
+      - name: Stage immutable APK v4 using protected GitHub OIDC and full R2 readback
+        id: upload
+        run: |
+          set -euo pipefail
+          sha="$(sha256sum signed/erp.apk | cut -d' ' -f1)"
+          bytes="$(wc -c < signed/erp.apk | tr -d ' ')"
+          test "$bytes" -gt 1000
+          test "$bytes" -le 314572800
+          oidc="$(curl --silent --show-error --fail-with-body \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$OIDC_AUD" | jq -er '.value')"
+          test -n "$oidc"
+          curl --silent --show-error --fail-with-body --retry 2 \
+            -H "Authorization: Bearer $oidc" \
+            -H "X-ERP-SHA256: $sha" \
+            -H "X-ERP-SIGNER-SHA256: $SIGNER" \
+            -H "X-ERP-SOURCE-SHA: $SIGNED_SHA" \
+            -H "X-ERP-VERSION-CODE: 4" \
+            -H "X-ERP-VERSION-NAME: 0.4.0" \
+            -H "Content-Type: application/vnd.android.package-archive" \
+            -X PUT --data-binary @signed/erp.apk "$UPLOADER/uat/0.4.0/upload"
+          curl --silent --show-error --fail-with-body --retry 2 \
+            -H "Authorization: Bearer $oidc" \
+            "$UPLOADER/uat/0.4.0/readback" -o "$RUNNER_TEMP/erp-uxb-v4-readback.apk"
+          test "$(wc -c < "$RUNNER_TEMP/erp-uxb-v4-readback.apk" | tr -d ' ')" = "$bytes"
+          test "$(sha256sum "$RUNNER_TEMP/erp-uxb-v4-readback.apk" | cut -d' ' -f1)" = "$sha"
+          echo "ERP_UXB_V4_R2_READBACK_PASS key=releases/4/erp-4.apk bytes=$bytes sha256=$sha source=$SIGNED_SHA"
+      - name: Record stage evidence; never update latest.json
+        if: always()
+        env:
+          STAGE_STATUS: ${{ steps.upload.outcome }}
+        run: |
+          set -euo pipefail
+          {
+            printf 'ERP UX-B APK 0.4.0 signed R2 staging: **%s**\n\n' "$STAGE_STATUS"
+            printf -- '- Source SHA: %s; signed run: %s\n' "$SIGNED_SHA" "$SIGNED_RUN"
+            printf -- '- [Staging run](https://github.com/%s/actions/runs/%s)\n' "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+            printf -- '- Immutable key: `releases/4/erp-4.apk`\n'
+            if [[ "$STAGE_STATUS" == success ]]; then
+              printf -- '- Full R2 byte-for-byte readback: PASS; APK signature verified\n'
+            else
+              printf -- '- R2 staging is NOT verified. Inspect workflow logs.\n'
+            fi
+            printf -- '- UAT only: latest.json unchanged. Device install and session-preservation UAT required.\n'
+          } > "$RUNNER_TEMP/uxb-v4-stage.md"
+          gh issue comment 46 --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/uxb-v4-stage.md"
