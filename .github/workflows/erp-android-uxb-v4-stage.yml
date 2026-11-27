@@ -81,6 +81,7 @@ jobs:
             -X PUT --data-binary @signed/erp.apk "$UPLOADER/uat/0.4.0/upload"
           curl --silent --show-error --fail-with-body --retry 2 \
             -H "Authorization: Bearer $oidc" \
+            -H "X-ERP-SOURCE-SHA: $SIGNED_SHA" \
             "$UPLOADER/uat/0.4.0/readback" -o "$RUNNER_TEMP/erp-uxb-v4-readback.apk"
           test "$(wc -c < "$RUNNER_TEMP/erp-uxb-v4-readback.apk" | tr -d ' ')" = "$bytes"
           test "$(sha256sum "$RUNNER_TEMP/erp-uxb-v4-readback.apk" | cut -d' ' -f1)" = "$sha"
