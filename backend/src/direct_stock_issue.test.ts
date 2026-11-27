@@ -276,7 +276,7 @@ test("T3-B PostgreSQL: partial MANUAL issue, lot/location, scoped stock, negativ
     VALUES($1,$2,$3,$4,'ISSUE','FULFILLMENT',$5,1,-5,$6,'coverage-ledger')`,
     [t,b,w,coverageProduct.body.id,coverageId,root.actorId]);
    await assert.rejects(concurrent.query("COMMIT"),
-    /Scoped stock classification exceeds final available balance/i);
+    /Scoped stock classification exceeds final on-hand balance/i);
   }finally{
    await concurrent.query("ROLLBACK").catch(()=>undefined);
    concurrent.release();
