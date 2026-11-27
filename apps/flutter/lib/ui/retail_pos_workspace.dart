@@ -34,10 +34,10 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
   final _searchFocus=FocusNode();
   Timer? _debounce;
   Future<void> _pendingWrite=Future<void>.value();
-  int _generation=0,_quoteVersion=0,_searchVersion=0,_customerChoiceVersion=0;
-  bool _loading=true,_searching=false,_quoting=false,_configOpen=false,_cached=false;
+  int _generation=0,_quoteVersion=0,_searchVersion=0,_catalogVersion=0,_customerChoiceVersion=0;
+  bool _loading=true,_searching=false,_quoting=false,_configOpen=false,_cached=false,_catalogLoading=false;
   String? _branch,_warehouse,_priceList,_walkIn,_error,_quoteError,_total;
-  List<Map<String,dynamic>> _branches=[],_warehouses=[],_priceLists=[],_customers=[],_matches=[];
+  List<Map<String,dynamic>> _branches=[],_warehouses=[],_priceLists=[],_customers=[],_matches=[],_catalog=[];
   List<_RetailLine> _lines=[];
   List<Map<String,dynamic>> _priced=[];
   Map<String,dynamic>? _shift,_pendingCheckout,_lastReceipt;
@@ -57,16 +57,16 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
     if(old.session.token!=widget.session.token||
         old.session.actorId!=widget.session.actorId||
         old.session.installationId!=widget.session.installationId){
-      ++_generation;++_quoteVersion;++_searchVersion;
+      ++_generation;++_quoteVersion;++_searchVersion;++_catalogVersion;
       _debounce?.cancel();_search.clear();
       _branch=null;_warehouse=null;_priceList=null;_walkIn=null;_canonicalWalkIn=null;_preparingWalkIn=false;++_customerChoiceVersion;
-      _lines=[];_matches=[];_priced=[];_total=null;_error=null;
+      _lines=[];_matches=[];_catalog=[];_priced=[];_total=null;_error=null;
       _shift=null;_pendingCheckout=null;_lastReceipt=null;
       unawaited(_loadBranches());
     }
   }
   @override void dispose(){
-    ++_generation;++_quoteVersion;++_searchVersion;
+    ++_generation;++_quoteVersion;++_searchVersion;++_catalogVersion;
     _debounce?.cancel();_search.dispose();_searchFocus.dispose();
     super.dispose();
   }
@@ -95,10 +95,10 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
   }
   Future<void> _loadBranch(String branch)async{
     final g=++_generation;
-    ++_quoteVersion;++_searchVersion;_debounce?.cancel();
+    ++_quoteVersion;++_searchVersion;++_catalogVersion;_debounce?.cancel();
     setState((){
       _branch=branch;_warehouse=null;_priceList=null;_walkIn=null;_canonicalWalkIn=null;_preparingWalkIn=false;++_customerChoiceVersion;
-      _lines=[];_priced=[];_matches=[];_total=null;_quoteError=null;
+      _lines=[];_priced=[];_matches=[];_catalog=[];_total=null;_quoteError=null;
       _loading=true;_error=null;_search.clear();
       _shift=null;_pendingCheckout=null;_lastReceipt=null;
     });
@@ -132,6 +132,7 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
       });
       await _restoreCart(g);
       await _loadPosState(g);
+      unawaited(_loadCatalog(g));
     }on ErpApiError catch(e){
       if(mounted&&g==_generation)setState((){_loading=false;_error=e.message;});
     }catch(_){
@@ -186,6 +187,25 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
     await _pendingWrite;
     await _restoreCart(g);
     await _loadPosState(g);
+    unawaited(_loadCatalog(g));
+  }
+  Future<void> _loadCatalog(int generation)async{
+    final branch=_branch,request=++_catalogVersion;
+    if(branch==null)return;
+    if(mounted)setState(()=>_catalogLoading=true);
+    try{
+      // Bounded browsing is display data, not a verified price or stock fact.
+      final result=await widget.client.salesCatalog(widget.session,'r1/skus',branchId:branch);
+      if(!mounted||generation!=_generation||request!=_catalogVersion||branch!=_branch)return;
+      setState((){
+        _catalog=result.items.where((item)=>item['active']!=false).take(100).toList();
+        _catalogLoading=false;
+        _cached=_cached||result.cached;
+      });
+    }catch(_){
+      if(mounted&&generation==_generation&&request==_catalogVersion)
+        setState(()=>_catalogLoading=false);
+    }
   }
   Future<void> _loadPosState(int g)async{
     final scope=_scope,store=widget.client.localStore;
@@ -605,7 +625,7 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
       setState(()=>_lines[at].quantity=next);
     }
     _queueSave();unawaited(_quote());
-    if(refocus){_search.clear();_matches=[];_searchFocus.requestFocus();}
+    if(refocus){_search.clear();_onSearch('');_searchFocus.requestFocus();}
   }
   void _remove(int i){
     setState(()=>_lines.removeAt(i));
@@ -614,7 +634,9 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
   void _onSearch(String query){
     _debounce?.cancel();
     final term=query.trim();
-    if(term.isEmpty){++_searchVersion;setState(()=>_matches=[]);return;}
+    ++_searchVersion;
+    setState((){_matches=[];_searching=term.isNotEmpty;});
+    if(term.isEmpty)return;
     _debounce=Timer(const Duration(milliseconds:230),()=>unawaited(_findSku(term)));
   }
   Future<List<Map<String,dynamic>>> _findSku(String term)async{
