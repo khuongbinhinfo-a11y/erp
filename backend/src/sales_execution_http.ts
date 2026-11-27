@@ -171,7 +171,12 @@ export async function handleExecutionHttp(req:IncomingMessage,res:ServerResponse
    const db=await pool.connect();
    try{
     if(!await permitted(db,c,s,"read"))throw new ExecutionFault(403,"FORBIDDEN");
-    send(res,200,{execution:await executionRead(db,c,s),requestId:rid},rid,cors);
+    const rawOffset=url.searchParams.get("sourceOffset");
+    if(rawOffset!=null&&!/^(0|[1-9][0-9]{0,6})$/.test(rawOffset))
+      throw new InputFault(400,"INVALID_SOURCE_OFFSET");
+    const offset=rawOffset==null?0:Number(rawOffset);
+    if(offset>1000000)throw new InputFault(400,"INVALID_SOURCE_OFFSET");
+    send(res,200,{execution:await executionRead(db,c,s,offset),requestId:rid},rid,cors);
    }finally{db.release();}
    return;
   }

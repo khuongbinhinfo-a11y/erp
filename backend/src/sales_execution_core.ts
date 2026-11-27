@@ -100,7 +100,9 @@ async function baseFacts(db:PoolClient,t:string,b:string,s:ExecutionScope){
   hasIssuedHistory:issuedHistory>0n,
   isFull:lines.length>0&&lines.every(x=>units(x.deliverableBase)===units(x.orderedBase))};
 }
-export async function executionRead(db:PoolClient,c:MutationContext,s:ExecutionScope){
+export async function executionRead(db:PoolClient,c:MutationContext,s:ExecutionScope,sourceOffset=0){
+ if(!Number.isSafeInteger(sourceOffset)||sourceOffset<0||sourceOffset>1000000)
+  throw new ExecutionFault(400,"INVALID_SOURCE_OFFSET");
  await requireT5a(db);
  const o=await manualOrder(db,c,s,false);
  const scope={...s,version:o.current_version};
@@ -133,8 +135,8 @@ export async function executionRead(db:PoolClient,c:MutationContext,s:ExecutionS
    ON l.installation_id=d.installation_id AND l.branch_id=d.branch_id AND l.issue_id=d.id
   WHERE d.installation_id=$1 AND d.branch_id=$2 AND d.order_id=$3
    AND d.version_no=$4 AND d.warehouse_id=$5
-  ORDER BY d.issued_at,l.source_line LIMIT 500`,
-  [c.installationId,s.branchId,s.orderId,scope.version,s.warehouseId]);
+  ORDER BY d.issued_at,d.id,l.source_line LIMIT 101 OFFSET $6`,
+  [c.installationId,s.branchId,s.orderId,scope.version,s.warehouseId,sourceOffset]);
  return {orderId:s.orderId,version:scope.version,revision:Number(o.revision),
   deliveryStatus:o.delivery_status,completed:deliver.rowCount!==0,
   fulfillmentId:deliver.rows[0]?.id??null,lines:facts.lines,
@@ -142,7 +144,8 @@ export async function executionRead(db:PoolClient,c:MutationContext,s:ExecutionS
   hasIssuedDelivery:facts.hasDelivery,hasIssuedHistory:facts.hasIssuedHistory,
   isFullDelivery:facts.isFull,
   grandTotal:total.toString(),paid:paid.toString(),
-  remaining:(total-paid).toString(),sources:sources.rows};
+  remaining:(total-paid).toString(),sources:sources.rows.slice(0,100),
+  nextSourceOffset:sources.rows.length>100?sourceOffset+100:null};
 }
 export async function returnManual(db:PoolClient,c:MutationContext,s:ManualReturnInput){
  await requireT5a(db);await warehouseLock(db,c,s);

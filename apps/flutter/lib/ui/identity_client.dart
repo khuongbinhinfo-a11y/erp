@@ -778,9 +778,11 @@ class ErpIdentityClient {
   }
   /// T5-A: canonical server-side stock/delivery and AR facts. No offline posts.
   Future<Map<String,dynamic>> salesExecutionRead(String token,{
-      required String branchId,required String warehouseId,required String orderId})async{
+      required String branchId,required String warehouseId,required String orderId,
+      int sourceOffset=0})async{
     final q=Uri(queryParameters:{'branchId':branchId,
-      'warehouseId':warehouseId,'orderId':orderId}).query;
+      'warehouseId':warehouseId,'orderId':orderId,
+      'sourceOffset':sourceOffset.toString()}).query;
     final r=await _request('GET','/v1/sales/execution/read?$q',token:token);
     return Map<String,dynamic>.from(r['execution'] as Map);
   }

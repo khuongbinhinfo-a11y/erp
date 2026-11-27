@@ -276,7 +276,7 @@ CREATE FUNCTION erp_t5a_manual_fulfillment_commit_guard() RETURNS trigger
  LANGUAGE plpgsql AS $$
 DECLARE ctx record; l record; issue_qty numeric;return_qty numeric;
  expected_amount numeric;posted_amount numeric;line_count integer;
- posted_count integer;real_qty numeric:=0;total_issued numeric:=0;total_amount numeric:=0;
+ posted_count integer;matched_count integer;real_qty numeric:=0;total_issued numeric:=0;total_amount numeric:=0;
 BEGIN
  IF NEW.mode<>'MANUAL' THEN RETURN NULL; END IF;
  SELECT o.status,v.delivery_choice,v.warehouse_id INTO ctx
@@ -296,6 +296,16 @@ BEGIN
  AND fulfillment_id=NEW.id;
  IF line_count<1 OR posted_count<>line_count THEN
  RAISE EXCEPTION 'Manual fulfillment requires all actual delivery lines'; END IF;
+ -- A row-count comparison alone can be spoofed with line numbers 1,3 in
+ -- place of 1,2. Both physical and commercial line sets must be identical.
+ SELECT count(*) INTO matched_count FROM sales_manual_delivery_line d
+ JOIN sales_order_line o ON o.installation_id=d.installation_id
+  AND o.branch_id=d.branch_id AND o.order_id=NEW.order_id
+  AND o.version_no=NEW.version_no AND o.line_no=d.order_line_no
+ WHERE d.installation_id=NEW.installation_id AND d.branch_id=NEW.branch_id
+  AND d.fulfillment_id=NEW.id;
+ IF matched_count<>line_count THEN
+  RAISE EXCEPTION 'Manual delivery has unmatched commercial order lines'; END IF;
  FOR l IN SELECT d.order_line_no,d.product_id,d.ordered_base,d.issued_base,
        d.returned_base,d.delivered_base,d.amount,s.line_total,
        s.pricing_engine,s.price_snapshot,s.quantity,s.unit_code,p.base_unit
