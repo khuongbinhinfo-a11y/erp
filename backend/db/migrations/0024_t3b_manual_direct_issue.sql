@@ -381,7 +381,7 @@ CREATE TRIGGER t3b_inventory_ledger_scope_guard BEFORE INSERT ON inventory_ledge
 -- Deferred DB backstop: no orphan manual ISSUE without a matching canonical
 -- ledger movement, and no movement can be posted with wrong source line.
 CREATE FUNCTION erp_t3b_issue_commit_guard() RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE issue_warehouse uuid;classified numeric;available_now numeric;
+DECLARE issue_warehouse uuid;classified numeric;onhand_now numeric;
 BEGIN
  IF NOT EXISTS(SELECT 1 FROM inventory_ledger m JOIN sales_direct_issue d
    ON d.installation_id=NEW.installation_id AND d.branch_id=NEW.branch_id
@@ -403,12 +403,12 @@ BEGIN
  FROM inventory_scope_balance
  WHERE installation_id=NEW.installation_id AND branch_id=NEW.branch_id
   AND warehouse_id=issue_warehouse AND product_id=NEW.product_id;
- SELECT coalesce((SELECT available FROM inventory_stock_balance
+ SELECT coalesce((SELECT on_hand FROM inventory_stock_balance
   WHERE installation_id=NEW.installation_id AND branch_id=NEW.branch_id
    AND warehouse_id=issue_warehouse AND product_id=NEW.product_id),0)
- INTO available_now;
- IF classified>0 AND classified>available_now THEN
-  RAISE EXCEPTION 'Scoped stock classification exceeds final available balance';
+ INTO onhand_now;
+ IF classified>0 AND classified>greatest(onhand_now,0) THEN
+  RAISE EXCEPTION 'Scoped stock classification exceeds final on-hand balance';
  END IF;
  RETURN NULL;
 END; $$;
@@ -452,19 +452,24 @@ INSERT INTO role_permission(installation_id,role_id,permission_code)
 -- Warehouse insert guards have already serialized writes by warehouse lock.
 CREATE FUNCTION erp_t3b_scope_coverage_commit_guard() RETURNS trigger
  LANGUAGE plpgsql AS $t3b$
-DECLARE available_now numeric;classified numeric;has_negative_scope boolean;
+DECLARE onhand_now numeric;classified numeric;has_negative_scope boolean;
 BEGIN
- SELECT coalesce((SELECT available FROM inventory_stock_balance
+ -- No physical bin/lot assignment: O(1) warehouse ledger post path.
+ IF NOT EXISTS(SELECT 1 FROM inventory_scope_assignment a
+   WHERE a.installation_id=NEW.installation_id AND a.branch_id=NEW.branch_id
+   AND a.warehouse_id=NEW.warehouse_id AND a.product_id=NEW.product_id)
+ THEN RETURN NULL; END IF;
+ SELECT coalesce((SELECT on_hand FROM inventory_stock_balance
   WHERE installation_id=NEW.installation_id AND branch_id=NEW.branch_id
    AND warehouse_id=NEW.warehouse_id AND product_id=NEW.product_id),0)
- INTO available_now;
+ INTO onhand_now;
  SELECT coalesce(sum(quantity_base),0),coalesce(bool_or(quantity_base<0),false)
  INTO classified,has_negative_scope
  FROM inventory_scope_balance
  WHERE installation_id=NEW.installation_id AND branch_id=NEW.branch_id
   AND warehouse_id=NEW.warehouse_id AND product_id=NEW.product_id;
- IF has_negative_scope OR classified>greatest(available_now,0) THEN
-   RAISE EXCEPTION 'Scoped stock classification exceeds final available balance';
+ IF has_negative_scope OR classified>greatest(onhand_now,0) THEN
+   RAISE EXCEPTION 'Scoped stock classification exceeds final on-hand balance';
  END IF;
  RETURN NULL;
 END; $t3b$;
@@ -476,3 +481,8 @@ CREATE CONSTRAINT TRIGGER t3b_ledger_coverage_on_commit
  AFTER INSERT ON inventory_ledger
  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
  EXECUTE FUNCTION erp_t3b_scope_coverage_commit_guard();
+
+-- Bound scope view aggregation by product; posting thousands of other orders
+-- must not turn one lot/bin check into a whole-ledger scan.
+CREATE INDEX sales_direct_issue_line_product_scope_idx
+ ON sales_direct_issue_line(installation_id,branch_id,product_id,issue_id);
