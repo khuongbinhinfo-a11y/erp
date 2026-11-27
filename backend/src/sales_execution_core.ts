@@ -80,7 +80,7 @@ async function baseFacts(db:PoolClient,t:string,b:string,s:ExecutionScope){
  const issued=new Map(issues.rows.map(x=>[x.line_no,units(x.quantity)]));
  const returned=new Map(returns.rows.map(x=>[x.line_no,units(x.quantity)]));
  const lines:LineFact[]=[];
- let total=0n,full=0n,delivered=0n;
+ let total=0n,full=0n,delivered=0n,issuedHistory=0n;
  for(const l of rows.rows){
   const raw=l.pricing_engine==="R1"?l.price_snapshot?.normalizedBaseQuantity:
    l.unit_code===l.base_unit?l.quantity:null;
@@ -91,12 +91,13 @@ async function baseFacts(db:PoolClient,t:string,b:string,s:ExecutionScope){
    throw new ExecutionFault(409,"ISSUE_RETURN_RECONCILIATION_REQUIRED");
   const net=out-back,value=BigInt(l.line_total);
   const allocated=net===ordered?value:(value*net+ordered/2n)/ordered;
-  total+=allocated;full+=value;delivered+=net;
+  total+=allocated;full+=value;delivered+=net;issuedHistory+=out;
   lines.push({lineNo:l.line_no,productId:l.product_id,orderedBase:decimal(ordered),
    issuedBase:decimal(out),returnedBase:decimal(back),deliverableBase:decimal(net),
    lineTotal:value.toString(),deliveryAmount:allocated.toString()});
  }
  return {lines,total:total.toString(),full:full.toString(),hasDelivery:delivered>0n,
+  hasIssuedHistory:issuedHistory>0n,
   isFull:lines.length>0&&lines.every(x=>units(x.deliverableBase)===units(x.orderedBase))};
 }
 export async function executionRead(db:PoolClient,c:MutationContext,s:ExecutionScope){
@@ -138,7 +139,8 @@ export async function executionRead(db:PoolClient,c:MutationContext,s:ExecutionS
   deliveryStatus:o.delivery_status,completed:deliver.rowCount!==0,
   fulfillmentId:deliver.rows[0]?.id??null,lines:facts.lines,
   expectedDeliveryTotal:facts.total,fullOrderLineTotal:facts.full,
-  hasIssuedDelivery:facts.hasDelivery,isFullDelivery:facts.isFull,
+  hasIssuedDelivery:facts.hasDelivery,hasIssuedHistory:facts.hasIssuedHistory,
+  isFullDelivery:facts.isFull,
   grandTotal:total.toString(),paid:paid.toString(),
   remaining:(total-paid).toString(),sources:sources.rows};
 }
@@ -204,7 +206,7 @@ export async function completeManual(db:PoolClient,c:MutationContext,s:Execution
   [c.installationId,s.branchId,s.orderId]);
  if(prior.rowCount)throw new ExecutionFault(409,"DELIVERY_ALREADY_COMPLETED");
  const facts=await baseFacts(db,c.installationId,s.branchId,s);
- if(!facts.hasDelivery)throw new ExecutionFault(409,"NO_ISSUED_GOODS_TO_DELIVER");
+ if(!facts.hasIssuedHistory)throw new ExecutionFault(409,"NO_ISSUED_GOODS_TO_DELIVER");
  const id=randomUUID(),t=c.installationId,b=s.branchId;
  await db.query(`INSERT INTO sales_fulfillment
   (installation_id,branch_id,id,order_id,version_no,warehouse_id,mode,
@@ -229,11 +231,11 @@ export async function completeManual(db:PoolClient,c:MutationContext,s:Execution
   fulfillment_status='COMPLETED',delivery_status=$4,payment_status=$5,
   revision=revision+1,updated_at=now() WHERE installation_id=$1 AND branch_id=$2 AND id=$3
   RETURNING revision::text`,
-  [t,b,s.orderId,facts.isFull?"DELIVERED":"PARTIAL",
+  [t,b,s.orderId,!facts.hasDelivery?"RETURNED":facts.isFull?"DELIVERED":"PARTIAL",
    BigInt(facts.total)===0n?"PAID":"PARTIAL"]);
  return {status:201,body:{id,orderId:s.orderId,revision:Number(update.rows[0]!.revision),
   grandTotal:facts.total,paid:"0",remaining:facts.total,
-  deliveryStatus:facts.isFull?"DELIVERED":"PARTIAL",
+  deliveryStatus:!facts.hasDelivery?"RETURNED":facts.isFull?"DELIVERED":"PARTIAL",
   fulfillmentStatus:"COMPLETED",paymentStatus:BigInt(facts.total)===0n?"PAID":"PARTIAL",
   inventoryPosted:false,receivablePosted:BigInt(facts.total)>0n,
   deliveredLines:facts.lines}};
