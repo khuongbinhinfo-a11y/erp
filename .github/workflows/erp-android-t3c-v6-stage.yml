@@ -19,7 +19,7 @@ jobs:
       github.event.workflow_run.event == 'workflow_run' &&
       github.event.workflow_run.head_branch == 'main' &&
       github.event.workflow_run.conclusion == 'success' &&
-      contains(github.event.workflow_run.head_commit.message, '[erp-apk-ux-c-v6]')
+      contains(github.event.workflow_run.head_commit.message, '[erp-apk-t3c-v6]')
     runs-on: ubuntu-latest
     environment: android-r2-publish
     env:
@@ -44,7 +44,7 @@ jobs:
           gh run download "$SIGNED_RUN" --repo "$GITHUB_REPOSITORY" -n erp-android-signed -D signed
           SIGNED_SHA="$(cat signed/commit.txt)"
           [[ "$SIGNED_SHA" =~ ^[a-f0-9]{40}$ ]]
-          gh api "repos/$GITHUB_REPOSITORY/commits/$SIGNED_SHA" --jq '.commit.message' | grep -Fq '[erp-apk-ux-c-v6]'
+          gh api "repos/$GITHUB_REPOSITORY/commits/$SIGNED_SHA" --jq '.commit.message' | grep -Fq '[erp-apk-t3c-v6]'
           ci_run="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SIGNED_SHA&event=push&status=success" --jq '.workflow_runs[0].id')"
           test -n "$ci_run"
           test "$ci_run" != null
