@@ -15,6 +15,19 @@ const location3='00000000-0000-4000-8000-000000000005';
 const warehouse='00000000-0000-4000-8000-000000000009';
 
 void main(){
+  test('UX-B: old address snapshot is visible until explicit re-selection',(){
+    final location=<String,dynamic>{
+      'id':location2,'name':'Đại lý 2','address':'88 Nguyễn Du, Quận 1'};
+    const oldAddress='20 Pasteur, Quận 1';
+    // Selected label reflects the saved order, menu item offers current directory value.
+    expect(erpSalesLocationLabel(location,snapshot:oldAddress,selected:true),
+      'Địa chỉ trên đơn · 20 Pasteur, Quận 1');
+    expect(erpSalesLocationLabel(location),'Đại lý 2 · 88 Nguyễn Du, Quận 1');
+    expect(erpSalesLocationLabel(location,snapshot:location['address'] as String,selected:true),
+      'Đại lý 2 · 88 Nguyễn Du, Quận 1');
+  });
+
+
   testWidgets('UX-A: primary and secondary addresses coexist and do not overwrite the customer',
     (tester)async{
     final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
