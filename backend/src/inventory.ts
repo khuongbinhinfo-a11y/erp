@@ -281,11 +281,10 @@ export async function releaseStock(db:PoolClient,ctx:MutationContext,scope:Wareh
    stock:await balance(db,t,scope,record.product_id)}};
 }
 
-/** T3-C1: reserve an entire confirmed TRIP order and replenish its existing
- * backorders. Adapted from legacy sales-fulfillment-replenishment.js:114-164.
- * Warehouse -> order -> reservation lock order; existing holds are never
- * taken from another order. Released snapshots remain immutable history.
- * No physical movement, pack, delivery or receivable fact is created.
+/** T3-C: one atomic whole-order hold, including append-only replenishment of
+ * backordered quantities after partial pick/pack or dispatch.
+ * Prepared holds remain immutable; no release/reinsert or duplicate inventory.
+ * Legacy source: sales-fulfillment-replenishment.js:114-164.
  */
 export async function reserveTripOrder(db:PoolClient,ctx:MutationContext,
  input:WarehouseScope&{orderId:string;version:number}){
@@ -301,58 +300,84 @@ export async function reserveTripOrder(db:PoolClient,ctx:MutationContext,
    WHERE o.installation_id=$1 AND o.branch_id=$2 AND o.id=$3 FOR UPDATE OF o`,[t,b,id]);
  const order=sale.rows[0];
  if(!order||order.status!=="CONFIRMED"||order.version_state!=="CONFIRMED"||
-   order.current_version!==input.version||order.fulfillment_status!=="NOT_ALLOCATED"||
-   order.delivery_status!=="NOT_DISPATCHED"||order.payment_status!=="NOT_DUE")
+    order.current_version!==input.version||order.fulfillment_status==="COMPLETED"||
+    order.delivery_status!=="NOT_DISPATCHED"||order.payment_status!=="NOT_DUE")
   throw new InventoryFault(409,"TRIP_ORDER_NOT_READY_FOR_HOLD");
  requireRevision(ctx.expectedRevision,Number(order.revision));
  const shipping=await readOrderContext(db,t,b,id,input.version);
  if(!shipping||shipping.deliveryChoice!=="TRIP"||shipping.warehouseId!==w)
   throw new InventoryFault(409,"TRIP_ORDER_NOT_READY_FOR_HOLD");
- const lines=await db.query<{line_no:number;product_id:string}>(
-  `SELECT line_no,product_id FROM sales_order_line WHERE installation_id=$1
-   AND branch_id=$2 AND order_id=$3 AND version_no=$4 ORDER BY line_no FOR SHARE`,
+ const lines=await db.query<{line_no:number;product_id:string;pricing_engine:string;
+  price_snapshot:{normalizedBaseQuantity?:unknown}|null;quantity:string;
+  unit_code:string;base_unit:string}>(`
+  SELECT l.line_no,l.product_id,l.pricing_engine,l.price_snapshot,
+   l.quantity::text,l.unit_code,p.base_unit
+  FROM sales_order_line l JOIN catalog_product p
+   ON p.installation_id=l.installation_id AND p.branch_id=l.branch_id
+    AND p.id=l.product_id
+  WHERE l.installation_id=$1 AND l.branch_id=$2 AND l.order_id=$3
+   AND l.version_no=$4 ORDER BY l.line_no FOR SHARE OF l`,
   [t,b,id,input.version]);
  if(!lines.rowCount)throw new InventoryFault(409,"ORDER_HAS_NO_LINES");
- const active=await db.query<{id:string;warehouse_id:string;version_no:number;line_no:number;
-  product_id:string;quantity:string;waiting:string}>(
-  `SELECT id,warehouse_id,version_no,line_no,product_id,quantity_base::text AS quantity,
-   backordered_base::text AS waiting FROM inventory_reservation WHERE installation_id=$1
-   AND branch_id=$2 AND order_id=$3 AND state='ACTIVE' ORDER BY line_no FOR UPDATE`,[t,b,id]);
- if(active.rows.some(r=>r.warehouse_id!==w||r.version_no!==input.version))
+ const active=await db.query<{id:string;warehouse_id:string;version_no:number;
+  line_no:number;product_id:string;quantity:string}>(`
+  SELECT id,warehouse_id,version_no,line_no,product_id,
+   quantity_base::text AS quantity FROM inventory_reservation
+  WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3 AND state='ACTIVE'
+  ORDER BY line_no,created_at,id FOR UPDATE`,[t,b,id]);
+ if(active.rows.some(x=>x.warehouse_id!==w||x.version_no!==input.version))
   throw new InventoryFault(409,"TRIP_HOLD_SCOPE_CONFLICT");
- const byLine=new Map(active.rows.map(r=>[r.line_no,r]));
+ const grouped=new Map<number,typeof active.rows>();
+ for(const row of active.rows){
+  const group=grouped.get(row.line_no)??[];
+  group.push(row);grouped.set(row.line_no,group);
+ }
  const results:{lineNo:number;reservationId:string;quantityBase:string;backorderedBase:string}[]=[];
  let changed=0;
  for(const line of lines.rows){
-  const prior=byLine.get(line.line_no);
-  if(prior&&prior.product_id!==line.product_id)throw new InventoryFault(409,"TRIP_HOLD_SCOPE_CONFLICT");
-  if(prior){
-   const stock=await balance(db,t,input,line.product_id);
-   // No release/reinsert when no additional capacity is available.
-   if(stockDecimalUnits(prior.waiting)===0n||stockDecimalUnits(stock.available)<=0n){
-    results.push({lineNo:line.line_no,reservationId:prior.id,
-     quantityBase:prior.quantity,backorderedBase:prior.waiting});
-    continue;
-   }
-   await db.query(`UPDATE inventory_reservation SET state='RELEASED',
-    revision=revision+1,released_at=now() WHERE installation_id=$1
-    AND branch_id=$2 AND id=$3 AND state='ACTIVE'`,[t,b,prior.id]);
+  const raw=line.pricing_engine==="R1"?line.price_snapshot?.normalizedBaseQuantity:
+    line.unit_code===line.base_unit?line.quantity:null;
+  if(!validBaseQty(raw))throw new InventoryFault(409,"BASE_QUANTITY_SNAPSHOT_REQUIRED");
+  const demand=stockDecimalUnits(raw),prior=grouped.get(line.line_no)??[];
+  if(prior.some(x=>x.product_id!==line.product_id))
+   throw new InventoryFault(409,"TRIP_HOLD_SCOPE_CONFLICT");
+  if(!prior.length){
+   const held=await reserveStock(db,ctx,{...input,lineNo:line.line_no});
+   results.push({lineNo:line.line_no,reservationId:held.body.id,
+    quantityBase:held.body.quantityBase,backorderedBase:held.body.backorderedBase});
+   changed++;continue;
   }
-  const held=await reserveStock(db,ctx,{...input,lineNo:line.line_no});
-  const body=held.body;
-  if(prior&&stockDecimalUnits(body.quantityBase)<=stockDecimalUnits(prior.quantity))
-   throw new InventoryFault(409,"TRIP_HOLD_NOT_INCREASED");
-  results.push({lineNo:line.line_no,reservationId:body.id,
-   quantityBase:body.quantityBase,backorderedBase:body.backorderedBase});
-  changed++;
+  const already=prior.reduce((sum,x)=>sum+stockDecimalUnits(x.quantity),0n);
+  if(already>demand)throw new InventoryFault(409,"TRIP_HOLD_EXCEEDS_ORDER");
+  const gap=demand-already;
+  let extra=0n;
+  if(gap>0n){
+   const stock=await balance(db,t,input,line.product_id);
+   const available=stockDecimalUnits(stock.available);
+   extra=available>0n?(available<gap?available:gap):0n;
+  }
+  if(extra>0n){
+   await db.query(`INSERT INTO inventory_reservation
+    (installation_id,branch_id,warehouse_id,product_id,order_id,version_no,
+     line_no,quantity_base,backordered_base,replenishment_of,actor_id,request_id)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8::numeric,0,$9,$10,$11)`,
+    [t,b,w,line.product_id,id,input.version,line.line_no,stockUnitsDecimal(extra),
+     prior[0]!.id,ctx.actorId,ctx.requestId]);
+   changed++;
+  }
+  results.push({lineNo:line.line_no,reservationId:prior[0]!.id,
+   quantityBase:stockUnitsDecimal(already+extra),
+   backorderedBase:stockUnitsDecimal(gap-extra)});
  }
  let revision=Number(order.revision);
  if(changed){
-  const updated=await db.query<{revision:string}>(`UPDATE sales_order SET
-   revision=revision+1,updated_at=now() WHERE installation_id=$1
-   AND branch_id=$2 AND id=$3 RETURNING revision::text`,[t,b,id]);
+  const updated=await db.query<{revision:string}>(`UPDATE sales_order
+   SET revision=revision+1,updated_at=now()
+   WHERE installation_id=$1 AND branch_id=$2 AND id=$3
+   RETURNING revision::text`,[t,b,id]);
   revision=Number(updated.rows[0]!.revision);
  }
- return {status:200,body:{orderId:id,version:input.version,warehouseId:w,revision,
-  changedLines:changed,lines:results,hasBackorder:results.some(r=>stockDecimalUnits(r.backorderedBase)>0n)}};
+ return {status:200,body:{orderId:id,version:input.version,warehouseId:w,
+  revision,changedLines:changed,lines:results,
+  hasBackorder:results.some(x=>stockDecimalUnits(x.backorderedBase)>0n)}};
 }
