@@ -298,6 +298,63 @@ test("T5-A manual delivery, source-matched return, 0-debt and repeat AR payment"
   }
 
 
+
+  // Over 100 issue sources: stable 100-row pages, no silent truncation.
+  const pagedOrder=await post("/v1/sales/orders",{
+    branchId:b,customerId:cust.body.id,priceListId:list.body.id,
+    shipping:{warehouseId:w,deliveryChoice:"MANUAL",
+      collectionPolicy:"CREDIT_TERMS",customerMode:"EXISTING"},
+    lines:[{productId:product.body.id,quantity:"5"}]});
+  assert.equal(pagedOrder.status,201,JSON.stringify(pagedOrder.body));
+  const pagedId=pagedOrder.body.id as string;
+  assert.equal((await post("/v1/sales/orders/"+pagedId+"/confirm",
+    {branchId:b},0)).status,200);
+  const pagedDb=await pool.connect();
+  try{
+    await pagedDb.query("BEGIN");
+    const headers=await pagedDb.query<{id:string}>(`
+      INSERT INTO sales_direct_issue
+      (installation_id,branch_id,order_id,version_no,warehouse_id,
+       actor_id,request_id)
+      SELECT $1,$2,$3,1,$4,$5,'page-'||n::text
+      FROM generate_series(1,101) n RETURNING id`,
+      [t,b,pagedId,w,actorId]);
+    assert.equal(headers.rows.length,101);
+    const ids=headers.rows.map(x=>x.id);
+    await pagedDb.query(`INSERT INTO sales_direct_issue_line
+      (installation_id,branch_id,issue_id,source_line,order_line_no,
+       product_id,quantity_base)
+      SELECT $1,$2,x.id,1,1,$4,0.001
+      FROM unnest($3::uuid[]) x(id)`,
+      [t,b,ids,product.body.id]);
+    await pagedDb.query(`INSERT INTO inventory_ledger
+      (installation_id,branch_id,warehouse_id,product_id,kind,source_type,
+       source_id,source_line,delta_base,actor_id,request_id)
+      SELECT $1,$2,$3,$4,'ISSUE','FULFILLMENT',x.id,1,-0.001,
+       $5,'paged-stock'
+      FROM unnest($6::uuid[]) x(id)`,
+      [t,b,w,product.body.id,actorId,ids]);
+    await pagedDb.query("COMMIT");
+  }finally{
+    await pagedDb.query("ROLLBACK").catch(()=>undefined);pagedDb.release();
+  }
+  const pageQuery=new URLSearchParams({branchId:b,warehouseId:w,orderId:pagedId});
+  const firstPage=await call("/v1/sales/execution/read?"+pageQuery,
+    "GET",undefined,token);
+  assert.equal(firstPage.status,200,JSON.stringify(firstPage.body));
+  assert.equal(firstPage.body.execution.sources.length,100);
+  assert.equal(firstPage.body.execution.nextSourceOffset,100);
+  const lastPage=await call("/v1/sales/execution/read?"+pageQuery+
+    "&sourceOffset=100","GET",undefined,token);
+  assert.equal(lastPage.status,200,JSON.stringify(lastPage.body));
+  assert.equal(lastPage.body.execution.sources.length,1);
+  assert.equal(lastPage.body.execution.nextSourceOffset,null);
+  const firstIds=new Set(firstPage.body.execution.sources
+    .map((x:{issueId:string})=>x.issueId));
+  assert.equal(firstIds.has(lastPage.body.execution.sources[0].issueId),false);
+  assert.equal((await call("/v1/sales/execution/read?"+pageQuery+
+    "&sourceOffset=1000001","GET",undefined,token)).status,400);
+
  }finally{
   if(server)await new Promise<void>(done=>server!.close(()=>done()));
   if(pool)await pool.end();
