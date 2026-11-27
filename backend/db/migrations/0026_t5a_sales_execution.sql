@@ -87,6 +87,13 @@ DECLARE issue_row sales_direct_issue_line%ROWTYPE;source_order uuid;
  source_version integer;source_wh uuid;return_order uuid;
  return_version integer;return_wh uuid;returned numeric;
 BEGIN
+ SELECT order_id,version_no,warehouse_id INTO return_order,return_version,return_wh
+ FROM sales_manual_return WHERE installation_id=NEW.installation_id
+  AND branch_id=NEW.branch_id AND id=NEW.return_id;
+ -- Same canonical lock order as API completion: order, then source issue line.
+ -- A concurrent completion cannot pass the guard while a return posts.
+ PERFORM 1 FROM sales_order WHERE installation_id=NEW.installation_id
+  AND branch_id=NEW.branch_id AND id=return_order FOR UPDATE;
  SELECT l.* INTO issue_row
  FROM sales_direct_issue_line l
  WHERE l.installation_id=NEW.installation_id AND l.branch_id=NEW.branch_id
@@ -96,9 +103,6 @@ BEGIN
  INTO source_order,source_version,source_wh
  FROM sales_direct_issue h WHERE h.installation_id=NEW.installation_id
   AND h.branch_id=NEW.branch_id AND h.id=NEW.issue_id;
- SELECT order_id,version_no,warehouse_id INTO return_order,return_version,return_wh
- FROM sales_manual_return WHERE installation_id=NEW.installation_id
-  AND branch_id=NEW.branch_id AND id=NEW.return_id;
  IF issue_row.issue_id IS NULL OR source_order<>return_order OR
   source_version<>return_version OR source_wh<>return_wh OR
   NEW.order_line_no<>issue_row.order_line_no OR
