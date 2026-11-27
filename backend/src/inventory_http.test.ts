@@ -496,7 +496,7 @@ test("R3 real PostgreSQL: on-hand, hold, release, no oversell, exact replay, RBA
   assert.deepEqual(after.rows,before.rows);
   const histories=await pool.query(`SELECT state,quantity_base::text AS held FROM inventory_reservation
    WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3 AND line_no=1 ORDER BY created_at,id`,[t,b,trip]);
-  assert.deepEqual(histories.rows,[{state:"RELEASED",held:"2.000000"},{state:"ACTIVE",held:"4.000000"}]);
+  assert.deepEqual(histories.rows,[{state:"ACTIVE",held:"2.000000"},{state:"ACTIVE",held:"2.000000"}]);
   const orderState=await pool.query(`SELECT fulfillment_status,delivery_status,payment_status FROM sales_order
    WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,[t,b,trip]);
   assert.deepEqual(orderState.rows[0],{fulfillment_status:"NOT_ALLOCATED",

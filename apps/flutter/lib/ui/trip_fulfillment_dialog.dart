@@ -44,7 +44,7 @@ class _TripFulfillmentDialogState extends State<TripFulfillmentDialog> {
   }
   Future<void> load()async{
     final n=++nonce;
-    setState((){loading=true;error=null;work=null;});
+    setState((){loading=true;error=null;work=null;records=[];});
     try{
       if(orders.isEmpty&&widget.initialOrderId==null){
         orders=(await widget.client.salesOrders(widget.session.token,widget.branchId))
@@ -70,7 +70,13 @@ class _TripFulfillmentDialogState extends State<TripFulfillmentDialog> {
         .map((x)=>Map<String,dynamic>.from(x as Map)).toList();
       final entries=<Map<String,dynamic>>[];
       if(preparing){
-        entries.addAll(lines.where((x)=>x['reservationId']!=null));
+        for(final line in lines){
+          final holds=line['reservations'] as List<dynamic>? ?? const [];
+          for(final raw in holds){
+            final hold=Map<String,dynamic>.from(raw as Map);
+            entries.add({...line,...hold});
+          }
+        }
         for(final x in entries){
           final productId=x['productId'].toString();
           if(!scopes.containsKey(productId)){
@@ -117,7 +123,9 @@ class _TripFulfillmentDialogState extends State<TripFulfillmentDialog> {
         }
         if(RegExp(r'^0(?:\.0+)?$').hasMatch(a)&&
            RegExp(r'^0(?:\.0+)?$').hasMatch(b))continue;
-        result.add({'lineNo':records[i]['lineNo'],'pickedBase':a,'packedBase':b,
+        result.add({'lineNo':records[i]['lineNo'],
+          'reservationId':records[i]['reservationId'],
+          'pickedBase':a,'packedBase':b,
           if(chosenLocation[i]!=null)'locationId':chosenLocation[i],
           if(chosenLot[i]!=null)'lotId':chosenLot[i]});
       }else{

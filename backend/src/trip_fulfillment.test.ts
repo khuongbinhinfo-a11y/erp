@@ -77,7 +77,7 @@ test("T3-C PostgreSQL: whole hold, partial pick/pack, physical dispatch, ledger,
   const qstr="?"+new URLSearchParams({branchId:b,warehouseId:w,orderId:id,version:"1"});
   const pre=await call("/v1/inventory/trips/work"+qstr,"GET",undefined,token);
   assert.equal(pre.status,200,JSON.stringify(pre.body));
-  assert.equal(pre.body.lines[0].reservedBase,"0");
+  assert.equal(pre.body.lines[0].reservedBase,"0.000000");
   assert.equal((await write("/v1/inventory/trips/prepare",{
    branchId:b,warehouseId:w,orderId:id,version:1,lines:[
     {lineNo:1,pickedBase:"1",packedBase:"1"}]},1)).status,409);

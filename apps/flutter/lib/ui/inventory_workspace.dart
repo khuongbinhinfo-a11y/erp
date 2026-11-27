@@ -359,7 +359,7 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
       Map<String,dynamic>.from(v as Map)).toList();
     if(lines.isEmpty){notify('Đơn không có dòng hàng.',bad:true);return;}
     if(shipping is Map&&shipping['deliveryChoice']=='TRIP'){
-      if(detail['fulfillmentStatus']!='NOT_ALLOCATED'||
+      if(detail['fulfillmentStatus']=='COMPLETED'||
           detail['deliveryStatus']!='NOT_DISPATCHED'||
           detail['paymentStatus']!='NOT_DUE'){
         notify('Đơn đã chuyển sang xử lý kho hoặc giao nhận.',bad:true);return;

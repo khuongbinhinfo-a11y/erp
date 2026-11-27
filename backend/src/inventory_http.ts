@@ -228,11 +228,12 @@ export async function handleInventoryHttp(req:IncomingMessage,res:ServerResponse
     throw new InventoryFault(400,"TRIP_LINES_REQUIRED");
    const lines:TripPrepareItem[]=raw.lines.map(x=>{
      const v=record(x);
-     allowFields(v,["lineNo","pickedBase","packedBase","locationId","lotId"]);
+     allowFields(v,["lineNo","reservationId","pickedBase","packedBase","locationId","lotId"]);
      if(typeof v.pickedBase!=="string"||typeof v.packedBase!=="string")
        throw new InventoryFault(400,"INVALID_QUANTITY");
      return {lineNo:positiveInt(v.lineNo),pickedBase:v.pickedBase,
       packedBase:v.packedBase,
+      ...(v.reservationId==null?{}:{reservationId:uuid(v.reservationId)}),
       ...(v.locationId==null?{}:{locationId:uuid(v.locationId)}),
       ...(v.lotId==null?{}:{lotId:uuid(v.lotId)})};
    });
