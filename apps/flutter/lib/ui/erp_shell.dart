@@ -5,6 +5,7 @@ import 'erp_tokens.dart';
 import 'erp_navigation_ui.dart';
 import 'company_workspace.dart';
 import 'retail_pos_workspace.dart';
+import 'pos_window_stub.dart' if (dart.library.html) 'pos_window_web.dart';
 import 'admin_workspace.dart';
 import 'identity_client.dart';
 import 'erp_toast.dart';
@@ -224,15 +225,23 @@ class _ErpShellState extends State<ErpShell> {
   @override
   Widget build(BuildContext context) {
     final mobile=_isMobile(context);
+    if(erpPosStandalone&&!widget.previewOnly){
+      // The new tab restores normal same-origin authentication; no URL token.
+      return Scaffold(body:widget.session!=null&&widget.client!=null&&hasModuleAccess(3)
+        ?RetailPosWorkspace(key:const ValueKey('erp-pos-dedicated-tab'),
+          client:widget.client!,session:widget.session!)
+        :const Center(child:Text('Không có quyền truy cập quầy Bán Lẻ.')));
+    }
+    final posFullscreen=mobile&&selected==3&&!widget.previewOnly;
     final desktop = !mobile&&MediaQuery.sizeOf(context).width >= 960;
     // Keep the same keyed Row/Expanded content slot across responsive
     // breakpoints. Moving between desktop and mobile must NOT dispose a
     // pending sales create/update/confirm state machine.
     return Scaffold(
-      appBar:desktop?null:AppBar(toolbarHeight:mobile?52:56,title:Text(visibleModules.isEmpty
+      appBar:desktop||posFullscreen?null:AppBar(toolbarHeight:mobile?52:56,title:Text(visibleModules.isEmpty
         ? 'Truy cập bị giới hạn':mobile&&selected==0?_mobileSection.label:erpFeatures[selected].title),
         actions:[if(widget.onThemeChanged!=null)ErpThemeSelector(value:widget.themeMode,onChanged:widget.onThemeChanged!)]),
-      bottomNavigationBar:mobile?_mobileBar():null,
+      bottomNavigationBar:mobile&&!posFullscreen?_mobileBar():null,
       drawer:desktop||mobile?null:Drawer(
         backgroundColor:ErpPalette.of(context).sidebar,
         child:_Navigation(
@@ -310,7 +319,10 @@ class _ErpShellState extends State<ErpShell> {
         ?const _MobileRetailEntry()
         :RetailPosWorkspace(
             key:const ValueKey('erp-mobile-retail-workspace'),
-            client:widget.client!,session:widget.session!);
+            client:widget.client!,session:widget.session!,
+            onOpenTab:erpPosWebSupported&&!erpPosStandalone?erpOpenPosTab:null,
+            onExit:mobile&&visibleModules.any((i)=>i!=3)
+              ?()=>select(visibleModules.firstWhere((i)=>i!=3)):null);
     } else {
       content = _FeaturePage(feature: erpFeatures[selected],mobile:mobile);
     }
