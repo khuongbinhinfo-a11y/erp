@@ -836,18 +836,24 @@ class ErpIdentityClient {
       await store.clearExecutionPending(scope,order,key);
       return result;
     }on ErpApiError catch(e){
+      Map<String,dynamic>? receipt;
+      var recoverySucceeded=false;
       try{
-        final receipt=await salesExecutionRecovery(session.token,action,fields,
-            key:key,revision:revision);
-        if(receipt!=null){
-          await store.clearExecutionPending(scope,order,key);
-          return receipt;
-        }
-        if(e.status>=400&&e.status<500&&e.status!=408&&e.status!=423&&e.status!=424){
-          await store.clearExecutionPending(scope,order,key);
-          rethrow;
-        }
-      }catch(_){/* Keep exact key/intent; an unavailable recovery is inconclusive. */}
+        receipt=await salesExecutionRecovery(session.token,action,fields,
+          key:key,revision:revision);
+        recoverySucceeded=true;
+      }catch(_){/* Lost readback: original intent must remain durable. */}
+      if(receipt!=null){
+        await store.clearExecutionPending(scope,order,key);
+        return receipt;
+      }
+      // Definitive non-retryable 4xx plus a successful committed-receipt
+      // readback proves the command did not post; preserve the real error.
+      if(recoverySucceeded&&e.status>=400&&e.status<500&&
+          e.status!=408&&e.status!=423&&e.status!=424){
+        await store.clearExecutionPending(scope,order,key);
+        rethrow;
+      }
       throw const ErpApiError(424,
         'Chưa xác minh được máy chủ đã ghi sổ hay chưa. Lệnh và khóa gốc đã được giữ; đối soát trước khi thử lại.');
     }
