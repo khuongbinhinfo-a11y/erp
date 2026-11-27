@@ -88,6 +88,9 @@ test("T5-A manual delivery, source-matched return, 0-debt and repeat AR payment"
   assert.deepEqual((await post("/v1/sales/execution/returns",payload,initialRev,key)).body,returned.body);
   assert.equal((await post("/v1/sales/execution/returns",
     {...payload,reason:"Khác"},initialRev,key)).status,409);
+  assert.equal((await post("/v1/sales/execution/returns",
+    {...payload,lines:[{issueId:issue.body.id,sourceLine:1,
+      quantityBase:"4.000000"}]},returned.body.revision)).status,409);
   const stock=await pool.query<{on_hand:string}>(`SELECT on_hand::text
     FROM inventory_stock_balance WHERE installation_id=$1 AND branch_id=$2
      AND warehouse_id=$3 AND product_id=$4`,[t,b,w,product.body.id]);
@@ -139,9 +142,15 @@ test("T5-A manual delivery, source-matched return, 0-debt and repeat AR payment"
   assert.deepEqual(recovered.body.receipt,partial.body);
   assert.equal((await post("/v1/sales/execution/payments",
     {...part,amount:"3000"},partial.body.revision)).status,409);
-  const last=await post("/v1/sales/execution/payments",
-    {...part,amount:"2000",method:"BANK_TRANSFER"},partial.body.revision);
-  assert.equal(last.status,201,JSON.stringify(last.body));
+  // Two devices attempting to collect the same remaining debt MUST serialize:
+  // one wins the order row lock, the stale revision loses without double posting.
+  const finalPay={...part,amount:"2000",method:"BANK_TRANSFER"};
+  const attempts=await Promise.all([
+    post("/v1/sales/execution/payments",finalPay,partial.body.revision),
+    post("/v1/sales/execution/payments",finalPay,partial.body.revision),
+  ]);
+  assert.deepEqual(attempts.map(x=>x.status).sort(),[201,409]);
+  const last=attempts.find(x=>x.status===201)!;
   assert.equal(last.body.paid,"3000");assert.equal(last.body.remaining,"0");
   assert.equal(last.body.paymentStatus,"PAID");
   const ledger=await pool.query<{kind:string;sum:string;n:string}>(`
