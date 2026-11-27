@@ -308,7 +308,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
             setState((){_selectionGeneration++;_selectedOrderId=null;
               _previewOrder=null;_previewError=null;_previewLoading=false;});
           }else{
-            unawaited(_selectOrder(stillVisible));
+            unawaited(_selectOrder(stillVisible,afterMutation:true));
           }
         }
       }
@@ -3071,9 +3071,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       if(path!=null&&mounted)inform('Mở bản in HTML đã lưu để in đơn hàng.');
     }catch(_){if(mounted)inform('Không mở được bản in.',error:true);}
   }
-  Future<void> _selectOrder(Map<String,dynamic> row)async{
+  Future<void> _selectOrder(Map<String,dynamic> row,{bool afterMutation=false})async{
     final branch=branchId,token=widget.session.token,id=row['id'];
-    if(branch==null||id is! String||_navigationLocked)return;
+    if(branch==null||id is! String||(_navigationLocked&&!afterMutation))return;
     final request=++_selectionGeneration;
     setState((){_selectedOrderId=id;_previewOrder=null;
       _previewLoading=true;_previewError=null;});
