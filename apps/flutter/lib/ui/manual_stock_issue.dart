@@ -45,8 +45,9 @@ Future<void> showManualStockIssue({
     actions:[TextButton(onPressed:()=>Navigator.pop(dialog),child:const Text('Đóng')),
      FilledButton(onPressed:()=>Navigator.pop(dialog,chosen),child:const Text('Tiếp tục'))])));
  }
- if(chosen==null||!context.mounted)return;
- final detail=await client.salesOrder(token,chosen,branchId);
+ final selectedOrderId=chosen;
+ if(selectedOrderId==null||!context.mounted)return;
+ final detail=await client.salesOrder(token,selectedOrderId,branchId);
  final shipping=detail['shipping'];
  if(detail['status']!='CONFIRMED'||detail['versionStatus']!='CONFIRMED'||
    detail['fulfillmentStatus']=='COMPLETED'||
@@ -54,7 +55,7 @@ Future<void> showManualStockIssue({
    shipping['warehouseId']!=warehouseId)
   throw const ErpApiError(409,'Đơn không còn đủ điều kiện xuất thủ công ở kho này.');
  final history=await client.inventoryDirectIssues(token,
-  branchId:branchId,warehouseId:warehouseId,orderId:chosen);
+  branchId:branchId,warehouseId:warehouseId,orderId:selectedOrderId);
  final lines=(detail['lines'] as List<dynamic>).map((x)=>Map<String,dynamic>.from(x as Map)).toList();
  final pending=<Map<String,dynamic>>[];
  final scopes=<String,Map<String,dynamic>>{};
