@@ -80,6 +80,10 @@ void main(){
     await tester.pumpAndSettle();
     expect(prepares,1);
     expect(find.byKey(const ValueKey('sales-delivery-PICKUP')),findsOneWidget);
+    // Optional walk-in details are collapsed in compact order mode.
+    expect(find.byKey(const ValueKey('sales-walk-in-name')),findsNothing);
+    await tester.tap(find.byKey(const ValueKey('sales-order-more-settings')));
+    await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const ValueKey('sales-walk-in-name')),'Khách thử');
     await tester.enterText(find.byKey(const ValueKey('sales-sku-search')),'P01');
     await tester.testTextInput.receiveAction(TextInputAction.search);
