@@ -73,6 +73,6 @@ void main(){
    expect(submitted?['lines'],[{'lineNo':1,'quantityBase':'3.000000'}]);
    expect(submitted?['allowNegative'],false);
    expect(revision,4);
-   expect(writes,0,'The dialog cannot post stock without explicit parent mutation');
+   expect(writes,0,reason:'The dialog cannot post stock without explicit parent mutation');
  });
 }
