@@ -71,7 +71,7 @@ function shortText(v:unknown,max:number):string{
 }
 function isoDate(v:unknown):string|null{
  if(v===undefined||v===null)return null;
- if(typeof v!=="string"||!/^\\d{4}-\\d{2}-\\d{2}$/.test(v)||
+ if(typeof v!=="string"||!/^\d{4}-\d{2}-\d{2}$/.test(v)||
   !Number.isFinite(new Date(v).getTime())||
   new Date(v).toISOString().slice(0,10)!==v)
   throw new InventoryFault(400,"INVALID_DATE");
