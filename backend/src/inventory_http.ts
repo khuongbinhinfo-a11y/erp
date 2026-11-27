@@ -6,7 +6,7 @@ import { hasPermission } from "./rbac.ts";
 import { executeMutation, MutationFault, type MutationContext } from "./mutation.ts";
 import { validIdempotencyKey } from "./contracts.ts";
 import { createLocation,createLot,setTrackingPolicy,assignStockScope,stockScopes,
-  directIssueHistory,reconcileManualIssues,issueManualStock,requireT3b,type DirectIssueItem } from "./direct_stock_issue.ts";
+  directIssueHistory,directIssueTotals,reconcileManualIssues,issueManualStock,requireT3b,type DirectIssueItem } from "./direct_stock_issue.ts";
 import { InventoryFault, validBaseQty, balance, balances, movements, reservations,
   openStock, reserveStock, releaseStock, readInventoryGuardPolicy,
   setInventoryGuardPolicy, type ShortageMode, type WarehouseScope } from "./inventory.ts";
@@ -203,6 +203,22 @@ export async function handleInventoryHttp(req:IncomingMessage,res:ServerResponse
     if(!await hasPermission(db,{installationId:tenant,actorId,
       permission:"inventory.read",...q}))throw new InventoryFault(403,"INVENTORY_READ_DENIED");
     send(res,200,{...await stockScopes(db,tenant,q,productId),requestId:id},id,cors);
+   }finally{db.release();}
+   return;
+  }
+  if(req.method==="GET"&&url.pathname==="/v1/inventory/direct-issues/totals"){
+   const q=scope({branchId:url.searchParams.get("branchId"),
+    warehouseId:url.searchParams.get("warehouseId")});
+   const orderId=uuid(url.searchParams.get("orderId"));
+   const db=await pool.connect();
+   try{
+    if(!await hasPermission(db,{installationId:tenant,actorId,
+       permission:"inventory.read",...q})||
+      !await hasPermission(db,{installationId:tenant,actorId,
+       permission:"orders.read",branchId:q.branchId}))
+      throw new InventoryFault(403,"INVENTORY_READ_DENIED");
+    send(res,200,{items:await directIssueTotals(db,tenant,q,orderId),
+      requestId:id},id,cors);
    }finally{db.release();}
    return;
   }
