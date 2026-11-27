@@ -128,6 +128,15 @@ void main(){
     // Desktop register keeps product grid and quoted cart visible in parallel.
     expect(find.byKey(const ValueKey('pos-products-grid')),findsOneWidget);
     expect(find.byKey(const ValueKey('pos-grid-item-$sku')),findsOneWidget);
+    // Desktop cards give the photo most of the visible area; the old tiny
+    // 44px avatar must never return.
+    final cardSize=tester.getSize(find.byKey(const ValueKey('pos-grid-item-$sku')));
+    final imageSize=tester.getSize(find.byKey(const ValueKey('pos-product-image-$sku')));
+    expect(cardSize.height,greaterThanOrEqualTo(250));
+    expect(imageSize.width,greaterThanOrEqualTo(120));
+    expect(imageSize.height,greaterThanOrEqualTo(120));
+    expect(imageSize.height/cardSize.height,greaterThan(0.5));
+
     expect(calls.where((x)=>x=='GET /v1/catalog/products/$product/media').length,1);
     expect(find.byKey(const ValueKey('pos-cart')),findsOneWidget);
     expect(find.byKey(const ValueKey('pos-plus-0')),findsOneWidget);
