@@ -6,6 +6,7 @@ import 'erp_number_input.dart';
 import 'erp_toast.dart';
 import 'identity_client.dart';
 import 'manual_stock_issue.dart';
+import 'trip_fulfillment_dialog.dart';
 import 'stock_scope_setup.dart';
 
 /// Kho workspace: server-sourced facts, never a client-owned stock balance.
@@ -146,10 +147,18 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
     widget.client.retainInventory(scope,body,key,action:action,revision:revision);
     setState(()=>busy=true);
     try{
-      await widget.client.inventoryAction(widget.session.token,action,body,
+      final result=await widget.client.inventoryAction(widget.session.token,action,body,
         key:key,revision:revision);
       widget.client.clearInventory(scope);
-      notify('Máy chủ đã xác nhận chứng từ.');
+      if(action=='trip-holds'){
+        notify(result['hasBackorder']==true
+          ?'Đã cập nhật giữ hàng. Đơn còn hàng chờ bổ sung.'
+          :'Đã giữ đủ hàng cho đơn.');
+        if(mounted&&branchId==b&&warehouseId==w)
+          setState((){tab='reservations';reservationState='ACTIVE';});
+      }else{
+        notify('Máy chủ đã xác nhận chứng từ.');
+      }
       await reload();
     }on ErpApiError catch(e){
       // Any 5xx may mean COMMIT succeeded but the ACK was lost: retain exact key/body.
@@ -349,6 +358,42 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
     final lines=(detail['lines'] as List<dynamic>).map((v)=>
       Map<String,dynamic>.from(v as Map)).toList();
     if(lines.isEmpty){notify('Đơn không có dòng hàng.',bad:true);return;}
+    if(shipping is Map&&shipping['deliveryChoice']=='TRIP'){
+      if(detail['fulfillmentStatus']=='COMPLETED'||
+          detail['deliveryStatus']!='NOT_DISPATCHED'||
+          detail['paymentStatus']!='NOT_DUE'){
+        notify('Đơn đã chuyển sang xử lý kho hoặc giao nhận.',bad:true);return;
+      }
+      final revision=int.tryParse(detail['revision'].toString());
+      if(revision==null){notify('Không đọc được phiên bản đơn. Hãy tải lại.',bad:true);return;}
+      final approved=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(
+        title:const Text('Giữ hàng toàn đơn'),
+        content:SizedBox(width:480,child:Column(mainAxisSize:MainAxisSize.min,
+          crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+            Text((detail['documentNo']??'Đơn bán').toString(),
+              style:const TextStyle(fontWeight:FontWeight.w700)),
+            const SizedBox(height:8),
+            Text('${lines.length} dòng hàng · Giữ phần khả dụng, bổ sung phần còn thiếu khi có tồn.'),
+            const SizedBox(height:8),
+            ConstrainedBox(constraints:const BoxConstraints(maxHeight:240),
+              child:ListView(shrinkWrap:true,children:[
+                for(final row in lines)Padding(padding:const EdgeInsets.symmetric(vertical:5),
+                  child:Row(children:[
+                    Expanded(child:Text((row['productName']??row['sku']??'').toString())),
+                    Text(erpNumberText(row['quantity'])+' '+(row['unitCode']??'').toString()),
+                  ])),
+              ])),
+          ])),
+        actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Đóng')),
+          FilledButton(key:const ValueKey('inventory-trip-hold-all'),
+            onPressed:()=>Navigator.pop(ctx,true),child:const Text('Giữ / bổ sung hàng'))],
+      ));
+      if(approved!=true||!mounted||branchId!=b||warehouseId!=w||widget.session.token!=token)return;
+      await send('trip-holds',{'branchId':b,'warehouseId':w,
+        'orderId':picked,'version':detail['version']},
+        intent:'trip-hold:'+picked,revision:revision);
+      return;
+    }
     int line=(lines.first['lineNo'] as num).toInt();
     final selected=await showDialog<int>(context:context,builder:(ctx)=>
       StatefulBuilder(builder:(ctx,refresh)=>AlertDialog(
@@ -369,6 +414,23 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
       'orderId':picked,'version':detail['version'],'lineNo':selected},
       intent:'hold:'+picked+':'+selected.toString());
   }
+  Future<void> openTrip(String mode)async{
+    final b=branchId,w=warehouseId,token=widget.session.token;
+    if(b==null||w==null||busy||hasPending)return;
+    final shipping=_linkedOrder?['shipping'];
+    final linked=_linkedScope&&shipping is Map&&shipping['deliveryChoice']=='TRIP'
+      ?_linkedOrder!['id'] as String?:null;
+    final command=await showDialog<TripCommand>(context:context,
+      builder:(ctx)=>TripFulfillmentDialog(
+        client:widget.client,session:widget.session,branchId:b,
+        warehouseId:w,mode:mode,initialOrderId:linked));
+    if(command==null||!mounted||branchId!=b||warehouseId!=w||
+      widget.session.token!=token)return;
+    await send(command.action,command.body,
+      intent:mode+':'+(command.body['orderId']??'').toString(),
+      revision:command.revision);
+  }
+
   Future<void> release(Map<String,dynamic> row)async{
     final b=branchId,w=warehouseId;
     if(b==null||w==null||hasPending||!can('inventory.reserve'))return;
@@ -391,7 +453,8 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
         '  |  Đã giữ: '+erpNumberText(row['reserved'])+
         '  |  Khả dụng: '+erpNumberText(row['available'])
       :tab=='movements'?'Biến động: '+erpNumberText(row['deltaBase'])
-      :'Số lượng: '+erpNumberText(row['quantityBase'])+
+      :'Đã giữ: '+erpNumberText(row['quantityBase'])+
+        (row['backorderedBase']!=null?'  |  Chờ hàng: '+erpNumberText(row['backorderedBase']):'')+
         ' · '+(row['state']=='ACTIVE'?'Đang giữ':'Đã giải phóng');
     return Column(children:[
       Padding(padding:const EdgeInsets.symmetric(vertical:12),child:Row(children:[
@@ -479,6 +542,16 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
           onPressed:busy||hasPending?null:()=>issueDirect(),
           icon:const Icon(Icons.local_shipping_outlined),
           label:const Text('Xuất kho thủ công')),
+        if(can('inventory.reserve'))OutlinedButton.icon(
+          key:const ValueKey('inventory-trip-prepare'),
+          onPressed:busy||hasPending?null:()=>openTrip('prepare'),
+          icon:const Icon(Icons.inventory_2_outlined),
+          label:const Text('Soạn & đóng theo chuyến')),
+        if(can('inventory.post'))OutlinedButton.icon(
+          key:const ValueKey('inventory-trip-dispatch'),
+          onPressed:busy||hasPending?null:()=>openTrip('dispatch'),
+          icon:const Icon(Icons.local_shipping_outlined),
+          label:const Text('Xuất hàng theo chuyến')),
         if(can('inventory.reserve'))OutlinedButton.icon(
           onPressed:busy||hasPending?null:()=>reserve(),
           icon:const Icon(Icons.inventory_2_outlined),label:const Text('Giữ hàng')),

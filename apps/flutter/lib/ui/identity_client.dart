@@ -865,6 +865,14 @@ class ErpIdentityClient {
       key:key,action:action,revision:revision);
   }
   void clearInventory(String id){_inventoryPending.remove(id);}
+  Future<Map<String,dynamic>> inventoryTripWork(String token,{
+      required String branchId,required String warehouseId,
+      required String orderId,required int version})async{
+    final query=Uri(queryParameters:{'branchId':branchId,'warehouseId':warehouseId,
+      'orderId':orderId,'version':'$version'}).query;
+    return _request('GET','/v1/inventory/trips/work?$query',token:token);
+  }
+
   Future<Map<String,dynamic>> inventoryAction(String token,String action,
       Map<String,dynamic> body,{required String key,required int revision})=>
     _request('POST','/v1/inventory/$action',token:token,

@@ -122,7 +122,7 @@ test("PG16+: nested categories forbid cycles, wrong group and multiple defaults"
     // Other integration suites install this handler to avoid uncaught events.
     db.on('error',()=>{});
     const migrated=await applyMigrations(db,resolve(process.cwd(),"db/migrations"));
-    assert.equal(migrated.applied.length,24);
+    assert.equal(migrated.applied.length,25);
     const installation=(await db.query<{id:string}>(`
       INSERT INTO installation(code,display_name) VALUES($1,$2) RETURNING id`,
       ["tree-"+randomUUID().slice(0,8),"Tree test"])).rows[0]!.id;
