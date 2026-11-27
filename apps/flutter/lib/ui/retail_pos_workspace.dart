@@ -740,7 +740,7 @@ class _RetailPosWorkspaceState extends State<RetailPosWorkspace> {
                       Icon(Icons.add_circle,color:palette.primary,size:23),
                     ]),
                   ]))),
-              ));
+              );
           }))),
       if(!wide&&rows.isNotEmpty)ConstrainedBox(
         constraints:BoxConstraints(maxHeight:keyboardOpen?140:190),
