@@ -1,3 +1,4 @@
+import {readFileSync} from "node:fs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -31,4 +32,19 @@ test("T5-A preserved rows subtract only new payment column",()=>{
    "(to_jsonb(x) - 'fulfillment_id')");
  assert.equal(preservedRowJsonExpression("inventory_reservation"),"to_jsonb(x)");
  assert.equal(preservedRowJsonExpression("customer_receivable_ledger"),"to_jsonb(x)");
+});
+
+test("T5-A SQL trigger functions always use complete PG dollar delimiters",()=>{
+ const migration=readFileSync(new URL("../db/migrations/0026_t5a_sales_execution.sql",
+   import.meta.url),"utf8");
+ const quoted=String.fromCharCode(36,36);
+ const lines=migration.split("\n");
+ for(const line of lines){
+   if(line.includes("LANGUAGE plpgsql AS ")){
+     assert.ok(line.trimEnd().endsWith("AS "+quoted),"Invalid opening delimiter");
+   }
+   if(line.trimStart().startsWith("END; "+quoted[0])){
+     assert.equal(line.trim(),"END; "+quoted+";","Invalid closing delimiter");
+   }
+ }
 });
