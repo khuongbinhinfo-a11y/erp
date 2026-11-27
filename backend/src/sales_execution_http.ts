@@ -100,7 +100,8 @@ function ctx(req:IncomingMessage,rid:string,t:string,actor:string,action:string,
 }
 async function permitted(db:PoolClient,c:MutationContext,s:Pick<ExecutionScope,'branchId'|'warehouseId'|'orderId'>,action:string){
  const branch=s.branchId,warehouse=s.warehouseId,tenant=c.installationId,actor=c.actorId;
- const branchPerm=action==="payment"?["orders.read","finance.payments.record"]:
+ const branchPerm=action==="read"?["orders.read"]:
+  action==="payment"?["orders.read","finance.payments.record"]:
   action==="return"?["orders.update","delivery.update"]:["orders.read","delivery.update"];
  const warehousePerm=action==="return"?["inventory.post"]:["inventory.read"];
  for(const permission of branchPerm){
@@ -169,7 +170,7 @@ export async function handleExecutionHttp(req:IncomingMessage,res:ServerResponse
     expectedRevision:0,payload:{}} satisfies MutationContext;
    const db=await pool.connect();
    try{
-    if(!await permitted(db,c,s,"complete"))throw new ExecutionFault(403,"FORBIDDEN");
+    if(!await permitted(db,c,s,"read"))throw new ExecutionFault(403,"FORBIDDEN");
     send(res,200,{execution:await executionRead(db,c,s),requestId:rid},rid,cors);
    }finally{db.release();}
    return;
