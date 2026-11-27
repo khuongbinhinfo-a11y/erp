@@ -147,6 +147,11 @@ BEGIN
     OR EXISTS (SELECT 1 FROM sales_trip_preparation_line p
      WHERE p.installation_id=OLD.installation_id AND p.branch_id=OLD.branch_id
       AND p.reservation_id=OLD.id)
+    OR (OLD.replenishment_of IS NULL AND EXISTS(
+      SELECT 1 FROM inventory_reservation child
+       WHERE child.installation_id=OLD.installation_id
+        AND child.branch_id=OLD.branch_id AND child.replenishment_of=OLD.id
+        AND child.state='ACTIVE'))
     OR (NEW.installation_id,NEW.branch_id,NEW.warehouse_id,NEW.id,NEW.product_id,
         NEW.order_id,NEW.version_no,NEW.line_no,NEW.quantity_base,NEW.backordered_base,
         NEW.actor_id,NEW.request_id,NEW.created_at,NEW.replenishment_of)
@@ -491,6 +496,11 @@ BEGIN
  IF NEW.replenishment_of IS NULL THEN
   IF NEW.quantity_base+NEW.backordered_base<>demand THEN
    RAISE EXCEPTION 'Reservation base quantity differs from snapshot'; END IF;
+  IF EXISTS(SELECT 1 FROM inventory_reservation other
+    WHERE other.installation_id=NEW.installation_id AND other.branch_id=NEW.branch_id
+     AND other.order_id=NEW.order_id AND other.version_no=NEW.version_no
+     AND other.line_no=NEW.line_no AND other.state='ACTIVE') THEN
+   RAISE EXCEPTION 'Cannot replace primary while any active hold remains'; END IF;
  ELSE
   -- Only an actual TRIP may append a new hold; direct MANUAL/PICKUP and
   -- completed/cancelled orders must not bypass the warehouse execution mode.

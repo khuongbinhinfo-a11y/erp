@@ -501,6 +501,15 @@ test("R3 real PostgreSQL: on-hand, hold, release, no oversell, exact replay, RBA
    WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,[t,b,trip]);
   assert.deepEqual(orderState.rows[0],{fulfillment_status:"NOT_ALLOCATED",
    delivery_status:"NOT_DISPATCHED",payment_status:"NOT_DUE"});
+  // Sales cancel with replenishment releases all unprepared active holds in
+  // child-first order; it never rewrites a prepared hold.
+  const cancelledTrip=await make("/v1/sales/orders/"+trip+"/cancel",
+   {branchId:b,reason:"Cancel unprepared restock"},3);
+  assert.equal(cancelledTrip.status,200,JSON.stringify(cancelledTrip.body));
+  const cleared=await pool.query<{state:string}>(`SELECT state FROM inventory_reservation
+   WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3 ORDER BY created_at,id`,
+   [t,b,trip]);
+  assert.deepEqual(cleared.rows,[{state:"RELEASED"},{state:"RELEASED"}]);
   const manual=await makeTrip([{productId:tripProducts[0]!,quantity:"1"}],"MANUAL");
   assert.equal((await make("/v1/inventory/trip-holds",{...pScope,orderId:manual,version:1},1)).status,409);
   // Simulate a production installation still on Sales 0010 while Inventory 0011 awaits approval.

@@ -505,6 +505,23 @@ async function releaseUnexecutedSalesHolds(db:PoolClient,t:string,b:string,id:st
  const exists=await db.query<{present:boolean}>(
    "SELECT to_regclass('public.inventory_reservation') IS NOT NULL AS present");
  if(exists.rows[0]?.present!==true)return 0;
+ const modern=await db.query<{ok:boolean}>(`
+  SELECT EXISTS(SELECT 1 FROM information_schema.columns
+   WHERE table_schema='public' AND table_name='inventory_reservation'
+     AND column_name='replenishment_of') AS ok`);
+ if(modern.rows[0]?.ok){
+  // Immutable children are released before the parent. Any prepared hold
+  // rejects the whole Sales amendment/cancel transaction atomically.
+  const children=await db.query(`UPDATE inventory_reservation SET
+    state='RELEASED',revision=revision+1,released_at=now()
+    WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3
+     AND state='ACTIVE' AND replenishment_of IS NOT NULL`,[t,b,id]);
+  const primary=await db.query(`UPDATE inventory_reservation SET
+    state='RELEASED',revision=revision+1,released_at=now()
+    WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3
+     AND state='ACTIVE' AND replenishment_of IS NULL`,[t,b,id]);
+  return (children.rowCount??0)+(primary.rowCount??0);
+ }
  const r=await db.query(`UPDATE inventory_reservation
   SET state='RELEASED',revision=revision+1,released_at=now()
   WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3 AND state='ACTIVE'`,
