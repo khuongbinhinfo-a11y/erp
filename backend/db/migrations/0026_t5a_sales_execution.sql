@@ -195,12 +195,15 @@ CREATE FUNCTION erp_t5a_allocation_guard() RETURNS trigger LANGUAGE plpgsql AS $
 DECLARE receipt_order uuid;sale_order uuid;receipt_amount numeric;
  sale_amount numeric;receipt_sum numeric;sale_sum numeric;
 BEGIN
- SELECT order_id,amount INTO receipt_order,receipt_amount FROM payment_receipt
- WHERE installation_id=NEW.installation_id AND branch_id=NEW.branch_id
-  AND id=NEW.receipt_id;
+ -- Serialize concurrent direct SQL writers on the shared SALE row, then
+ -- the child receipt in the same lock order. Otherwise two transactions can
+ -- both observe each other's uncommitted allocations as missing.
  SELECT order_id,amount INTO sale_order,sale_amount FROM customer_receivable_ledger
  WHERE installation_id=NEW.installation_id AND branch_id=NEW.branch_id
-  AND id=NEW.sale_ledger_id AND kind='SALE';
+  AND id=NEW.sale_ledger_id AND kind='SALE' FOR UPDATE;
+ SELECT order_id,amount INTO receipt_order,receipt_amount FROM payment_receipt
+ WHERE installation_id=NEW.installation_id AND branch_id=NEW.branch_id
+  AND id=NEW.receipt_id FOR UPDATE;
  SELECT coalesce(sum(allocated),0) INTO receipt_sum FROM payment_allocation
  WHERE installation_id=NEW.installation_id AND branch_id=NEW.branch_id
   AND receipt_id=NEW.receipt_id;
