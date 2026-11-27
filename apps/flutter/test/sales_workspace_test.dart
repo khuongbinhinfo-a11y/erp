@@ -83,6 +83,9 @@ void main(){
     await tester.pumpAndSettle();
     expect(details,1);
     expect(find.byKey(const ValueKey('sales-preview-full')),findsOneWidget);
+    expect(find.byKey(const ValueKey('sales-preview-document-table')),findsOneWidget);
+    expect(find.text('Chi tiết đơn hàng'),findsOneWidget);
+    expect(find.text('SỐ LƯỢNG'),findsOneWidget);
     expect(find.text('Sản phẩm A'),findsOneWidget);
     expect(find.text('Đơn: Đang lập'),findsOneWidget);
     expect(writes,0,reason:'Selecting an order must never mutate inventory or sales');

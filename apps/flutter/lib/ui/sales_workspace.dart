@@ -3092,105 +3092,189 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   }
 
   Widget _previewPane(BuildContext context){
-    final palette=ErpPalette.of(context),item=_previewOrder;
+    final p=ErpPalette.of(context),item=_previewOrder;
     if(_selectedOrderId==null)return Center(child:Padding(
       padding:const EdgeInsets.all(24),
       child:Text('Chọn một đơn bên trái để xem trước chứng từ.',
-        style:TextStyle(color:palette.muted))));
+        style:TextStyle(color:p.muted))));
     if(_previewLoading)return const Center(child:CircularProgressIndicator());
     if(_previewError!=null)return Center(child:Padding(
       padding:const EdgeInsets.all(20),child:Column(mainAxisSize:MainAxisSize.min,children:[
-        Text(_previewError!,style:TextStyle(color:palette.danger)),
+        Text(_previewError!,style:TextStyle(color:p.danger)),
         TextButton(onPressed:()=>_selectOrder({'id':_selectedOrderId}),child:const Text('Thử lại')),
       ])));
     if(item==null)return const SizedBox.shrink();
     final shipping=item['shipping'] is Map?item['shipping'] as Map:const {};
-    final orderLines=item['lines'] is List?item['lines'] as List:const [];
+    final lines=item['lines'] is List?item['lines'] as List:const [];
+    final editable=item['status']!='CANCELLED'&&item['versionStatus']=='DRAFT';
     const modes={'MANUAL':'Giao thủ công','TRIP':'Giao theo chuyến','PICKUP':'Khách lấy'};
-    return Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
-      Padding(padding:const EdgeInsets.fromLTRB(16,12,12,8),
-        child:Row(children:[
-          Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-            Text((item['documentNo']??'Đơn đang lập').toString(),
-              style:TextStyle(fontWeight:FontWeight.w800,fontSize:17,color:palette.ink)),
-            Text((item['customerName']??'').toString(),maxLines:2,
-              overflow:TextOverflow.ellipsis,style:TextStyle(color:palette.muted)),
-          ])),
-          IconButton(tooltip:'Bỏ chọn đơn',onPressed:(){
-            setState((){_selectionGeneration++;_selectedOrderId=null;
-              _previewOrder=null;_previewError=null;});
-          },icon:const Icon(Icons.close)),
+    Widget progress(String heading,String value,IconData icon)=>Container(
+      padding:const EdgeInsets.symmetric(horizontal:9,vertical:9),
+      decoration:BoxDecoration(color:p.surface,
+        border:Border.all(color:p.border),borderRadius:BorderRadius.circular(5)),
+      child:Row(children:[
+        Icon(icon,size:15,color:p.primary),
+        const SizedBox(width:7),
+        Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+          Text(heading,style:TextStyle(fontSize:10,color:p.muted,
+            fontWeight:FontWeight.w700)),
+          const SizedBox(height:3),
+          Text(value,maxLines:2,overflow:TextOverflow.ellipsis,
+            style:TextStyle(fontSize:12,color:p.ink,fontWeight:FontWeight.w700)),
         ])),
-      Divider(height:1,color:palette.border),
-      Expanded(child:ListView(padding:const EdgeInsets.all(16),children:[
-        Wrap(spacing:12,runSpacing:6,children:[
-          Text('Đơn: '+stateOf(item)),
-          Text('Kho: '+erpSalesProgressText(item['fulfillmentStatus'],'warehouse')),
-          Text('Giao: '+erpSalesProgressText(item['deliveryStatus'],'delivery')),
-          Text('Thu: '+erpSalesProgressText(item['paymentStatus'],'payment')),
+      ]));
+    Widget column(String value,int flex,{bool right=false,bool bold=false,bool caption=false})=>
+      Expanded(flex:flex,child:Text(value,textAlign:right?TextAlign.right:TextAlign.left,
+        maxLines:2,overflow:TextOverflow.ellipsis,
+        style:TextStyle(fontSize:caption?10:12,color:caption?p.muted:p.ink,
+          fontWeight:caption||bold?FontWeight.w700:FontWeight.w500)));
+    Widget sum(String label,dynamic value,{bool strong=false})=>
+      Padding(padding:EdgeInsets.symmetric(vertical:strong?8:5),
+        child:Row(children:[
+          Expanded(child:Text(label,style:TextStyle(fontSize:strong?13:12,
+            fontWeight:strong?FontWeight.w800:FontWeight.w500,
+            color:strong?p.ink:p.muted))),
+          Text(money(value),style:TextStyle(
+            fontWeight:FontWeight.w800,color:strong?p.primary:p.ink,
+            fontSize:strong?18:12)),
+        ]));
+    return Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+      Padding(padding:const EdgeInsets.fromLTRB(14,11,8,9),child:Row(children:[
+        Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+          Text((item['documentNo']??'Chưa cấp số').toString(),maxLines:1,
+            overflow:TextOverflow.ellipsis,style:TextStyle(fontSize:11,
+              fontWeight:FontWeight.w800,color:p.primary)),
+          const SizedBox(height:3),
+          Text((item['customerName']??'Khách lẻ').toString(),maxLines:2,
+            overflow:TextOverflow.ellipsis,style:TextStyle(fontSize:17,
+              fontWeight:FontWeight.w800,color:p.ink)),
+        ])),
+        const SizedBox(width:8),
+        Column(crossAxisAlignment:CrossAxisAlignment.end,children:[
+          Text('TỔNG CỘNG',style:TextStyle(fontSize:10,color:p.muted)),
+          Text(money(item['total']),style:TextStyle(fontSize:17,
+            fontWeight:FontWeight.w800,color:p.primary)),
         ]),
-        const SizedBox(height:12),
-        if(shipping.isNotEmpty)...[
-          Text('Kho xuất: '+(shipping['warehouseName']??'—').toString()),
-          Text('Cách giao: '+(modes[shipping['deliveryChoice']]??'—')),
-          if((shipping['deliveryAddress']??'').toString().isNotEmpty)
-            Text('Địa chỉ: '+shipping['deliveryAddress'].toString()),
-          const SizedBox(height:12),
-        ],
-        Text('HÀNG HÓA',style:TextStyle(color:palette.ink,fontWeight:FontWeight.w800)),
-        const SizedBox(height:6),
-        for(final line in orderLines)Container(
-          padding:const EdgeInsets.symmetric(vertical:10),
-          decoration:BoxDecoration(border:Border(bottom:BorderSide(color:palette.border))),
-          child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
-            Text((line['productName']??line['sku']??'').toString(),
-              style:const TextStyle(fontWeight:FontWeight.w700)),
-            Text((line['sku']??'').toString()+' · '+
-              erpGroupedDecimalText(line['quantity'])+' '+(line['unitCode']??'').toString(),
-              style:TextStyle(fontSize:12,color:palette.muted)),
-            Row(mainAxisAlignment:MainAxisAlignment.spaceBetween,children:[
-              Text('Đơn giá: '+money(line['unitPrice']),style:const TextStyle(fontSize:12)),
-              Text(money(line['lineTotal']),style:const TextStyle(fontWeight:FontWeight.w700)),
-            ]),
-          ])),
-        const SizedBox(height:14),
-        Row(mainAxisAlignment:MainAxisAlignment.spaceBetween,children:[
-          const Text('Tiền hàng'),Text(money(item['subtotal'])),
-        ]),
-        Row(mainAxisAlignment:MainAxisAlignment.spaceBetween,children:[
-          const Text('Chiết khấu'),Text(money(item['discountTotal'])),
-        ]),
-        Row(mainAxisAlignment:MainAxisAlignment.spaceBetween,children:[
-          const Text('Thuế'),Text(money(item['taxTotal'])),
-        ]),
-        const SizedBox(height:5),
-        Row(mainAxisAlignment:MainAxisAlignment.spaceBetween,children:[
-          const Text('TỔNG CỘNG',style:TextStyle(fontWeight:FontWeight.w800)),
-          Text(money(item['total']),style:TextStyle(color:palette.ink,
-            fontWeight:FontWeight.w800,fontSize:18)),
-        ]),
-        if((item['note']??'').toString().isNotEmpty)...[
-          const SizedBox(height:12),Text('Ghi chú: '+item['note'].toString()),
-        ],
+        IconButton(tooltip:'Bỏ chọn đơn',onPressed:(){
+          setState((){_selectionGeneration++;_selectedOrderId=null;
+            _previewOrder=null;_previewError=null;});
+        },icon:const Icon(Icons.close,size:18)),
       ])),
-      Divider(height:1,color:palette.border),
-      Padding(padding:const EdgeInsets.all(10),child:Wrap(spacing:6,runSpacing:6,
-        alignment:WrapAlignment.end,children:[
-          if(_canOpenWarehouse(item))OutlinedButton.icon(
-            onPressed:_navigationLocked?null:()=>widget.onOpenWarehouse!(item),
-            icon:const Icon(Icons.warehouse_outlined,size:16),label:const Text('Xử lý kho')),
+      Divider(height:1,color:p.border),
+      Padding(padding:const EdgeInsets.fromLTRB(12,7,12,8),
+        child:Wrap(spacing:6,runSpacing:6,children:[
           if(can('orders.create'))OutlinedButton.icon(
             onPressed:_navigationLocked?null:()=>createOrder(source:item),
-            icon:const Icon(Icons.copy_outlined,size:16),label:const Text('Sao chép')),
-          if(item['status']!='CANCELLED'&&item['versionStatus']=='DRAFT'&&can('orders.update'))
-            OutlinedButton(onPressed:_navigationLocked?null:()=>updateOrder(item),
-              child:const Text('Sửa đơn')),
-          if(item['status']!='CANCELLED'&&item['versionStatus']=='DRAFT'&&can('orders.confirm'))
-            FilledButton(onPressed:_navigationLocked?null:()=>action(item,'confirm'),
-              child:const Text('Xác nhận')),
+            icon:const Icon(Icons.copy_outlined,size:15),label:const Text('Sao chép')),
+          if(editable&&can('orders.update'))OutlinedButton(
+            onPressed:_navigationLocked?null:()=>updateOrder(item),
+            child:const Text('Sửa đơn')),
+          if(_canOpenWarehouse(item))OutlinedButton.icon(
+            onPressed:_navigationLocked?null:()=>widget.onOpenWarehouse!(item),
+            icon:const Icon(Icons.warehouse_outlined,size:15),
+            label:const Text('Xử lý kho')),
+          if(editable&&can('orders.confirm'))FilledButton(
+            onPressed:_navigationLocked?null:()=>action(item,'confirm'),
+            child:const Text('Xác nhận')),
           OutlinedButton.icon(key:const ValueKey('sales-preview-full'),
             onPressed:_navigationLocked?null:()=>openOrder(item),
-            icon:const Icon(Icons.open_in_full,size:16),label:const Text('Chi tiết / In')),
+            icon:const Icon(Icons.print_outlined,size:15),
+            label:const Text('Chi tiết / In')),
+        ])),
+      Divider(height:1,color:p.border),
+      Expanded(child:ListView(padding:const EdgeInsets.fromLTRB(14,12,14,16),
+        children:[
+          LayoutBuilder(builder:(ctx,bounds){
+            final count=bounds.maxWidth>=650?4:2;
+            final w=(bounds.maxWidth-(count-1)*8)/count;
+            return Wrap(spacing:8,runSpacing:8,children:[
+              SizedBox(width:w,child:progress('ĐƠN HÀNG','Đơn: '+stateOf(item),
+                Icons.receipt_long_outlined)),
+              SizedBox(width:w,child:progress('XUẤT KHO',
+                erpSalesProgressText(item['fulfillmentStatus'],'warehouse'),
+                Icons.inventory_2_outlined)),
+              SizedBox(width:w,child:progress('GIAO HÀNG',
+                erpSalesProgressText(item['deliveryStatus'],'delivery'),
+                Icons.local_shipping_outlined)),
+              SizedBox(width:w,child:progress('THANH TOÁN',
+                erpSalesProgressText(item['paymentStatus'],'payment'),
+                Icons.payments_outlined)),
+            ]);
+          }),
+          const SizedBox(height:16),
+          Text('THÔNG TIN GIAO HÀNG',style:TextStyle(fontSize:11,
+            color:p.ink,fontWeight:FontWeight.w800)),
+          const SizedBox(height:6),
+          Wrap(spacing:18,runSpacing:7,children:[
+            Text('Kho xuất: '+(shipping['warehouseName']??'Chưa phân kho').toString(),
+              style:TextStyle(fontSize:12,color:p.ink)),
+            Text('Cách giao: '+(modes[shipping['deliveryChoice']]??'Chưa chọn'),
+              style:TextStyle(fontSize:12,color:p.ink)),
+          ]),
+          if((shipping['deliveryAddress']??'').toString().trim().isNotEmpty)
+            Padding(padding:const EdgeInsets.only(top:6),
+              child:Text('Địa chỉ giao: '+shipping['deliveryAddress'].toString(),
+                style:TextStyle(fontSize:12,color:p.muted))),
+          const SizedBox(height:17),
+          Row(children:[
+            Expanded(child:Text('Chi tiết đơn hàng',style:TextStyle(
+              fontSize:14,fontWeight:FontWeight.w800,color:p.ink))),
+            Text(lines.length.toString()+' sản phẩm',
+              style:TextStyle(fontSize:11,color:p.muted)),
+          ]),
+          const SizedBox(height:8),
+          Container(key:const ValueKey('sales-preview-document-table'),
+            decoration:BoxDecoration(border:Border.all(color:p.border),
+              borderRadius:BorderRadius.circular(6)),
+            child:Column(children:[
+              Container(color:p.mint,padding:const EdgeInsets.symmetric(
+                horizontal:9,vertical:10),child:Row(children:[
+                  column('SẢN PHẨM',43,caption:true),
+                  column('SỐ LƯỢNG',19,right:true,caption:true),
+                  column('ĐƠN GIÁ',19,right:true,caption:true),
+                  column('THÀNH TIỀN',22,right:true,caption:true),
+                ])),
+              for(var index=0;index<lines.length;index++)...[
+                if(index>0)Divider(height:1,color:p.border),
+                Padding(padding:const EdgeInsets.symmetric(
+                  horizontal:9,vertical:10),child:Builder(builder:(ctx){
+                  final line=lines[index] is Map?lines[index] as Map:const {};
+                  final title=(line['productName']??line['sku']??'').toString();
+                  final sku=(line['sku']??'').toString();
+                  return Row(children:[
+                    Expanded(flex:43,child:Column(
+                      crossAxisAlignment:CrossAxisAlignment.start,children:[
+                        Text(title,maxLines:2,overflow:TextOverflow.ellipsis,
+                          style:TextStyle(fontSize:12,color:p.ink,
+                            fontWeight:FontWeight.w700)),
+                        if(sku.isNotEmpty&&sku!=title)
+                          Text(sku,maxLines:1,overflow:TextOverflow.ellipsis,
+                            style:TextStyle(fontSize:10,color:p.muted)),
+                      ])),
+                    column(erpGroupedDecimalText(line['quantity'])+' '+
+                      (line['unitCode']??'').toString(),19,right:true),
+                    column(money(line['unitPrice']),19,right:true),
+                    column(money(line['lineTotal']),22,right:true,bold:true),
+                  ]);
+                })),
+              ],
+              if(lines.isEmpty)Padding(padding:const EdgeInsets.all(18),
+                child:Text('Chưa có sản phẩm',style:TextStyle(color:p.muted))),
+            ])),
+          const SizedBox(height:12),
+          Align(alignment:Alignment.centerRight,child:ConstrainedBox(
+            constraints:const BoxConstraints(maxWidth:290),
+            child:Column(children:[
+              sum('Tiền hàng',item['subtotal']),
+              sum('Chiết khấu',item['discountTotal']),
+              sum('Thuế',item['taxTotal']),
+              Divider(height:1,color:p.border),
+              sum('TỔNG CỘNG',item['total'],strong:true),
+            ]))),
+          if((item['note']??'').toString().trim().isNotEmpty)
+            Padding(padding:const EdgeInsets.only(top:9),
+              child:Text('Ghi chú: '+item['note'].toString(),
+                style:TextStyle(fontSize:12,color:p.muted))),
         ])),
     ]);
   }
@@ -3590,9 +3674,13 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
               height:(MediaQuery.sizeOf(ctx).height*.66).clamp(380.0,700.0).toDouble(),
               child:Row(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
                 Expanded(flex:43,child:Column(children:[
-                  Container(padding:const EdgeInsets.symmetric(horizontal:12,vertical:9),
-                    alignment:Alignment.centerLeft,color:ErpPalette.of(ctx).mint,
-                    child:const Text('ĐƠN HÀNG',style:TextStyle(fontWeight:FontWeight.w800))),
+                  Container(padding:const EdgeInsets.symmetric(horizontal:12,vertical:10),
+                    color:ErpPalette.of(ctx).surface,child:Row(children:[
+                      Expanded(child:Text('Danh sách đơn',style:TextStyle(
+                        fontWeight:FontWeight.w800,color:ErpPalette.of(ctx).ink,fontSize:13))),
+                      Text(shown.length.toString()+' đơn',style:TextStyle(
+                        color:ErpPalette.of(ctx).muted,fontSize:11)),
+                    ])),
                   Expanded(child:ListView.separated(
                     itemCount:shown.length,
                     separatorBuilder:(_,__)=>Divider(height:1,color:ErpPalette.of(ctx).border),
@@ -3603,20 +3691,34 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         key:ValueKey('sales-order-row-'+o['id'].toString()),
                         onTap:_navigationLocked?null:()=>_selectOrder(o),
                         child:Container(
-                          color:selected?ErpPalette.of(ctx).mint:null,
-                          padding:const EdgeInsets.symmetric(horizontal:12,vertical:12),
+                          decoration:BoxDecoration(
+                            color:selected?ErpPalette.of(ctx).mint:ErpPalette.of(ctx).surface,
+                            border:Border(left:BorderSide(color:selected?
+                              ErpPalette.of(ctx).primary:Colors.transparent,width:3))),
+                          padding:const EdgeInsets.fromLTRB(10,10,12,10),
                           child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
                             Row(children:[
-                              Expanded(child:Text((o['documentNo']??'Đang lập').toString(),
-                                style:const TextStyle(fontWeight:FontWeight.w800))),
-                              Text(money(o['total']),style:const TextStyle(fontWeight:FontWeight.w700)),
+                              Expanded(child:Text((o['customerName']??'Khách lẻ').toString(),
+                                maxLines:1,overflow:TextOverflow.ellipsis,
+                                style:TextStyle(fontWeight:FontWeight.w800,fontSize:13,
+                                  color:ErpPalette.of(ctx).ink))),
+                              const SizedBox(width:8),
+                              Text(money(o['total']),style:TextStyle(fontWeight:FontWeight.w800,
+                                fontSize:13,color:ErpPalette.of(ctx).primary)),
                             ]),
-                            const SizedBox(height:4),
-                            Text((o['customerName']??'').toString(),maxLines:1,
-                              overflow:TextOverflow.ellipsis),
-                            const SizedBox(height:4),
-                            Text(stateOf(o)+' · '+erpSalesProgressText(o['fulfillmentStatus'],'warehouse'),
-                              style:TextStyle(color:ErpPalette.of(ctx).muted,fontSize:12)),
+                            const SizedBox(height:5),
+                            Row(children:[
+                              Expanded(child:Text((o['documentNo']??'Đang lập').toString(),
+                                maxLines:1,overflow:TextOverflow.ellipsis,
+                                style:TextStyle(color:ErpPalette.of(ctx).muted,fontSize:11))),
+                              const SizedBox(width:6),
+                              Container(padding:const EdgeInsets.symmetric(horizontal:7,vertical:3),
+                                decoration:BoxDecoration(color:ErpPalette.of(ctx).mint,
+                                  border:Border.all(color:ErpPalette.of(ctx).border),
+                                  borderRadius:BorderRadius.circular(4)),
+                                child:Text(stateOf(o),style:TextStyle(fontSize:10,
+                                  color:ErpPalette.of(ctx).ink,fontWeight:FontWeight.w700))),
+                            ]),
                           ]),
                         ),
                       );
