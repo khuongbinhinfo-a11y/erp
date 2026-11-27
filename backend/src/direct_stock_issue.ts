@@ -145,6 +145,35 @@ export async function directIssueHistory(db:PoolClient,t:string,s:WarehouseScope
  [t,s.branchId,s.warehouseId,orderId]);
  return r.rows;
 }
+/** Complete aggregate, not first 500 audit events: safe for large partial issues. */
+export async function directIssueTotals(db:PoolClient,t:string,s:WarehouseScope,orderId:string){
+ await requireT3b(db);
+ const r=await db.query<{
+  lineNo:number;productId:string;baseUnit:string;issuedBase:string;
+ }>(`
+ SELECT l.line_no AS "lineNo",l.product_id AS "productId",
+  p.base_unit AS "baseUnit",coalesce(issued.qty,0)::text AS "issuedBase"
+ FROM sales_order o
+ JOIN sales_order_line l ON l.installation_id=o.installation_id AND l.branch_id=o.branch_id
+   AND l.order_id=o.id AND l.version_no=o.current_version
+ JOIN catalog_product p ON p.installation_id=l.installation_id AND p.branch_id=l.branch_id
+  AND p.id=l.product_id
+ LEFT JOIN LATERAL (
+  SELECT sum(i.quantity_base) AS qty FROM sales_direct_issue d
+  JOIN sales_direct_issue_line i ON i.installation_id=d.installation_id
+   AND i.branch_id=d.branch_id AND i.issue_id=d.id
+  WHERE d.installation_id=o.installation_id AND d.branch_id=o.branch_id
+   AND d.order_id=o.id AND d.version_no=o.current_version
+   AND d.warehouse_id=$3 AND i.order_line_no=l.line_no
+ ) issued ON TRUE
+ WHERE o.installation_id=$1 AND o.branch_id=$2 AND o.id=$4
+   AND EXISTS(SELECT 1 FROM sales_order_version_context c
+    WHERE c.installation_id=o.installation_id AND c.branch_id=o.branch_id
+     AND c.order_id=o.id AND c.version_no=o.current_version
+     AND c.warehouse_id=$3 AND c.delivery_choice='MANUAL')
+ ORDER BY l.line_no`,[t,s.branchId,s.warehouseId,orderId]);
+ return r.rows;
+}
 export async function reconcileManualIssues(db:PoolClient,t:string,s:WarehouseScope,orderId:string){
  await requireT3b(db);
  const rows=await db.query<{lineNo:number;productId:string;issueId:string;
@@ -165,7 +194,19 @@ export async function reconcileManualIssues(db:PoolClient,t:string,s:WarehouseSc
   AND d.order_id=$4
  GROUP BY l.order_line_no,l.product_id,d.id,l.source_line,l.quantity_base
  ORDER BY d.id,l.source_line`,[t,s.branchId,s.warehouseId,orderId]);
- const matched=rows.rows.every(x=>x.issued===x.posted&&x.movementCount==="1");
+ const matched=rows.rows.every(x=>q(x.issued)===q(x.posted)&&x.movementCount==="1");
+ const extra=await db.query<{n:string}>(`
+ SELECT count(*)::text AS n FROM inventory_ledger m
+ JOIN sales_direct_issue d ON d.installation_id=m.installation_id
+  AND d.branch_id=m.branch_id AND d.id=m.source_id
+ WHERE d.installation_id=$1 AND d.branch_id=$2 AND d.warehouse_id=$3
+  AND d.order_id=$4 AND m.kind='ISSUE' AND m.source_type='FULFILLMENT'
+  AND NOT EXISTS (
+   SELECT 1 FROM sales_direct_issue_line l
+   WHERE l.installation_id=m.installation_id AND l.branch_id=m.branch_id
+    AND l.issue_id=m.source_id AND l.source_line=m.source_line
+    AND l.product_id=m.product_id AND l.quantity_base=-m.delta_base
+  )`,[t,s.branchId,s.warehouseId,orderId]);
  const warehouse=await db.query<{productId:string;onHand:string;ledgerTotal:string}>(`
  SELECT p.id AS "productId",coalesce(v.on_hand,0)::text AS "onHand",
    coalesce((SELECT sum(l.delta_base) FROM inventory_ledger l
@@ -183,7 +224,8 @@ export async function reconcileManualIssues(db:PoolClient,t:string,s:WarehouseSc
  [t,s.branchId,s.warehouseId,orderId]);
  const balanceMatched=warehouse.rows.every(x=>q(x.onHand)===q(x.ledgerTotal));
  return {orderId,warehouseId:s.warehouseId,
-  reconciled:matched&&balanceMatched,lines:rows.rows.map(x=>({
+  reconciled:matched&&balanceMatched&&extra.rows[0]?.n==="0",
+  unmatchedMovementCount:Number(extra.rows[0]?.n??"0"),lines:rows.rows.map(x=>({
     issueId:x.issueId,lineNo:x.lineNo,sourceLine:x.sourceLine,
     productId:x.productId,quantityBase:x.issued,postedBase:x.posted,
     movementCount:Number(x.movementCount)})),
