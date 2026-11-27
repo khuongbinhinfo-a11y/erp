@@ -6,6 +6,7 @@ import 'erp_number_input.dart';
 import 'erp_toast.dart';
 import 'identity_client.dart';
 import 'manual_stock_issue.dart';
+import 'stock_scope_setup.dart';
 
 /// Kho workspace: server-sourced facts, never a client-owned stock balance.
 class InventoryWorkspace extends StatefulWidget {
@@ -237,6 +238,21 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
         intent:'opening:'+selection['product']!);
     }finally{qty.dispose();lookupText.dispose();}
   }
+  Future<void> configureStockScopes()async{
+    final b=branchId,w=warehouseId,token=widget.session.token;
+    if(b==null||w==null||busy||hasPending||
+       (!can('inventory.policy.manage')&&!can('inventory.post')))return;
+    try{
+      await showStockScopeSetup(context:context,client:widget.client,
+        session:widget.session,branchId:b,warehouseId:w,
+        canManagePolicy:can('inventory.policy.manage'),canAssign:can('inventory.post'),
+        onSubmit:(action,body,revision)async{
+          if(!mounted||branchId!=b||warehouseId!=w||widget.session.token!=token)return;
+          await send(action,body,intent:'t3b-stock-scope',revision:revision);
+        });
+    }on ErpApiError catch(e){notify(e.message,bad:true);}
+    catch(_){notify('Không mở được quản lý lô và vị trí.',bad:true);}
+  }
   Future<void> issueDirect({String? orderId})async{
     final b=branchId,w=warehouseId,token=widget.session.token;
     if(b==null||w==null||hasPending||busy||!can('inventory.post'))return;
@@ -453,6 +469,11 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
           onPressed:busy||loading||hasPending?null:()=>issueDirect(orderId:_linkedOrder!['id'] as String),
           icon:const Icon(Icons.local_shipping_outlined),
           label:Text('Xuất kho · ${_linkedOrder!['documentNo']}')),
+        if(can('inventory.policy.manage')||can('inventory.post'))OutlinedButton.icon(
+          key:const ValueKey('inventory-stock-scope-setup'),
+          onPressed:busy||hasPending?null:configureStockScopes,
+          icon:const Icon(Icons.layers_outlined),
+          label:const Text('Lô và vị trí')),
         if(can('inventory.post'))OutlinedButton.icon(
           key:const ValueKey('inventory-manual-issue'),
           onPressed:busy||hasPending?null:()=>issueDirect(),
