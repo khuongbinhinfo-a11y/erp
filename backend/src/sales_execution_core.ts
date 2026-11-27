@@ -122,10 +122,14 @@ export async function executionRead(db:PoolClient,c:MutationContext,s:ExecutionS
   SELECT id,completed_at FROM sales_fulfillment
   WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3 AND mode='MANUAL'`,
   [c.installationId,s.branchId,s.orderId]);
- const sources=await db.query(`SELECT d.id AS "issueId",l.source_line AS "sourceLine",
-  l.order_line_no AS "lineNo",l.product_id AS "productId",
+ const sources=await db.query(`SELECT d.id AS "issueId",d.issued_at AS "issuedAt",
+  l.source_line AS "sourceLine",l.order_line_no AS "lineNo",
+  l.product_id AS "productId",p.sku AS "productSku",p.name AS "productName",
+  p.base_unit AS "baseUnit",
   l.quantity_base::text AS "quantityBase",l.location_id AS "locationId",
-  l.lot_id AS "lotId",
+  loc.code AS "locationCode",loc.name AS "locationName",
+  l.lot_id AS "lotId",lot.lot_code AS "lotCode",
+  lot.expiry_date::text AS "lotExpiry",
   (l.quantity_base-coalesce((
    SELECT sum(r.quantity_base) FROM sales_manual_return_line r
    WHERE r.installation_id=l.installation_id AND r.branch_id=l.branch_id
@@ -133,6 +137,14 @@ export async function executionRead(db:PoolClient,c:MutationContext,s:ExecutionS
   ),0))::text AS "returnableBase"
   FROM sales_direct_issue d JOIN sales_direct_issue_line l
    ON l.installation_id=d.installation_id AND l.branch_id=d.branch_id AND l.issue_id=d.id
+  JOIN catalog_product p ON p.installation_id=l.installation_id
+   AND p.branch_id=l.branch_id AND p.id=l.product_id
+  LEFT JOIN inventory_storage_location loc ON
+   loc.installation_id=l.installation_id AND loc.branch_id=l.branch_id
+   AND loc.warehouse_id=d.warehouse_id AND loc.id=l.location_id
+  LEFT JOIN inventory_product_lot lot ON
+   lot.installation_id=l.installation_id AND lot.branch_id=l.branch_id
+   AND lot.product_id=l.product_id AND lot.id=l.lot_id
   WHERE d.installation_id=$1 AND d.branch_id=$2 AND d.order_id=$3
    AND d.version_no=$4 AND d.warehouse_id=$5
   ORDER BY d.issued_at,d.id,l.source_line LIMIT 101 OFFSET $6`,
