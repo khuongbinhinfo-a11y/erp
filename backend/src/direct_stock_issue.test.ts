@@ -95,6 +95,38 @@ test("T3-B PostgreSQL: partial MANUAL issue, lot/location, scoped stock, negativ
   assert.equal(issued.body.receivablePosted,false);
   assert.equal(issued.body.paymentPosted,false);
   assert.equal(issued.body.remaining[0].remainingBase,"3.000000");
+  // Codex P2: a forged movement posted before a matching source header must
+  // be rejected at COMMIT even if a separate legitimate line is posted later.
+  const forgedId=randomUUID(),forger=await db.connect();
+  try{
+   await forger.query("BEGIN");
+   await forger.query(`INSERT INTO inventory_ledger
+    (installation_id,branch_id,warehouse_id,product_id,kind,source_type,
+      source_id,source_line,delta_base,actor_id,request_id)
+    VALUES($1,$2,$3,$4,'ISSUE','FULFILLMENT',$5,99,-1,$6,'forged-preheader')`,
+    [t,b,w,products[0],forgedId,root.actorId]);
+   await forger.query(`INSERT INTO sales_direct_issue
+    (installation_id,branch_id,id,order_id,version_no,warehouse_id,actor_id,request_id)
+    VALUES($1,$2,$3,$4,1,$5,$6,'forged-header')`,
+    [t,b,forgedId,first,w,root.actorId]);
+   await forger.query(`INSERT INTO sales_direct_issue_line
+    (installation_id,branch_id,issue_id,source_line,order_line_no,
+      product_id,quantity_base)
+    VALUES($1,$2,$3,1,1,$4,1)`,[t,b,forgedId,products[0]]);
+   await forger.query(`INSERT INTO inventory_ledger
+    (installation_id,branch_id,warehouse_id,product_id,kind,source_type,
+      source_id,source_line,delta_base,actor_id,request_id)
+    VALUES($1,$2,$3,$4,'ISSUE','FULFILLMENT',$5,1,-1,$6,'forged-valid-line')`,
+    [t,b,w,products[0],forgedId,root.actorId]);
+   await assert.rejects(forger.query("COMMIT"),
+     /Direct issue ledger movement has no matching source line/i);
+  }finally{
+   await forger.query("ROLLBACK").catch(()=>undefined);
+   forger.release();
+  }
+  assert.equal((await db.query<{n:string}>(
+   "SELECT count(*)::text AS n FROM inventory_ledger WHERE installation_id=$1 AND source_id=$2",
+   [t,forgedId])).rows[0]!.n,"0");
   assert.deepEqual((await write("/v1/inventory/direct-issues",payload,1,key)).body,issued.body);
   assert.equal((await write("/v1/inventory/direct-issues",
    {...payload,lines:[{lineNo:1,quantityBase:"3.000000"}]},1,key)).status,409);
@@ -109,6 +141,14 @@ test("T3-B PostgreSQL: partial MANUAL issue, lot/location, scoped stock, negativ
     AND branch_id=$2 AND warehouse_id=$3 AND kind='ISSUE'
     AND source_id IN ($4,$5)`,[t,b,w,issued.body.id,second.body.id]);
   assert.equal(count.rows[0]!.n,"2");
+  const totals=await call("/v1/inventory/direct-issues/totals?"+
+    new URLSearchParams({branchId:b,warehouseId:w,orderId:first}).toString(),
+    "GET",undefined,token);
+  assert.equal(totals.status,200,JSON.stringify(totals.body));
+  assert.equal(totals.body.items.length,1);
+  assert.equal(totals.body.items[0].issuedBase,"5.000000");
+  assert.equal(totals.body.items[0].baseUnit,"cai");
+
   const reconciliation=await call("/v1/inventory/direct-issues/reconcile?"+
    new URLSearchParams({branchId:b,warehouseId:w,orderId:first}).toString(),
    "GET",undefined,token);
