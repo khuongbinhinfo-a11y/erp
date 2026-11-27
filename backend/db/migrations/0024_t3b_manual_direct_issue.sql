@@ -381,6 +381,7 @@ CREATE TRIGGER t3b_inventory_ledger_scope_guard BEFORE INSERT ON inventory_ledge
 -- Deferred DB backstop: no orphan manual ISSUE without a matching canonical
 -- ledger movement, and no movement can be posted with wrong source line.
 CREATE FUNCTION erp_t3b_issue_commit_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE issue_warehouse uuid;classified numeric;available_now numeric;
 BEGIN
  IF NOT EXISTS(SELECT 1 FROM inventory_ledger m JOIN sales_direct_issue d
    ON d.installation_id=NEW.installation_id AND d.branch_id=NEW.branch_id
@@ -391,6 +392,24 @@ BEGIN
    AND m.kind='ISSUE' AND m.product_id=NEW.product_id
    AND m.delta_base=-NEW.quantity_base) THEN
   RAISE EXCEPTION 'Direct issue line missing matching posted inventory movement'; END IF;
+ -- Deferred coverage is checked against FINAL warehouse availability. During
+ -- a transaction the line decreases classified scope stock before its matching
+ -- ledger movement decreases on-hand; otherwise an assignment in between can
+ -- classify the same physical stock twice.
+ SELECT warehouse_id INTO issue_warehouse FROM sales_direct_issue
+ WHERE installation_id=NEW.installation_id AND branch_id=NEW.branch_id
+  AND id=NEW.issue_id;
+ SELECT coalesce(sum(quantity_base),0) INTO classified
+ FROM inventory_scope_balance
+ WHERE installation_id=NEW.installation_id AND branch_id=NEW.branch_id
+  AND warehouse_id=issue_warehouse AND product_id=NEW.product_id;
+ SELECT coalesce((SELECT available FROM inventory_stock_balance
+  WHERE installation_id=NEW.installation_id AND branch_id=NEW.branch_id
+   AND warehouse_id=issue_warehouse AND product_id=NEW.product_id),0)
+ INTO available_now;
+ IF classified>0 AND classified>available_now THEN
+  RAISE EXCEPTION 'Scoped stock classification exceeds final available balance';
+ END IF;
  RETURN NULL;
 END; $$;
 CREATE CONSTRAINT TRIGGER sales_direct_issue_posted_on_commit
