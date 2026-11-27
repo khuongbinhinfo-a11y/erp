@@ -253,6 +253,32 @@ test("B1: real PostgreSQL order lifecycle, immutable versions, RBAC, replay and 
       shipping:{...shipping,requestedDeliveryDate:"2026-02-30"}},0,"t1-baddate-"+randomUUID())).status,400);
     assert.equal((await write("/v1/sales/orders/"+t1id+"/confirm",{branchId:b},0,"t1-confirm-"+randomUUID())).status,200);
     assert.equal((await readT1()).body.order.paymentStatus,"NOT_DUE");
+    // T3-A: MANUAL is a direct-issue lane, never a trip stock hold.
+    const reserveInput={branchId:b,warehouseId:root.warehouseId,
+      orderId:t1id,version:1,lineNo:1};
+    const manualHold=await write("/v1/inventory/reservations",reserveInput,0,
+      "t3a-manual-reserve-"+randomUUID());
+    assert.equal(manualHold.status,409,JSON.stringify(manualHold.body));
+    assert.equal(manualHold.body.error.code,"ORDER_DIRECT_ISSUE_ONLY");
+    assert.equal((await pool.query(
+      "SELECT count(*)::integer AS n FROM inventory_reservation WHERE installation_id=$1 AND order_id=$2",
+      [root.installationId,t1id])).rows[0]!.n,0);
+    const tripInput={...t1Payload,shipping:{...shipping,deliveryChoice:"TRIP",
+      rememberDeliveryChoice:false}};
+    const tripOrder=await write("/v1/sales/orders",tripInput,0,
+      "t3a-trip-create-"+randomUUID());
+    assert.equal(tripOrder.status,201,JSON.stringify(tripOrder.body));
+    const tripConfirm=await write("/v1/sales/orders/"+tripOrder.body.id+"/confirm",
+      {branchId:b},0,"t3a-trip-confirm-"+randomUUID());
+    assert.equal(tripConfirm.status,200,JSON.stringify(tripConfirm.body));
+    const tripHold=await write("/v1/inventory/reservations",
+      {...reserveInput,orderId:tripOrder.body.id},0,"t3a-trip-reserve-"+randomUUID());
+    assert.equal(tripHold.status,201,JSON.stringify(tripHold.body));
+    assert.equal(tripHold.body.quantityBase,"0.000000");
+    assert.equal(tripHold.body.backorderedBase,"2.000000");
+    const tripDetail=await call("/v1/sales/orders/"+tripOrder.body.id+
+      "?branchId="+b,"GET",undefined,token);
+    assert.equal(tripDetail.body.order.shipping.deliveryChoice,"TRIP");
     await assert.rejects(pool.query("UPDATE sales_order_version_context SET delivery_choice='TRIP' WHERE installation_id=$1 AND order_id=$2",
       [root.installationId,t1id]),/immutable/i);
     const t1Amend=await write("/v1/sales/orders/"+t1id+"/amend",{branchId:b,reason:"Sửa giao hàng"},1,"t1-amend-"+randomUUID());
