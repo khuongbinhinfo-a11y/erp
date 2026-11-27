@@ -72,6 +72,7 @@ function shortText(v:unknown,max:number):string{
 function isoDate(v:unknown):string|null{
  if(v===undefined||v===null)return null;
  if(typeof v!=="string"||!/^\\d{4}-\\d{2}-\\d{2}$/.test(v)||
+  !Number.isFinite(new Date(v).getTime())||
   new Date(v).toISOString().slice(0,10)!==v)
   throw new InventoryFault(400,"INVALID_DATE");
  return v;
@@ -265,8 +266,9 @@ export async function handleInventoryHttp(req:IncomingMessage,res:ServerResponse
     ["branchId","warehouseId","productId","quantityBase","locationId","lotId"]);
    if(!validBaseQty(v.quantityBase))throw new InventoryFault(400,"INVALID_QUANTITY");
    const payload={...scope(v),productId:uuid(v.productId),
-     quantityBase:v.quantityBase,locationId:optionalUuid(v.locationId),
-     lotId:optionalUuid(v.lotId)};
+     quantityBase:v.quantityBase,
+     ...(optionalUuid(v.locationId)?{locationId:uuid(v.locationId)}:{}),
+     ...(optionalUuid(v.lotId)?{lotId:uuid(v.lotId)}:{})};
    const c=ctx(req,id,tenant,actorId,"inventory.stock-scope.assign",payload,true);
    const out=await executeMutation(pool,c,{
     authorize:(db,m)=>hasPermission(db,{installationId:m.installationId,actorId:m.actorId,
@@ -285,7 +287,8 @@ export async function handleInventoryHttp(req:IncomingMessage,res:ServerResponse
     allowFields(row,["lineNo","quantityBase","locationId","lotId"]);
     if(!validBaseQty(row.quantityBase))throw new InventoryFault(400,"INVALID_QUANTITY");
     return {lineNo:positiveInt(row.lineNo),quantityBase:row.quantityBase,
-     locationId:optionalUuid(row.locationId),lotId:optionalUuid(row.lotId)};
+     ...(optionalUuid(row.locationId)?{locationId:uuid(row.locationId)}:{}),
+     ...(optionalUuid(row.lotId)?{lotId:uuid(row.lotId)}:{})};
    });
    if(v.allowNegative!==undefined&&typeof v.allowNegative!=="boolean")
     throw new InventoryFault(400,"INVALID_NEGATIVE_FLAG");
