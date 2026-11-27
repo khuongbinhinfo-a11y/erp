@@ -1,9 +1,9 @@
-import 'dart:html' as html;
+import 'dart:js_interop';
+import 'package:web/web.dart' as web;
 
-// Same-origin route; no session, actor or credentials are placed into the URL.
-// The existing browser session must still authenticate and pass server-side RBAC.
+// Dedicated register, same-origin only; never place credentials in the URL.
 bool get erpPosStandalone=>Uri.base.queryParameters['erp_pos']=='1';
 bool get erpPosWebSupported=>true;
 void erpOpenPosTab(){
-  html.window.open('/?erp_pos=1','_blank','noopener');
+  web.window.open('/?erp_pos=1'.toJS,'_blank'.toJS,'noopener'.toJS);
 }
