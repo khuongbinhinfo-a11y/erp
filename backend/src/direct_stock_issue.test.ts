@@ -109,6 +109,16 @@ test("T3-B PostgreSQL: partial MANUAL issue, lot/location, scoped stock, negativ
     AND branch_id=$2 AND warehouse_id=$3 AND kind='ISSUE'
     AND source_id IN ($4,$5)`,[t,b,w,issued.body.id,second.body.id]);
   assert.equal(count.rows[0]!.n,"2");
+  const reconciliation=await call("/v1/inventory/direct-issues/reconcile?"+
+   new URLSearchParams({branchId:b,warehouseId:w,orderId:first}).toString(),
+   "GET",undefined,token);
+  assert.equal(reconciliation.status,200,JSON.stringify(reconciliation.body));
+  assert.equal(reconciliation.body.reconciled,true);
+  assert.equal(reconciliation.body.lines.length,2);
+  assert.equal(reconciliation.body.lines.every((x:any)=>
+    x.quantityBase===x.postedBase&&x.movementCount===1),true);
+  assert.equal(reconciliation.body.stock[0].onHand,
+    reconciliation.body.stock[0].ledgerTotal);
   const stock=await call("/v1/inventory/balances?branchId="+b+"&warehouseId="+w,
     "GET",undefined,token);
   assert.equal(stock.status,200);
