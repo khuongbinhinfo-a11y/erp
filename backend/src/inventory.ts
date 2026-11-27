@@ -75,16 +75,18 @@ export async function readInventoryGuardPolicy(db:PoolClient,t:string,s:Warehous
   reserveShortageMode:"BLOCK" as ShortageMode,
   negativeIssueMode:"BLOCK",revision:0,migrationRequired:true,
  };
- const q=await db.query<{reserveShortageMode:ShortageMode;revision:string}>(
-  `SELECT reserve_shortage_mode AS "reserveShortageMode",revision::text AS revision
+ const q=await db.query<{reserveShortageMode:ShortageMode;negativeIssueMode:ShortageMode;revision:string}>(
+  `SELECT reserve_shortage_mode AS "reserveShortageMode",
+    negative_issue_mode AS "negativeIssueMode",revision::text AS revision
    FROM inventory_guard_policy WHERE installation_id=$1 AND branch_id=$2 AND warehouse_id=$3`,
   [t,s.branchId,s.warehouseId]);
  return {branchId:s.branchId,warehouseId:s.warehouseId,
   reserveShortageMode:q.rows[0]?.reserveShortageMode??"WARN",
-  negativeIssueMode:"BLOCK",revision:Number(q.rows[0]?.revision??"0")};
+  negativeIssueMode:q.rows[0]?.negativeIssueMode??"BLOCK",
+  revision:Number(q.rows[0]?.revision??"0")};
 }
 export async function setInventoryGuardPolicy(db:PoolClient,ctx:MutationContext,
- s:WarehouseScope,mode:ShortageMode){
+ s:WarehouseScope,mode:ShortageMode,negativeMode?:ShortageMode){
  if(!await hasInventoryGuardSchema(db))
   throw new InventoryFault(503,"INVENTORY_POLICY_MIGRATION_REQUIRED");
  await lockWarehouse(db,ctx.installationId,s);
@@ -93,12 +95,15 @@ export async function setInventoryGuardPolicy(db:PoolClient,ctx:MutationContext,
   FOR UPDATE`,[ctx.installationId,s.branchId,s.warehouseId]);
  requireRevision(ctx.expectedRevision,Number(old.rows[0]?.revision??"0"));
  await db.query(`INSERT INTO inventory_guard_policy(
-   installation_id,branch_id,warehouse_id,reserve_shortage_mode,revision,updated_by)
-   VALUES($1,$2,$3,$4,1,$5)
+   installation_id,branch_id,warehouse_id,reserve_shortage_mode,negative_issue_mode,
+   revision,updated_by)
+   VALUES($1,$2,$3,$4,coalesce($6,'BLOCK'),1,$5)
    ON CONFLICT (installation_id,branch_id,warehouse_id) DO UPDATE SET
-   reserve_shortage_mode=EXCLUDED.reserve_shortage_mode,revision=inventory_guard_policy.revision+1,
+   reserve_shortage_mode=EXCLUDED.reserve_shortage_mode,
+   negative_issue_mode=coalesce($6,inventory_guard_policy.negative_issue_mode),
+   revision=inventory_guard_policy.revision+1,
    updated_by=EXCLUDED.updated_by,updated_at=now()`,
-   [ctx.installationId,s.branchId,s.warehouseId,mode,ctx.actorId]);
+   [ctx.installationId,s.branchId,s.warehouseId,mode,ctx.actorId,negativeMode??null]);
  return {status:200,body:await readInventoryGuardPolicy(db,ctx.installationId,s)};
 }
 
