@@ -24,7 +24,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       SIGNED_RUN: ${{ github.event.workflow_run.id }}
-      SIGNED_SHA: ${{ github.event.workflow_run.head_sha }}
+      SIGNED_CONTEXT_SHA: ${{ github.event.workflow_run.head_sha }}
       SIGNER: '545d17fc51c8d24de4d73cb84ff7c3953f79c7d14efc7ada29b7075110d0c028'
       OIDC_AUD: 'erp-android-r2-stage-v4'
       UPLOADER: 'https://erp-android-r2-stage-v4.gustavjung24.workers.dev'
@@ -36,10 +36,13 @@ jobs:
       - name: Verify reviewed CI, exact release run and original signer
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$SIGNED_SHA"
-          [[ "$SIGNED_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SIGNED_CONTEXT_SHA"
+          [[ "$SIGNED_CONTEXT_SHA" =~ ^[a-f0-9]{40}$ ]]
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SIGNED_RUN" > "$RUNNER_TEMP/uxb-signed-run.json"
-          jq -e --arg sha "$SIGNED_SHA" '.head_sha == $sha and .head_branch == "main" and .conclusion == "success" and .event == "workflow_run" and .path == ".github/workflows/erp-android-release.yml"' "$RUNNER_TEMP/uxb-signed-run.json" >/dev/null
+          jq -e --arg sha "$SIGNED_CONTEXT_SHA" '.head_sha == $sha and .head_branch == "main" and .conclusion == "success" and .event == "workflow_run" and .path == ".github/workflows/erp-android-release.yml"' "$RUNNER_TEMP/uxb-signed-run.json" >/dev/null
+          gh run download "$SIGNED_RUN" --repo "$GITHUB_REPOSITORY" -n erp-android-signed -D signed
+          SIGNED_SHA="$(cat signed/commit.txt)"
+          [[ "$SIGNED_SHA" =~ ^[a-f0-9]{40}$ ]]
           gh api "repos/$GITHUB_REPOSITORY/commits/$SIGNED_SHA" --jq '.commit.message' | grep -Fq '[erp-apk-ux-b-v4]'
           ci_run="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SIGNED_SHA&event=push&status=success" --jq '.workflow_runs[0].id')"
           test -n "$ci_run"
@@ -50,8 +53,7 @@ jobs:
             flutter-android-native-build flutter-windows-native-build; do
             grep -Fxq "$job" "$RUNNER_TEMP/uxb-ci-jobs"
           done
-          gh run download "$SIGNED_RUN" --repo "$GITHUB_REPOSITORY" -n erp-android-signed -D signed
-          test "$(cat signed/commit.txt)" = "$SIGNED_SHA"
+          printf 'SIGNED_SHA=%s\n' "$SIGNED_SHA" >> "$GITHUB_ENV"
           test "$(cat signed/signer.txt)" = "$SIGNER"
           (cd signed && sed 's|signed/||g' SHA256SUMS | sha256sum -c -)
           test -s signed/erp.apk
