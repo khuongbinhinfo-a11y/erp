@@ -446,3 +446,33 @@ CREATE CONSTRAINT TRIGGER sales_direct_issue_header_on_commit
 INSERT INTO role_permission(installation_id,role_id,permission_code)
  SELECT installation_id,id,'inventory.negative.issue' FROM app_role
  WHERE code='PRIMARY_OWNER_MAIN' ON CONFLICT DO NOTHING;
+
+-- Commit-time coverage backstop: source lines classify stock before ledger
+-- posts it. A second allocation in that gap must not survive COMMIT.
+-- Warehouse insert guards have already serialized writes by warehouse lock.
+CREATE FUNCTION erp_t3b_scope_coverage_commit_guard() RETURNS trigger
+ LANGUAGE plpgsql AS $t3b$
+DECLARE available_now numeric;classified numeric;has_negative_scope boolean;
+BEGIN
+ SELECT coalesce((SELECT available FROM inventory_stock_balance
+  WHERE installation_id=NEW.installation_id AND branch_id=NEW.branch_id
+   AND warehouse_id=NEW.warehouse_id AND product_id=NEW.product_id),0)
+ INTO available_now;
+ SELECT coalesce(sum(quantity_base),0),coalesce(bool_or(quantity_base<0),false)
+ INTO classified,has_negative_scope
+ FROM inventory_scope_balance
+ WHERE installation_id=NEW.installation_id AND branch_id=NEW.branch_id
+  AND warehouse_id=NEW.warehouse_id AND product_id=NEW.product_id;
+ IF has_negative_scope OR classified>greatest(available_now,0) THEN
+   RAISE EXCEPTION 'T3-B allocated lot/location stock exceeds available ledger balance';
+ END IF;
+ RETURN NULL;
+END; $t3b$;
+CREATE CONSTRAINT TRIGGER t3b_assignment_coverage_on_commit
+ AFTER INSERT ON inventory_scope_assignment
+ DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+ EXECUTE FUNCTION erp_t3b_scope_coverage_commit_guard();
+CREATE CONSTRAINT TRIGGER t3b_ledger_coverage_on_commit
+ AFTER INSERT ON inventory_ledger
+ DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+ EXECUTE FUNCTION erp_t3b_scope_coverage_commit_guard();
