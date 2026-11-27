@@ -1,6 +1,8 @@
 # ERP — MASTER PLAN V4.1 | Tái cấu trúc nghiệp vụ và UX
 Ngày quyết định: 24/11/2026. V4.1 khóa bổ sung quy tắc legacy-first và phát hành theo quyết định owner mới nhất. **Tài liệu điều hành hiện hành**, thay thế thứ tự lô B/R và quy trình direct-main trong các tài liệu lịch sử. Không thay thế các bất biến an toàn dữ liệu. Issue cũ là backlog/trace, không tự đóng theo kế hoạch. Chỉ DONE khi có evidence đúng SHA, CI, smoke và UAT theo phạm vi.
 
+> **Quy tắc UX bổ sung ngày 26/11/2026:** [Audit khách hàng — lập đơn — POS, acceptance và handoff](UX_CUSTOMER_ORDER_POS_AUDIT_20261126.md). Ưu tiên sửa P0 địa chỉ khách và Khách lẻ trước khi mở rộng POS; không nhầm staging APK với OTA activated.
+
 ## 1. Mục tiêu và phạm vi
 - Phân phối thực tế: Công Ty (desktop-first), Quản trị, Giao Hàng (mobile-first), Bán Lẻ POS mới, Đặt Hàng (Flutter), MCP là tích hợp Sales Miền Tây, KHÔNG port MCP hoặc Retail cũ. Android native APK/AAB, Windows native, iPhone PWA cài màn hình chính; iOS native không phải gate hiện tại. Chung Flutter/Dart, API, design tokens; UX theo thiết bị, không port Next.js/frontend cũ.
 - Mỗi khách một installation độc lập PostgreSQL, backend TypeScript modular monolith, domain/storage/account/secrets/backup riêng. Prisma Compute/Postgres hiện là demo/POC, không khóa production. API server là nguồn nghiệp vụ duy nhất. Không tái sử dụng data/PII/secrets/assets/domain cũ. Hai repo khách cũ tuyệt đối chỉ đọc.
