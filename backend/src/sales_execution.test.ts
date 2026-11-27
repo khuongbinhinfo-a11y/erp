@@ -240,6 +240,45 @@ test("T5-A manual delivery, source-matched return, 0-debt and repeat AR payment"
      WHERE installation_id=$1 AND branch_id=$2 AND order_id=$3`,
      [t,b,refusedId])).rows[0]?.n,"0");
 
+  // The direct SQL route must be unable to issue the outstanding unshipped
+  // quantity after MANUAL completion. Gross issued is deliberately < ordered.
+  const lateOrder=await post("/v1/sales/orders",{branchId:b,
+    customerId:cust.body.id,priceListId:list.body.id,
+    shipping:{warehouseId:w,deliveryChoice:"MANUAL",
+      collectionPolicy:"CREDIT_TERMS",customerMode:"EXISTING"},
+    lines:[{productId:product.body.id,quantity:"5"}]});
+  assert.equal(lateOrder.status,201,JSON.stringify(lateOrder.body));
+  const lateId=lateOrder.body.id as string;
+  assert.equal((await post("/v1/sales/orders/"+lateId+"/confirm",
+    {branchId:b},0)).status,200);
+  const partialIssue=await post("/v1/inventory/direct-issues",{
+     branchId:b,warehouseId:w,orderId:lateId,version:1,
+     lines:[{lineNo:1,quantityBase:"1.000000"}]},1);
+  assert.equal(partialIssue.status,201,JSON.stringify(partialIssue.body));
+  const lateQ=new URLSearchParams({branchId:b,warehouseId:w,orderId:lateId});
+  const lateState=await call("/v1/sales/execution/read?"+lateQ,"GET",undefined,token);
+  assert.equal(lateState.status,200);
+  const lastComplete=await post("/v1/sales/execution/complete",{
+     branchId:b,warehouseId:w,orderId:lateId,version:1},
+     lateState.body.execution.revision);
+  assert.equal(lastComplete.status,201,JSON.stringify(lastComplete.body));
+  const sqlClient=await pool.connect();
+  try{
+    await sqlClient.query("BEGIN");
+    const newIssue=await sqlClient.query<{id:string}>(`INSERT INTO sales_direct_issue
+      (installation_id,branch_id,order_id,version_no,warehouse_id,
+       actor_id,request_id) VALUES($1,$2,$3,1,$4,$5,'forged-late-issue')
+       RETURNING id`,[t,b,lateId,w,actorId]);
+    await assert.rejects(sqlClient.query(`INSERT INTO sales_direct_issue_line
+      (installation_id,branch_id,issue_id,source_line,order_line_no,
+       product_id,quantity_base)
+      VALUES($1,$2,$3,1,1,$4,1)`,
+      [t,b,newIssue.rows[0]!.id,product.body.id]),/Cannot issue after completed MANUAL delivery/);
+  }finally{
+    await sqlClient.query("ROLLBACK").catch(()=>undefined);sqlClient.release();
+  }
+
+
  }finally{
   if(server)await new Promise<void>(done=>server!.close(()=>done()));
   if(pool)await pool.end();

@@ -245,6 +245,30 @@ CREATE TRIGGER t5a_manual_fulfillment_order_lock
  BEFORE INSERT ON sales_fulfillment FOR EACH ROW
  EXECUTE FUNCTION erp_t5a_manual_fulfillment_order_lock();
 
+-- T3-B already locks warehouse -> order for legitimate issue lines. Recheck
+-- terminal MANUAL status on the same order row to protect against direct SQL
+-- writers adding stock issues after immutable completion/SALE posting.
+CREATE FUNCTION erp_t5a_no_late_manual_issue() RETURNS trigger
+ LANGUAGE plpgsql AS $$
+DECLARE source_order uuid; fulfillment_state text;
+BEGIN
+ SELECT h.order_id INTO source_order FROM sales_direct_issue h
+ WHERE h.installation_id=NEW.installation_id AND h.branch_id=NEW.branch_id
+  AND h.id=NEW.issue_id;
+ PERFORM 1 FROM sales_order WHERE installation_id=NEW.installation_id
+  AND branch_id=NEW.branch_id AND id=source_order FOR UPDATE;
+ SELECT o.fulfillment_status INTO fulfillment_state FROM sales_order o
+ WHERE o.installation_id=NEW.installation_id AND o.branch_id=NEW.branch_id
+  AND o.id=source_order;
+ IF fulfillment_state='COMPLETED' OR EXISTS (
+  SELECT 1 FROM sales_fulfillment f WHERE f.installation_id=NEW.installation_id
+   AND f.branch_id=NEW.branch_id AND f.order_id=source_order AND f.mode='MANUAL'
+ ) THEN RAISE EXCEPTION 'Cannot issue after completed MANUAL delivery'; END IF;
+ RETURN NEW;
+END; $$;
+CREATE TRIGGER t5a_no_late_manual_issue BEFORE INSERT ON sales_direct_issue_line
+ FOR EACH ROW EXECUTE FUNCTION erp_t5a_no_late_manual_issue();
+
 -- Database-level integrity: a posted MANUAL fulfillment MUST reconcile to
 -- every canonical sale line, physical issue, return and exactly one SALE debit.
 -- Deferred checks work for a single atomic transaction without transient gaps.
