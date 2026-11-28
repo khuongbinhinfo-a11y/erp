@@ -77,6 +77,11 @@ test("P0 auth HTTP: bootstrap once, login throttle, RBAC user grants, revoke, au
         "demo session remains valid across browser restarts, logout still revokes");
       assert.ok((session.body.grants as any[]).some(x=>x.permission==="identity.users.manage"));
       assert.ok((session.body.grants as any[]).some(x=>x.permission==="inventory.read"&&x.warehouseId===root.warehouseId));
+      const org=await call("/v1/admin/organization","GET",undefined,token);
+      assert.equal(org.status,200);
+      assert.deepEqual(org.body.organization,{code:"tenant-ci",displayName:"Synthetic CI Tenant"});
+      assert.equal("installationId" in org.body.organization,false,
+        "organization contract exposes canonical display fields, not cross-tenant IDs");
       const catalog=await call("/v1/admin/permissions","GET",undefined,token);
       assert.equal(catalog.status,200);
       assert.ok((catalog.body.permissions as any[]).some(p=>
@@ -159,6 +164,7 @@ test("P0 auth HTTP: bootstrap once, login throttle, RBAC user grants, revoke, au
         {"idempotency-key":"evil-branch-"+randomUUID(),"if-match":"0"})).status,403);
 
       assert.equal((await call("/v1/admin/users","GET",undefined,bobToken)).status,403);
+      assert.equal((await call("/v1/admin/organization","GET",undefined,bobToken)).status,403);
       assert.equal((await call("/v1/admin/permissions","GET",undefined,bobToken)).status,403);
       assert.equal((await call("/v1/admin/audit","GET",undefined,bobToken)).status,403);
       assert.equal((await call("/v1/admin/policy-scopes","GET",undefined,bobToken)).status,403);

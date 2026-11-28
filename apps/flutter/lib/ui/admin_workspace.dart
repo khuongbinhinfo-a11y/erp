@@ -20,6 +20,7 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
   int selected=0;
   Future<List<IdentityUser>>? usersFuture;
   IdentityScopes? namedScopes;
+  int _scopeGeneration=0;
 
   Future<List<Map<String,dynamic>>>? permissionsFuture;
   Future<List<Map<String,dynamic>>>? auditFuture;
@@ -29,6 +30,23 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
   bool allowed(String code)=>widget.session?.grants.any((g)=>g.permission==code)??false;
   String get token=>widget.session!.token;
 
+  String accessStamp(IdentitySession? session){
+    if(session==null)return '';
+    final grants=session.grants.map((g)=>[
+      g.roleId,g.permission,g.branchId??'',g.warehouseId??''].join('/')).toList()..sort();
+    return [session.actorId,session.installationId,session.token,...grants].join('|');
+  }
+  @override void didUpdateWidget(covariant AdminWorkspace old){
+    super.didUpdateWidget(old);
+    if(old.previewOnly!=widget.previewOnly||old.client!=widget.client||
+       accessStamp(old.session)!=accessStamp(widget.session)){
+      // Cross-account state must never retain old user/audit/scope snapshots.
+      _scopeGeneration++;
+      selected=0;namedScopes=null;usersFuture=null;
+      permissionsFuture=null;auditFuture=null;
+      if(real&&allowed('identity.roles.manage'))loadScopes();
+    }
+  }
   @override void initState(){
     super.initState();
 
@@ -58,11 +76,18 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
       setState(()=>auditFuture=widget.client!.auditEvents(token));
   }
   Future<void> loadScopes() async {
+    final generation=++_scopeGeneration;
+    final session=widget.session,client=widget.client;
+    if(session==null||client==null)return;
     try {
-      final loaded=await widget.client!.scopes(token);
-      if(mounted)setState(()=>namedScopes=loaded);
+      final loaded=await client.scopes(session.token);
+      if(mounted&&generation==_scopeGeneration&&
+          widget.session?.token==session.token)
+        setState(()=>namedScopes=loaded);
     } catch (_) {
-      if(mounted)setState(()=>namedScopes=null);
+      if(mounted&&generation==_scopeGeneration&&
+          widget.session?.token==session.token)
+        setState(()=>namedScopes=null);
     }
   }
   String grantScopeLabel(IdentityGrant grant) {

@@ -224,6 +224,11 @@ class ErpIdentityClient {
     final r=await _request('GET','/v1/admin/users',token:token);
     return (r['users'] as List<dynamic>).map((v)=>IdentityUser.fromJson(v as Map<String,dynamic>)).toList();
   }
+  /// Canonical installation data, installation-role-gated on the server.
+  Future<Map<String,dynamic>> organization(String token)async{
+    final r=await _request('GET','/v1/admin/organization',token:token);
+    return Map<String,dynamic>.from(r['organization'] as Map);
+  }
   /// Owner-only directory writes: scope membership is assigned atomically on server.
   Future<Map<String,dynamic>> createOrgBranch(String token,{
     required String code,required String name,required String key})=>

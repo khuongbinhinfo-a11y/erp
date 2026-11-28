@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createHash } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import { signIn,signOut,resolveSession,AuthDenied,AuthThrottled,validThrottleSecret } from "./auth.ts";
-import { userAccess,listUsers,listScopes,listPolicyScopes,listPermissionCatalog,listAuditEvents,listGrants,createUser,updateUser,addGrant,revokeGrant,IdentityError } from "./identity_admin.ts";
+import { userAccess,listUsers,listScopes,readOrganization,listPolicyScopes,listPermissionCatalog,listAuditEvents,listGrants,createUser,updateUser,addGrant,revokeGrant,IdentityError } from "./identity_admin.ts";
 import { MutationFault } from "./mutation.ts";
 import { createDirectoryBranch,createDirectoryWarehouse,DirectoryFault } from "./org_directory.ts";
 import { validIdempotencyKey } from "./contracts.ts";
@@ -130,6 +130,12 @@ export async function handleIdentityHttp(
         send(res,200,{actorId:actor.actorId,installationId:tenant,loginName:identity.rows[0].loginName,
           expiresAt:identity.rows[0].expiresAt.toISOString(),grants:permissions,requestId:id},id,corsOrigin);
       }finally{db.release();}
+      return;
+    }
+    if(path==="/v1/admin/organization"&&req.method==="GET"){
+      const db=await pool.connect();
+      try{send(res,200,{organization:await readOrganization(db,tenant,actor.actorId),requestId:id},id,corsOrigin);}
+      finally{db.release();}
       return;
     }
     if(path==="/v1/admin/permissions"&&req.method==="GET"){
