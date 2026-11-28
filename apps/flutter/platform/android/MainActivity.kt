@@ -37,7 +37,10 @@ class MainActivity : FlutterActivity() {
                 }
                 val salesOrder = call.method == "printSalesOrder"
                 val html = call.argument<String>("html")
-                if (html == null || html.length !in 100..64000 ||
+                // A4 batch slips can contain up to 100 confirmed orders.
+                // Retain a strict cap to bound WebView/MethodChannel memory.
+                val maxHtmlChars = if (salesOrder) 2_000_000 else 64_000
+                if (html == null || html.length !in 100..maxHtmlChars ||
                     !html.startsWith("<!doctype html>") || html.contains("<script", true)) {
                     result.error("INVALID_RECEIPT", "Phiếu bán chưa hợp lệ.", null)
                     return@setMethodCallHandler
@@ -60,7 +63,7 @@ class MainActivity : FlutterActivity() {
                             try {
                                 if (isFinishing || isDestroyed) throw IllegalStateException()
                                 val manager = getSystemService(Context.PRINT_SERVICE) as PrintManager
-                                val title = if (salesOrder) "Đơn bán hàng" else "Phiếu bán lẻ"
+                                val title = if (salesOrder) "Phiếu xuất kho" else "Phiếu bán lẻ"
                                 manager.print("ERP - $title", page.createPrintDocumentAdapter(title),
                                     PrintAttributes.Builder()
                                         .setMediaSize(if (salesOrder) PrintAttributes.MediaSize.ISO_A4 else PrintAttributes.MediaSize.ISO_A5).build())

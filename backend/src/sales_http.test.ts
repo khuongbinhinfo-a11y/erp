@@ -124,6 +124,17 @@ test("B1: real PostgreSQL order lifecycle, immutable versions, RBAC, replay and 
     assert.equal(listRead.status,200);
     assert.equal(listRead.body.items.length,1);
     assert.equal(listRead.origin,"https://erp.example.test");
+    // Bulk management must page past the former 100-order cap, preserving
+    // branch/warehouse RBAC and rejecting malformed or unbounded offsets.
+    const page2=await call("/v1/sales/orders?branchId="+b+"&offset=100",
+      "GET",undefined,token);
+    assert.equal(page2.status,200);
+    assert.deepEqual(page2.body.items,[]);
+    for(const invalid of ["-100","1","abc","100001","10000000000000000000"]){
+      const response=await call("/v1/sales/orders?branchId="+b+"&offset="+invalid,
+        "GET",undefined,token);
+      assert.equal(response.status,400,invalid);
+    }
 
     const newPrice=await catalog("prices",{
       priceListId:list.body.id,productId:product.body.id,
@@ -159,6 +170,9 @@ test("B1: real PostgreSQL order lifecycle, immutable versions, RBAC, replay and 
     const detail=await call("/v1/sales/orders/"+id+"?branchId="+b,"GET",undefined,token);
     assert.equal(detail.status,200);
     assert.equal(detail.body.order.total,"21600");
+    assert.equal(detail.body.order.customerCode,"C-001");
+    assert.ok(Number.isFinite(Date.parse(detail.body.order.confirmedAt)),
+      "A4 print must use the confirmed timestamp from canonical order version");
     assert.equal(detail.body.order.lines[0].unitPrice,"12000.0000");
     assert.equal(detail.body.order.history.length,1);
     await assert.rejects(pool.query(

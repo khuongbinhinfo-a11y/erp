@@ -766,8 +766,13 @@ class ErpIdentityClient {
       body:{'branchId':branchId},revision:0,idempotencyKey:key);
     return Map<String,dynamic>.from(raw['customer'] as Map);
   }
-  Future<List<Map<String,dynamic>>> salesOrders(String token,String branchId,{String query=''})async{
-    final q=Uri(queryParameters:{'branchId':branchId,if(query.trim().isNotEmpty)'q':query.trim()}).query;
+  Future<List<Map<String,dynamic>>> salesOrders(String token,String branchId,{
+      String query='',int offset=0})async{
+    if(offset<0||offset>100000||offset%100!=0)
+      throw const ErpApiError(400,'Trang đơn hàng không hợp lệ.');
+    final q=Uri(queryParameters:{'branchId':branchId,
+      if(query.trim().isNotEmpty)'q':query.trim(),
+      if(offset>0)'offset':offset.toString()}).query;
     final r=await _request('GET','/v1/sales/orders?$q',token:token);
     return (r['items'] as List<dynamic>).map((v)=>Map<String,dynamic>.from(v as Map)).toList();
   }

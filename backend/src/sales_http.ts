@@ -589,7 +589,7 @@ async function cancel(db:PoolClient,ctx:MutationContext,id:string,b:string,reaso
     [t,b,id,ctx.actorId,reason]);
   return {status:200,body:{id,status:"CANCELLED",revision:Number(q.rows[0]!.revision)}};
 }
-async function listing(db:PoolClient,t:string,b:string,search:string,actor:string){
+async function listing(db:PoolClient,t:string,b:string,search:string,actor:string,offset:number){
   const modern=await hasOrderContextSchema(db);
   const warehouseIds=modern?(await userAccess(db,t,actor))
     .filter(g=>g.branchId===b&&g.permission==="inventory.read"&&g.warehouseId).map(g=>g.warehouseId!):[];
@@ -610,7 +610,7 @@ async function listing(db:PoolClient,t:string,b:string,search:string,actor:strin
       ${modern?'AND (sc.warehouse_id IS NULL OR sc.warehouse_id=ANY($4::uuid[]))':''}
       AND ($3='' OR o.document_no ILIKE '%'||$3||'%' OR c.code ILIKE '%'||$3||'%'
         OR c.name ILIKE '%'||$3||'%' ${modern?"OR sc.walk_in_name ILIKE '%'||$3||'%'":""})
-    ORDER BY o.created_at DESC,o.id DESC LIMIT 100`,[t,b,search,...(modern?[warehouseIds]:[])]);
+    ORDER BY o.created_at DESC,o.id DESC LIMIT 100 OFFSET $${modern?5:4}`,[t,b,search,...(modern?[warehouseIds]:[]),offset]);
   return r.rows;
 }
 async function orderWarehouseAllowed(db:PoolClient,t:string,b:string,id:string,actor:string){
@@ -630,6 +630,7 @@ async function detail(db:PoolClient,t:string,b:string,id:string,actor:string){
     v.grand_total::text AS total,v.subtotal::text,
     v.discount_total::text AS "discountTotal",v.tax_total::text AS "taxTotal",
     v.note,v.amendment_reason AS "amendmentReason",o.created_at AS "createdAt",
+    v.confirmed_at AS "confirmedAt",v.customer_code AS "customerCode",
     o.fulfillment_status AS "fulfillmentStatus",o.delivery_status AS "deliveryStatus",
     o.payment_status AS "paymentStatus",v.customer_name AS "customerName"
     FROM sales_order o JOIN sales_order_version v ON v.installation_id=o.installation_id
@@ -789,11 +790,16 @@ export async function handleSalesHttp(req:IncomingMessage,res:ServerResponse,
     if(url.pathname==="/v1/sales/orders"&&req.method==="GET"){
       const b=uuid(url.searchParams.get("branchId")),q=(url.searchParams.get("q")??"").trim();
       if(q.length>80)throw new SalesError(400,"SEARCH_TOO_LONG");
+      const rawOffset=url.searchParams.get("offset")??"0";
+      if(!/^(0|[1-9][0-9]*)$/.test(rawOffset))throw new SalesError(400,"INVALID_OFFSET");
+      const offset=Number(rawOffset);
+      if(!Number.isSafeInteger(offset)||offset>100000||offset%100!==0)
+        throw new SalesError(400,"INVALID_OFFSET");
       const db=await pool.connect();
       try{
         if(!await hasPermission(db,{installationId:tenant,actorId,permission:"orders.read",branchId:b}))
           throw new SalesError(403,"ORDERS_READ_DENIED");
-        send(res,200,{items:await listing(db,tenant,b,q,actorId),requestId:id},id,cors);
+        send(res,200,{items:await listing(db,tenant,b,q,actorId,offset),requestId:id},id,cors);
       }finally{db.release();}
       return;
     }
