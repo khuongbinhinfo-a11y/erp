@@ -188,11 +188,13 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
   final search=TextEditingController();
   var displayed=<Map<String,dynamic>>[...eligible];
   var nextOffset=200,hasMore=eligible.length==200,queryBusy=false;
+  var submittedQuery='';
   String? queryError;
   BuildContext? dialogContext;
   Future<void> fetchEligible(StateSetter refresh,{bool append=false})async{
    if(queryBusy||!mounted||dialogContext?.mounted!=true)return;
-   final requested=append?nextOffset:0,term=search.text.trim();
+   final requested=append?nextOffset:0,
+    term=append?submittedQuery:search.text.trim();
    refresh((){queryBusy=true;queryError=null;});
    try{
     final result=await widget.client.deliveryTripItems(token,
@@ -205,6 +207,7 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
       displayed.addAll(result.where((o)=>seen.add(o['id'])));
      }else{
       displayed=<Map<String,dynamic>>[...result];
+      submittedQuery=term;
      }
      nextOffset=requested+200;
      hasMore=result.length==200&&nextOffset<=100000;
