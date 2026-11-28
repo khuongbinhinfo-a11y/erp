@@ -32,7 +32,7 @@ async function event(db:PoolClient,c:MutationContext,s:TripScope,id:string,type:
  VALUES($1,$2,$3,$4,$5,jsonb_build_object('count',$6::integer),$7,$8)`,
  [c.installationId,s.branchId,id,type,revision,count,c.actorId,c.requestId]);
 }
-export async function tripResources(db:PoolClient,t:string,s:TripScope,type:"drivers"|"vehicles"){
+export async function tripResources(db:PoolClient,t:string,s:TripScope,type:"drivers"|"vehicles",offset=0){
  if(type==="vehicles")return (await db.query(`SELECT id,code,name,active,
   license_plate AS "licensePlate" FROM delivery_vehicle WHERE
   installation_id=$1 AND branch_id=$2 AND warehouse_id=$3
@@ -48,7 +48,7 @@ export async function tripResources(db:PoolClient,t:string,s:TripScope,type:"dri
    AND e.id=d.employee_id
   WHERE d.installation_id=$1 AND d.branch_id=$2 AND d.warehouse_id=$3
   ORDER BY (d.active AND COALESCE(e.active,false)) DESC,d.code
-  LIMIT 200`,[t,s.branchId,s.warehouseId])).rows;
+  LIMIT 200 OFFSET $4`,[t,s.branchId,s.warehouseId,offset])).rows;
 }
 export async function createResource(db:PoolClient,c:MutationContext,s:TripScope,
  kind:"vehicles",v:{code:string;name:string;licensePlate:string}){
