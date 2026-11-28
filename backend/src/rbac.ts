@@ -5,6 +5,8 @@ export const PERMISSIONS = {
   "identity.users.read": "installation",
   "identity.users.manage": "installation",
   "identity.roles.manage": "installation",
+  "org.employees.read": "branch",
+  "org.employees.manage": "branch",
   "catalog.read": "branch",
   "catalog.write": "branch",
   "orders.read": "branch",

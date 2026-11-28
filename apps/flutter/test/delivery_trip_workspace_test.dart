@@ -149,7 +149,8 @@ void main(){
       expect(writes,0,reason:'Cancelling a draft dialog must not POST');
     }
     await cancelFocusedDialog(find.byKey(const ValueKey('trip-create')));
-    await cancelFocusedDialog(find.widgetWithText(OutlinedButton,'Thêm nhân viên'));
+    expect(find.text('Thêm nhân viên'),findsNothing,
+      reason:'Giao nhận không quản lý hồ sơ nhân viên của toàn Công Ty');
     // Driver is selected from the canonical employee registry, never typed.
     await tester.tap(find.widgetWithText(OutlinedButton,'Liên kết tài xế'));
     await tester.pumpAndSettle();

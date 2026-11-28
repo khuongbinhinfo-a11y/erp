@@ -34,10 +34,14 @@ class IdentityUser {
   final String id,loginName;
   final int revision;
   final bool disabled;
-  const IdentityUser({required this.id,required this.loginName,required this.revision,required this.disabled});
+  final String? employeeId,employeeName,employeeBranchId;
+  const IdentityUser({required this.id,required this.loginName,required this.revision,
+    required this.disabled,this.employeeId,this.employeeName,this.employeeBranchId});
   factory IdentityUser.fromJson(Map<String,dynamic> m)=>IdentityUser(
     id:m['id'] as String,loginName:m['loginName'] as String,
-    revision:m['revision'] as int,disabled:m['disabled'] as bool);
+    revision:m['revision'] as int,disabled:m['disabled'] as bool,
+    employeeId:m['employeeId'] as String?,employeeName:m['employeeName'] as String?,
+    employeeBranchId:m['employeeBranchId'] as String?);
 }
 class IdentityScope {
   final String id,code,name;
@@ -89,7 +93,7 @@ class ErpIdentityClient {
   ErpIdentityClient({this.apiOrigin=erpApiOrigin,http.Client? httpClient,this.localStore}):_http=httpClient??http.Client();
   bool get configured=>Uri.tryParse(apiOrigin)?.scheme=='https'&&
     Uri.tryParse(apiOrigin)?.host.isNotEmpty==true;
-  void dispose(){_tripMutationKeys.clear();_r1Pending.clear();_mediaPending.clear();_inventoryPending.clear();_purchasePending.clear();_transferPending.clear();_stocktakePending.clear();_http.close();}
+  void dispose(){_staffMutationKeys.clear();_tripMutationKeys.clear();_r1Pending.clear();_mediaPending.clear();_inventoryPending.clear();_purchasePending.clear();_transferPending.clear();_stocktakePending.clear();_http.close();}
   String _key()=>'erp-'+DateTime.now().microsecondsSinceEpoch.toString()+'-${++_sequence}';
   Future<Map<String,dynamic>> _request(String method,String path,{
     String? token,Map<String,dynamic>? body,int? revision,String? idempotencyKey,
@@ -214,7 +218,7 @@ class ErpIdentityClient {
   Future<IdentitySession> refresh(IdentitySession current)=>restore(current.token);
   Future<void> logout(String token)async{
     try{await _request('POST','/v1/auth/logout',token:token);}
-    finally{_r1Pending.clear();_inventoryPending.clear();_purchasePending.clear();_transferPending.clear();_stocktakePending.clear();}
+    finally{_staffMutationKeys.clear();_r1Pending.clear();_inventoryPending.clear();_purchasePending.clear();_transferPending.clear();_stocktakePending.clear();}
   }
   Future<List<IdentityUser>> users(String token)async{
     final r=await _request('GET','/v1/admin/users',token:token);
@@ -797,9 +801,62 @@ class ErpIdentityClient {
     final r=await _request('GET','/v1/sales/orders/$id?$q',token:token);
     return Map<String,dynamic>.from(r['order'] as Map);
   }
+  /// IA-A: canonical company personnel, branch scoped without warehouse.
+  Future<List<IdentityScope>> staffBranches(String token)async{
+    final r=await _request('GET','/v1/org/employees/branches',token:token);
+    return (r['items'] as List).map((v)=>
+      IdentityScope.fromJson(Map<String,dynamic>.from(v as Map))).toList();
+  }
+  Future<List<Map<String,dynamic>>> staffItems(String token,String branchId,{
+      int offset=0,String search='',bool? active})async{
+    if(offset<0||offset>100000||offset%200!=0||search.trim().length>80){
+      throw const ErpApiError(400,'Bộ lọc nhân viên không hợp lệ.');
+    }
+    final query=Uri(queryParameters:{'branchId':branchId,
+      if(offset>0)'offset':'$offset',
+      if(search.trim().isNotEmpty)'q':search.trim(),
+      if(active!=null)'active':'$active'}).query;
+    final r=await _request('GET','/v1/org/employees?$query',token:token);
+    return (r['items'] as List).map((v)=>Map<String,dynamic>.from(v as Map)).toList();
+  }
+  Future<Map<String,dynamic>> staffWrite(IdentitySession session,String path,
+      Map<String,dynamic> payload,int revision)async{
+    final employeePath=path=='employees'||
+      (path.startsWith('employees/')&&path.split('/').length==2);
+    if(!employeePath)throw const ErpApiError(400,'Thao tác nhân viên không hợp lệ.');
+    final b=payload['branchId'];
+    if(b is! String||!session.grants.any((g)=>
+       g.permission=='org.employees.manage'&&g.branchId==b)){
+      throw const ErpApiError(403,'Không có quyền quản lý nhân viên tại chi nhánh này.');
+    }
+    final stamp=jsonEncode([session.installationId,session.actorId,
+      'staff/$path',revision,payload]);
+    final key=_staffMutationKeys.putIfAbsent(stamp,_key);
+    final r=await _request(path=='employees'?'POST':'PATCH','/v1/org/$path',
+      token:session.token,body:payload,revision:revision,idempotencyKey:key);
+    _staffMutationKeys.remove(stamp);
+    return r;
+  }
+  Future<Map<String,dynamic>> linkStaffAccount(IdentitySession session,
+      IdentityUser user,String branchId,String? employeeId)async{
+    if(!session.grants.any((g)=>g.permission=='identity.users.manage')||
+       !session.grants.any((g)=>
+         g.permission=='org.employees.manage'&&g.branchId==branchId)){
+      throw const ErpApiError(403,'Không có quyền liên kết tài khoản với nhân viên.');
+    }
+    final payload={'branchId':branchId,'employeeId':employeeId};
+    final stamp=jsonEncode([session.installationId,session.actorId,
+      'staff/account/${user.id}',user.revision,payload]);
+    final key=_staffMutationKeys.putIfAbsent(stamp,_key);
+    final r=await _request('PATCH','/v1/admin/users/${user.id}/employee',
+      token:session.token,body:payload,revision:user.revision,idempotencyKey:key);
+    _staffMutationKeys.remove(stamp);
+    return r;
+  }
   /// T5-B: route planning is server authoritative; never posts physical stock/COD.
   /// Preserve idempotency-key until verified acknowledgement of same body.
   final Map<String,String> _tripMutationKeys=<String,String>{};
+  final Map<String,String> _staffMutationKeys=<String,String>{};
   Future<List<Map<String,dynamic>>> deliveryTripItems(String token,String endpoint,
       String branch,String warehouse,{int offset=0,String search=''})async{
     if(!const ['trips','drivers','vehicles','employees','trips/eligible'].contains(endpoint)){

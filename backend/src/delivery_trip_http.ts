@@ -127,7 +127,9 @@ export async function handleDeliveryTripHttp(req:IncomingMessage,res:ServerRespo
     if(!await permitted(db,t,actor,s,false))reject("FORBIDDEN",403);
     let result:unknown;
     if(url.pathname==="/v1/delivery/employees")
-     result={items:await employees(db,t,s.branchId,pagedOffset(url,200))};
+     result={items:(await employees(db,t,s.branchId,pagedOffset(url,200)))
+       .map(e=>({id:e.id,code:e.code,fullName:e.fullName,active:e.active,
+         linkedDriver:e.linkedDriver}))};
     else if(url.pathname==="/v1/delivery/vehicles")
      result={items:await tripResources(db,t,s,"vehicles")};
     else if(url.pathname==="/v1/delivery/drivers")
@@ -184,7 +186,10 @@ export async function handleDeliveryTripHttp(req:IncomingMessage,res:ServerRespo
    action="delivery."+kind+".create";
    const c=context(req,t,actor,rid,action,payload);
    const out=await executeMutation(pool,c,{
-    authorize:(db)=>permitted(db,t,actor!,s,true),
+    authorize:(db)=>kind==="employees"
+      ?hasPermission(db,{installationId:t,actorId:actor!,
+        permission:"org.employees.manage",branchId:s.branchId})
+      :permitted(db,t,actor!,s,true),
     execute
    });
    send(res,out.status,out.body,rid,cors);return;
@@ -203,7 +208,8 @@ export async function handleDeliveryTripHttp(req:IncomingMessage,res:ServerRespo
    action="delivery.employees.update";
    const c=context(req,t,actor,rid,action,payload);
    const out=await executeMutation(pool,c,{
-    authorize:(db)=>permitted(db,t,actor!,s,true),
+    authorize:(db)=>hasPermission(db,{installationId:t,actorId:actor!,
+      permission:"org.employees.manage",branchId:s.branchId}),
     execute:(db,m)=>updateEmployee(db,m,s,employeeId,input)
    });
    send(res,out.status,out.body,rid,cors);return;

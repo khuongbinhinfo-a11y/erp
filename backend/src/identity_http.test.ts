@@ -33,7 +33,7 @@ test("P0 auth HTTP: bootstrap once, login throttle, RBAC user grants, revoke, au
     pool=new Pool({connectionString:tenantUrl.toString(),max:5,query_timeout:12000});
     pool.on("error",()=>{/* The test asserts request failures explicitly; avoid unhandled idle pool events. */});
     const mig=await applyMigrations(pool,resolve(process.cwd(),"db/migrations"));
-    assert.equal(mig.applied.length,28);
+    assert.equal(mig.applied.length,29);
     const pass="Admin-ci-"+randomUUID();
     const root=await bootstrapInstallation(pool,{
       code:"tenant-ci",displayName:"Synthetic CI Tenant",adminLogin:"admin_root",adminPassword:pass,

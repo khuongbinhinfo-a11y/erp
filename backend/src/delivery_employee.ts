@@ -16,20 +16,20 @@ export async function employees(db:PoolClient,installationId:string,branchId:str
   [installationId,branchId,offset]);
  return result.rows;
 }
-export async function createEmployee(db:PoolClient,c:MutationContext,s:TripScope,
- input:{code:string;fullName:string;phone?:string;jobTitle?:string}){
+export async function createEmployee(db:PoolClient,c:MutationContext,s:Pick<TripScope,"branchId">,
+ input:{code:string;fullName:string;phone?:string;jobTitle?:string;department?:string}){
  requireRevision(c.expectedRevision,0);
  const r=await db.query<{id:string}>(`INSERT INTO org_employee
-  (installation_id,branch_id,code,full_name,job_title,phone,created_by)
-  VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+  (installation_id,branch_id,code,full_name,job_title,phone,created_by,department)
+  VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
   [c.installationId,s.branchId,input.code,input.fullName,input.jobTitle??null,
-   input.phone??null,c.actorId]);
+   input.phone?.trim()?input.phone.trim():null,c.actorId,input.department??null]);
  return {status:201,body:{employee:{id:r.rows[0]!.id,
-  code:input.code,fullName:input.fullName,phone:input.phone??null,
-  jobTitle:input.jobTitle??null,active:true,revision:0,linkedDriver:false}}};
+  code:input.code,fullName:input.fullName,phone:input.phone?.trim()?input.phone.trim():null,
+  jobTitle:input.jobTitle??null,department:input.department??null,active:true,revision:0,linkedDriver:false}}};
 }
-export async function updateEmployee(db:PoolClient,c:MutationContext,s:TripScope,
- employeeId:string,input:{fullName:string;phone?:string;jobTitle?:string;active:boolean}){
+export async function updateEmployee(db:PoolClient,c:MutationContext,s:Pick<TripScope,"branchId">,
+ employeeId:string,input:{fullName:string;phone?:string;jobTitle?:string;department?:string;active:boolean}){
  const current=await db.query<{revision:string;active:boolean}>(`
   SELECT revision::text,active FROM org_employee
   WHERE installation_id=$1 AND branch_id=$2 AND id=$3 FOR UPDATE`,
@@ -47,13 +47,13 @@ export async function updateEmployee(db:PoolClient,c:MutationContext,s:TripScope
   if(pending.rowCount)fail("EMPLOYEE_HAS_PENDING_TRIPS");
  }
  const changed=await db.query(`UPDATE org_employee SET
-  full_name=$4,phone=$5,job_title=$6,active=$7,
+  full_name=$4,phone=$5,job_title=$6,active=$7,department=COALESCE($8,department),
   revision=revision+1,updated_at=now()
   WHERE installation_id=$1 AND branch_id=$2 AND id=$3
   RETURNING id,code,full_name AS "fullName",phone,
-   job_title AS "jobTitle",active,revision::integer`,
-  [c.installationId,s.branchId,employeeId,input.fullName,input.phone??null,
-   input.jobTitle??null,input.active]);
+   job_title AS "jobTitle",department,active,revision::integer`,
+  [c.installationId,s.branchId,employeeId,input.fullName,input.phone?.trim()?input.phone.trim():null,
+   input.jobTitle??null,input.active,input.department??null]);
  return {status:200,body:{employee:changed.rows[0]}};
 }
 export async function linkDriver(db:PoolClient,c:MutationContext,s:TripScope,

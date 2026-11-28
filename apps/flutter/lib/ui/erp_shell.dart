@@ -363,7 +363,7 @@ class _ErpShellState extends State<ErpShell> {
     final grants=activeSession?.grants??const <IdentityGrant>[];
     bool allowed(String prefix)=>grants.any((g)=>g.permission.startsWith(prefix));
     return switch(index){
-      0=>allowed('catalog.')||allowed('orders.')||allowed('inventory.')||allowed('finance.')||allowed('purchase.')||allowed('reports.'),
+      0=>allowed('catalog.')||allowed('orders.')||allowed('inventory.')||allowed('finance.')||allowed('purchase.')||allowed('reports.')||allowed('org.employees.'),
       1=>allowed('orders.')||allowed('catalog.'),
       2=>allowed('identity.'),
       3=>allowed('orders.create'),
