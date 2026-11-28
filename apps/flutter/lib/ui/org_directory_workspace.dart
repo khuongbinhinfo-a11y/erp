@@ -8,7 +8,8 @@ import 'stock_scope_setup.dart';
 class OrgDirectoryWorkspace extends StatefulWidget {
  final ErpIdentityClient client;
  final IdentitySession session;
- const OrgDirectoryWorkspace({super.key,required this.client,required this.session});
+ final Future<void> Function()? onScopesChanged;
+ const OrgDirectoryWorkspace({super.key,required this.client,required this.session,this.onScopesChanged});
  @override State<OrgDirectoryWorkspace> createState()=>_OrgDirectoryWorkspaceState();
 }
 class _OrgDirectoryWorkspaceState extends State<OrgDirectoryWorkspace>{
@@ -71,6 +72,7 @@ class _OrgDirectoryWorkspaceState extends State<OrgDirectoryWorkspace>{
      code:values.code,name:values.name,key:requestKey('branch',p));
    notice('Đã tạo chi nhánh. Quyền quản trị phạm vi mới đã gán cho quản trị viên chính.');
    await load();
+   await widget.onScopesChanged?.call();
   }on ErpApiError catch(e){notice(e.message,bad:true);await load();}
   catch(_){notice('Không xác minh được lệnh tạo chi nhánh; kiểm tra danh sách trước khi thử lại.',bad:true);await load();}
   finally{if(mounted)setState(()=>busy=false);}
@@ -101,6 +103,7 @@ class _OrgDirectoryWorkspaceState extends State<OrgDirectoryWorkspace>{
     branchId:branchId,code:values.code,name:values.name,key:requestKey('warehouse',p));
    notice('Đã tạo kho. Mặc định không cho xuất âm; lô/vị trí tùy chọn theo sản phẩm.');
    await load();
+   await widget.onScopesChanged?.call();
   }on ErpApiError catch(e){notice(e.message,bad:true);await load();}
   catch(_){notice('Không xác minh được lệnh tạo kho; kiểm tra danh sách trước khi thử lại.',bad:true);await load();}
   finally{if(mounted)setState(()=>busy=false);}
