@@ -89,7 +89,7 @@ class ErpIdentityClient {
   ErpIdentityClient({this.apiOrigin=erpApiOrigin,http.Client? httpClient,this.localStore}):_http=httpClient??http.Client();
   bool get configured=>Uri.tryParse(apiOrigin)?.scheme=='https'&&
     Uri.tryParse(apiOrigin)?.host.isNotEmpty==true;
-  void dispose(){_r1Pending.clear();_mediaPending.clear();_inventoryPending.clear();_purchasePending.clear();_transferPending.clear();_stocktakePending.clear();_http.close();}
+  void dispose(){_tripMutationKeys.clear();_r1Pending.clear();_mediaPending.clear();_inventoryPending.clear();_purchasePending.clear();_transferPending.clear();_stocktakePending.clear();_http.close();}
   String _key()=>'erp-'+DateTime.now().microsecondsSinceEpoch.toString()+'-${++_sequence}';
   Future<Map<String,dynamic>> _request(String method,String path,{
     String? token,Map<String,dynamic>? body,int? revision,String? idempotencyKey,
@@ -780,6 +780,55 @@ class ErpIdentityClient {
     final q=Uri(queryParameters:{'branchId':branchId}).query;
     final r=await _request('GET','/v1/sales/orders/$id?$q',token:token);
     return Map<String,dynamic>.from(r['order'] as Map);
+  }
+  /// T5-B: route planning is server authoritative; never posts physical stock/COD.
+  /// Preserve idempotency-key until verified acknowledgement of same body.
+  final Map<String,String> _tripMutationKeys=<String,String>{};
+  Future<List<Map<String,dynamic>>> deliveryTripItems(String token,String endpoint,
+      String branch,String warehouse,{int offset=0,String search=''})async{
+    if(!const ['trips','drivers','vehicles','trips/eligible'].contains(endpoint)){
+      throw const ErpApiError(400,'Danh sách điều phối không hợp lệ.');
+    }
+    final step=endpoint=='trips'?100:endpoint=='trips/eligible'?200:0;
+    if(offset<0||offset>100000||
+       (step==0&&offset!=0)||(step>0&&offset%step!=0)||
+       search.trim().length>80||(endpoint!='trips/eligible'&&search.isNotEmpty)){
+      throw const ErpApiError(400,'Trang hoặc bộ lọc điều phối không hợp lệ.');
+    }
+    final q=Uri(queryParameters:{'branchId':branch,'warehouseId':warehouse,
+      if(step>0&&offset>0)'offset':offset.toString(),
+      if(endpoint=='trips/eligible'&&search.trim().isNotEmpty)
+       'q':search.trim()}).query;
+    final result=await _request('GET','/v1/delivery/$endpoint?$q',token:token);
+    return (result['items'] as List<dynamic>).map((v)=>
+      Map<String,dynamic>.from(v as Map)).toList();
+  }
+  Future<Map<String,dynamic>> deliveryTripDetail(String token,String branch,
+      String warehouse,String tripId)async{
+    final q=Uri(queryParameters:{'branchId':branch,'warehouseId':warehouse}).query;
+    final r=await _request('GET','/v1/delivery/trips/$tripId?$q',token:token);
+    return Map<String,dynamic>.from(r['trip'] as Map);
+  }
+  Future<Map<String,dynamic>> deliveryTripWrite(IdentitySession session,
+      String endpoint,Map<String,dynamic> payload,int revision)async{
+    final valid=const {'trips','vehicles','drivers'}.contains(endpoint)||
+      RegExp(r'^trips/[0-9a-f-]{36}/(assign|unassign|reorder|plan|reopen|lock)$')
+        .hasMatch(endpoint);
+    if(!valid)throw const ErpApiError(400,'Thao tác điều phối không hợp lệ.');
+    final b=payload['branchId'],w=payload['warehouseId'];
+    if(b is! String||w is! String||
+      !session.grants.any((g)=>g.permission=='delivery.update'&&g.branchId==b)||
+      !session.grants.any((g)=>g.permission=='inventory.read'&&
+        g.branchId==b&&g.warehouseId==w)){
+      throw const ErpApiError(403,'Không có quyền điều phối trong kho và chi nhánh này.');
+    }
+    final identity=jsonEncode([session.installationId,session.actorId,
+      endpoint,revision,payload]);
+    final key=_tripMutationKeys.putIfAbsent(identity,_key);
+    final value=await _request('POST','/v1/delivery/$endpoint',
+      token:session.token,body:payload,revision:revision,idempotencyKey:key);
+    _tripMutationKeys.remove(identity);
+    return value;
   }
   /// T5-A: canonical server-side stock/delivery and AR facts. No offline posts.
   Future<Map<String,dynamic>> salesExecutionRead(String token,{

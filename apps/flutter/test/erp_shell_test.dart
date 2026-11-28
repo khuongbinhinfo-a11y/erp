@@ -57,6 +57,9 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
   final moreScroll=find.descendant(of:find.byKey(const ValueKey('erp-mobile-more-list')),matching:find.byType(Scrollable)).first;
   final admin=find.byKey(const ValueKey('erp-mobile-more-module-2'));
   await tester.scrollUntilVisible(admin,150,scrollable:moreScroll);
+  // Extra tier adds a row: bring tap target clear of the modal viewport edge.
+  await tester.drag(moreScroll,const Offset(0,-120));
+  await tester.pumpAndSettle();
   await tester.tap(admin);
   await tester.pumpAndSettle();
   expect(find.text('Người dùng và phân quyền'), findsOneWidget);
@@ -314,7 +317,11 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
     await tester.tap(find.byKey(const ValueKey('company-sub-CompanySection.products')));
     await tester.pumpAndSettle();
     expect(find.text('Danh mục sản phẩm'), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('company-CompanyGroup.overview')));
+    // Header tabs scroll horizontally when there are more business sections.
+    final overview=find.byKey(const ValueKey('company-CompanyGroup.overview'));
+    await tester.ensureVisible(overview);
+    await tester.pumpAndSettle();
+    await tester.tap(overview);
     await tester.pumpAndSettle();
     expect(tester.getTopLeft(header).dy, y);
     expect(find.text('Tổng quan điều hành'), findsOneWidget);
