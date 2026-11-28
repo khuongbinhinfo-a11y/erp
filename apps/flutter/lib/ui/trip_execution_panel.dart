@@ -47,7 +47,7 @@ class _TripExecutionPanelState extends State<TripExecutionPanel>{
   if(busy)return;
   setState((){busy=true;error=null;});
   try{
-   final result=await widget.client.deliveryExecutionWrite(widget.session,action,{
+   await widget.client.deliveryExecutionWrite(widget.session,action,{
     'branchId':widget.branchId,'warehouseId':widget.warehouseId,
     'tripId':widget.tripId,...payload},revision);
    if(!mounted)return;
@@ -150,14 +150,14 @@ class _TripExecutionPanelState extends State<TripExecutionPanel>{
         });
        },child:const Text('Xác nhận kết quả giao')),
       ]))),
-    )));
+    ));
    if(payload!=null)await _write('attempt',payload,stop['revision'] as int);
   }finally{for(final c in controls){c.dispose();}}
  }
  Future<void> _returnGoods(Map<String,dynamic> stop)async{
   final lines=available(stop);if(lines.isEmpty)return;
   final reason=TextEditingController();
-  final controls=[for(final line in lines)TextEditingController(text:'0')];
+  final controls=[for(int i=0;i<lines.length;i++)TextEditingController(text:'0')];
   try{
    final payload=await showModalBottomSheet<Map<String,dynamic>>(
     context:context,isScrollControlled:true,showDragHandle:true,

@@ -25,7 +25,7 @@ test("IA-A: staff belongs to Company branch, not delivery; user link and RBAC ar
   const migrations=resolve(process.cwd(),"db/migrations");
   const applied=await applyMigrations(db,migrations);
   assert.ok(applied.applied.includes("0029_iaa_employee_access.sql"));
-  assert.equal((await applyMigrations(db,migrations)).skipped.length,29);
+  assert.equal((await applyMigrations(db,migrations)).skipped.length,30);
   const password="iaa-"+randomUUID();
   const owner=await bootstrapInstallation(db,{
    code:"iaa",displayName:"Staff integration",adminLogin:"owner",adminPassword:password,

@@ -93,7 +93,7 @@ class ErpIdentityClient {
   ErpIdentityClient({this.apiOrigin=erpApiOrigin,http.Client? httpClient,this.localStore}):_http=httpClient??http.Client();
   bool get configured=>Uri.tryParse(apiOrigin)?.scheme=='https'&&
     Uri.tryParse(apiOrigin)?.host.isNotEmpty==true;
-  void dispose(){_staffMutationKeys.clear();_tripMutationKeys.clear();_r1Pending.clear();_mediaPending.clear();_inventoryPending.clear();_purchasePending.clear();_transferPending.clear();_stocktakePending.clear();_http.close();}
+  void dispose(){_deliveryExecutionKeys.clear();_staffMutationKeys.clear();_tripMutationKeys.clear();_r1Pending.clear();_mediaPending.clear();_inventoryPending.clear();_purchasePending.clear();_transferPending.clear();_stocktakePending.clear();_http.close();}
   String _key()=>'erp-'+DateTime.now().microsecondsSinceEpoch.toString()+'-${++_sequence}';
   Future<Map<String,dynamic>> _request(String method,String path,{
     String? token,Map<String,dynamic>? body,int? revision,String? idempotencyKey,
@@ -122,8 +122,8 @@ class ErpIdentityClient {
           'Dữ liệu nhận được không hợp lệ. Vui lòng thử lại.');
       }
       if(decoded is! Map<String,dynamic>)throw const ErpApiError(502,'Phản hồi API không hợp lệ.');
-      if(response.status>=400){
-        final message=switch(response.status){
+      if(response.statusCode>=400){
+        final message=switch(response.statusCode){
           401=>'Sai tài khoản/mật khẩu hoặc phiên đã hết hạn.',
           403=>'Không có quyền sử dụng chức năng này.',
           409=>'Dữ liệu thay đổi hoặc thao tác bị trùng. Hãy tải lại.',
@@ -141,9 +141,9 @@ class ErpIdentityClient {
         // Do not replace its specific message with a misleading "duplicate".
         final serverMessage=fault is Map<String,dynamic> && fault['message'] is String
           ? (fault['message'] as String).trim():null;
-        final specificConflict=response.status==409&&code!=null&&
+        final specificConflict=response.statusCode==409&&code!=null&&
           serverMessage!=null&&serverMessage.isNotEmpty&&serverMessage.length<=240;
-        throw ErpApiError(response.status,
+        throw ErpApiError(response.statusCode,
           specificConflict?serverMessage:message,code:code);
       }
       return decoded;
@@ -157,7 +157,7 @@ class ErpIdentityClient {
         try{
           final probe=await _http.get(origin.resolve('/v1/auth/config'))
             .timeout(const Duration(seconds:4));
-          if(probe.status==200){
+          if(probe.statusCode==200){
             throw const ErpApiError(424,
               'Chưa thể đăng nhập. Vui lòng thử lại.');
           }
@@ -171,7 +171,7 @@ class ErpIdentityClient {
         try{
           final probe=await _http.get(origin.resolve('/v1/auth/config'))
             .timeout(const Duration(seconds:4));
-          if(probe.status==200||probe.status==401||probe.status==503){
+          if(probe.statusCode==200||probe.statusCode==401||probe.statusCode==503){
             throw const ErpApiError(424,
               'Danh mục đang tạm gián đoạn. Vui lòng thử lại.');
           }
@@ -954,6 +954,50 @@ class ErpIdentityClient {
       token:session.token,body:payload,revision:revision,idempotencyKey:key);
     _tripMutationKeys.remove(identity);
     return value;
+  }
+
+  /// T5-D: recheck the same idempotency receipt after an ambiguous acknowledgement.
+  final Map<String,String> _deliveryExecutionKeys=<String,String>{};
+  Future<Map<String,dynamic>> deliveryExecutionRead(IdentitySession session,{
+      required String branchId,required String warehouseId,required String tripId})async{
+    final q=Uri(queryParameters:{'branchId':branchId,'warehouseId':warehouseId,'tripId':tripId}).query;
+    final r=await _request('GET','/v1/delivery/execution/read?$q',token:session.token);
+    return Map<String,dynamic>.from(r['execution'] as Map);
+  }
+  Future<Map<String,dynamic>> deliveryExecutionWrite(IdentitySession session,
+      String action,Map<String,dynamic> payload,int revision)async{
+    if(!const {'start','attempt','return','collect','handover'}.contains(action))
+      throw const ErpApiError(400,'Thao tác giao hàng không hợp lệ.');
+    final b=payload['branchId'],w=payload['warehouseId'];
+    final permission=action=='start'||action=='return'?'delivery.update':
+      action=='handover'?'delivery.cod.handover':'delivery.execute';
+    final warehousePermission=action=='return'?'inventory.post':'inventory.read';
+    if(b is! String||w is! String||
+      !session.grants.any((g)=>g.permission==permission&&g.branchId==b)||
+      !session.grants.any((g)=>g.permission==warehousePermission&&
+       g.branchId==b&&g.warehouseId==w))
+      throw const ErpApiError(403,'Chưa được cấp quyền giao hàng tại kho này.');
+    final fingerprint=jsonEncode([session.installationId,session.actorId,action,revision,payload]);
+    final key=_deliveryExecutionKeys.putIfAbsent(fingerprint,_key);
+    try{
+      final r=await _request('POST','/v1/delivery/execution/$action',
+        token:session.token,body:payload,revision:revision,idempotencyKey:key);
+      _deliveryExecutionKeys.remove(fingerprint);
+      return r;
+    }on ErpApiError catch(e){
+      if(e.status==0||e.status==502||e.status==503||e.status==504){
+        try{
+          final receipt=await _request('POST','/v1/delivery/execution/recovery',
+            token:session.token,body:{'action':action,'body':payload},
+            revision:revision,idempotencyKey:key);
+          if(receipt['receipt'] is Map){
+            _deliveryExecutionKeys.remove(fingerprint);
+            return Map<String,dynamic>.from(receipt['receipt'] as Map);
+          }
+        }catch(_){/* original key/body/revision remain for next retry */ }
+      }
+      rethrow;
+    }
   }
   /// T5-A: canonical server-side stock/delivery and AR facts. No offline posts.
   Future<Map<String,dynamic>> salesExecutionRead(String token,{

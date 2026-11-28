@@ -26,8 +26,8 @@ test("T3-B PostgreSQL: partial MANUAL issue, lot/location, scoped stock, negativ
   db=new Pool({connectionString:u.toString(),max:8,query_timeout:12000});
   db.on("error",()=>{});
   const migrations=await applyMigrations(db,resolve(process.cwd(),"db/migrations"));
-  assert.equal(migrations.applied.length,29);
-  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).skipped.length,29);
+  assert.equal(migrations.applied.length,30);
+  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).skipped.length,30);
   const pass="T3B-Test-"+randomUUID();
   const root=await bootstrapInstallation(db,{code:"t3b",displayName:"T3-B test",
    adminLogin:"owner",adminPassword:pass});
