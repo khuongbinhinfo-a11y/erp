@@ -29,7 +29,7 @@ async function changed(db:PoolClient,c:MutationContext,s:TripScope,id:string,
 async function event(db:PoolClient,c:MutationContext,s:TripScope,id:string,type:string,revision:number,count=0){
  await db.query(`INSERT INTO delivery_trip_event
  (installation_id,branch_id,trip_id,event_type,revision,detail,actor_id,request_id)
- VALUES($1,$2,$3,$4,$5,jsonb_build_object('count',$6),$7,$8)`,
+ VALUES($1,$2,$3,$4,$5,jsonb_build_object('count',$6::integer),$7,$8)`,
  [c.installationId,s.branchId,id,type,revision,count,c.actorId,c.requestId]);
 }
 export async function tripResources(db:PoolClient,t:string,s:TripScope,type:"drivers"|"vehicles"){
@@ -199,6 +199,14 @@ export async function reorder(db:PoolClient,c:MutationContext,s:TripScope,tripId
  return {status:200,body:{id:tripId,revision}};
 }
 async function verifyStops(db:PoolClient,c:MutationContext,s:TripScope,tripId:string){
+ // Lock route orders in stable ID order until COMMIT, to serialize LOCK
+ // against concurrent amendment/cancellation and fulfillment transitions.
+ await db.query(`SELECT o.id FROM delivery_trip_stop st
+  JOIN sales_order o ON o.installation_id=st.installation_id AND
+   o.branch_id=st.branch_id AND o.id=st.order_id
+  WHERE st.installation_id=$1 AND st.branch_id=$2 AND st.trip_id=$3
+  ORDER BY o.id FOR UPDATE OF o`,
+  [c.installationId,s.branchId,tripId]);
  const badRows=await db.query(`SELECT o.id FROM delivery_trip_stop st
  JOIN sales_order o ON o.installation_id=st.installation_id
  AND o.branch_id=st.branch_id AND o.id=st.order_id
@@ -210,7 +218,8 @@ async function verifyStops(db:PoolClient,c:MutationContext,s:TripScope,tripId:st
  AND (o.current_version<>st.order_version OR o.status<>'CONFIRMED'
  OR v.state<>'CONFIRMED' OR x.delivery_choice<>'TRIP' OR x.warehouse_id<>$4
  OR x.delivery_address IS DISTINCT FROM st.delivery_address
- OR o.delivery_status<>'NOT_DISPATCHED' OR o.payment_status<>'NOT_DUE')`,
+ OR o.delivery_status<>'NOT_DISPATCHED' OR o.payment_status<>'NOT_DUE'
+ OR o.fulfillment_status='COMPLETED')`,
  [c.installationId,s.branchId,tripId,s.warehouseId]);
  if(badRows.rowCount)throw bad("TRIP_ORDER_CHANGED");
  const n=await db.query<{n:string}>(`SELECT count(*)::text AS n
