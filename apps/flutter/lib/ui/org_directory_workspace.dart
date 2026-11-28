@@ -233,6 +233,9 @@ class _OrgDirectoryWorkspaceState extends State<OrgDirectoryWorkspace>{
    if(warehouses.isEmpty)const Padding(padding:EdgeInsets.all(12),child:Text('Chưa có kho.')),
    ...warehouses.map((w){
     final branch=branches.where((b)=>b.id==w.branchId).firstOrNull;
+    final canTrack=widget.session.grants.any((g)=>g.permission=='catalog.read'&&g.branchId==w.branchId)
+      &&widget.session.grants.any((g)=>g.permission=='inventory.read'&&
+        g.branchId==w.branchId&&g.warehouseId==w.id);
     return Padding(padding:const EdgeInsets.symmetric(vertical:4),
      child:Card(child:Padding(padding:const EdgeInsets.all(10),child:Column(
       crossAxisAlignment:CrossAxisAlignment.start,children:[
@@ -243,9 +246,12 @@ class _OrgDirectoryWorkspaceState extends State<OrgDirectoryWorkspace>{
        if(widget.policyOnly)Wrap(spacing:8,runSpacing:6,children:[
         OutlinedButton.icon(onPressed:busy?null:()=>policy(w),
          icon:const Icon(Icons.tune_outlined),label:const Text('Xuất âm / giữ hàng')),
-        OutlinedButton.icon(onPressed:busy?null:()=>tracking(w),
+        OutlinedButton.icon(onPressed:busy||!canTrack?null:()=>tracking(w),
          icon:const Icon(Icons.layers_outlined),label:const Text('Lô / vị trí theo sản phẩm')),
        ]),
+       if(widget.policyOnly&&!canTrack)
+         const Text('Lô/vị trí cần thêm quyền xem danh mục và tồn kho của kho này.',
+           style:TextStyle(fontSize:12)),
       ]))));
    }),
    const SizedBox(height:12),
