@@ -177,7 +177,8 @@ test("P0 auth HTTP: bootstrap once, login throttle, RBAC user grants, revoke, au
       const audited=await pool.query<{total:string}>(
         "SELECT count(*)::text AS total FROM audit_event WHERE installation_id=$1",
         [root.installationId]);
-      assert.equal(audited.rows[0]!.total,"4","create/grant/revoke/disable audited exactly once");
+      assert.equal(audited.rows[0]!.total,"7",
+        "create/grant/revoke/disable plus branch/warehouse/policy mutations audited once");
       const throttles=await pool.query<{count:string}>(
         "SELECT count(*)::text AS count FROM auth_login_throttle WHERE installation_id=$1 AND failed_count>=5",
         [root.installationId]);
