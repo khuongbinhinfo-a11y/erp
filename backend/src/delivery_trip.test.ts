@@ -44,6 +44,11 @@ test("T5-B trip planner: two orders, driver/vehicle, sequencing, idempotency, lo
     VALUES($1,$2,$3,'LEGACY01','Hồ sơ cũ',$4) RETURNING id`,
     [t,b,w,scope.actorId]);
   const legacyId=legacy.rows[0]!.id;
+  const hidden=await db.query<{id:string}>(`INSERT INTO delivery_driver
+   (installation_id,branch_id,warehouse_id,code,name,created_by)
+   VALUES($1,$2,$3,'LEGACY02','Hồ sơ chưa đối soát',$4) RETURNING id`,
+   [t,b,w,scope.actorId]);
+  const hiddenId=hidden.rows[0]!.id;
   assert.deepEqual((await applyMigrations(db,migrationDirectory)).applied,
     ["0028_t5c_canonical_employee_driver.sql"]);
   assert.equal((await applyMigrations(db,migrationDirectory)).skipped.length,28);
@@ -269,6 +274,30 @@ test("T5-B trip planner: two orders, driver/vehicle, sequencing, idempotency, lo
   assert.equal((await call("/v1/delivery/trips"+qs+"&offset=-100",
     "GET",undefined,token)).status,400);
   assert.equal((await call(path+qs,"GET",undefined,token)).status,200);
+  // Regression: >200 active linked drivers cannot hide unlinked historical
+  // profiles from page 2. Driver screen must allow deliberate reconciliation.
+  await db.query(`INSERT INTO org_employee(installation_id,branch_id,
+    code,full_name,created_by)
+   SELECT $1,$2,'PG'||lpad(n::text,5,'0'),
+    'Nhân viên phân trang '||n,$3 FROM generate_series(1,201) n`,
+   [t,b,scope.actorId]);
+  await db.query(`INSERT INTO delivery_driver(installation_id,branch_id,
+    warehouse_id,code,name,employee_id,created_by)
+   SELECT installation_id,branch_id,$3,code,full_name,id,$4
+   FROM org_employee WHERE installation_id=$1 AND branch_id=$2
+    AND code LIKE 'PG%'`,[t,b,w,scope.actorId]);
+  const driverA=await call("/v1/delivery/drivers"+qs,"GET",undefined,token);
+  const driverB=await call("/v1/delivery/drivers"+qs+"&offset=200",
+    "GET",undefined,token);
+  assert.equal(driverA.status,200);
+  assert.equal(driverB.status,200);
+  assert.equal(driverA.data.items.length,200);
+  assert.ok(driverB.data.items.some((r:any)=>r.id===hiddenId&&r.linkedEmployee===false),
+    "Old unlinked drivers remain accessible after first page");
+  assert.equal((await call("/v1/delivery/drivers"+qs+"&offset=1",
+   "GET",undefined,token)).status,400);
+  assert.equal(new Set([...driverA.data.items,...driverB.data.items]
+    .map((r:any)=>r.id)).size,driverA.data.items.length+driverB.data.items.length);
   const ledger=await db.query<{n:string}>(`SELECT count(*)::text AS n FROM inventory_ledger
     WHERE installation_id=$1 AND branch_id=$2`,[t,b]);
   assert.equal(ledger.rows[0]?.n,"0");
