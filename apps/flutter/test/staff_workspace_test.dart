@@ -101,8 +101,7 @@ void main(){
    client:client,session:session))));
   await tester.pumpAndSettle();
   final create=tester.widget<FilledButton>(
-   find.ancestor(of:find.byKey(const ValueKey('staff-create')),
-    matching:find.byType(FilledButton)).first);
+   find.byKey(const ValueKey('staff-create')));
   expect(create.onPressed,isNull);
   expect(tester.takeException(),isNull);
  });
