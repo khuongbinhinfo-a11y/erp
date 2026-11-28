@@ -4052,7 +4052,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                 label:Text(allVisibleSelected?'Bỏ chọn trang này':
                   'Chọn tất cả (${visibleIds.length})')),
               if(_selectedBulkOrders.isNotEmpty)...[
-                Text('$printableSelected đơn đủ điều kiện in',
+                Text('$printableSelected đơn đã xác nhận trong danh sách đã tải · các đơn khác sẽ đối chiếu khi in',
                   style:TextStyle(fontSize:12,color:ErpPalette.of(context).muted)),
                 TextButton(
                   onPressed:_navigationLocked?null:
