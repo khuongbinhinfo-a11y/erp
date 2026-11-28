@@ -4,6 +4,7 @@ import type { Pool, PoolClient } from "pg";
 import { signIn,signOut,resolveSession,AuthDenied,AuthThrottled,validThrottleSecret } from "./auth.ts";
 import { userAccess,listUsers,listScopes,listGrants,createUser,updateUser,addGrant,revokeGrant,IdentityError } from "./identity_admin.ts";
 import { MutationFault } from "./mutation.ts";
+import { createDirectoryBranch,createDirectoryWarehouse,DirectoryFault } from "./org_directory.ts";
 import { validIdempotencyKey } from "./contracts.ts";
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -148,6 +149,16 @@ export async function handleIdentityHttp(
       finally{db.release();}
       return;
     }
+    if((path==="/v1/admin/directory/branches"||
+        path==="/v1/admin/directory/warehouses")&&req.method==="POST"){
+      const payload=await readBody(req);
+      const isBranch=path.endsWith("/branches");
+      const ctx=mutateHeaders(req,id,payload,isBranch
+        ?"org.branch.create":"org.warehouse.create",actor.actorId,tenant);
+      const outcome=isBranch?await createDirectoryBranch(pool,ctx):
+        await createDirectoryWarehouse(pool,ctx);
+      send(res,outcome.status,outcome.body,id,corsOrigin);return;
+    }
     if(path==="/v1/admin/users"&&req.method==="POST"){
       const payload=await readBody(req);
       const ctx=mutateHeaders(req,id,payload,"identity.user.create",actor.actorId,tenant);
@@ -186,6 +197,7 @@ export async function handleIdentityHttp(
     if(error instanceof AuthThrottled){fail(res,429,"AUTH_THROTTLED",id,corsOrigin);return;}
     if(error instanceof AuthDenied){fail(res,401,"AUTH_DENIED",id,corsOrigin);return;}
     if(error instanceof IdentityError){fail(res,error.status,error.kind,id,corsOrigin);return;}
+    if(error instanceof DirectoryFault){fail(res,error.status,error.code,id,corsOrigin);return;}
     if(error instanceof MutationFault){fail(res,error.httpStatus,error.code,id,corsOrigin);return;}
     if(typeof error==="object"&&error!==null&&"code" in error&&error.code==="23505"){
       fail(res,409,"CONFLICT",id,corsOrigin);return;
