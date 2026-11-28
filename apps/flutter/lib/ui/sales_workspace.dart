@@ -3568,7 +3568,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
             label:const Text('Xử lý kho')),
           if(_canOpenDelivery(item))OutlinedButton.icon(
             key:const ValueKey('sales-linked-delivery'),
-            onPressed:_navigationLocked?null:()=>widget.onOpenDelivery!(item),
+            onPressed:_navigationLocked?null:()=>widget.onOpenDelivery!({...item,'branchId':branchId}),
             icon:const Icon(Icons.route_outlined,size:15),
             label:const Text('Điều phối giao')),
           if(editable&&can('orders.confirm'))FilledButton(
@@ -3720,7 +3720,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
 
   bool _canOpenDelivery(Map<String,dynamic> item){
     final ship=item['shipping'],b=branchId;
-    if(widget.onOpenDelivery==null||b==null||item['branchId']!=b||
+    if(widget.onOpenDelivery==null||b==null||(item['branchId']!=null&&item['branchId']!=b)||
       ship is! Map||ship['deliveryChoice']!='TRIP'||ship['warehouseId'] is! String)
       return false;
     final warehouse=ship['warehouseId'];
