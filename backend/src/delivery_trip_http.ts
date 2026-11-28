@@ -130,7 +130,8 @@ export async function handleDeliveryTripHttp(req:IncomingMessage,res:ServerRespo
      result={items:await employees(db,t,s.branchId,pagedOffset(url,200))};
     else if(url.pathname==="/v1/delivery/vehicles")
      result={items:await tripResources(db,t,s,"vehicles")};
-    else if(url.pathname==="/v1/delivery/drivers")result={items:await tripResources(db,t,s,"drivers")};
+    else if(url.pathname==="/v1/delivery/drivers")
+     result={items:await tripResources(db,t,s,"drivers",pagedOffset(url,200))};
     else if(url.pathname==="/v1/delivery/trips/eligible"){
      const query=(url.searchParams.get("q")??"").trim();
      if(query.length>80)reject("TRIP_SEARCH_TOO_LONG");
