@@ -45,7 +45,9 @@
     "test:t5c:operator": "node --experimental-strip-types --test scripts/t5c-0028-codespaces-migration.test.mjs",
     "db:migrate:t5c:codespaces": "node --experimental-strip-types scripts/t5c-0028-codespaces-migration.mjs",
     "test:t5b:operator": "node --experimental-strip-types --test scripts/t5b-0027-codespaces-migration.test.mjs",
-    "db:migrate:t5b:codespaces": "node --experimental-strip-types scripts/t5b-0027-codespaces-migration.mjs"
+    "db:migrate:t5b:codespaces": "node --experimental-strip-types scripts/t5b-0027-codespaces-migration.mjs",
+    "db:migrate:iaa:codespaces": "node --experimental-strip-types scripts/iaa-0029-codespaces-migration.mjs",
+    "test:iaa:operator": "node --experimental-strip-types --test scripts/iaa-0029-codespaces-migration.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
