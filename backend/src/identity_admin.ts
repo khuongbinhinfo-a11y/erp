@@ -26,7 +26,7 @@ export function parseScope(input:Record<string,unknown>):Scope{
      scope!=="installation"&&(!branchId||!UUID.test(branchId))||
      scope==="branch"&&input.warehouseId!=null||
      scope==="warehouse"&&(!warehouseId||!UUID.test(warehouseId)))throw new IdentityError(400,"INVALID_SCOPE");
-  return {permission,branchId,warehouseId};
+  return {permission,...(branchId?{branchId}:{}),...(warehouseId?{warehouseId}:{})};
 }
 export type Grant={roleId:string;permission:string;branchId:string|null;warehouseId:string|null};
 export async function userAccess(db:PoolClient,installationId:string,userId:string):Promise<Grant[]>{
