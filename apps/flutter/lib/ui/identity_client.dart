@@ -955,14 +955,16 @@ class ErpIdentityClient {
   /// All inventory lists are server-paginated; no SKU can disappear past the first 100.
   Future<({List<Map<String,dynamic>> items,bool hasMore})> inventoryPage(
       String token,String kind,{required String branchId,required String warehouseId,
-      String state='ACTIVE',int offset=0})async{
+      String state='ACTIVE',int offset=0,String? productId})async{
     if(!const {'balances','movements','reservations'}.contains(kind)||
        offset<0||offset%100!=0||
-       (kind=='reservations'&&!const {'ACTIVE','RELEASED'}.contains(state))){
+       (kind=='reservations'&&!const {'ACTIVE','RELEASED'}.contains(state))||
+        (productId!=null&&kind!='reservations')){
       throw const ErpApiError(400,'Trang dữ liệu kho không hợp lệ.');
     }
     final q=Uri(queryParameters:{'branchId':branchId,'warehouseId':warehouseId,
-      'offset':'$offset',if(kind=='reservations')'state':state}).query;
+      'offset':'$offset',if(kind=='reservations')'state':state,
+       if(productId!=null)'productId':productId}).query;
     final r=await _request('GET','/v1/inventory/$kind?$q',token:token);
     return (items:(r['items'] as List<dynamic>).map((x)=>
       Map<String,dynamic>.from(x as Map)).toList(),
