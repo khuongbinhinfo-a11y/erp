@@ -21,11 +21,14 @@ class _OrgDirectoryWorkspaceState extends State<OrgDirectoryWorkspace>{
  bool busy=false,loading=false;
  final Map<String,String> keys={};
  @override void initState(){super.initState();load();}
+ String accessStamp(IdentitySession session){
+  final grants=session.grants.map((g)=>[
+    g.roleId,g.permission,g.branchId??'',g.warehouseId??''].join('/')).toList()..sort();
+  return [session.actorId,session.installationId,session.token,...grants].join('|');
+ }
  @override void didUpdateWidget(covariant OrgDirectoryWorkspace old){
   super.didUpdateWidget(old);
-  if(old.session.token!=widget.session.token||
-     old.session.actorId!=widget.session.actorId||
-     old.session.installationId!=widget.session.installationId||
+  if(accessStamp(old.session)!=accessStamp(widget.session)||
      old.client!=widget.client||old.policyOnly!=widget.policyOnly){
     // Never allow stale async results to cross a session or scope switch.
     _loadGeneration++;
