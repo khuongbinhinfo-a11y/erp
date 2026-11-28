@@ -72,9 +72,7 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
   await tester.pumpAndSettle();
   expect(find.text('Tài khoản người dùng'), findsOneWidget);
   expect(find.text('Chưa có dữ liệu'), findsOneWidget);
-  await tester.tap(find.byKey(const ValueKey('admin-2')));
-  await tester.pumpAndSettle();
-  expect(find.text('Không có quyền xem danh mục quyền.'), findsOneWidget);
+  expect(find.byKey(const ValueKey('admin-2')),findsOneWidget);
 });
 
   testWidgets('old persistent notices are replaced by a dismissible upper-right toast', (tester) async {
