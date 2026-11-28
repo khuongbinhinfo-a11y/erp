@@ -15,6 +15,7 @@ void main(){
         home:const Scaffold(body:CompanyWorkspace(previewOnly:true))));
       expect(find.byKey(const ValueKey('company-CompanyGroup.catalog')),findsOneWidget);
       expect(find.byKey(const ValueKey('company-CompanyGroup.warehouse')),findsOneWidget);
+      expect(find.byKey(const ValueKey('company-CompanyGroup.personnel')),findsOneWidget);
       expect(find.byKey(const ValueKey('company-sub-CompanySection.products')),findsNothing);
       await tester.tap(find.byKey(const ValueKey('company-CompanyGroup.catalog')));
       await tester.pumpAndSettle();
@@ -44,6 +45,7 @@ void main(){
       expect(find.byKey(const ValueKey('company-CompanyGroup.purchasing')),findsNothing);
       expect(find.byKey(const ValueKey('company-CompanyGroup.finance')),findsNothing);
       expect(find.byKey(const ValueKey('company-CompanyGroup.reports')),findsNothing);
+      expect(find.byKey(const ValueKey('company-CompanyGroup.personnel')),findsNothing);
       await tester.tap(find.byKey(const ValueKey('company-CompanyGroup.catalog')));
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('company-sub-CompanySection.customers')),findsOneWidget);
