@@ -22,10 +22,13 @@ class _OrgDirectoryWorkspaceState extends State<OrgDirectoryWorkspace>{
   super.didUpdateWidget(old);
   if(old.session.token!=widget.session.token){directory=null;keys.clear();load();}
  }
- String requestKey(String action,Object payload){
-  final key='$action:${jsonEncode(payload)}';
-  return keys.putIfAbsent(key,()=> 'org-${DateTime.now().microsecondsSinceEpoch}-${keys.length}');
- }
+ String _fingerprint(String action,Object payload,int revision)=>
+   '$action:$revision:${jsonEncode(payload)}';
+ String requestKey(String action,Object payload,{int revision=0})=>
+   keys.putIfAbsent(_fingerprint(action,payload,revision),
+     ()=> 'org-${DateTime.now().microsecondsSinceEpoch}-${keys.length}');
+ void acknowledgeKey(String action,Object payload,{int revision=0})=>
+   keys.remove(_fingerprint(action,payload,revision));
  void notice(String message,{bool bad=false}){
   if(mounted)ErpToast.show(context,message,isError:bad);
  }
@@ -42,7 +45,7 @@ class _OrgDirectoryWorkspaceState extends State<OrgDirectoryWorkspace>{
  Future<({String code,String name})?> inputDialog(String title)async{
   final code=TextEditingController(),name=TextEditingController();
   try{
-   return await showDialog<({String code,String name})>(context:context,
+   final route=DialogRoute<({String code,String name})>(context:context,
     builder:(dialog)=>AlertDialog(title:Text(title),
      content:SizedBox(width:420,child:Column(mainAxisSize:MainAxisSize.min,children:[
       TextField(controller:code,textCapitalization:TextCapitalization.characters,
@@ -56,6 +59,9 @@ class _OrgDirectoryWorkspaceState extends State<OrgDirectoryWorkspace>{
       FilledButton(onPressed:()=>Navigator.pop(dialog,
        (code:code.text.trim().toUpperCase(),name:name.text.trim())),
        child:const Text('Tạo'))]));
+   final result=await Navigator.of(context,rootNavigator:true).push(route);
+   await route.completed;
+   return result;
   }finally{code.dispose();name.dispose();}
  }
  bool valid(({String code,String name}) input)=>
@@ -70,6 +76,7 @@ class _OrgDirectoryWorkspaceState extends State<OrgDirectoryWorkspace>{
   try{
    await widget.client.createOrgBranch(widget.session.token,
      code:values.code,name:values.name,key:requestKey('branch',p));
+   acknowledgeKey('branch',p);
    notice('Đã tạo chi nhánh. Quyền quản trị phạm vi mới đã gán cho quản trị viên chính.');
    await load();
    await widget.onScopesChanged?.call();
@@ -101,6 +108,7 @@ class _OrgDirectoryWorkspaceState extends State<OrgDirectoryWorkspace>{
   try{
    await widget.client.createOrgWarehouse(widget.session.token,
     branchId:branchId,code:values.code,name:values.name,key:requestKey('warehouse',p));
+   acknowledgeKey('warehouse',p);
    notice('Đã tạo kho. Mặc định không cho xuất âm; lô/vị trí tùy chọn theo sản phẩm.');
    await load();
    await widget.onScopesChanged?.call();
@@ -156,8 +164,10 @@ class _OrgDirectoryWorkspaceState extends State<OrgDirectoryWorkspace>{
    setState(()=>busy=true);
    final body={'branchId':b,'warehouseId':warehouse.id,
     'reserveShortageMode':values.reserve,'negativeIssueMode':values.negative};
+   final revision=(current['revision'] as num).toInt();
    await widget.client.inventoryAction(session.token,'guard-policy',body,
-    key:requestKey('policy',body),revision:(current['revision'] as num).toInt());
+    key:requestKey('policy',body,revision:revision),revision:revision);
+   acknowledgeKey('policy',body,revision:revision);
    notice('Đã lưu chính sách kho trên máy chủ.');
   }on ErpApiError catch(e){notice(e.message,bad:true);}
   catch(_){notice('Chưa xác nhận được kết quả chính sách. Tải lại trước khi thử.',bad:true);}
@@ -179,7 +189,8 @@ class _OrgDirectoryWorkspaceState extends State<OrgDirectoryWorkspace>{
      canManagePolicy:can('inventory.policy.manage'),canAssign:can('inventory.post'),
      onSubmit:(action,payload,revision)async{
       await widget.client.inventoryAction(session.token,action,payload,
-       key:requestKey('tracking',payload),revision:revision);
+       key:requestKey('tracking/$action',payload,revision:revision),revision:revision);
+      acknowledgeKey('tracking/$action',payload,revision:revision);
       notice('Đã lưu chính sách lô/vị trí cho sản phẩm.');
      });
   }on ErpApiError catch(e){notice(e.message,bad:true);}
