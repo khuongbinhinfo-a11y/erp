@@ -23,9 +23,9 @@ export async function createEmployee(db:PoolClient,c:MutationContext,s:Pick<Trip
   (installation_id,branch_id,code,full_name,job_title,phone,created_by,department)
   VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
   [c.installationId,s.branchId,input.code,input.fullName,input.jobTitle??null,
-   input.phone??null,c.actorId,input.department??null]);
+   input.phone?.trim()?input.phone.trim():null,c.actorId,input.department??null]);
  return {status:201,body:{employee:{id:r.rows[0]!.id,
-  code:input.code,fullName:input.fullName,phone:input.phone??null,
+  code:input.code,fullName:input.fullName,phone:input.phone?.trim()?input.phone.trim():null,
   jobTitle:input.jobTitle??null,department:input.department??null,active:true,revision:0,linkedDriver:false}}};
 }
 export async function updateEmployee(db:PoolClient,c:MutationContext,s:Pick<TripScope,"branchId">,
@@ -52,7 +52,7 @@ export async function updateEmployee(db:PoolClient,c:MutationContext,s:Pick<Trip
   WHERE installation_id=$1 AND branch_id=$2 AND id=$3
   RETURNING id,code,full_name AS "fullName",phone,
    job_title AS "jobTitle",department,active,revision::integer`,
-  [c.installationId,s.branchId,employeeId,input.fullName,input.phone??null,
+  [c.installationId,s.branchId,employeeId,input.fullName,input.phone?.trim()?input.phone.trim():null,
    input.jobTitle??null,input.active,input.department??null]);
  return {status:200,body:{employee:changed.rows[0]}};
 }

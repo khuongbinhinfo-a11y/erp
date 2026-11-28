@@ -51,7 +51,8 @@ void main(){
    expect(writes,isEmpty,reason:'Read must not create or mutate HR data');
    await tester.tap(find.byKey(const ValueKey('staff-create')));
    await tester.pumpAndSettle();
-   expect(find.text('Thêm nhân viên'),findsOneWidget);
+   expect(find.descendant(of:find.byType(AlertDialog),
+     matching:find.text('Thêm nhân viên')),findsOneWidget);
    await tester.tap(find.widgetWithText(TextButton,'Hủy').last);
    await tester.pumpAndSettle();
    expect(writes,isEmpty,reason:'Cancel must not POST an employee');
