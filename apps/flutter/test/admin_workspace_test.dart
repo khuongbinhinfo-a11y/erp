@@ -24,6 +24,16 @@ void main() {
             {'id':target,'loginName':'nhan_vien_1','revision':0,'disabled':false}
           ]}),200,headers:headers);
         }
+        if(req.url.path=='/v1/admin/permissions'){
+          return http.Response(jsonEncode({'permissions':[
+            {'code':'identity.users.read','scope':'installation'},
+            {'code':'inventory.read','scope':'warehouse'},
+            {'code':'inventory.policy.manage','scope':'warehouse'},
+          ]}),200,headers:headers);
+        }
+        if(req.url.path=='/v1/admin/audit'){
+          return http.Response(jsonEncode({'events':[]}),200,headers:headers);
+        }
         if (req.url.path == '/v1/admin/scopes') {
           return http.Response(jsonEncode({
             'branches':[{'id':branch,'code':'CN01','name':'Chi nhánh miền Nam'}],
@@ -58,6 +68,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(requests,contains('/v1/admin/scopes'));
     expect(requests,contains('/v1/admin/users'));
+    await tester.tap(find.text('Tài khoản').last);
+    await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('Cấp quyền'));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('admin-grant-selector')));
@@ -78,5 +90,10 @@ void main() {
     expect(find.text('Xem tồn kho'),findsOneWidget);
     expect(find.textContaining('Kho trung tâm (K01)'),findsOneWidget);
     expect(find.textContaining('00000000-0000'),findsNothing);
+    await tester.tap(find.text('Phân quyền').last);
+    await tester.pumpAndSettle();
+    expect(requests,contains('/v1/admin/permissions'));
+    expect(find.text('Ma trận quyền'),findsOneWidget);
+    expect(find.text('Đã cấp'),findsWidgets);
   });
 }
