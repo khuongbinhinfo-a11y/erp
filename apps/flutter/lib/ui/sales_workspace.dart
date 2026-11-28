@@ -121,7 +121,8 @@ class _OrderLine {
 class _SalesWorkspaceState extends State<SalesWorkspace> {
   List<Map<String,dynamic>> branches=[],orders=[];
   String? branchId,error,missingCatalog;
-  bool loading=true,saving=false;
+  bool loading=true,saving=false,_loadingMore=false,_hasMoreOrders=false;
+  int _nextOrdersOffset=0;
   int generation=0,sequence=0;
   final search=TextEditingController();
   String _orderFilter='all',_deliveryFilter='all',_paymentFilter='all';
@@ -272,6 +273,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       pendingCreate=null;pendingCreateKey=null;pendingConfirm=null;
       pendingConfirmKey=null;pendingUpdate=null;pendingUpdateKey=null;
       pendingCreateAutoConfirm=false;localRecoveryBusy=false;localRecoveryBlocked=false;pendingNeedsReceipt=false;
+      _loadingMore=false;_hasMoreOrders=false;_nextOrdersOffset=0;
       _retailOpenedOnce=false;loadBranches();_syncDelay=15;_scheduleRecovery();
     }
   }
@@ -304,11 +306,15 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   Future<void> reload()async{
     final branch=branchId;if(branch==null)return;
     final id=++generation;
-    setState((){loading=true;error=null;});
+    setState((){loading=true;error=null;_loadingMore=false;_hasMoreOrders=false;_nextOrdersOffset=0;});
     try{
       final values=await widget.client.salesOrders(widget.session.token,branch,query:search.text);
       if(mounted&&generation==id){
-        setState((){orders=values;loading=false;});
+        setState((){
+          orders=values;loading=false;
+          _nextOrdersOffset=100;
+          _hasMoreOrders=values.length==100;
+        });
         if(_selectedOrderId!=null){
           final stillVisible=values.where((o)=>o['id']==_selectedOrderId).firstOrNull;
           if(stillVisible==null){
@@ -326,6 +332,27 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
         loading=false;error='Không tải được đơn hàng.';
       });
     }
+  }
+  Future<void> _loadMoreOrders()async{
+    final branch=branchId,token=widget.session.token;
+    if(branch==null||loading||_loadingMore||!_hasMoreOrders||_navigationLocked)return;
+    final request=generation,offset=_nextOrdersOffset,query=search.text;
+    if(offset>100000||offset%100!=0)return;
+    setState(()=>_loadingMore=true);
+    try{
+      final values=await widget.client.salesOrders(token,branch,query:query,offset:offset);
+      if(!_sameScope(token,branch)||request!=generation||query!=search.text)return;
+      setState((){
+        final seen=orders.map((o)=>o['id']).toSet();
+        orders=[...orders,...values.where((o)=>seen.add(o['id']))];
+        _nextOrdersOffset=offset+100;
+        _hasMoreOrders=values.length==100&&_nextOrdersOffset<=100000;
+      });
+    }on ErpApiError catch(e){
+      if(mounted&&request==generation)inform(e.message,error:true);
+    }catch(_){
+      if(mounted&&request==generation)inform('Chưa tải được trang đơn tiếp theo.',error:true);
+    }finally{if(mounted&&request==generation)setState(()=>_loadingMore=false);}
   }
   Future<Map<String,dynamic>?> editForm({Map<String,dynamic>? order,bool copying=false,bool localDraft=false})async{
     final branch=branchId;if(branch==null)return null;
@@ -4013,7 +4040,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                 style:TextStyle(fontSize:11))),
           ])),
         if(!retail&&!loading)Padding(padding:const EdgeInsets.only(bottom:8),
-          child:Text('${shown.length}/${orders.length} đơn đang hiển thị · tối đa 100 kết quả mỗi lần tra cứu',
+          child:Text('${shown.length}/${orders.length} đơn đã tải · mỗi lần tải 100 đơn',
             style:TextStyle(color:ErpPalette.of(context).muted,fontSize:12))),
         if(error!=null)Padding(padding:const EdgeInsets.only(bottom:12),
           child:Text(error!,style:TextStyle(color:ErpPalette.of(context).danger))),
@@ -4163,6 +4190,16 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           ])).toList(),
         ));
         }),
+        if(!retail&&!loading&&_hasMoreOrders)Padding(
+          padding:const EdgeInsets.only(top:12),
+          child:Center(child:OutlinedButton.icon(
+            key:const ValueKey('sales-orders-load-more'),
+            onPressed:_loadingMore||_navigationLocked?null:_loadMoreOrders,
+            icon:_loadingMore?
+              const SizedBox(width:16,height:16,child:CircularProgressIndicator(strokeWidth:2)):
+              const Icon(Icons.expand_more),
+            label:Text(_loadingMore?'Đang tải':'Tải thêm 100 đơn'),
+          ))),
       ]),
     );
   }
