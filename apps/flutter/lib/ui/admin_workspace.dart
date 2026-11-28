@@ -352,7 +352,7 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
             return ListTile(dense:true,
               leading:Icon(grants.isEmpty?Icons.lock_outline:Icons.verified_user_outlined),
               title:Text(erpPermissionLabel(code)),
-              subtitle:Text('$'+'{label} · '+(grants.isEmpty?'Chưa được cấp':
+              subtitle:Text(label+' · '+(grants.isEmpty?'Chưa được cấp':
                 grants.map(grantScopeLabel).join(', '))),
               trailing:Text(grants.isEmpty?'Chưa cấp':'Đã cấp'));
           }),
