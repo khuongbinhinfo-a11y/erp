@@ -31,12 +31,12 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
 
   @override void initState(){
     super.initState();
-    if(real&&allowed('identity.users.read'))usersFuture=widget.client!.users(token);
+
     if(real&&allowed('identity.roles.manage'))loadScopes();
 
   }
   void reload(){
-    if(real&&allowed('identity.users.read')){
+    if(real&&allowed('identity.users.read')&&selected==1){
       setState(()=>usersFuture=widget.client!.users(token));
     }
     if(real&&allowed('identity.roles.manage'))loadScopes();
@@ -45,6 +45,8 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
     if(!mounted)return;
     setState((){
       selected=value;
+      if(real&&value==1&&allowed('identity.users.read'))
+        usersFuture=widget.client!.users(token);
       if(real&&value==2&&(allowed('identity.users.read')||allowed('identity.roles.manage')))
         permissionsFuture=widget.client!.permissionCatalog(token);
       if(real&&value==4&&allowed('identity.roles.manage'))
@@ -66,7 +68,7 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
   String grantScopeLabel(IdentityGrant grant) {
     final current=namedScopes;
     if(grant.warehouseId!=null){
-      if(current==null)return 'Đang tải tên kho';
+      if(current==null)return 'Kho theo quyền đã cấp';
       for(final warehouse in current.warehouses){
         if(warehouse.id==grant.warehouseId){
           final branchName=current.branches.where((x)=>x.id==warehouse.branchId)
@@ -78,7 +80,7 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
       return 'Kho không còn khả dụng';
     }
     if(grant.branchId!=null){
-      if(current==null)return 'Đang tải tên chi nhánh';
+      if(current==null)return 'Chi nhánh theo quyền đã cấp';
       for(final branch in current.branches){
         if(branch.id==grant.branchId)return 'Chi nhánh '+branch.name+(branch.code=='MAIN'?'':' ('+branch.code+')');
       }
