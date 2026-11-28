@@ -114,7 +114,7 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
  Future<void> _choose(Map<String,dynamic> trip)async{
   final b=branch,w=warehouse,epoch=++generation;
   if(b==null||w==null)return;
-  setState(()=>loading=true);
+  setState((){loading=true;_loadingMoreTrips=false;});
   try{
    final x=await widget.client.deliveryTripDetail(
     widget.session.token,b,w,trip['id'] as String);
@@ -182,48 +182,119 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
   code.dispose();name.dispose();extra.dispose();
  }
  Future<void> _assign()async{
-  final d=detail;if(d==null||eligible.isEmpty)return;
+  final d=detail,b=branch,w=warehouse,token=widget.session.token;
+  if(d==null||b==null||w==null||eligible.isEmpty)return;
   final chosen=<String>{};
-  final ok=await showDialog<bool>(context:context,builder:(c)=>StatefulBuilder(
-   builder:(c,update)=>AlertDialog(
+  final search=TextEditingController();
+  var displayed=<Map<String,dynamic>>[...eligible];
+  var nextOffset=200,hasMore=eligible.length==200,queryBusy=false;
+  String? queryError;
+  BuildContext? dialogContext;
+  Future<void> fetchEligible(StateSetter refresh,{bool append=false})async{
+   if(queryBusy||!mounted||dialogContext?.mounted!=true)return;
+   final requested=append?nextOffset:0,term=search.text.trim();
+   refresh((){queryBusy=true;queryError=null;});
+   try{
+    final result=await widget.client.deliveryTripItems(token,
+      'trips/eligible',b,w,offset:requested,search:term);
+    if(!mounted||dialogContext?.mounted!=true||
+       branch!=b||warehouse!=w)return;
+    refresh((){
+     if(append){
+      final seen=displayed.map((o)=>o['id']).toSet();
+      displayed.addAll(result.where((o)=>seen.add(o['id'])));
+     }else{
+      displayed=<Map<String,dynamic>>[...result];
+     }
+     nextOffset=requested+200;
+     hasMore=result.length==200&&nextOffset<=100000;
+     queryBusy=false;
+    });
+   }on ErpApiError catch(e){
+    if(dialogContext?.mounted==true)refresh((){
+      queryError=e.message;queryBusy=false;
+    });
+   }catch(_){
+    if(dialogContext?.mounted==true)refresh((){
+      queryError='Chưa tải được danh sách đơn giao. Vui lòng thử lại.';
+      queryBusy=false;
+    });
+   }
+  }
+  final ok=await showDialog<bool>(context:context,builder:(dialog){
+   dialogContext=dialog;
+   return StatefulBuilder(builder:(c,update)=>AlertDialog(
     title:const Text('Chọn đơn giao theo chuyến'),
-    content:SizedBox(width:520,height:350,child:Column(children:[
-      Row(children:[
-       Text('Đã chọn ${chosen.length} đơn',style:const TextStyle(fontWeight:FontWeight.w700)),
-       const Spacer(),
-       TextButton.icon(key:const ValueKey('trip-select-all-orders'),
-         onPressed:()=>update((){
-           final first=eligible.take(100).map((x)=>x['id'] as String).toList();
-           // Select-all is a bounded replacement, not a union that may
-           // exceed the API's atomic 100-order assignment limit.
-           if(first.length==chosen.length&&first.every(chosen.contains)){
-             chosen.clear();
-           }else{
-             chosen..clear()..addAll(first);
-           }
+    content:SizedBox(
+     width:(MediaQuery.sizeOf(c).width-48).clamp(280.0,520.0).toDouble(),
+     height:(MediaQuery.sizeOf(c).height*.58).clamp(260.0,480.0).toDouble(),
+     child:Column(children:[
+      TextField(key:const ValueKey('trip-eligible-search'),controller:search,
+       textInputAction:TextInputAction.search,
+       onSubmitted:(_)=>fetchEligible(update),
+       decoration:InputDecoration(
+        labelText:'Tìm mã đơn, khách hoặc địa chỉ',
+        isDense:true,prefixIcon:const Icon(Icons.search),
+        suffixIcon:IconButton(tooltip:'Tìm đơn chờ gán',
+         onPressed:queryBusy?null:()=>fetchEligible(update),
+         icon:const Icon(Icons.arrow_forward)),
+       )),
+      const SizedBox(height:8),
+      Wrap(spacing:8,runSpacing:6,crossAxisAlignment:WrapCrossAlignment.center,
+       children:[
+        Text('Đã chọn ${chosen.length} đơn',
+         style:const TextStyle(fontWeight:FontWeight.w700)),
+        TextButton.icon(key:const ValueKey('trip-select-all-orders'),
+         onPressed:queryBusy||displayed.isEmpty?null:()=>update((){
+          final first=displayed.take(100).map((x)=>x['id'] as String).toList();
+          if(first.length==chosen.length&&first.every(chosen.contains)){
+           chosen.clear();
+          }else{
+           chosen..clear()..addAll(first);
+          }
          }),
          icon:const Icon(Icons.select_all,size:16),
          label:const Text('Chọn tất cả (tối đa 100)')),
-      ]),
-      Expanded(child:ListView(children:eligible.map((o)=>
-       CheckboxListTile(dense:true,controlAffinity:ListTileControlAffinity.leading,
-        value:chosen.contains(o['id']),
-        onChanged:(v)=>update((){
-         if(v==true&&chosen.length<100)chosen.add(o['id'] as String);
-         else if(v!=true)chosen.remove(o['id']);
-        }),
-        title:Text('${o['documentNo']} · ${o['customerName']}',
-         maxLines:1,overflow:TextOverflow.ellipsis),
-        subtitle:Text(o['deliveryAddress']?.toString()??'',maxLines:2,
-         overflow:TextOverflow.ellipsis))).toList())),
-    ])),
-    actions:[TextButton(onPressed:()=>Navigator.pop(c,false),child:const Text('Hủy')),
-     FilledButton(onPressed:chosen.isEmpty?null:()=>Navigator.pop(c,true),
-       child:Text('Thêm ${chosen.length} đơn'))],
-   )));
-  if(ok==true&&mounted&&chosen.isNotEmpty)
+       ]),
+      if(queryError!=null)Text(queryError!,
+       style:TextStyle(color:ErpPalette.of(c).danger,fontSize:12)),
+      Expanded(child:queryBusy?
+       const Center(child:CircularProgressIndicator()):
+       displayed.isEmpty?
+       const Center(child:Text('Không có đơn giao phù hợp.')):
+       ListView(children:displayed.map((o)=>
+        CheckboxListTile(
+         dense:true,controlAffinity:ListTileControlAffinity.leading,
+         value:chosen.contains(o['id']),
+         onChanged:(v)=>update((){
+          if(v==true&&chosen.length<100)chosen.add(o['id'] as String);
+          else if(v!=true)chosen.remove(o['id']);
+         }),
+         title:Text('${o['documentNo']} · ${o['customerName']}',
+          maxLines:1,overflow:TextOverflow.ellipsis),
+         subtitle:Text(o['deliveryAddress']?.toString()??'',maxLines:2,
+          overflow:TextOverflow.ellipsis),
+        )).toList())),
+      if(hasMore)Align(alignment:Alignment.center,
+       child:TextButton.icon(
+        key:const ValueKey('trip-eligible-load-more'),
+        onPressed:queryBusy?null:()=>fetchEligible(update,append:true),
+        icon:const Icon(Icons.expand_more),
+        label:const Text('Tải thêm 200 đơn'),
+       )),
+     ])),
+    actions:[
+     TextButton(onPressed:()=>Navigator.pop(c,false),child:const Text('Hủy')),
+     FilledButton(onPressed:chosen.isEmpty||queryBusy?null:()=>Navigator.pop(c,true),
+      child:Text('Thêm ${chosen.length} đơn')),
+    ],
+   ));
+  });
+  search.dispose();
+  if(ok==true&&mounted&&chosen.isNotEmpty&&branch==b&&warehouse==w){
    await _write('trips/${d['id']}/assign',{'orderIds':chosen.toList()},
     d['revision'] as int);
+  }
  }
  Future<void> _plan()async{
   final d=detail;
