@@ -96,10 +96,11 @@ class SalesWorkspace extends StatefulWidget {
   final ValueChanged<bool>? onNavigationLockChanged;
   final VoidCallback? onOpenOrders;
   final ValueChanged<Map<String,dynamic>>? onOpenWarehouse;
+  final ValueChanged<Map<String,dynamic>>? onOpenDelivery;
   final bool retailMode;
   const SalesWorkspace({super.key,required this.client,required this.session,
     this.onOpenCatalog,this.onNavigationLockChanged,
-    this.retailMode=false,this.onOpenOrders,this.onOpenWarehouse});
+    this.retailMode=false,this.onOpenOrders,this.onOpenWarehouse,this.onOpenDelivery});
   @override State<SalesWorkspace> createState()=>_SalesWorkspaceState();
 }
 class _OrderLine {
@@ -3565,6 +3566,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
             onPressed:_navigationLocked?null:()=>widget.onOpenWarehouse!(item),
             icon:const Icon(Icons.warehouse_outlined,size:15),
             label:const Text('Xử lý kho')),
+          if(_canOpenDelivery(item))OutlinedButton.icon(
+            key:const ValueKey('sales-linked-delivery'),
+            onPressed:_navigationLocked?null:()=>widget.onOpenDelivery!(item),
+            icon:const Icon(Icons.route_outlined,size:15),
+            label:const Text('Điều phối giao')),
           if(editable&&can('orders.confirm'))FilledButton(
             onPressed:_navigationLocked?null:()=>action(item,'confirm'),
             child:const Text('Xác nhận')),
@@ -3712,6 +3718,17 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     ]);
   }
 
+  bool _canOpenDelivery(Map<String,dynamic> item){
+    final ship=item['shipping'],b=branchId;
+    if(widget.onOpenDelivery==null||b==null||item['branchId']!=b||
+      ship is! Map||ship['deliveryChoice']!='TRIP'||ship['warehouseId'] is! String)
+      return false;
+    final warehouse=ship['warehouseId'];
+    final grants=widget.session.grants;
+    return grants.any((g)=>g.permission=='delivery.read'&&g.branchId==b)&&
+      grants.any((g)=>g.permission=='orders.read'&&g.branchId==b)&&
+      grants.any((g)=>g.permission=='inventory.read'&&g.branchId==b&&g.warehouseId==warehouse);
+  }
   bool _canOpenWarehouse(Map<String,dynamic> item){
     final shipping=item['shipping'];
     if(widget.onOpenWarehouse==null||!erpSalesCanHold(item)||shipping is! Map||shipping['warehouseId'] is! String)return false;
