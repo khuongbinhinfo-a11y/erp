@@ -72,6 +72,18 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
     refreshed.addAll(lastPage.where((o)=>seen.add(o['id'])));
     nextOffset+=100;
    }
+   // Employee directory is page-scoped by the server. Load all pages
+   // before offering a staff selector; otherwise late-code employees vanish.
+   final employeeRows=<Map<String,dynamic>>[...rows[4]];
+   var lastEmployees=rows[4],employeeOffset=200;
+   while(lastEmployees.length==200&&employeeOffset<=100000){
+    lastEmployees=await widget.client.deliveryTripItems(widget.session.token,
+      'employees',b,w,offset:employeeOffset);
+    if(!mounted||generation!=epoch)return;
+    final seen=employeeRows.map((e)=>e['id']).toSet();
+    employeeRows.addAll(lastEmployees.where((e)=>seen.add(e['id'])));
+    employeeOffset+=200;
+   }
    final tid=chosen??detail?['id']?.toString();
    Map<String,dynamic>? selected;
    if(tid!=null){
@@ -79,7 +91,7 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
    }
    if(!mounted||generation!=epoch)return;
    setState((){
-    trips=refreshed;drivers=rows[1];vehicles=rows[2];eligible=rows[3];employees=rows[4];
+    trips=refreshed;drivers=rows[1];vehicles=rows[2];eligible=rows[3];employees=employeeRows;
     detail=selected;loading=false;
     _nextTripOffset=nextOffset;_hasMoreTrips=lastPage.length==100&&nextOffset<=100000;
    });
