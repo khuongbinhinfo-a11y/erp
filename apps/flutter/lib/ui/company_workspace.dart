@@ -8,6 +8,7 @@ import 'transfer_workspace.dart';
 import 'stocktake_workspace.dart';
 import 'sales_workspace.dart';
 import 'delivery_trip_workspace.dart';
+import 'staff_workspace.dart';
 import 'erp_toast.dart';
 import 'identity_client.dart';
 
@@ -23,6 +24,7 @@ enum CompanySection {
   stocktakes('Kiểm kê', 'Kiểm đếm và ghi chênh lệch', Icons.fact_check_outlined),
   orders('Đơn hàng', 'Đơn hàng và chứng từ', Icons.receipt_long_outlined),
   deliveryTrips('Chuyến giao', 'Điều phối tài xế, xe và điểm giao', Icons.route_outlined),
+  employees('Nhân viên', 'Hồ sơ nhân viên toàn Công Ty', Icons.badge_outlined),
   receivables('Công nợ', 'Phải thu và thanh toán', Icons.account_balance_wallet_outlined),
   reports('Báo cáo', 'Báo cáo và đối soát', Icons.bar_chart_outlined);
 
@@ -42,6 +44,7 @@ enum CompanyGroup {
   delivery('Giao nhận'),
   finance('Tài chính'),
   catalog('Danh mục'),
+  personnel('Nhân sự'),
   reports('Báo cáo');
   const CompanyGroup(this.label);
   final String label;
@@ -52,6 +55,7 @@ extension CompanySectionGroup on CompanySection {
     CompanySection.overview=>CompanyGroup.overview,
     CompanySection.orders=>CompanyGroup.sales,
     CompanySection.deliveryTrips=>CompanyGroup.delivery,
+    CompanySection.employees=>CompanyGroup.personnel,
     CompanySection.purchases=>CompanyGroup.purchasing,
     CompanySection.warehouses||CompanySection.transfers||CompanySection.stocktakes
       =>CompanyGroup.warehouse,
@@ -76,6 +80,7 @@ bool erpCanViewCompanySection(CompanySection target,List<IdentityGrant> grants,{
       CompanySection.stocktakes=>has('inventory.stocktake.read')||has('inventory.stocktake.create'),
       CompanySection.orders=>has('orders.read')||has('orders.create'),
       CompanySection.deliveryTrips=>has('delivery.read')&&has('inventory.read')&&has('orders.read'),
+      CompanySection.employees=>has('org.employees.read')||has('org.employees.manage'),
       CompanySection.receivables=>has('finance.receivables.read')||has('finance.payments.record'),
       // Reports have no released API yet; a catalog.read grant must never
       // implicitly expose finance or stock reporting.
@@ -217,6 +222,10 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
             : (active == CompanySection.deliveryTrips && !widget.previewOnly &&
                 widget.client != null && widget.session != null)
               ? DeliveryTripWorkspace(key:const ValueKey('delivery-trip-workspace'),
+                  client:widget.client!,session:widget.session!)
+            : (active == CompanySection.employees && !widget.previewOnly &&
+                widget.client != null && widget.session != null)
+              ? StaffWorkspace(key:const ValueKey('staff-workspace'),
                   client:widget.client!,session:widget.session!)
             : (active == CompanySection.purchases && !widget.previewOnly &&
                 widget.client != null && widget.session != null)
@@ -365,6 +374,7 @@ class _Register extends StatelessWidget {
       CompanySection.purchases => const ['Mã đơn mua', 'Nhà cung cấp', 'Kho', 'Trạng thái'],
       CompanySection.orders => const ['Mã đơn hàng', 'Ngày tạo', 'Khách hàng', 'Trạng thái'],
       CompanySection.deliveryTrips => const ['Mã chuyến', 'Tài xế', 'Xe', 'Điểm giao', 'Trạng thái'],
+      CompanySection.employees => const ['Mã NV', 'Họ tên', 'Chi nhánh', 'Trạng thái'],
       CompanySection.receivables => const ['Mã chứng từ', 'Khách hàng', 'Ngày ghi sổ', 'Số dư'],
       CompanySection.reports => const ['Tên báo cáo', 'Kỳ dữ liệu', 'Lần đối soát', 'Trạng thái'],
       CompanySection.overview => const <String>[],

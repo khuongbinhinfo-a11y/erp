@@ -185,81 +185,13 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
   if(ok==true&&mounted)await _write('trips',
    {'plannedDate':day.trim(),'note':note.trim()},0,chosen:null);
  }
- Future<void> _newEmployee()async{
-  var code='',fullName='',phone='',jobTitle='';
-  final ok=await showDialog<bool>(context:context,builder:(c)=>AlertDialog(
-   title:const Text('Thêm nhân viên'),
-   content:SizedBox(width:410,child:Column(mainAxisSize:MainAxisSize.min,children:[
-    TextFormField(onChanged:(v)=>code=v,
-     decoration:const InputDecoration(labelText:'Mã nhân viên')),
-    TextFormField(onChanged:(v)=>fullName=v,
-     decoration:const InputDecoration(labelText:'Họ và tên')),
-    TextFormField(onChanged:(v)=>jobTitle=v,
-     decoration:const InputDecoration(labelText:'Chức vụ (tùy chọn)')),
-    TextFormField(onChanged:(v)=>phone=v,keyboardType:TextInputType.phone,
-     decoration:const InputDecoration(labelText:'Số điện thoại (tùy chọn)')),
-   ])),
-   actions:[TextButton(onPressed:()=>Navigator.pop(c,false),child:const Text('Hủy')),
-    FilledButton(onPressed:()=>Navigator.pop(c,true),child:const Text('Tạo nhân viên'))],
-  ));
-  if(ok==true&&mounted)await _write('employees',{
-   'code':code.trim().toUpperCase(),'fullName':fullName.trim(),
-   if(phone.trim().isNotEmpty)'phone':phone.trim(),
-   if(jobTitle.trim().isNotEmpty)'jobTitle':jobTitle.trim(),
-  },0);
- }
- Future<void> _editEmployee(Map<String,dynamic> employee)async{
-  var fullName=employee['fullName']?.toString()??'',
-   phone=employee['phone']?.toString()??'',
-   jobTitle=employee['jobTitle']?.toString()??'',
-   active=employee['active']==true;
-  final result=await showDialog<bool>(context:context,builder:(c)=>
-   StatefulBuilder(builder:(c,refresh)=>AlertDialog(
-    title:Text('Nhân viên · ${employee['code']}'),
-    content:SizedBox(width:410,child:Column(mainAxisSize:MainAxisSize.min,children:[
-     TextFormField(initialValue:fullName,onChanged:(v)=>fullName=v,
-      decoration:const InputDecoration(labelText:'Họ và tên')),
-     TextFormField(initialValue:jobTitle,onChanged:(v)=>jobTitle=v,
-      decoration:const InputDecoration(labelText:'Chức vụ')),
-     TextFormField(initialValue:phone,onChanged:(v)=>phone=v,
-      decoration:const InputDecoration(labelText:'Số điện thoại')),
-     SwitchListTile(value:active,title:const Text('Đang hoạt động'),
-      onChanged:(v)=>refresh(()=>active=v)),
-     const Text('Ngừng hoạt động không xóa lịch sử. Nhân viên còn chuyến chưa kết thúc không thể ngừng.',
-      style:TextStyle(fontSize:12)),
-    ])),
-    actions:[TextButton(onPressed:()=>Navigator.pop(c,false),child:const Text('Hủy')),
-     FilledButton(onPressed:()=>Navigator.pop(c,true),child:const Text('Lưu'))],
-   )));
-  if(result==true&&mounted)await _write(
-   'employees/${employee['id']}/update',{
-    'fullName':fullName.trim(),'active':active,
-    if(phone.trim().isNotEmpty)'phone':phone.trim(),
-    if(jobTitle.trim().isNotEmpty)'jobTitle':jobTitle.trim(),
-   },employee['revision'] as int);
- }
- Future<void> _manageEmployees()async{
-  if(!mounted)return;
-  final chosen=await showDialog<Map<String,dynamic>>(context:context,
-   builder:(c)=>AlertDialog(title:const Text('Nhân viên chi nhánh'),
-    content:SizedBox(width:500,height:450,
-     child:ListView(children:employees.map((e)=>ListTile(
-      title:Text(e['fullName']?.toString()??''),
-      subtitle:Text('${e['code']} · ${e['active']==true?'Đang làm việc':'Đã ngừng'}'
-       '${e['linkedDriver']==true?' · Đã liên kết tài xế':''}'),
-      trailing:const Icon(Icons.edit_outlined),
-      onTap:()=>Navigator.pop(c,e),
-     )).toList())),
-    actions:[TextButton(onPressed:()=>Navigator.pop(c),child:const Text('Đóng'))]));
-  if(chosen!=null&&mounted)await _editEmployee(chosen);
- }
  Future<void> _newResource(bool driver)async{
   if(driver){
    final available=employees.where((e)=>
      e['active']==true&&e['linkedDriver']!=true).toList();
    if(available.isEmpty){
     if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-     content:Text('Chưa có nhân viên đang hoạt động chưa liên kết. Hãy tạo nhân viên trước.')));
+     content:Text('Chưa có nhân viên phù hợp. Vào Công Ty → Nhân sự → Nhân viên để tạo hồ sơ.')));
     return;
    }
    String chosen=available.first['id'] as String;
@@ -649,10 +581,6 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
     else ...[
      const SizedBox(height:10),
      Wrap(spacing:8,runSpacing:8,children:[
-      OutlinedButton.icon(onPressed:busy||!canManage?null:_newEmployee,
-       icon:const Icon(Icons.person_add_alt_1_outlined),label:const Text('Thêm nhân viên')),
-      OutlinedButton.icon(onPressed:busy||!canManage?null:_manageEmployees,
-       icon:const Icon(Icons.groups_outlined),label:const Text('Nhân viên')),
       OutlinedButton.icon(onPressed:busy||!canManage?null:()=>_newResource(true),
        icon:const Icon(Icons.badge_outlined),label:const Text('Liên kết tài xế')),
       if(drivers.any((d)=>d['linkedEmployee']!=true))

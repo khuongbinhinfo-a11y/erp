@@ -34,10 +34,14 @@ class IdentityUser {
   final String id,loginName;
   final int revision;
   final bool disabled;
-  const IdentityUser({required this.id,required this.loginName,required this.revision,required this.disabled});
+  final String? employeeId,employeeName,employeeBranchId;
+  const IdentityUser({required this.id,required this.loginName,required this.revision,
+    required this.disabled,this.employeeId,this.employeeName,this.employeeBranchId});
   factory IdentityUser.fromJson(Map<String,dynamic> m)=>IdentityUser(
     id:m['id'] as String,loginName:m['loginName'] as String,
-    revision:m['revision'] as int,disabled:m['disabled'] as bool);
+    revision:m['revision'] as int,disabled:m['disabled'] as bool,
+    employeeId:m['employeeId'] as String?,employeeName:m['employeeName'] as String?,
+    employeeBranchId:m['employeeBranchId'] as String?);
 }
 class IdentityScope {
   final String id,code,name;
@@ -89,7 +93,7 @@ class ErpIdentityClient {
   ErpIdentityClient({this.apiOrigin=erpApiOrigin,http.Client? httpClient,this.localStore}):_http=httpClient??http.Client();
   bool get configured=>Uri.tryParse(apiOrigin)?.scheme=='https'&&
     Uri.tryParse(apiOrigin)?.host.isNotEmpty==true;
-  void dispose(){_tripMutationKeys.clear();_r1Pending.clear();_mediaPending.clear();_inventoryPending.clear();_purchasePending.clear();_transferPending.clear();_stocktakePending.clear();_http.close();}
+  void dispose(){_staffMutationKeys.clear();_tripMutationKeys.clear();_r1Pending.clear();_mediaPending.clear();_inventoryPending.clear();_purchasePending.clear();_transferPending.clear();_stocktakePending.clear();_http.close();}
   String _key()=>'erp-'+DateTime.now().microsecondsSinceEpoch.toString()+'-${++_sequence}';
   Future<Map<String,dynamic>> _request(String method,String path,{
     String? token,Map<String,dynamic>? body,int? revision,String? idempotencyKey,
@@ -214,7 +218,7 @@ class ErpIdentityClient {
   Future<IdentitySession> refresh(IdentitySession current)=>restore(current.token);
   Future<void> logout(String token)async{
     try{await _request('POST','/v1/auth/logout',token:token);}
-    finally{_r1Pending.clear();_inventoryPending.clear();_purchasePending.clear();_transferPending.clear();_stocktakePending.clear();}
+    finally{_staffMutationKeys.clear();_r1Pending.clear();_inventoryPending.clear();_purchasePending.clear();_transferPending.clear();_stocktakePending.clear();}
   }
   Future<List<IdentityUser>> users(String token)async{
     final r=await _request('GET','/v1/admin/users',token:token);
@@ -797,9 +801,488 @@ class ErpIdentityClient {
     final r=await _request('GET','/v1/sales/orders/$id?$q',token:token);
     return Map<String,dynamic>.from(r['order'] as Map);
   }
+  /// IA-A: nhân viên là danh mục Công Ty theo chi nhánh, không yêu cầu quyền kho.
+  Future<List<IdentityScope>> staffBranches(String token)async{
+    final r=await _request('GET','/v1/org/employees/branches',token:token);
+    return (r['items'] as List).map((v)=>
+      IdentityScope.fromJson(Map<String,dynamic>.from(v as Map))).toList();
+  }
+  Future<List<Map<String,dynamic>>> staffItems(String token,String branchId,{
+      int offset=0,String search='',bool? active})async{
+    if(offset<0||offset>100000||offset%200!=0||search.trim().length>80){
+      throw const ErpApiError(400,'Bộ lọc nhân viên không hợp lệ.');
+    }
+    final query=Uri(queryParameters:{'branchId':branchId,
+      if(offset>0)'offset':'$offset',
+      if(search.trim().isNotEmpty)'q':search.trim(),
+      if(active!=null)'active':'$active'}).query;
+    final r=await _request('GET','/v1/org/employees?$query',token:token);
+    return (r['items'] as List).map((v)=>Map<String,dynamic>.from(v as Map)).toList();
+  }
+  Future<Map<String,dynamic>> staffWrite(IdentitySession session,String path,
+      Map<String,dynamic> payload,int revision)async{
+    if(path!='employees'&&!RegExp(r'^employees/[0-9a-f-]{36}
+  /// Preserve idempotency-key until verified acknowledgement of same body.
+  final Map<String,String> _tripMutationKeys=<String,String>{};
+  final Map<String,String> _staffMutationKeys=<String,String>{};
+  Future<List<Map<String,dynamic>>> deliveryTripItems(String token,String endpoint,
+      String branch,String warehouse,{int offset=0,String search=''})async{
+    if(!const ['trips','drivers','vehicles','employees','trips/eligible'].contains(endpoint)){
+      throw const ErpApiError(400,'Danh sách điều phối không hợp lệ.');
+    }
+    final step=endpoint=='trips'?100:const {'trips/eligible','employees','drivers'}.contains(endpoint)?200:0;
+    if(offset<0||offset>100000||
+       (step==0&&offset!=0)||(step>0&&offset%step!=0)||
+       search.trim().length>80||(endpoint!='trips/eligible'&&search.isNotEmpty)){
+      throw const ErpApiError(400,'Trang hoặc bộ lọc điều phối không hợp lệ.');
+    }
+    final q=Uri(queryParameters:{'branchId':branch,'warehouseId':warehouse,
+      if(step>0&&offset>0)'offset':offset.toString(),
+      if(endpoint=='trips/eligible'&&search.trim().isNotEmpty)
+       'q':search.trim()}).query;
+    final result=await _request('GET','/v1/delivery/$endpoint?$q',token:token);
+    return (result['items'] as List<dynamic>).map((v)=>
+      Map<String,dynamic>.from(v as Map)).toList();
+  }
+  Future<Map<String,dynamic>> deliveryTripDetail(String token,String branch,
+      String warehouse,String tripId)async{
+    final q=Uri(queryParameters:{'branchId':branch,'warehouseId':warehouse}).query;
+    final r=await _request('GET','/v1/delivery/trips/$tripId?$q',token:token);
+    return Map<String,dynamic>.from(r['trip'] as Map);
+  }
+  Future<Map<String,dynamic>> deliveryTripWrite(IdentitySession session,
+      String endpoint,Map<String,dynamic> payload,int revision)async{
+    final valid=const {'trips','vehicles','drivers','employees'}.contains(endpoint)||
+      RegExp(r'^employees/[0-9a-f-]{36}/update$').hasMatch(endpoint)||
+      RegExp(r'^drivers/[0-9a-f-]{36}/link$').hasMatch(endpoint)||
+      RegExp(r'^trips/[0-9a-f-]{36}/(assign|unassign|reorder|plan|reopen|lock)$')
+        .hasMatch(endpoint);
+    if(!valid)throw const ErpApiError(400,'Thao tác điều phối không hợp lệ.');
+    final b=payload['branchId'],w=payload['warehouseId'];
+    if(b is! String||w is! String||
+      !session.grants.any((g)=>g.permission=='delivery.update'&&g.branchId==b)||
+      !session.grants.any((g)=>g.permission=='inventory.read'&&
+        g.branchId==b&&g.warehouseId==w)){
+      throw const ErpApiError(403,'Không có quyền điều phối trong kho và chi nhánh này.');
+    }
+    final identity=jsonEncode([session.installationId,session.actorId,
+      endpoint,revision,payload]);
+    final key=_tripMutationKeys.putIfAbsent(identity,_key);
+    final value=await _request('POST','/v1/delivery/$endpoint',
+      token:session.token,body:payload,revision:revision,idempotencyKey:key);
+    _tripMutationKeys.remove(identity);
+    return value;
+  }
+  /// T5-A: canonical server-side stock/delivery and AR facts. No offline posts.
+  Future<Map<String,dynamic>> salesExecutionRead(String token,{
+      required String branchId,required String warehouseId,required String orderId,
+      int sourceOffset=0})async{
+    final q=Uri(queryParameters:{'branchId':branchId,
+      'warehouseId':warehouseId,'orderId':orderId,
+      'sourceOffset':sourceOffset.toString()}).query;
+    final r=await _request('GET','/v1/sales/execution/read?$q',token:token);
+    return Map<String,dynamic>.from(r['execution'] as Map);
+  }
+  Future<Map<String,dynamic>?> salesExecutionRecovery(String token,
+      String action,Map<String,dynamic> fields,
+      {required String key,required int revision})async{
+    final r=await _request('POST','/v1/sales/execution/recovery',token:token,
+      body:{'action':action,'body':fields},revision:revision,idempotencyKey:key);
+    final receipt=r['receipt'];
+    return receipt==null?null:Map<String,dynamic>.from(receipt as Map);
+  }
+  /// The key/body/revision are persisted atomically before any network call.
+  /// Unresolved payment must NEVER be replaced with a fresh idempotency key.
+  Future<Map<String,dynamic>> postSalesExecution(IdentitySession session,
+      String action,Map<String,dynamic> fields,int revision)async{
+    if(!const {'complete','return','payment'}.contains(action))
+      throw const ErpApiError(400,'Thao tác đơn không hợp lệ.');
+    final branch=fields['branchId'] as String,warehouse=fields['warehouseId'] as String,
+      order=fields['orderId'] as String;
+    final scope=localScope(session,branch,warehouse:warehouse),store=localStore;
+    if(scope==null||store==null)
+      throw const ErpApiError(503,'Chưa có lưu trữ an toàn cho chứng từ chờ đối soát.');
+    final previous=await store.executionPending(scope,order);
+    String key;
+    if(previous!=null){
+      final pendingAction=previous['action'],pendingBody=previous['body'],
+        pendingRevision=previous['revision'],pendingKey=previous['key'];
+      if(pendingKey is! String||pendingBody is! Map<String,dynamic>||
+         pendingRevision is! int||pendingAction is! String)
+        throw const ErpApiError(409,'Chứng từ chờ bị lỗi. Chưa thể ghi sổ.');
+      final existing=await salesExecutionRecovery(session.token,pendingAction,
+        Map<String,dynamic>.from(pendingBody),key:pendingKey,revision:pendingRevision);
+      if(existing!=null){
+        await store.clearExecutionPending(scope,order,pendingKey);
+        if(pendingAction==action&&pendingRevision==revision&&
+            jsonEncode(pendingBody)==jsonEncode(fields))return existing;
+        throw const ErpApiError(409,'Đã đối soát chứng từ cũ. Tải lại đơn trước khi tiếp tục.');
+      }
+      if(pendingAction!=action||pendingRevision!=revision||
+         jsonEncode(pendingBody)!=jsonEncode(fields))
+        throw const ErpApiError(423,
+          'Chứng từ trước chưa xác nhận. Phải đối soát, không được gửi lệnh mới.');
+      key=pendingKey;
+    }else{
+      key=_key();
+      await store.saveExecutionPending(scope,order,{
+        'action':action,'body':fields,'revision':revision,'key':key});
+    }
+    try{
+      final path=action=='return'?'returns':action=='payment'?'payments':'complete';
+      final result=await _request('POST','/v1/sales/execution/$path',
+        token:session.token,body:fields,revision:revision,idempotencyKey:key);
+      await store.clearExecutionPending(scope,order,key);
+      return result;
+    }on ErpApiError catch(e){
+      Map<String,dynamic>? receipt;
+      var recoverySucceeded=false;
+      try{
+        receipt=await salesExecutionRecovery(session.token,action,fields,
+          key:key,revision:revision);
+        recoverySucceeded=true;
+      }catch(_){/* Lost readback: original intent must remain durable. */}
+      if(receipt!=null){
+        await store.clearExecutionPending(scope,order,key);
+        return receipt;
+      }
+      // Definitive non-retryable 4xx plus a successful committed-receipt
+      // readback proves the command did not post; preserve the real error.
+      if(recoverySucceeded&&e.status>=400&&e.status<500&&
+          e.status!=408&&e.status!=423&&e.status!=424){
+        await store.clearExecutionPending(scope,order,key);
+        rethrow;
+      }
+      throw const ErpApiError(424,
+        'Chưa xác minh được máy chủ đã ghi sổ hay chưa. Lệnh và khóa gốc đã được giữ; đối soát trước khi thử lại.');
+    }
+  }
+  /// Read without posting. Keep an unresolved original command until ACK.
+  Future<Map<String,dynamic>?> reconcileSalesExecution(IdentitySession session,
+      {required String branchId,required String warehouseId,required String orderId})async{
+    final scope=localScope(session,branchId,warehouse:warehouseId),store=localStore;
+    if(scope==null||store==null)return null;
+    final p=await store.executionPending(scope,orderId);
+    if(p==null)return null;
+    final action=p['action'],body=p['body'],key=p['key'],revision=p['revision'];
+    if(action is! String||body is! Map||key is! String||revision is! int)
+      throw const ErpApiError(409,'Lệnh chờ đối soát không hợp lệ.');
+    final receipt=await salesExecutionRecovery(session.token,action,
+      Map<String,dynamic>.from(body),key:key,revision:revision);
+    if(receipt!=null)await store.clearExecutionPending(scope,orderId,key);
+    return receipt;
+  }
+  Future<Map<String,dynamic>?> salesRecovery(String token,String action,Map<String,dynamic> fields,{
+    required String key,required int revision,String? orderId})async{
+    final r=await _request('POST','/v1/sales/recovery',token:token,body:{
+      'action':action,'body':fields,if(orderId!=null)'orderId':orderId},
+      revision:revision,idempotencyKey:key);
+    final receipt=r['receipt'];
+    return receipt==null?null:Map<String,dynamic>.from(receipt as Map);
+  }
+  Future<Map<String,dynamic>> createSalesOrder(String token,Map<String,dynamic> fields,{
+    required String key,
+  })=>_request('POST','/v1/sales/orders',token:token,body:fields,
+    revision:0,idempotencyKey:key);
+  Future<Map<String,dynamic>> updateSalesOrder(String token,String id,int revision,
+    Map<String,dynamic> fields,{required String key})=>
+    _request('PATCH','/v1/sales/orders/$id',token:token,body:fields,
+      revision:revision,idempotencyKey:key);
+  Future<Map<String,dynamic>> salesOrderAction(String token,String id,String action,
+    String branchId,int revision,{required String key,String? reason})=>
+    _request('POST','/v1/sales/orders/$id/$action',token:token,
+      body:{'branchId':branchId,if(reason!=null)'reason':reason},
+      revision:revision,idempotencyKey:key);
+
+  /// Warehouse data is always authorized by the backend for one branch/warehouse.
+  /// All inventory lists are server-paginated; no SKU can disappear past the first 100.
+  Future<({List<Map<String,dynamic>> items,bool hasMore})> inventoryPage(
+      String token,String kind,{required String branchId,required String warehouseId,
+      String state='ACTIVE',int offset=0,String? productId})async{
+    if(!const {'balances','movements','reservations'}.contains(kind)||
+       offset<0||offset%100!=0||
+       (kind=='reservations'&&!const {'ACTIVE','RELEASED'}.contains(state))||
+        (productId!=null&&kind!='reservations')){
+      throw const ErpApiError(400,'Trang dữ liệu kho không hợp lệ.');
+    }
+    final q=Uri(queryParameters:{'branchId':branchId,'warehouseId':warehouseId,
+      'offset':'$offset',if(kind=='reservations')'state':state,
+       if(productId!=null)'productId':productId}).query;
+    final r=await _request('GET','/v1/inventory/$kind?$q',token:token);
+    return (items:(r['items'] as List<dynamic>).map((x)=>
+      Map<String,dynamic>.from(x as Map)).toList(),
+      hasMore:r['hasMore']==true);
+  }
+  Future<List<Map<String,dynamic>>> inventoryItems(String token,String kind,{
+    required String branchId,required String warehouseId,
+  })async=>(await inventoryPage(token,kind,
+      branchId:branchId,warehouseId:warehouseId)).items;
+  Future<({List<Map<String,dynamic>> items,bool hasMore})> inventoryReservationPage(
+      String token,{required String branchId,required String warehouseId,
+      required String state,required int offset})=>
+    inventoryPage(token,'reservations',branchId:branchId,
+      warehouseId:warehouseId,state:state,offset:offset);
+  /// T3-B: scoped on-hand and source issues are server-derived facts only.
+  Future<Map<String,dynamic>> inventoryGuardPolicy(String token,{
+    required String branchId,required String warehouseId})=>
+    _request('GET','/v1/inventory/guard-policy?'+Uri(queryParameters:{
+      'branchId':branchId,'warehouseId':warehouseId}).query,token:token);
+  Future<Map<String,dynamic>> inventoryStockScopes(String token,{
+    required String branchId,required String warehouseId,required String productId})=>
+    _request('GET','/v1/inventory/stock-scopes?'+Uri(queryParameters:{
+      'branchId':branchId,'warehouseId':warehouseId,'productId':productId}).query,
+      token:token);
+  Future<List<Map<String,dynamic>>> inventoryDirectIssueTotals(String token,{
+    required String branchId,required String warehouseId,required String orderId})async{
+    final r=await _request('GET','/v1/inventory/direct-issues/totals?'+Uri(queryParameters:{
+      'branchId':branchId,'warehouseId':warehouseId,'orderId':orderId}).query,
+      token:token);
+    return (r['items'] as List<dynamic>).map((x)=>
+      Map<String,dynamic>.from(x as Map)).toList();
+  }
+  Future<List<Map<String,dynamic>>> inventoryDirectIssues(String token,{
+    required String branchId,required String warehouseId,required String orderId})async{
+    final r=await _request('GET','/v1/inventory/direct-issues?'+Uri(queryParameters:{
+      'branchId':branchId,'warehouseId':warehouseId,'orderId':orderId}).query,
+      token:token);
+    return (r['items'] as List<dynamic>).map((x)=>Map<String,dynamic>.from(x as Map)).toList();
+  }
+  /// A pending request uses an identical command body and key until the server ACKs.
+  // Keep the entire exact request when POST may have COMMITTED without an ACK.
+  final Map<String,({Map<String,dynamic> payload,String key,String? action,int? revision})>
+    _inventoryPending={};
+  ({Map<String,dynamic> payload,String key,String? action,int? revision})?
+      pendingInventory(String id){
+    final p=_inventoryPending[id];
+    return p==null?null:(payload:Map<String,dynamic>.from(p.payload),
+      key:p.key,action:p.action,revision:p.revision);
+  }
+  void retainInventory(String id,Map<String,dynamic> payload,String key,
+      {String? action,int? revision}){
+    _inventoryPending[id]=(payload:Map<String,dynamic>.from(payload),
+      key:key,action:action,revision:revision);
+  }
+  void clearInventory(String id){_inventoryPending.remove(id);}
+  Future<Map<String,dynamic>> inventoryTripWork(String token,{
+      required String branchId,required String warehouseId,
+      required String orderId,required int version})async{
+    final query=Uri(queryParameters:{'branchId':branchId,'warehouseId':warehouseId,
+      'orderId':orderId,'version':'$version'}).query;
+    return _request('GET','/v1/inventory/trips/work?$query',token:token);
+  }
+
+  Future<Map<String,dynamic>> inventoryAction(String token,String action,
+      Map<String,dynamic> body,{required String key,required int revision})=>
+    _request('POST','/v1/inventory/$action',token:token,
+      body:body,revision:revision,idempotencyKey:key);
+
+  /// Branch + warehouse scoped purchase orders. Only server-posted receipts alter stock.
+  Future<({List<Map<String,dynamic>> items,bool hasMore})> purchasingOrderPage(
+      String token,String branchId,String warehouseId,{int offset=0})async{
+    if(offset<0||offset%100!=0)throw const ErpApiError(400,'Trang đơn mua không hợp lệ.');
+    final q=Uri(queryParameters:{'branchId':branchId,'warehouseId':warehouseId,
+      'offset':'$offset'}).query;
+    final r=await _request('GET','/v1/purchasing/orders?$q',token:token);
+    return (items:(r['items'] as List<dynamic>).map((v)=>
+      Map<String,dynamic>.from(v as Map)).toList(),hasMore:r['hasMore']==true);
+  }
+  Future<List<Map<String,dynamic>>> purchasingOrders(String token,
+      String branchId,String warehouseId)async=>
+    (await purchasingOrderPage(token,branchId,warehouseId)).items;
+  Future<Map<String,dynamic>> purchasingOrder(String token,String id,
+      String branchId,String warehouseId)async{
+    final q=Uri(queryParameters:{'branchId':branchId,'warehouseId':warehouseId}).query;
+    final r=await _request('GET','/v1/purchasing/orders/$id?$q',token:token);
+    return Map<String,dynamic>.from(r['order'] as Map);
+  }
+  Future<Map<String,dynamic>> purchasingCommand(String token,String path,
+      Map<String,dynamic> payload,{required int revision,required String key})=>
+    _request('POST','/v1/purchasing/$path',token:token,body:payload,
+      revision:revision,idempotencyKey:key);
+  // Preserve the entire immutable command, not only its body and key.
+  final Map<String,({Map<String,dynamic> payload,String key,String path,int revision})> _purchasePending={};
+  ({Map<String,dynamic> payload,String key,String path,int revision})? pendingPurchase(String id){
+    final p=_purchasePending[id];
+    return p==null?null:(payload:Map<String,dynamic>.from(p.payload),
+      key:p.key,path:p.path,revision:p.revision);
+  }
+  void retainPurchase(String id,Map<String,dynamic> payload,String key,{
+      required String path,required int revision}){
+    _purchasePending[id]=(payload:Map<String,dynamic>.from(payload),
+      key:key,path:path,revision:revision);
+  }
+  void clearPurchase(String id)=>_purchasePending.remove(id);
+
+  /// Transfer-scoped selectors work even without catalog.read permission.
+  Future<({List<Map<String,dynamic>> branches,List<Map<String,dynamic>> warehouses})>
+      transferScopes(String token,{String? branchId,String query=''})async{
+    final q=Uri(queryParameters:{
+      if(branchId!=null)'branchId':branchId,
+      if(query.isNotEmpty)'q':query,
+    }).query;
+    final raw=await _request('GET','/v1/inventory/transfers/scopes?$q',token:token);
+    List<Map<String,dynamic>> rows(String key)=>(raw[key] as List<dynamic>)
+      .map((x)=>Map<String,dynamic>.from(x as Map)).toList();
+    return (branches:rows('branches'),warehouses:rows('warehouses'));
+  }
+  /// Active SKUs for transfer creation; scoped to the source warehouse grant.
+  /// Unlike catalog screens this never asks for unrelated catalog.read rights.
+  Future<List<Map<String,dynamic>>> transferProducts(String token,{
+    required String branchId,required String sourceWarehouseId,String query=''})async{
+    final q=Uri(queryParameters:{'branchId':branchId,
+      'warehouseId':sourceWarehouseId,if(query.trim().isNotEmpty)'q':query.trim()}).query;
+    final raw=await _request('GET','/v1/inventory/transfers/products?$q',
+      token:token);
+    return (raw['items'] as List<dynamic>).map((x)=>
+      Map<String,dynamic>.from(x as Map)).toList();
+  }
+  /// Transfer lifecycle is separate from sales order and actual accepted stock.
+  Future<({List<Map<String,dynamic>> items,bool hasMore})> transferPage(
+    String token,{required String branchId,required String warehouseId,int offset=0})async{
+    if(offset<0||offset%100!=0)throw const ErpApiError(400,'Trang chuyển kho không hợp lệ.');
+    final query=Uri(queryParameters:{'branchId':branchId,
+      'warehouseId':warehouseId,'offset':'$offset'}).query;
+    final r=await _request('GET','/v1/inventory/transfers?$query',token:token);
+    return (items:(r['items'] as List<dynamic>).map((x)=>
+      Map<String,dynamic>.from(x as Map)).toList(),hasMore:r['hasMore']==true);
+  }
+  Future<Map<String,dynamic>> transferDetail(String token,String transferId,{
+      required String branchId,required String warehouseId,
+      required String sourceWarehouseId,required String destinationWarehouseId})async{
+    final q=Uri(queryParameters:{'branchId':branchId,'warehouseId':warehouseId,
+      'sourceWarehouseId':sourceWarehouseId,
+      'destinationWarehouseId':destinationWarehouseId}).query;
+    final r=await _request('GET','/v1/inventory/transfers/$transferId?$q',token:token);
+    return Map<String,dynamic>.from(r['transfer'] as Map);
+  }
+  Future<Map<String,dynamic>> transferCommand(String token,String path,
+    Map<String,dynamic> payload,{required int revision,required String key})=>
+    _request('POST','/v1/inventory/transfers$path',token:token,body:payload,
+       revision:revision,idempotencyKey:key);
+  final Map<String,({Map<String,dynamic> payload,String key,String path,int revision})>
+    _transferPending={};
+  ({Map<String,dynamic> payload,String key,String path,int revision})?
+    pendingTransfer(String scope){
+    final c=_transferPending[scope];
+    return c==null?null:(payload:Map<String,dynamic>.from(c.payload),
+       key:c.key,path:c.path,revision:c.revision);
+  }
+  void retainTransfer(String scope,Map<String,dynamic> payload,String key,{
+    required String path,required int revision}){
+    _transferPending[scope]=(payload:Map<String,dynamic>.from(payload),
+      key:key,path:path,revision:revision);
+  }
+  void clearTransfer(String scope)=>_transferPending.remove(scope);
+  List<String> transferPendingScopes(String actorId,String branchId,String warehouseId)=>
+    _transferPending.entries.where((entry){
+      final p=entry.value.payload;
+      return entry.key.startsWith('$actorId:')&&p['branchId']==branchId&&
+        (p['sourceWarehouseId']==warehouseId||p['destinationWarehouseId']==warehouseId);
+    }).map((entry)=>entry.key).toList();
+
+
+  Future<({List<Map<String,dynamic>> branches,List<Map<String,dynamic>> warehouses})>
+      stocktakeScopes(String token,{String? branchId,String query=''})async{
+    final q=Uri(queryParameters:{if(branchId!=null)'branchId':branchId,
+      if(query.isNotEmpty)'q':query}).query;
+    final r=await _request('GET','/v1/inventory/stocktakes/scopes?$q',token:token);
+    List<Map<String,dynamic>> list(String k)=>(r[k] as List<dynamic>).map((x)=>
+      Map<String,dynamic>.from(x as Map)).toList();
+    return (branches:list('branches'),warehouses:list('warehouses'));
+  }
+  Future<({List<Map<String,dynamic>> items,bool hasMore})> stocktakePage(
+    String token,{required String branchId,required String warehouseId,int offset=0})async{
+    if(offset<0||offset%100!=0)throw const ErpApiError(400,'Trang kiểm kê không hợp lệ.');
+    final q=Uri(queryParameters:{'branchId':branchId,'warehouseId':warehouseId,
+      'offset':'$offset'}).query;
+    final r=await _request('GET','/v1/inventory/stocktakes?$q',token:token);
+    return (items:(r['items'] as List<dynamic>).map((x)=>
+      Map<String,dynamic>.from(x as Map)).toList(),hasMore:r['hasMore']==true);
+  }
+  Future<Map<String,dynamic>> stocktakeDetail(String token,String id,{
+    required String branchId,required String warehouseId})async{
+    final q=Uri(queryParameters:{'branchId':branchId,'warehouseId':warehouseId}).query;
+    final r=await _request('GET','/v1/inventory/stocktakes/$id?$q',token:token);
+    return Map<String,dynamic>.from(r['stocktake'] as Map);
+  }
+  Future<Map<String,dynamic>> stocktakeCommand(String token,String suffix,
+    Map<String,dynamic> body,{required int revision,required String key})=>
+    _request('POST','/v1/inventory/stocktakes$suffix',token:token,
+      body:body,revision:revision,idempotencyKey:key);
+  final Map<String,({Map<String,dynamic> payload,String key,String suffix,int revision})>
+    _stocktakePending={};
+  ({Map<String,dynamic> payload,String key,String suffix,int revision})?
+      pendingStocktake(String scope){
+    final p=_stocktakePending[scope];
+    return p==null?null:(payload:Map<String,dynamic>.from(p.payload),
+      key:p.key,suffix:p.suffix,revision:p.revision);
+  }
+  void retainStocktake(String scope,Map<String,dynamic> payload,String key,{
+      required String suffix,required int revision}){
+    _stocktakePending[scope]=(payload:Map<String,dynamic>.from(payload),
+      key:key,suffix:suffix,revision:revision);
+  }
+  void clearStocktake(String scope)=>_stocktakePending.remove(scope);
+
+  Future<IdentityUser> createUser(String token,String username,String password)async{
+    final r=await _request('POST','/v1/admin/users',token:token,revision:0,
+      body:{'loginName':username,'password':password});
+    return IdentityUser.fromJson(r);
+  }
+  Future<int> setDisabled(String token,IdentityUser user,bool disabled)async{
+    final r=await _request('PATCH','/v1/admin/users/${user.id}',token:token,
+      revision:user.revision,body:{'disabled':disabled});
+    return r['revision'] as int;
+  }
+  Future<int> grant(String token,IdentityUser user,{
+    required String permission,String? branchId,String? warehouseId,
+  })async{
+    final r=await _request('POST','/v1/admin/users/${user.id}/grants',token:token,revision:user.revision,
+      body:{'permission':permission,'branchId':branchId,'warehouseId':warehouseId});
+    return r['revision'] as int;
+  }
+  Future<int> revoke(String token,IdentityUser user,String roleId)async{
+    final r=await _request('DELETE','/v1/admin/users/${user.id}/grants/$roleId',token:token,
+      revision:user.revision);
+    return r['revision'] as int;
+  }
+}
+).hasMatch(path)){
+      throw const ErpApiError(400,'Thao tác nhân viên không hợp lệ.');
+    }
+    final b=payload['branchId'];
+    if(b is! String||!session.grants.any((g)=>
+       g.permission=='org.employees.manage'&&g.branchId==b)){
+      throw const ErpApiError(403,'Không có quyền quản lý nhân viên tại chi nhánh này.');
+    }
+    final stamp=jsonEncode([session.installationId,session.actorId,
+      'staff/$path',revision,payload]);
+    final key=_staffMutationKeys.putIfAbsent(stamp,_key);
+    final r=await _request(path=='employees'?'POST':'PATCH','/v1/org/$path',
+      token:session.token,body:payload,revision:revision,idempotencyKey:key);
+    _staffMutationKeys.remove(stamp);
+    return r;
+  }
+  Future<Map<String,dynamic>> linkStaffAccount(IdentitySession session,
+      IdentityUser user,String branchId,String? employeeId)async{
+    if(!session.grants.any((g)=>g.permission=='identity.users.manage')||
+       !session.grants.any((g)=>
+         g.permission=='org.employees.manage'&&g.branchId==branchId)){
+      throw const ErpApiError(403,'Không có quyền liên kết tài khoản với nhân viên.');
+    }
+    final payload={'branchId':branchId,'employeeId':employeeId};
+    final stamp=jsonEncode([session.installationId,session.actorId,
+      'staff/account/${user.id}',user.revision,payload]);
+    final key=_staffMutationKeys.putIfAbsent(stamp,_key);
+    final r=await _request('PATCH','/v1/admin/users/${user.id}/employee',
+      token:session.token,body:payload,revision:user.revision,idempotencyKey:key);
+    _staffMutationKeys.remove(stamp);
+    return r;
+  }
   /// T5-B: route planning is server authoritative; never posts physical stock/COD.
   /// Preserve idempotency-key until verified acknowledgement of same body.
   final Map<String,String> _tripMutationKeys=<String,String>{};
+  final Map<String,String> _staffMutationKeys=<String,String>{};
   Future<List<Map<String,dynamic>>> deliveryTripItems(String token,String endpoint,
       String branch,String warehouse,{int offset=0,String search=''})async{
     if(!const ['trips','drivers','vehicles','employees','trips/eligible'].contains(endpoint)){
