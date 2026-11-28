@@ -9,8 +9,8 @@ import {bootstrapInstallation} from "./bootstrap.ts";
 import {buildApp} from "./server.ts";
 import {isDatabaseReady} from "./db.ts";
 const url=process.env.DATABASE_URL;
-const local=(()=>{try{const u=new URL(url??"");return
- ["localhost","127.0.0.1"].includes(u.hostname)&&u.pathname==="/erp_ci";
+const local=(()=>{try{const u=new URL(url??"");
+ return ["localhost","127.0.0.1"].includes(u.hostname)&&u.pathname==="/erp_ci";
  }catch{return false;}})();
 test("IA-A: staff belongs to Company branch, not delivery; user link and RBAC are atomic",
  {skip:!local},async()=>{
