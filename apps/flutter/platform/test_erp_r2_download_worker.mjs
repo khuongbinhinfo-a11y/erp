@@ -9,6 +9,7 @@ const SHA3="5bce59f3dea1143f148632f5bfc17552b2f4dd3d6a10d56cf5f4e4ef7c23f9f0";
 const SHA4="1ad76237794d167df8d9b7fbe928879def8952c7451731e81bcc4421a0c12370";
 const SHA5="d050f77e19fa1ce4ba4ac4011442ed7955f7342252f2805ad9db61ddfe0616cf";
 const SHA6="c0865670dd95065358aa0028ffc5e08af1609d4740f5ea4b74b9b879b0c8140c";
+const SHA7="f16b8dded86468a68bbfcca74e26895a980ee59eca1d79038ce6626f583bc878";
 const manifest={schema:1,versionCode:2,versionName:"0.2.0",
   packageName:"vn.erpdistribution.erp_distribution",sha256:SHA2,signerSha256:SIGNER,
   size:63769586,objectKey:"releases/2/erp-2.apk",sourceSha:"9963be10fd6d648474b826bcb5e917adbde03b5c",
@@ -25,6 +26,9 @@ const manifest5={...manifest,versionCode:5,versionName:"0.5.0",
 const manifest6={...manifest,versionCode:6,versionName:"0.6.0",
   sha256:SHA6,size:64949914,objectKey:"releases/6/erp-6.apk",
   sourceSha:"be18bcb12e97b78b9752b881e561ab90777ca5fd",notes:"ERP T3-C Android 0.6.0"};
+const manifest7={...manifest,versionCode:7,versionName:"0.7.0",
+  sha256:SHA7,size:65310490,objectKey:"releases/7/erp-7.apk",
+  sourceSha:"8194a9d54e9501f736d0294b73f7454f7f300a44",notes:"ERP T5-A Android 0.7.0"};
 const meta=(size,sha)=>({size,customMetadata:{sha256:sha,signersha256:SIGNER}});
 const store={
   "releases/1/erp-1.apk":meta(63425634,SHA1),
@@ -36,6 +40,8 @@ const store={
     signersha256:SIGNER,sourcesha:"d97e58e9ea437420285cb9a563bf7bb4005f14f4"}},
   "releases/6/erp-6.apk":{size:64949914,customMetadata:{sha256:SHA6,
     signersha256:SIGNER,sourcesha:"be18bcb12e97b78b9752b881e561ab90777ca5fd"}},
+  "releases/7/erp-7.apk":{size:65310490,customMetadata:{sha256:SHA7,
+    signersha256:SIGNER,sourcesha:"8194a9d54e9501f736d0294b73f7454f7f300a44"}},
   "releases/latest.json":{size:JSON.stringify(manifest).length}
 };
 let calls=[];
@@ -145,7 +151,7 @@ test("v4 latest relay verifies published manifest only when pointer is approved 
   assert.equal((await worker.fetch(new Request(BASE+"/releases/latest.json"),mismatched)).status,409);
 });
 test("arbitrary R2 files, writes and queries are denied",async()=>{
-  for(const path of ["/releases/7/erp-7.apk","/releases/2/manifest.json","/private","/releases/latest.json?a=1"]){
+  for(const path of ["/releases/8/erp-8.apk","/releases/2/manifest.json","/private","/releases/latest.json?a=1"]){
     assert.equal((await worker.fetch(new Request(BASE+path),env)).status,404);
   }
   for(const method of ["POST","PUT","DELETE"])assert.equal(
@@ -221,4 +227,34 @@ test("signed T3-C v6 immutable APK is UAT-downloadable, latest remains v5 until 
   const bad={ERP_ANDROID_RELEASES:{...check.ERP_ANDROID_RELEASES,
     get:async key=>key==="releases/latest.json"?{text:async()=>JSON.stringify({...manifest6,sourceSha:"f".repeat(40)})}:null}};
   assert.equal((await worker.fetch(new Request(BASE+"/releases/latest.json"),bad)).status,409);
+});
+
+test("T5-A v7 signed APK exact immutable path, friendly name and range support",async()=>{
+  for(const path of ["/ERP-Android-0.7.0.apk","/releases/7/erp-7.apk"]){
+    const res=await worker.fetch(new Request(BASE+path),env);
+    assert.equal(res.status,200);
+    assert.equal(res.headers.get("x-erp-sha256"),SHA7);
+    assert.equal(res.headers.get("x-erp-signer-sha256"),SIGNER);
+    assert.equal(res.headers.get("content-length"),"65310490");
+  }
+  const part=await worker.fetch(new Request(BASE+"/releases/7/erp-7.apk",{headers:{range:"bytes=65310480-"}}),env);
+  assert.equal(part.status,206);
+  assert.equal(part.headers.get("content-range"),"bytes 65310480-65310489/65310490");
+  const head=await worker.fetch(new Request(BASE+"/releases/7/erp-7.apk",{method:"HEAD"}),env);
+  assert.equal(head.status,200);assert.equal(head.body,null);
+});
+test("T5-A v7 latest relay fail-closed on forged signer, source, hash and object",async()=>{
+  const bkt={ERP_ANDROID_RELEASES:{
+    head:async key=>key==="releases/latest.json"?{size:JSON.stringify(manifest7).length}:store[key]||null,
+    get:async key=>key==="releases/latest.json"?{text:async()=>JSON.stringify(manifest7)}:
+      store[key]?{...store[key],body:new Response("apk-stream").body}:null
+  }};
+  const valid=await worker.fetch(new Request(BASE+"/releases/latest.json"),bkt);
+  assert.equal(valid.status,200);assert.deepEqual(await valid.json(),manifest7);
+  for(const change of [{sha256:SHA6},{sourceSha:"f".repeat(40)},
+    {signerSha256:"e".repeat(64)},{objectKey:"releases/6/erp-6.apk"},{versionCode:8}]){
+    const fake={ERP_ANDROID_RELEASES:{...bkt.ERP_ANDROID_RELEASES,
+      get:async key=>key==="releases/latest.json"?{text:async()=>JSON.stringify({...manifest7,...change})}:null}};
+    assert.equal((await worker.fetch(new Request(BASE+"/releases/latest.json"),fake)).status,409);
+  }
 });
