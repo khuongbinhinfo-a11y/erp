@@ -3259,7 +3259,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           const Text('Từng khoản thu được ghi sổ riêng, không gộp hoặc tự tạo phiếu 0 đồng.',
             style:TextStyle(fontSize:12)),
         ]else
-          const Padding(padding:EdgeInsets.only(top:8),
+          Padding(padding:const EdgeInsets.only(top:8),
             child:Text(action=='issue'?
               'Xuất kho từng đơn theo số lượng và nguồn hàng thực tế. Không tự trừ tồn.':
               'Không tự ghi thu tiền khi hoàn thành giao.',
