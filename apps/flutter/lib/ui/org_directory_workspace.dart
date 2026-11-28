@@ -207,7 +207,7 @@ class _OrgDirectoryWorkspaceState extends State<OrgDirectoryWorkspace>{
    const SizedBox(height:16),
    const Text('Danh sách chi nhánh',style:TextStyle(fontWeight:FontWeight.bold)),
    ...branches.map((b)=>ListTile(dense:true,leading:const Icon(Icons.business_outlined),
-    title:Text(b.name),subtitle:Text('Mã nội bộ: ${b.code}'))),
+    title:Text(b.name),subtitle:Text(b.code=='MAIN'?'Chi nhánh mặc định':'Mã: ${b.code}'))),
    const Divider(),
    const Text('Kho trực thuộc',style:TextStyle(fontWeight:FontWeight.bold)),
    if(warehouses.isEmpty)const Padding(padding:EdgeInsets.all(12),child:Text('Chưa có kho.')),
@@ -217,7 +217,7 @@ class _OrgDirectoryWorkspaceState extends State<OrgDirectoryWorkspace>{
      child:Card(child:Padding(padding:const EdgeInsets.all(10),child:Column(
       crossAxisAlignment:CrossAxisAlignment.start,children:[
        Text(w.name,style:const TextStyle(fontWeight:FontWeight.w700)),
-       Text('Mã ${w.code} · ${branch?.name??"Chi nhánh chưa xác định"}',
+       Text('${w.code=='MAIN'?'Kho mặc định':'Mã ${w.code}'} · ${branch?.name??"Chi nhánh chưa xác định"}',
         style:const TextStyle(fontSize:12)),
        const SizedBox(height:6),
        Wrap(spacing:8,runSpacing:6,children:[
