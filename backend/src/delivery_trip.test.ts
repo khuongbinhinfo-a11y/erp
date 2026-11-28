@@ -128,13 +128,33 @@ test("T5-B trip planner: two orders, driver/vehicle, sequencing, idempotency, lo
     "Detached driver creation must be rejected");
   assert.equal((await post("/v1/delivery/drivers",
     {...s,employeeId:randomUUID()})).status,409);
+  const oldStaff=await post("/v1/delivery/employees",{
+    ...s,code:"NVLEG",fullName:"Tài xế hồ sơ cũ"});
+  assert.equal(oldStaff.status,201,JSON.stringify(oldStaff.data));
+  const restored=await post("/v1/delivery/drivers/"+legacyId+"/link",
+    {...s,employeeId:oldStaff.data.employee.id});
+  assert.equal(restored.status,200,JSON.stringify(restored.data));
+  assert.equal(restored.data.resource.id,legacyId,
+    "Historical driver ID preserved across explicit employee reconciliation");
+  assert.equal((await post("/v1/delivery/drivers/"+legacyId+"/link",
+    {...s,employeeId:oldStaff.data.employee.id})).status,409);
+  assert.equal((await db.query(`SELECT count(*)::integer AS n FROM delivery_driver
+    WHERE installation_id=$1 AND id=$2`,[t,legacyId])).rows[0].n,1);
   const dr=await post("/v1/delivery/drivers",
     {...s,employeeId:staff.data.employee.id});
   assert.equal((await post("/v1/delivery/drivers",
     {...s,employeeId:staff.data.employee.id})).status,409,
     "Exactly one active driver profile per canonical employee");
-  assert.equal((await call("/v1/delivery/drivers"+qs,"GET",undefined,token))
-    .data.items[0].employeeId,staff.data.employee.id);
+  const driverList=await call("/v1/delivery/drivers"+qs,"GET",undefined,token);
+  assert.equal(driverList.status,200);
+  assert.equal(driverList.data.items.find((x:any)=>x.id===dr.data.resource.id).employeeId,
+    staff.data.employee.id);
+  const clearedPhone=await post("/v1/delivery/employees/"+staff.data.employee.id+"/update",
+    {...s,fullName:"Tài xế Một",active:true},0);
+  assert.equal(clearedPhone.status,200,JSON.stringify(clearedPhone.data));
+  const clearRead=await call("/v1/delivery/drivers"+qs,"GET",undefined,token);
+  assert.equal(clearRead.data.items.find((x:any)=>x.id===dr.data.resource.id).phone,
+    null,"Cleared canonical phone must not leak an older driver copy");
   const inactive=await post("/v1/delivery/employees",{
     ...s,code:"NV02",fullName:"Nhân viên nghỉ"});
   assert.equal(inactive.status,201,JSON.stringify(inactive.data));
@@ -180,7 +200,7 @@ test("T5-B trip planner: two orders, driver/vehicle, sequencing, idempotency, lo
   assert.equal(lock.status,200,JSON.stringify(lock.data));
   assert.equal(lock.data.status,"LOCKED");
   assert.equal((await post("/v1/delivery/employees/"+staff.data.employee.id+"/update",{
-    ...s,fullName:"Tài xế Một",active:false},0)).status,409,
+    ...s,fullName:"Tài xế Một",active:false},1)).status,409,
     "Cannot disable employee while a locked delivery trip is outstanding");
   assert.equal((await post(path+"/reorder",{...s,orderIds:reversed},6)).status,409);
   // Concurrency: employee deactivation and planning must serialize on
