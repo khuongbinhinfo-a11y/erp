@@ -41,6 +41,7 @@ void main(){
           'lineNo':1,'issuedBase':'2.000000','baseUnit':'cai','productId':product}]},
         '/v1/inventory/stock-scopes'=>{
           'policy':{'requireLocation':false,'requireLot':false},
+          'stock':{'onHand':'3.000000','reserved':'0','available':'3.000000'},
           'locations':[],'lots':[],'scopes':[]},
         '/v1/inventory/guard-policy'=>{'policy':{
           'reserveShortageMode':'WARN','negativeIssueMode':'BLOCK','revision':0}},
@@ -68,6 +69,7 @@ void main(){
    await tester.pumpAndSettle();
    expect(find.text('Xuất kho trực tiếp'),findsOneWidget);
    expect(find.textContaining('Còn phải xuất: 3 cai'),findsOneWidget);
+   expect(find.textContaining('Tồn khả dụng tại kho: 3 cai'),findsOneWidget);
    expect(writes,0);
    expect(acknowledged,false);
    // Dismiss while quantity input owns focus: no disposed-controller frame.
@@ -80,4 +82,77 @@ void main(){
    expect(revision,4);
    expect(writes,0,reason:'The dialog cannot post stock without explicit parent mutation');
  });
+ test('T5-A 409 preserves server business reason instead of generic duplicate',()async{
+  final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+   httpClient:MockClient((request)async=>http.Response(jsonEncode({
+    'error':{'code':'INSUFFICIENT_AVAILABLE_STOCK',
+      'message':'Tồn khả dụng không đủ. Vui lòng nhập kho hoặc giảm số xuất.',
+      'requestId':'test-request-123'}
+    }),409,headers:const {'content-type':'application/json; charset=utf-8'})));
+  addTearDown(client.dispose);
+  try{
+   await client.inventoryAction('test-token','direct-issues',
+     {'branchId':branch,'warehouseId':warehouse,'orderId':order,'lines':[]},
+     key:'stock-feedback-test',revision:2);
+   fail('The 409 must be reported');
+  }on ErpApiError catch(e){
+   expect(e.status,409);
+   expect(e.code,'INSUFFICIENT_AVAILABLE_STOCK');
+   expect(e.message,'Tồn khả dụng không đủ. Vui lòng nhập kho hoặc giảm số xuất.');
+  }
+ });
+
+ testWidgets('T5-A zero available prevents issue intent before any POST', (tester)async{
+  var submitCount=0,writeCount=0;
+  final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+   httpClient:MockClient((request)async{
+    if(request.method!='GET')writeCount++;
+    final data=switch(request.url.path){
+      '/v1/sales/orders/$order'=>{'order':{
+        'id':order,'branchId':branch,'version':1,'revision':3,
+        'status':'CONFIRMED','versionStatus':'CONFIRMED',
+        'fulfillmentStatus':'NOT_ALLOCATED',
+        'shipping':{'warehouseId':warehouse,'deliveryChoice':'MANUAL'},
+        'lines':[{'lineNo':1,'productId':product,'sku':'P1',
+          'productName':'Hàng chưa nhập kho','unitCode':'cai',
+          'quantity':'8','priceSnapshot':{'normalizedBaseQuantity':'8.000000'}}]}},
+      '/v1/inventory/direct-issues/totals'=>{'items':[{
+        'lineNo':1,'issuedBase':'0','baseUnit':'cai','productId':product}]},
+      '/v1/inventory/stock-scopes'=>{
+        'policy':{'requireLocation':false,'requireLot':false},
+        'stock':{'onHand':'0','reserved':'0','available':'0'},
+        'locations':[],'lots':[],'scopes':[]},
+      '/v1/inventory/guard-policy'=>{'policy':{
+        'negativeIssueMode':'BLOCK','reserveShortageMode':'WARN'}},
+      _=>throw StateError('Unexpected read ${request.url.path}'),
+    };
+    return http.Response(jsonEncode(data),200,
+      headers:const {'content-type':'application/json; charset=utf-8'});
+   }));
+  addTearDown(client.dispose);
+  tester.view.devicePixelRatio=1;
+  tester.view.physicalSize=const Size(1000,850);
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
+  final session=IdentitySession(actorId:actor,token:'test-token',
+    expiresAt:DateTime.now().add(const Duration(hours:1)),grants:[]);
+  await tester.pumpWidget(MaterialApp(home:Scaffold(body:Builder(builder:(ctx)=>
+    FilledButton(onPressed:()async{
+      await showManualStockIssue(context:ctx,client:client,session:session,
+        branchId:branch,warehouseId:warehouse,orderId:order,
+        onSubmit:(body,rev)async{submitCount++;});
+    },child:const Text('Mở xuất kho'))))));
+  await tester.tap(find.text('Mở xuất kho'));
+  await tester.pumpAndSettle();
+  expect(find.textContaining('Tồn khả dụng tại kho: 0 cai'),findsOneWidget);
+  await tester.tap(find.byKey(const ValueKey('manual-issue-confirm')));
+  await tester.pumpAndSettle();
+  expect(find.textContaining('Số xuất vượt tồn khả dụng'),findsOneWidget);
+  expect(submitCount,0,reason:'No warehouse OUT intent without real stock');
+  expect(writeCount,0);
+  await tester.tap(find.text('Đóng'));
+  await tester.pumpAndSettle();
+  expect(tester.takeException(),isNull);
+ });
+
 }
