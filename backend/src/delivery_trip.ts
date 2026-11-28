@@ -66,7 +66,7 @@ export async function tripList(db:PoolClient,t:string,s:TripScope,offset=0){
  ORDER BY t.created_at DESC,t.id DESC LIMIT 100 OFFSET $4`,
  [t,s.branchId,s.warehouseId,offset])).rows;
 }
-export async function tripEligible(db:PoolClient,t:string,s:TripScope){
+export async function tripEligible(db:PoolClient,t:string,s:TripScope,offset=0,search=''){
  return (await db.query(`SELECT o.id,o.document_no AS "documentNo",
  v.customer_name AS "customerName",v.grand_total::text AS total,
  c.delivery_address AS "deliveryAddress",c.requested_delivery_date::text AS "deliveryDate"
@@ -82,7 +82,11 @@ export async function tripEligible(db:PoolClient,t:string,s:TripScope){
   AND o.fulfillment_status<>'COMPLETED'
   AND NOT EXISTS(SELECT 1 FROM delivery_trip_stop s WHERE
    s.installation_id=o.installation_id AND s.branch_id=o.branch_id AND s.order_id=o.id)
- ORDER BY o.created_at,o.id LIMIT 200`,[t,s.branchId,s.warehouseId])).rows;
+  AND ($4::text='' OR o.document_no ILIKE '%'||$4||'%'
+   OR v.customer_name ILIKE '%'||$4||'%'
+   OR c.delivery_address ILIKE '%'||$4||'%')
+ ORDER BY o.created_at,o.id LIMIT 200 OFFSET $5`,
+ [t,s.branchId,s.warehouseId,search,offset])).rows;
 }
 export async function tripDetail(db:PoolClient,t:string,s:TripScope,id:string){
  const h=await db.query(`SELECT t.id,t.trip_no AS "tripNo",t.status,t.revision::integer,
