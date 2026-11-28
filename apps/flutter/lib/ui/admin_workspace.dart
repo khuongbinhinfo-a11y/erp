@@ -111,6 +111,85 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
     catch(_){message('Không tạo được tài khoản.',error:true);}
     finally{login.dispose();password.dispose();}
   }
+  /// Account stays a login principal. Linking requires both identity and branch HR grants.
+  Future<void> linkEmployee(IdentityUser user)async{
+    if(!real||!allowed('identity.users.manage'))return;
+    try{
+      final all=await widget.client!.staffBranches(token);
+      if(!mounted)return;
+      final branches=all.where((b)=>widget.session!.grants.any((g)=>
+        g.permission=='org.employees.manage'&&g.branchId==b.id)).toList();
+      if(branches.isEmpty){
+        message('Tài khoản chưa có quyền quản lý nhân sự ở chi nhánh nào.',error:true);return;
+      }
+      // A linked user must be unlinked from the original branch before moving.
+      String chosenBranch=user.employeeBranchId!=null&&
+        branches.any((b)=>b.id==user.employeeBranchId)
+        ?user.employeeBranchId!:branches.first.id;
+      final selected=await showDialog<String>(context:context,builder:(c)=>
+       StatefulBuilder(builder:(ctx,refresh)=>AlertDialog(
+        title:Text('Chi nhánh nhân viên · '+user.loginName),
+        content:SizedBox(width:430,child:DropdownButtonFormField<String>(
+         initialValue:chosenBranch,isExpanded:true,
+         decoration:const InputDecoration(labelText:'Chi nhánh'),
+         items:branches.map((b)=>DropdownMenuItem<String>(value:b.id,
+           child:Text(b.name,overflow:TextOverflow.ellipsis))).toList(),
+         onChanged:user.employeeId!=null?null:(v)=>refresh(()=>chosenBranch=v??chosenBranch))),
+        actions:[
+         TextButton(onPressed:()=>Navigator.pop(c),child:const Text('Hủy')),
+         FilledButton(onPressed:()=>Navigator.pop(c,chosenBranch),
+           child:const Text('Tiếp tục')),
+        ],
+       )));
+      if(selected==null||!mounted)return;
+      final rows=<Map<String,dynamic>>[];
+      for(var offset=0;offset<=100000;offset+=200){
+       final page=await widget.client!.staffItems(token,selected,offset:offset);
+       rows.addAll(page);
+       if(page.length<200)break;
+      }
+      if(!mounted)return;
+      final eligible=rows.where((e)=>e['active']==true||
+         e['accountUserId']==user.id).where((e)=>
+         e['accountUserId']==null||e['accountUserId']==user.id).toList();
+      String employee=user.employeeId??'__none__';
+      if(employee!='__none__'&&!eligible.any((e)=>e['id']==employee)){
+        message('Liên kết cũ không còn khả dụng. Kiểm tra dữ liệu nhân viên.',error:true);return;
+      }
+      final approved=await showDialog<String>(context:context,builder:(c)=>
+       StatefulBuilder(builder:(ctx,refresh)=>AlertDialog(
+        title:Text('Liên kết tài khoản · '+user.loginName),
+        content:SizedBox(width:450,child:Column(
+         mainAxisSize:MainAxisSize.min,children:[
+          const Text('Không bắt buộc mỗi nhân viên có tài khoản ERP. '
+           'Chỉ liên kết đúng người sau khi xác minh.'),
+          const SizedBox(height:12),
+          DropdownButtonFormField<String>(initialValue:employee,isExpanded:true,
+           decoration:const InputDecoration(labelText:'Nhân viên'),
+           items:[
+            const DropdownMenuItem(value:'__none__',child:Text('Không liên kết')),
+            ...eligible.map((e)=>DropdownMenuItem<String>(
+             value:e['id'].toString(),child:Text(
+              e['code'].toString()+' · '+e['fullName'].toString(),
+              overflow:TextOverflow.ellipsis))),
+           ],onChanged:(v)=>refresh(()=>employee=v??employee)),
+         ])),
+        actions:[
+         TextButton(onPressed:()=>Navigator.pop(c),child:const Text('Hủy')),
+         FilledButton(onPressed:()=>Navigator.pop(c,employee),
+          child:const Text('Lưu liên kết')),
+        ],
+       )));
+      if(approved==null||!mounted)return;
+      if(approved=='__none__'&&user.employeeId==null)return;
+      await widget.client!.linkStaffAccount(widget.session!,user,selected,
+        approved=='__none__'?null:approved);
+      message(approved=='__none__'?'Đã hủy liên kết tài khoản.':
+        'Đã liên kết nhân viên với tài khoản.');
+      reload();
+    }on ErpApiError catch(e){message(e.message,error:true);reload();}
+    catch(_){message('Chưa xác minh được liên kết. Tải lại tài khoản trước khi thử.',error:true);reload();}
+  }
   Future<void> updateStatus(IdentityUser user)async{
     try{
       await widget.client!.setDisabled(token,user,!user.disabled);
@@ -227,9 +306,15 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
             const SizedBox(width:12),
             Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
               Text(user.loginName,style:TextStyle(fontWeight:FontWeight.w700,color:ErpPalette.of(ctx).ink)),
-              Text(user.disabled?'Đã khóa':'Đang hoạt động',
+              Text((user.disabled?'Đã khóa':'Đang hoạt động')+
+                (user.employeeName==null?'':' · '+user.employeeName!),
                 style:TextStyle(fontSize:12,color:user.disabled?ErpPalette.of(ctx).danger:ErpPalette.of(ctx).muted)),
             ])),
+            if(allowed('identity.users.manage')&&widget.session!.grants.any(
+               (g)=>g.permission=='org.employees.manage'))
+              IconButton(tooltip:'Liên kết nhân viên',
+               icon:const Icon(Icons.badge_outlined),
+               onPressed:()=>linkEmployee(user)),
             if(allowed('identity.roles.manage'))...[
               IconButton(
                 tooltip:'Cấp quyền',icon:const Icon(Icons.security_outlined),
