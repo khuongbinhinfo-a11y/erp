@@ -803,7 +803,23 @@ class ErpIdentityClient {
   }
   Future<Map<String,dynamic>> deliveryTripWrite(IdentitySession session,
       String endpoint,Map<String,dynamic> payload,int revision)async{
-    if(!RegExp(r'^(trips|vehicles|drivers|trips/[0-9a-f-]{36}/(assign|unassign|reorder|plan|reopen|lock))
+    final valid=const {'trips','vehicles','drivers'}.contains(endpoint)||
+      RegExp(r'^trips/[0-9a-f-]{36}/(assign|unassign|reorder|plan|reopen|lock)\$')
+        .hasMatch(endpoint);
+    if(!valid)throw const ErpApiError(400,'Thao tác điều phối không hợp lệ.');
+    final b=payload['branchId'],w=payload['warehouseId'];
+    if(b is! String||w is! String||
+        localScope(session,b,warehouse:w)==null){
+      throw const ErpApiError(403,'Không có quyền trong kho và chi nhánh này.');
+    }
+    final identity=jsonEncode([session.installationId,session.actorId,
+      endpoint,revision,payload]);
+    final key=_tripMutationKeys.putIfAbsent(identity,_key);
+    final result=await _request('POST','/v1/delivery/$endpoint',
+      token:session.token,body:payload,revision:revision,idempotencyKey:key);
+    _tripMutationKeys.remove(identity);
+    return result;
+  }
   Future<Map<String,dynamic>> salesExecutionRead(String token,{
       required String branchId,required String warehouseId,required String orderId,
       int sourceOffset=0})async{
