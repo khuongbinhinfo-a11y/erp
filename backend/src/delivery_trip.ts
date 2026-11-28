@@ -50,7 +50,7 @@ export async function createResource(db:PoolClient,c:MutationContext,s:TripScope
  [c.installationId,s.branchId,s.warehouseId,v.code,v.name,x,c.actorId]);
  return {status:201,body:{resource:q.rows[0]}};
 }
-export async function tripList(db:PoolClient,t:string,s:TripScope){
+export async function tripList(db:PoolClient,t:string,s:TripScope,offset=0){
  return (await db.query(`SELECT t.id,t.trip_no AS "tripNo",t.status,t.revision::integer,
  t.planned_date::text AS "plannedDate",t.note,t.vehicle_id AS "vehicleId",
  t.driver_id AS "driverId",d.name AS "driverName",
@@ -63,7 +63,8 @@ export async function tripList(db:PoolClient,t:string,s:TripScope){
   AND st.branch_id=t.branch_id AND st.trip_id=t.id
  WHERE t.installation_id=$1 AND t.branch_id=$2 AND t.warehouse_id=$3
  GROUP BY t.installation_id,t.branch_id,t.id,d.name,v.license_plate
- ORDER BY t.created_at DESC,t.id DESC LIMIT 100`,[t,s.branchId,s.warehouseId])).rows;
+ ORDER BY t.created_at DESC,t.id DESC LIMIT 100 OFFSET $4`,
+ [t,s.branchId,s.warehouseId,offset])).rows;
 }
 export async function tripEligible(db:PoolClient,t:string,s:TripScope){
  return (await db.query(`SELECT o.id,o.document_no AS "documentNo",
