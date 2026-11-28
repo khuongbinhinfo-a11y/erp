@@ -3105,9 +3105,6 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       if(mounted)inform('Không in được toàn bộ đơn đã chọn. Kiểm tra lại trạng thái và quyền.',error:true);
     }finally{if(mounted)setState(()=>_manualBusy=false);}
   }
-  bool _manualSelectable(Map<String,dynamic> row)=>
-    row['status']=='CONFIRMED'&&row['versionStatus']=='CONFIRMED'&&
-    erpSalesDeliveryChoice(row)=='MANUAL';
   bool _bulkSelectable(Map<String,dynamic> row)=>
     row['status']=='CONFIRMED'&&row['versionStatus']=='CONFIRMED';
   Widget _manualCheckbox(Map<String,dynamic> row){
@@ -3385,7 +3382,6 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     final manual=item['status']=='CONFIRMED'&&shipping['deliveryChoice']=='MANUAL';
     final execution=_previewExecution;
     final hasReceivable=execution?['completed']==true;
-    final due=BigInt.tryParse((execution?['remaining']??'0').toString())??BigInt.zero;
     final lines=item['lines'] is List?item['lines'] as List:const [];
     final editable=item['status']!='CANCELLED'&&item['versionStatus']=='DRAFT';
     const modes={'MANUAL':'Giao thủ công','TRIP':'Giao theo chuyến','PICKUP':'Khách lấy'};
