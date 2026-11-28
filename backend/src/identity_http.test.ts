@@ -80,6 +80,51 @@ test("P0 auth HTTP: bootstrap once, login throttle, RBAC user grants, revoke, au
       const scopes=await call("/v1/admin/scopes","GET",undefined,token);
       assert.equal(scopes.status,200);
       assert.equal(scopes.body.branches[0].id,root.branchId);
+      // Directory: owner can create a branch and a warehouse without inventing
+      // global user grants or changing the existing MAIN scope.
+      const branchPayload={code:"CN02",name:"Chi nhánh số 2"};
+      const branchHeaders={"idempotency-key":"org-branch-"+randomUUID(),"if-match":"0"};
+      const newBranch=await call("/v1/admin/directory/branches","POST",
+        branchPayload,token,branchHeaders);
+      assert.equal(newBranch.status,201,JSON.stringify(newBranch.body));
+      const branchId=String(newBranch.body.id);
+      const replay=await call("/v1/admin/directory/branches","POST",
+        branchPayload,token,branchHeaders);
+      assert.equal(replay.status,201);
+      assert.equal(replay.body.id,branchId,"same-key replay does not create a second branch");
+      assert.equal((await call("/v1/admin/directory/branches","POST",
+        {...branchPayload,name:"Changed"},token,branchHeaders)).status,409);
+      const warehousePayload={branchId,code:"KHO02",name:"Kho chi nhánh 2"};
+      const warehouseHeaders={"idempotency-key":"org-warehouse-"+randomUUID(),"if-match":"0"};
+      const newWarehouse=await call("/v1/admin/directory/warehouses","POST",
+        warehousePayload,token,warehouseHeaders);
+      assert.equal(newWarehouse.status,201,JSON.stringify(newWarehouse.body));
+      const newWarehouseId=String(newWarehouse.body.id);
+      const freshSession=await call("/v1/auth/session","GET",undefined,token);
+      assert.equal(freshSession.status,200);
+      assert.ok((freshSession.body.grants as any[]).some(x=>
+        x.permission==="catalog.read"&&x.branchId===branchId));
+      assert.ok((freshSession.body.grants as any[]).some(x=>
+        x.permission==="inventory.negative.issue"&&x.branchId===branchId&&
+        x.warehouseId===newWarehouseId));
+      const expanded=await call("/v1/admin/scopes","GET",undefined,token);
+      assert.equal(expanded.status,200);
+      assert.ok((expanded.body.branches as any[]).some(x=>x.id===branchId&&x.name==="Chi nhánh số 2"));
+      assert.ok((expanded.body.warehouses as any[]).some(x=>x.id===newWarehouseId&&x.branchId===branchId));
+      const policyPath="/v1/inventory/guard-policy?branchId="+branchId+
+        "&warehouseId="+newWarehouseId;
+      const basePolicy=await call(policyPath,"GET",undefined,token);
+      assert.equal(basePolicy.status,200,JSON.stringify(basePolicy.body));
+      assert.equal(basePolicy.body.policy.negativeIssueMode,"BLOCK");
+      const allow=await call("/v1/inventory/guard-policy","POST",
+       {branchId,warehouseId:newWarehouseId,reserveShortageMode:"WARN",
+        negativeIssueMode:"ALLOW"},token,
+        {"idempotency-key":"org-policy-"+randomUUID(),"if-match":
+          String(basePolicy.body.policy.revision)});
+      assert.equal(allow.status,200,JSON.stringify(allow.body));
+      assert.equal(allow.body.negativeIssueMode,"ALLOW");
+      assert.equal((await call(policyPath,"GET",undefined,token)).body.policy.negativeIssueMode,"ALLOW");
+
       const createKey="create-"+randomUUID();
       const bobPass="Bob-ci-"+randomUUID();
       const createPayload={loginName:"warehouse_user",password:bobPass};
@@ -99,6 +144,10 @@ test("P0 auth HTTP: bootstrap once, login throttle, RBAC user grants, revoke, au
       const bobSession=await call("/v1/auth/session","GET",undefined,bobToken);
       assert.equal(bobSession.status,200);
       assert.equal((bobSession.body.grants as any[]).length,0);
+      assert.equal((await call("/v1/admin/directory/branches","POST",
+        {code:"EVIL",name:"Not authorized"},bobToken,
+        {"idempotency-key":"evil-branch-"+randomUUID(),"if-match":"0"})).status,403);
+
       assert.equal((await call("/v1/admin/users","GET",undefined,bobToken)).status,403);
       const scope={permission:"inventory.read",branchId:root.branchId,warehouseId:root.warehouseId};
       const grant=await call("/v1/admin/users/"+bobId+"/grants","POST",scope,token,
