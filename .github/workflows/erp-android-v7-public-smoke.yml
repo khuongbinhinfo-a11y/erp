@@ -1,0 +1,67 @@
+name: ERP Android T5-A v7 public APK smoke
+on:
+  issue_comment:
+    types: [created]
+permissions:
+  contents: read
+jobs:
+  smoke:
+    if: >-
+      github.repository == 'khuongbinhinfo-a11y/erp' &&
+      github.event.issue.number == 46 &&
+      github.event.comment.user.login == 'gustavjung24-ops' &&
+      github.event.comment.body == '/erp-android-v7-public-smoke'
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    env:
+      BASE: https://erp-android-download.gustavjung24.workers.dev
+      SHA7: f16b8dded86468a68bbfcca74e26895a980ee59eca1d79038ce6626f583bc878
+      SHA6: c0865670dd95065358aa0028ffc5e08af1609d4740f5ea4b74b9b879b0c8140c
+      SHA5: d050f77e19fa1ce4ba4ac4011442ed7955f7342252f2805ad9db61ddfe0616cf
+      BYTES7: '65310490'
+      SIGNER: 545d17fc51c8d24de4d73cb84ff7c3953f79c7d14efc7ada29b7075110d0c028
+    steps:
+      - name: Verify signed v7 public HEAD and exact full SHA-256
+        run: |
+          set -euo pipefail
+          curl -fsSIL --retry 3 --max-time 40 "$BASE/ERP-Android-0.7.0.apk" \
+            -D "$RUNNER_TEMP/v7.headers" -o /dev/null
+          tr -d '\r' < "$RUNNER_TEMP/v7.headers" | grep -i -Fxq "x-erp-sha256: $SHA7"
+          tr -d '\r' < "$RUNNER_TEMP/v7.headers" | grep -i -Fxq "x-erp-signer-sha256: $SIGNER"
+          tr -d '\r' < "$RUNNER_TEMP/v7.headers" | grep -i -Fxq "content-length: $BYTES7"
+          curl -fsSL --retry 3 --retry-delay 2 --max-time 400 \
+            "$BASE/releases/7/erp-7.apk" -o "$RUNNER_TEMP/erp-v7.apk"
+          test "$(wc -c < "$RUNNER_TEMP/erp-v7.apk" | tr -d ' ')" = "$BYTES7"
+          test "$(sha256sum "$RUNNER_TEMP/erp-v7.apk" | cut -d' ' -f1)" = "$SHA7"
+          echo "ERP_ANDROID_V7_PUBLIC_FULL_READBACK_PASS sha256=$SHA7 bytes=$BYTES7"
+      - name: Verify HTTP range resume and previous v5/v6 compatibility
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 --max-time 40 -H 'Range: bytes=65310480-' \
+            -D "$RUNNER_TEMP/partial.headers" "$BASE/releases/7/erp-7.apk" \
+            -o "$RUNNER_TEMP/last10"
+          test "$(wc -c < "$RUNNER_TEMP/last10" | tr -d ' ')" = 10
+          tr -d '\r' < "$RUNNER_TEMP/partial.headers" | grep -Eq '^HTTP/[^ ]+ 206'
+          tr -d '\r' < "$RUNNER_TEMP/partial.headers" | grep -i -Fxq \
+            'content-range: bytes 65310480-65310489/65310490'
+          for n in 5 6; do
+            curl -fsSIL --retry 3 --max-time 40 "$BASE/releases/$n/erp-$n.apk" \
+              -D "$RUNNER_TEMP/old$n.headers" -o /dev/null
+            expected="$SHA5"
+            if [[ "$n" = 6 ]]; then expected="$SHA6"; fi
+            tr -d '\r' < "$RUNNER_TEMP/old$n.headers" | grep -i -Fxq \
+              "x-erp-sha256: $expected"
+          done
+          code="$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/releases/8/erp-8.apk")"
+          test "$code" = 404
+          echo "ERP_ANDROID_V7_PUBLIC_RANGE_AND_LEGACY_PASS"
+      - name: Validate latest pointer stays v5 pending real-device UAT
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 --max-time 40 "$BASE/releases/latest.json" \
+            -o "$RUNNER_TEMP/latest.json"
+          jq -e --arg sha "$SHA5" --arg signer "$SIGNER" \
+            '.schema == 1 and .versionCode == 5 and .versionName == "0.5.0" and
+             .sha256 == $sha and .signerSha256 == $signer and
+             .objectKey == "releases/5/erp-5.apk"' "$RUNNER_TEMP/latest.json" >/dev/null
+          echo "ERP_ANDROID_V7_PUBLIC_SMOKE_PASS_LATEST_V5_UNCHANGED (NOT OTA UAT)"
