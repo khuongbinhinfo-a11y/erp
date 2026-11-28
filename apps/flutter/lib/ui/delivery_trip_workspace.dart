@@ -248,7 +248,7 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
         style:TextStyle(fontSize:12,color:p.muted)),
        if(t['driverName']!=null)Text('${t['driverName']} · ${t['licensePlate']??''}',
         maxLines:1,overflow:TextOverflow.ellipsis),
-     ]))),const Icon(Icons.chevron_right,size:18)]),
+     ])),const Icon(Icons.chevron_right,size:18)]),
     )),
   ]);
  }
