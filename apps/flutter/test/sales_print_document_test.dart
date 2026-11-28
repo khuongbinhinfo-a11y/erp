@@ -21,6 +21,9 @@ void main(){
   final result=confirmedSalesPrintDocument(_order('SO-20261128-000001'));
   expect(result,contains('PHIẾU XUẤT KHO'));
   expect(result,contains('size:A4'));
+  expect(result,contains('font:10.5pt'));
+  expect(result,contains('min-width:42px;text-align:center;white-space:nowrap'));
+  expect(result,contains('border-bottom:1px dotted #aaa'));
   expect(result,contains('Kho giao hàng'));
   expect(result,contains('Người lập'));
   expect(result,contains('Khách hàng'));
