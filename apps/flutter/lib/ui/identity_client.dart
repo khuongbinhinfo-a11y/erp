@@ -785,16 +785,20 @@ class ErpIdentityClient {
   /// Preserve idempotency-key until verified acknowledgement of same body.
   final Map<String,String> _tripMutationKeys=<String,String>{};
   Future<List<Map<String,dynamic>>> deliveryTripItems(String token,String endpoint,
-      String branch,String warehouse,{int offset=0})async{
+      String branch,String warehouse,{int offset=0,String search=''})async{
     if(!const ['trips','drivers','vehicles','trips/eligible'].contains(endpoint)){
       throw const ErpApiError(400,'Danh sách điều phối không hợp lệ.');
     }
-    if(offset<0||offset>100000||offset%100!=0||
-       (endpoint!='trips'&&offset!=0)){
-      throw const ErpApiError(400,'Trang danh sách chuyến không hợp lệ.');
+    final step=endpoint=='trips'?100:endpoint=='trips/eligible'?200:0;
+    if(offset<0||offset>100000||
+       (step==0&&offset!=0)||(step>0&&offset%step!=0)||
+       search.trim().length>80||(endpoint!='trips/eligible'&&search.isNotEmpty)){
+      throw const ErpApiError(400,'Trang hoặc bộ lọc điều phối không hợp lệ.');
     }
     final q=Uri(queryParameters:{'branchId':branch,'warehouseId':warehouse,
-      if(endpoint=='trips'&&offset>0)'offset':offset.toString()}).query;
+      if(step>0&&offset>0)'offset':offset.toString(),
+      if(endpoint=='trips/eligible'&&search.trim().isNotEmpty)
+       'q':search.trim()}).query;
     final result=await _request('GET','/v1/delivery/$endpoint?$q',token:token);
     return (result['items'] as List<dynamic>).map((v)=>
       Map<String,dynamic>.from(v as Map)).toList();
