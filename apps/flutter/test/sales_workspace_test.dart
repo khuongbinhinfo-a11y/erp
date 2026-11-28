@@ -723,4 +723,68 @@ void main(){
     await tester.pump(const Duration(seconds:5));
   });
 
+
+  testWidgets('Bulk header selects confirmed and in-amendment orders together',
+      (tester)async{
+    const editing='00000000-0000-4000-8000-000000000008';
+    var writes=0;
+    final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+      httpClient:MockClient((request)async{
+        if(request.method!='GET')writes++;
+        http.Response ok(Map<String,dynamic> data)=>http.Response(jsonEncode(data),200,
+          headers:const {'content-type':'application/json; charset=utf-8'});
+        if(request.url.path=='/v1/catalog/branches'){
+          return ok({'items':[{'id':branch,'name':'Chi nhánh chính'}]});
+        }
+        if(request.url.path=='/v1/sales/orders'){
+          return ok({'items':[
+            {'id':order,'documentNo':'SO-20261128-000002',
+              'customerName':'Khách A','total':'66640',
+              'status':'CONFIRMED','versionStatus':'CONFIRMED',
+              'deliveryChoice':'MANUAL','fulfillmentStatus':'NOT_ALLOCATED',
+              'deliveryStatus':'NOT_DISPATCHED','paymentStatus':'NOT_DUE'},
+            {'id':editing,'documentNo':'SO-20261124-000001',
+              'customerName':'Khách B','total':'9800',
+              'status':'CONFIRMED','versionStatus':'DRAFT',
+              'deliveryChoice':'MANUAL','fulfillmentStatus':'NOT_ALLOCATED',
+              'deliveryStatus':'NOT_DISPATCHED','paymentStatus':'NOT_DUE'},
+          ]});
+        }
+        return http.Response('{}',404);
+      }));
+    addTearDown(client.dispose);
+    tester.view.devicePixelRatio=1;
+    tester.view.physicalSize=const Size(1440,1000);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(MaterialApp(theme:erpTheme(touch:false),
+      home:Scaffold(body:SalesWorkspace(client:client,session:loggedIn()))));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('sales-orders-bulk-tab')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('sales-bulk-row-$order')),findsOneWidget);
+    expect(find.byKey(const ValueKey('sales-bulk-row-$editing')),findsOneWidget);
+    expect(find.byKey(const ValueKey('sales-bulk-header-select-all')),findsOneWidget);
+    expect(tester.widget<Checkbox>(
+      find.byKey(const ValueKey('sales-bulk-row-$editing'))).onChanged,isNotNull,
+      reason:'Amending order must still be selectable, not silently disabled');
+    await tester.tap(find.byKey(const ValueKey('sales-bulk-select-all')));
+    await tester.pumpAndSettle();
+    expect(tester.widget<Checkbox>(
+      find.byKey(const ValueKey('sales-bulk-row-$order'))).value,isTrue);
+    expect(tester.widget<Checkbox>(
+      find.byKey(const ValueKey('sales-bulk-row-$editing'))).value,isTrue);
+    expect(find.text('Đã chọn 2 đơn'),findsOneWidget);
+    expect(find.textContaining('1 đơn đã xác nhận trong danh sách đã tải'),findsOneWidget);
+    expect(writes,0,reason:'Selection cannot post stock, deliveries or money');
+    await tester.ensureVisible(find.byKey(
+      const ValueKey('sales-bulk-header-select-all')));
+    await tester.tap(find.byKey(const ValueKey('sales-bulk-header-select-all')));
+    await tester.pumpAndSettle();
+    expect(tester.widget<Checkbox>(
+      find.byKey(const ValueKey('sales-bulk-row-$order'))).value,isFalse);
+    expect(tester.widget<Checkbox>(
+      find.byKey(const ValueKey('sales-bulk-row-$editing'))).value,isFalse);
+  });
+
 }
