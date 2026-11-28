@@ -3106,10 +3106,13 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     }finally{if(mounted)setState(()=>_manualBusy=false);}
   }
   bool _manualSelectable(Map<String,dynamic> row)=>
-    row['status']=='CONFIRMED'&&erpSalesDeliveryChoice(row)=='MANUAL';
+    row['status']=='CONFIRMED'&&row['versionStatus']=='CONFIRMED'&&
+    erpSalesDeliveryChoice(row)=='MANUAL';
+  bool _bulkSelectable(Map<String,dynamic> row)=>
+    row['status']=='CONFIRMED'&&row['versionStatus']=='CONFIRMED';
   Widget _manualCheckbox(Map<String,dynamic> row){
     if(!_bulkMode)return const SizedBox.shrink();
-    final id=row['id']?.toString(),allowed=_manualSelectable(row);
+    final id=row['id']?.toString(),allowed=_bulkSelectable(row);
     return Checkbox(value:id!=null&&_selectedBulkOrders.contains(id),
       onChanged:_navigationLocked||id==null||!allowed?null:(value){
         setState((){if(value==true){_selectedBulkOrders.add(id);}
@@ -3198,11 +3201,11 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   Future<void> _batchManual(String action)async{
     if(_navigationLocked||branchId==null||_selectedBulkOrders.isEmpty)return;
     final branch=branchId!,token=widget.session.token;
-    final chosen=orders.where((o)=>_selectedBulkOrders.contains(o['id'])&&
-       _manualSelectable(o)).toList(growable:false);
-    if(chosen.isEmpty){inform('Chọn các đơn MANUAL có quyền xử lý.',error:true);return;}
-    final prompt=action=='complete'?'Hoàn thành thực giao':
-       'Thu đủ công nợ theo từng đơn';
+    final chosen=orders.where((o)=>_selectedBulkOrders.contains(o['id']))
+      .toList(growable:false);
+    if(chosen.isEmpty){inform('Hãy chọn đơn hàng cần xử lý.',error:true);return;}
+    final prompt=action=='issue'?'Xuất kho':
+      action=='complete'?'Hoàn thành thực giao':'Thu đủ công nợ theo từng đơn';
     var paymentMethod='CASH';
     final yes=await showDialog<bool>(context:context,builder:(c)=>StatefulBuilder(
       builder:(c,change)=>AlertDialog(
@@ -3235,7 +3238,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     )));
     if(yes!=true||!mounted||!_sameScope(token,branch))return;
     setState(()=>_manualBusy=true);
-    final outcomes=<({String label,bool success,String message})>[];
+    final outcomes=<({String id,String label,bool success,String message})>[];
     try{
       for(final row in chosen){
         if(!_sameScope(token,branch))break;
@@ -3250,6 +3253,17 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
             !_manualAllowed(action,detail))throw const ErpApiError(409,
               'Đơn không còn hợp lệ hoặc đã đổi quyền/kho.');
           final warehouse=shipping['warehouseId'] as String;
+          if(action=='issue'){
+            // Physical source/lot/location quantities must be confirmed per
+            // order. Never fabricate stock OUT for a selected list row.
+            final posted=await erpManualOrderAction(context:context,
+              client:widget.client,session:widget.session,
+              order:detail,branchId:branch,action:'issue');
+            outcomes.add((id:id,label:label,success:posted,
+              message:posted?'Đã ghi nhận xuất kho trên máy chủ.':
+                'Chưa xuất kho: đã hủy hoặc cần đối soát thao tác.'));
+            continue;
+          }
           final state=await widget.client.salesExecutionRead(token,
             branchId:branch,warehouseId:warehouse,orderId:id);
           Map<String,dynamic> payload;
@@ -3270,20 +3284,27 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           }
           final response=await widget.client.postSalesExecution(widget.session,
             action,payload,(state['revision'] as num).toInt());
-          outcomes.add((label:label,success:true,
+          outcomes.add((id:id,label:label,success:true,
             message:action=='complete'?
               'Đã ghi hàng giao: '+erpVndText(response['grandTotal']):
               'Đã thu: '+erpVndText(response['amount'])+' · Còn: '+
                  erpVndText(response['remaining'])));
         }on ErpApiError catch(e){
-          outcomes.add((label:label,success:false,message:e.message));
+          outcomes.add((id:id,label:label,success:false,message:e.message));
         }catch(_){
-          outcomes.add((label:label,success:false,
+          outcomes.add((id:id,label:label,success:false,
             message:'Chưa xác minh server ACK; kiểm tra lệnh chờ trước khi thử lại.'));
         }
       }
     }finally{
-      if(mounted)setState((){_manualBusy=false;_selectedBulkOrders.clear();});
+      if(mounted)setState((){
+        _manualBusy=false;
+        // Preserve failed/unknown rows for reconciliation; never silently
+        // lose selection after a mixed batch.
+        for(final row in outcomes){
+          if(row.success)_selectedBulkOrders.remove(row.id);
+        }
+      });
     }
     if(!_sameScope(token,branch))return;
     await reload();
@@ -3863,6 +3884,17 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
               onPressed:widget.onOpenOrders,icon:const Icon(Icons.receipt_long_outlined),
               label:const Text('Xem đơn hàng'))),
         ],
+        if(!retail)Padding(padding:const EdgeInsets.only(top:8,bottom:6),
+          child:Wrap(spacing:8,runSpacing:6,children:[
+            ChoiceChip(key:const ValueKey('sales-orders-normal-tab'),
+              selected:!_bulkMode,label:const Text('Danh sách đơn'),
+              onSelected:_navigationLocked?null:(_)=>setState((){
+                _bulkMode=false;_selectedBulkOrders.clear();
+              })),
+            ChoiceChip(key:const ValueKey('sales-orders-bulk-tab'),
+              selected:_bulkMode,label:const Text('Xử lý hàng loạt'),
+              onSelected:_navigationLocked?null:(_)=>setState(()=>_bulkMode=true)),
+          ])),
         if(!retail&&_localConfigured)Align(alignment:Alignment.centerRight,
           child:TextButton.icon(key:const ValueKey('sales-resume-local-order'),
             onPressed:_navigationLocked?null:()=>createOrder(resumeSaved:true),
@@ -3943,21 +3975,47 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           ]);
         }),
         const SizedBox(height:12),
-        if(!retail&&!loading&&_selectedBulkOrders.isNotEmpty)Padding(
+        if(!retail&&!loading&&_bulkMode)Padding(
           padding:const EdgeInsets.only(bottom:10),
-          child:Wrap(spacing:8,runSpacing:6,crossAxisAlignment:WrapCrossAlignment.center,
-            children:[
-              Text('Đã chọn '+_selectedBulkOrders.length.toString()+' đơn giao thủ công',
+          child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+            Wrap(spacing:8,runSpacing:6,crossAxisAlignment:WrapCrossAlignment.center,children:[
+              Text('Đã chọn ${_selectedBulkOrders.length} đơn',
                 style:const TextStyle(fontWeight:FontWeight.w700)),
-              OutlinedButton.icon(onPressed:_navigationLocked?null:()=>_batchManual('complete'),
-                icon:const Icon(Icons.task_alt_outlined,size:16),
-                label:const Text('Hoàn thành hàng loạt')),
-              FilledButton.icon(onPressed:_navigationLocked?null:()=>_batchManual('payment'),
-                icon:const Icon(Icons.payments_outlined,size:16),
-                label:const Text('Thu đủ hàng loạt')),
-              TextButton(onPressed:_navigationLocked?null:()=>setState(()=>_selectedBulkOrders.clear()),
+              TextButton.icon(key:const ValueKey('sales-bulk-select-all'),
+                onPressed:_navigationLocked?null:()=>setState((){
+                  for(final row in shown){
+                    if(_bulkSelectable(row)&&row['id'] is String)
+                      _selectedBulkOrders.add(row['id'] as String);
+                  }
+                }),icon:const Icon(Icons.select_all,size:16),
+                label:const Text('Chọn đơn đã xác nhận trong kết quả hiện tại')),
+              if(_selectedBulkOrders.isNotEmpty)TextButton(
+                onPressed:_navigationLocked?null:()=>setState(()=>_selectedBulkOrders.clear()),
                 child:const Text('Bỏ chọn')),
-            ])),
+            ]),
+            const SizedBox(height:6),
+            Wrap(spacing:8,runSpacing:8,children:[
+              OutlinedButton.icon(key:const ValueKey('sales-bulk-issue'),
+                onPressed:_navigationLocked||_selectedBulkOrders.isEmpty?null:()=>_batchManual('issue'),
+                icon:const Icon(Icons.inventory_2_outlined,size:16),
+                label:const Text('Xuất kho')),
+              OutlinedButton.icon(key:const ValueKey('sales-bulk-complete'),
+                onPressed:_navigationLocked||_selectedBulkOrders.isEmpty?null:()=>_batchManual('complete'),
+                icon:const Icon(Icons.task_alt_outlined,size:16),
+                label:const Text('Hoàn thành')),
+              FilledButton.icon(key:const ValueKey('sales-bulk-payment'),
+                onPressed:_navigationLocked||_selectedBulkOrders.isEmpty?null:()=>_batchManual('payment'),
+                icon:const Icon(Icons.payments_outlined,size:16),
+                label:const Text('Thu đủ')),
+              OutlinedButton.icon(key:const ValueKey('sales-bulk-print'),
+                onPressed:_navigationLocked||_selectedBulkOrders.isEmpty?null:_printSelectedOrders,
+                icon:const Icon(Icons.print_outlined,size:16),
+                label:const Text('In phiếu xuất kho')),
+            ]),
+            const Padding(padding:EdgeInsets.only(top:7),
+              child:Text('Thao tác theo từng đơn, đối soát kết quả riêng. Xuất kho yêu cầu chọn số lượng và nguồn hàng thực tế cho từng đơn; không tự xuất thiếu.',
+                style:TextStyle(fontSize:11))),
+          ])),
         if(!retail&&!loading)Padding(padding:const EdgeInsets.only(bottom:8),
           child:Text('${shown.length}/${orders.length} đơn đang hiển thị · tối đa 100 kết quả mỗi lần tra cứu',
             style:TextStyle(color:ErpPalette.of(context).muted,fontSize:12))),
@@ -3981,7 +4039,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                 decoration:BoxDecoration(
                   border:Border(bottom:BorderSide(color:ErpPalette.of(context).border))),
                 child:Row(children:[
-                  _manualCheckbox(o),
+                  if(_bulkMode)_manualCheckbox(o),
                   Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
                     Text(o['documentNo'] as String? ?? 'Chưa cấp số',
                       style:TextStyle(fontWeight:FontWeight.w700,color:ErpPalette.of(context).ink)),
@@ -3998,7 +4056,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
               )),
           ])
         else LayoutBuilder(builder:(ctx,bounds){
-          if(bounds.maxWidth>=900){
+          if(bounds.maxWidth>=900&&!_bulkMode){
             return SizedBox(key:const ValueKey('sales-split-view'),
               height:(MediaQuery.sizeOf(ctx).height*.66).clamp(380.0,700.0).toDouble(),
               child:Row(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
@@ -4027,7 +4085,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                           padding:const EdgeInsets.fromLTRB(10,10,12,10),
                           child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
                             Row(children:[
-                              _manualCheckbox(o),
+                              if(_bulkMode)_manualCheckbox(o),
                               Expanded(child:Text((o['customerName']??'Khách lẻ').toString(),
                                 maxLines:1,overflow:TextOverflow.ellipsis,
                                 style:TextStyle(fontWeight:FontWeight.w800,fontSize:13,
@@ -4066,7 +4124,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           headingRowColor:WidgetStatePropertyAll(ErpPalette.of(context).mint),
           headingTextStyle:TextStyle(fontWeight:FontWeight.w700,color:ErpPalette.of(context).ink),
           columns:[
-            const DataColumn(label:Text('Chọn')),
+            if(_bulkMode)const DataColumn(label:Text('Chọn')),
             const DataColumn(label:Text('Số đơn / Ngày')),
             const DataColumn(label:Text('Khách hàng / Kho')),
             const DataColumn(label:Text('Thành tiền'),numeric:true),
@@ -4077,7 +4135,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
             const DataColumn(label:Text('Thao tác')),
           ],
           rows:shown.map((o)=>DataRow(cells:[
-            DataCell(_manualCheckbox(o)),
+            if(_bulkMode)DataCell(_manualCheckbox(o)),
             DataCell(Column(mainAxisAlignment:MainAxisAlignment.center,crossAxisAlignment:CrossAxisAlignment.start,children:[
               Text(o['documentNo'] as String? ?? 'Chưa cấp số',style:const TextStyle(fontWeight:FontWeight.w700)),
               Text(erpDateTimeText(o['createdAt']),style:TextStyle(fontSize:11,color:ErpPalette.of(context).muted)),
