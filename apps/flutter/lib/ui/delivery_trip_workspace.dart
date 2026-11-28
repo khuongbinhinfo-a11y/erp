@@ -152,15 +152,31 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
   final ok=await showDialog<bool>(context:context,builder:(c)=>StatefulBuilder(
    builder:(c,update)=>AlertDialog(
     title:const Text('Chọn đơn giao theo chuyến'),
-    content:SizedBox(width:520,height:350,child:ListView(children:eligible.map((o)=>
-     CheckboxListTile(dense:true,controlAffinity:ListTileControlAffinity.leading,
-      value:chosen.contains(o['id']),onChanged:(v)=>update((){
-       if(v==true)chosen.add(o['id'] as String);else chosen.remove(o['id']);
-      }),
-      title:Text('${o['documentNo']} · ${o['customerName']}',
-       maxLines:1,overflow:TextOverflow.ellipsis),
-      subtitle:Text(o['deliveryAddress']?.toString()??'',maxLines:2,
-       overflow:TextOverflow.ellipsis))).toList())),
+    content:SizedBox(width:520,height:350,child:Column(children:[
+      Row(children:[
+       Text('Đã chọn ${chosen.length} đơn',style:const TextStyle(fontWeight:FontWeight.w700)),
+       const Spacer(),
+       TextButton.icon(key:const ValueKey('trip-select-all-orders'),
+         onPressed:()=>update((){
+           final first=eligible.take(100).map((x)=>x['id'] as String).toList();
+           if(first.every(chosen.contains))chosen.removeAll(first);
+           else chosen.addAll(first);
+         }),
+         icon:const Icon(Icons.select_all,size:16),
+         label:const Text('Chọn tất cả (tối đa 100)')),
+      ]),
+      Expanded(child:ListView(children:eligible.map((o)=>
+       CheckboxListTile(dense:true,controlAffinity:ListTileControlAffinity.leading,
+        value:chosen.contains(o['id']),
+        onChanged:(v)=>update((){
+         if(v==true&&chosen.length<100)chosen.add(o['id'] as String);
+         else if(v!=true)chosen.remove(o['id']);
+        }),
+        title:Text('${o['documentNo']} · ${o['customerName']}',
+         maxLines:1,overflow:TextOverflow.ellipsis),
+        subtitle:Text(o['deliveryAddress']?.toString()??'',maxLines:2,
+         overflow:TextOverflow.ellipsis))).toList())),
+    ])),
     actions:[TextButton(onPressed:()=>Navigator.pop(c,false),child:const Text('Hủy')),
      FilledButton(onPressed:chosen.isEmpty?null:()=>Navigator.pop(c,true),
        child:Text('Thêm ${chosen.length} đơn'))],
