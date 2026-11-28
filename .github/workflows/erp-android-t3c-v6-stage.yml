@@ -34,6 +34,7 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha }}
           persist-credentials: false
       - name: Verify reviewed CI, exact release run and original signer
+        id: verify
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$SIGNED_CONTEXT_SHA"
@@ -43,7 +44,13 @@ jobs:
           gh run download "$SIGNED_RUN" --repo "$GITHUB_REPOSITORY" -n erp-android-signed -D signed
           SIGNED_SHA="$(cat signed/commit.txt)"
           [[ "$SIGNED_SHA" =~ ^[a-f0-9]{40}$ ]]
-          gh api "repos/$GITHUB_REPOSITORY/commits/$SIGNED_SHA" --jq '.commit.message' | grep -Fq '[erp-apk-t3c-v6]'
+          commit_message="$(gh api "repos/$GITHUB_REPOSITORY/commits/$SIGNED_SHA" --jq '.commit.message')"
+          if [[ "$commit_message" != *'[erp-apk-t3c-v6]'* ]]; then
+            echo "ERP_T3C_V6_STAGE_SKIPPED_UNRELATED_SIGNED_RELEASE source=$SIGNED_SHA"
+            echo 'stage=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo 'stage=true' >> "$GITHUB_OUTPUT"
           ci_run="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SIGNED_SHA&event=push&status=success" --jq '.workflow_runs[0].id')"
           test -n "$ci_run"
           test "$ci_run" != null
@@ -62,6 +69,7 @@ jobs:
           bash apps/flutter/platform/verify_android_signed.sh signed/erp.apk "$tools" vn.erpdistribution.erp_distribution 6 0.6.0 "$SIGNER"
       - name: Stage immutable APK v6 using protected GitHub OIDC and full R2 readback
         id: upload
+        if: steps.verify.outputs.stage == 'true'
         run: |
           set -euo pipefail
           sha="$(sha256sum signed/erp.apk | cut -d' ' -f1)"
@@ -89,7 +97,7 @@ jobs:
           test "$(sha256sum "$RUNNER_TEMP/erp-t3c-v6-readback.apk" | cut -d' ' -f1)" = "$sha"
           echo "ERP_T3C_V6_R2_READBACK_PASS key=releases/6/erp-6.apk bytes=$bytes sha256=$sha source=$SIGNED_SHA"
       - name: Record stage evidence; never update latest.json
-        if: always()
+        if: always() && steps.verify.outputs.stage == 'true'
         env:
           STAGE_STATUS: ${{ steps.upload.outcome }}
         run: |
