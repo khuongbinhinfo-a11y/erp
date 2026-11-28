@@ -3244,7 +3244,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       title:Text(prompt+' hàng loạt'),
       content:SizedBox(width:480,child:Column(mainAxisSize:MainAxisSize.min,
        crossAxisAlignment:CrossAxisAlignment.start,children:[
-        Text('Đối chiếu '+chosen.length.toString()+
+        Text('Đối chiếu '+chosenIds.length.toString()+
           ' đơn riêng biệt với máy chủ. Đơn không đủ điều kiện được báo lỗi riêng.'),
         if(action=='payment')...[
           const SizedBox(height:12),
@@ -3260,7 +3260,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
             style:TextStyle(fontSize:12)),
         ]else
           const Padding(padding:EdgeInsets.only(top:8),
-            child:Text('Không tự ghi thu tiền khi hoàn thành giao.',
+            child:Text(action=='issue'?
+              'Xuất kho từng đơn theo số lượng và nguồn hàng thực tế. Không tự trừ tồn.':
+              'Không tự ghi thu tiền khi hoàn thành giao.',
               style:TextStyle(fontSize:12))),
        ])),
       actions:[
