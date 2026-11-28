@@ -114,7 +114,14 @@ export async function handleDeliveryTripHttp(req:IncomingMessage,res:ServerRespo
     if(url.pathname==="/v1/delivery/vehicles")result={items:await tripResources(db,t,s,"vehicles")};
     else if(url.pathname==="/v1/delivery/drivers")result={items:await tripResources(db,t,s,"drivers")};
     else if(url.pathname==="/v1/delivery/trips/eligible")result={items:await tripEligible(db,t,s)};
-    else if(url.pathname==="/v1/delivery/trips")result={items:await tripList(db,t,s)};
+    else if(url.pathname==="/v1/delivery/trips"){
+     const rawOffset=url.searchParams.get("offset")??"0";
+     if(!/^(0|[1-9][0-9]*)$/.test(rawOffset))reject("INVALID_TRIP_OFFSET");
+     const offset=Number(rawOffset);
+     if(!Number.isSafeInteger(offset)||offset>100000||offset%100!==0)
+      reject("INVALID_TRIP_OFFSET");
+     result={items:await tripList(db,t,s,offset)};
+    }
     else{
      const p=/^\/v1\/delivery\/trips\/([0-9a-f-]{36})$/i.exec(url.pathname);
      if(!p)reject("NOT_FOUND",404);
