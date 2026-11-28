@@ -220,6 +220,15 @@ class ErpIdentityClient {
     final r=await _request('GET','/v1/admin/users',token:token);
     return (r['users'] as List<dynamic>).map((v)=>IdentityUser.fromJson(v as Map<String,dynamic>)).toList();
   }
+  /// Owner-only directory writes: scope membership is assigned atomically on server.
+  Future<Map<String,dynamic>> createOrgBranch(String token,{
+    required String code,required String name,required String key})=>
+    _request('POST','/v1/admin/directory/branches',token:token,
+      body:{'code':code,'name':name},revision:0,idempotencyKey:key);
+  Future<Map<String,dynamic>> createOrgWarehouse(String token,{
+    required String branchId,required String code,required String name,required String key})=>
+    _request('POST','/v1/admin/directory/warehouses',token:token,
+      body:{'branchId':branchId,'code':code,'name':name},revision:0,idempotencyKey:key);
   Future<IdentityScopes> scopes(String token)async{
     final branches=<IdentityScope>[],warehouses=<IdentityScope>[];
     List<IdentityScope> parse(dynamic v)=>(v as List<dynamic>).map((x)=>
