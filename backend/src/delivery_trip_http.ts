@@ -25,6 +25,14 @@ function date(v:unknown):string{
    reject("INVALID_DATE");
  return x;
 }
+function pagedOffset(url:URL,step:number):number{
+ const value=url.searchParams.get("offset")??"0";
+ if(!/^(0|[1-9][0-9]*)$/.test(value))reject("INVALID_TRIP_OFFSET");
+ const offset=Number(value);
+ if(!Number.isSafeInteger(offset)||offset>100000||offset%step!==0)
+  reject("INVALID_TRIP_OFFSET");
+ return offset;
+}
 function scope(r:Record<string,unknown>):TripScope{
  return {branchId:id(r.branchId),warehouseId:id(r.warehouseId)};
 }
@@ -113,14 +121,13 @@ export async function handleDeliveryTripHttp(req:IncomingMessage,res:ServerRespo
     let result:unknown;
     if(url.pathname==="/v1/delivery/vehicles")result={items:await tripResources(db,t,s,"vehicles")};
     else if(url.pathname==="/v1/delivery/drivers")result={items:await tripResources(db,t,s,"drivers")};
-    else if(url.pathname==="/v1/delivery/trips/eligible")result={items:await tripEligible(db,t,s)};
+    else if(url.pathname==="/v1/delivery/trips/eligible"){
+     const query=(url.searchParams.get("q")??"").trim();
+     if(query.length>80)reject("TRIP_SEARCH_TOO_LONG");
+     result={items:await tripEligible(db,t,s,pagedOffset(url,200),query)};
+    }
     else if(url.pathname==="/v1/delivery/trips"){
-     const rawOffset=url.searchParams.get("offset")??"0";
-     if(!/^(0|[1-9][0-9]*)$/.test(rawOffset))reject("INVALID_TRIP_OFFSET");
-     const offset=Number(rawOffset);
-     if(!Number.isSafeInteger(offset)||offset>100000||offset%100!==0)
-      reject("INVALID_TRIP_OFFSET");
-     result={items:await tripList(db,t,s,offset)};
+     result={items:await tripList(db,t,s,pagedOffset(url,100))};
     }
     else{
      const p=/^\/v1\/delivery\/trips\/([0-9a-f-]{36})$/i.exec(url.pathname);
