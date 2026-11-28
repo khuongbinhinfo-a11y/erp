@@ -33,11 +33,22 @@ async function event(db:PoolClient,c:MutationContext,s:TripScope,id:string,type:
  [c.installationId,s.branchId,id,type,revision,count,c.actorId,c.requestId]);
 }
 export async function tripResources(db:PoolClient,t:string,s:TripScope,type:"drivers"|"vehicles"){
- const table=type==="drivers"?"delivery_driver":"delivery_vehicle";
- const column=type==="drivers"?"phone":"license_plate AS \"licensePlate\"";
- return (await db.query(`SELECT id,code,name,active,${column} FROM ${table}
- WHERE installation_id=$1 AND branch_id=$2 AND warehouse_id=$3
- ORDER BY active DESC,code LIMIT 200`,[t,s.branchId,s.warehouseId])).rows;
+ if(type==="vehicles")return (await db.query(`SELECT id,code,name,active,
+  license_plate AS "licensePlate" FROM delivery_vehicle WHERE
+  installation_id=$1 AND branch_id=$2 AND warehouse_id=$3
+  ORDER BY active DESC,code LIMIT 200`,[t,s.branchId,s.warehouseId])).rows;
+ // Legacy 0027 drivers remain visible for reconciliation, but unlinked drivers
+ // must never be considered eligible for a new plan or locked trip.
+ return (await db.query(`SELECT d.id,COALESCE(e.code,d.code) AS code,
+  COALESCE(e.full_name,d.name) AS name,COALESCE(e.phone,d.phone) AS phone,
+  d.employee_id AS "employeeId",(d.active AND COALESCE(e.active,false)) AS active,
+  (e.id IS NOT NULL) AS "linkedEmployee"
+  FROM delivery_driver d LEFT JOIN org_employee e ON
+   e.installation_id=d.installation_id AND e.branch_id=d.branch_id
+   AND e.id=d.employee_id
+  WHERE d.installation_id=$1 AND d.branch_id=$2 AND d.warehouse_id=$3
+  ORDER BY (d.active AND COALESCE(e.active,false)) DESC,d.code
+  LIMIT 200`,[t,s.branchId,s.warehouseId])).rows;
 }
 export async function createResource(db:PoolClient,c:MutationContext,s:TripScope,
  kind:"drivers"|"vehicles",v:{code:string;name:string;phone?:string;licensePlate?:string}){
@@ -250,9 +261,11 @@ export async function transition(db:PoolClient,c:MutationContext,s:TripScope,tri
  const v=await db.query<{ok:boolean}>(`SELECT EXISTS(SELECT 1 FROM delivery_vehicle
  WHERE installation_id=$1 AND branch_id=$2 AND warehouse_id=$3
  AND id=$4 AND active) AS ok`,[c.installationId,s.branchId,s.warehouseId,veh]);
- const d=await db.query<{ok:boolean}>(`SELECT EXISTS(SELECT 1 FROM delivery_driver
- WHERE installation_id=$1 AND branch_id=$2 AND warehouse_id=$3
- AND id=$4 AND active) AS ok`,[c.installationId,s.branchId,s.warehouseId,drv]);
+ const d=await db.query<{ok:boolean}>(`SELECT EXISTS(SELECT 1 FROM delivery_driver d JOIN org_employee e
+   ON e.installation_id=d.installation_id AND e.branch_id=d.branch_id
+   AND e.id=d.employee_id AND e.active
+ WHERE d.installation_id=$1 AND d.branch_id=$2 AND d.warehouse_id=$3
+ AND d.id=$4 AND d.active) AS ok`,[c.installationId,s.branchId,s.warehouseId,drv]);
  if(!v.rows[0]?.ok||!d.rows[0]?.ok)throw bad("TRIP_INACTIVE_RESOURCE");
  const status=action==="plan"?"PLANNED":"LOCKED";
  const revision=await changed(db,c,s,tripId,status,
