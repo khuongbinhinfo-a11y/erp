@@ -35,12 +35,17 @@ void main(){
           case '/v1/delivery/vehicles':
             data={'items':[]};
           case '/v1/delivery/trips/eligible':
-            data={'items':List.generate(101,(i)=> {
+            final filtered=List.generate(201,(i)=> {
               'id':'00000000-0000-4000-8000-${i.toString().padLeft(12,'0')}',
               'documentNo':'SO-20261128-${i.toString().padLeft(6,'0')}',
               'customerName':'Điểm giao ${i+1}',
               'deliveryAddress':'Địa chỉ ${i+1}',
-            })};
+            }).where((o){
+              final query=req.url.queryParameters['q']??'';
+              return query.isEmpty||o['documentNo']!.contains(query);
+            }).toList();
+            final offset=int.tryParse(req.url.queryParameters['offset']??'0')??0;
+            data={'items':filtered.skip(offset).take(200).toList()};
           case '/v1/delivery/trips/$tid':
             detailReads++;
             data={'trip':{'id':tid,'tripNo':'TG-20261128-000001',
@@ -87,6 +92,17 @@ void main(){
     expect(find.text('Thêm 100 đơn'),findsOneWidget,
       reason:'Select all must respect the atomic 100-order API limit.');
     expect(find.text('Thêm 101 đơn'),findsNothing);
+    await tester.tap(find.byKey(const ValueKey('trip-eligible-load-more')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Điểm giao 201'),findsWidgets);
+    await tester.enterText(find.byKey(const ValueKey('trip-eligible-search')),
+      'SO-20261128-000200');
+    await tester.testTextInput.receiveAction(TextInputAction.search);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Điểm giao 201'),findsOneWidget);
+    expect(find.textContaining('Điểm giao 1 ·'),findsNothing);
+    expect(find.text('Thêm 100 đơn'),findsOneWidget,
+      reason:'Search/paging must preserve selected ids without posting');
     await tester.tap(find.widgetWithText(TextButton,'Hủy').last);
     await tester.pumpAndSettle();
     expect(writes,0);
