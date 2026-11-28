@@ -630,6 +630,7 @@ async function detail(db:PoolClient,t:string,b:string,id:string,actor:string){
     v.grand_total::text AS total,v.subtotal::text,
     v.discount_total::text AS "discountTotal",v.tax_total::text AS "taxTotal",
     v.note,v.amendment_reason AS "amendmentReason",o.created_at AS "createdAt",
+    v.confirmed_at AS "confirmedAt",v.customer_code AS "customerCode",
     o.fulfillment_status AS "fulfillmentStatus",o.delivery_status AS "deliveryStatus",
     o.payment_status AS "paymentStatus",v.customer_name AS "customerName"
     FROM sales_order o JOIN sales_order_version v ON v.installation_id=o.installation_id
