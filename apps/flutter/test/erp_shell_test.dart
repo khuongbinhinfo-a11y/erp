@@ -235,6 +235,28 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
     expect(find.text('Đăng nhập hệ thống'),findsOneWidget);
   });
 
+  testWidgets('IA-B policy-only grant opens Administration but never Company', (tester) async {
+    tester.view.devicePixelRatio=1;
+    tester.view.physicalSize=const Size(1280,800);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final session=IdentitySession(
+      actorId:'00000000-0000-4000-8000-000000000003',
+      token:'example-token-not-for-network',
+      expiresAt:DateTime.now().add(const Duration(hours:1)),
+      grants:const [
+        IdentityGrant(roleId:'policy-role',permission:'inventory.policy.manage',
+          branchId:'00000000-0000-4000-8000-000000000001',
+          warehouseId:'00000000-0000-4000-8000-000000000002'),
+      ]);
+    await tester.pumpWidget(MaterialApp(home:ErpShell(
+      session:session,previewOnly:false)));
+    expect(find.byKey(const ValueKey('nav-0')),findsNothing);
+    expect(find.byKey(const ValueKey('nav-2')),findsOneWidget);
+    expect(find.text('Tổ chức, tài khoản, quyền và chính sách'),findsOneWidget);
+    expect(find.text('Không có quyền quản lý tổ chức.'),findsOneWidget);
+  });
+
   testWidgets('authenticated module menu hides unauthorized Company features', (tester) async {
     final session=IdentitySession(
       actorId:'00000000-0000-4000-8000-000000000001',
