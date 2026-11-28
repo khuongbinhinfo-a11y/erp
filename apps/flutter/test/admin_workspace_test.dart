@@ -90,6 +90,8 @@ void main() {
     expect(find.text('Xem tồn kho'),findsOneWidget);
     expect(find.textContaining('Kho trung tâm (K01)'),findsOneWidget);
     expect(find.textContaining('00000000-0000'),findsNothing);
+    await tester.tap(find.text('Đóng').last);
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Phân quyền').last);
     await tester.pumpAndSettle();
     expect(requests,contains('/v1/admin/permissions'));
