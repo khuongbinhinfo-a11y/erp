@@ -25,6 +25,11 @@ void main() {
             {'id':target,'loginName':'nhan_vien_1','revision':0,'disabled':false}
           ]}),200,headers:headers);
         }
+        if(req.url.path=='/v1/admin/organization'){
+          return http.Response(jsonEncode({'organization':{
+            'code':'ERPTEST','displayName':'Doanh nghiệp thử nghiệm'
+          }}),200,headers:headers);
+        }
         if(req.url.path=='/v1/admin/permissions'){
           return http.Response(jsonEncode({'permissions':[
             {'code':'identity.users.read','scope':'installation'},
