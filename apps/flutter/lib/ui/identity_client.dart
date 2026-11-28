@@ -802,10 +802,10 @@ class ErpIdentityClient {
   final Map<String,String> _tripMutationKeys=<String,String>{};
   Future<List<Map<String,dynamic>>> deliveryTripItems(String token,String endpoint,
       String branch,String warehouse,{int offset=0,String search=''})async{
-    if(!const ['trips','drivers','vehicles','trips/eligible'].contains(endpoint)){
+    if(!const ['trips','drivers','vehicles','employees','trips/eligible'].contains(endpoint)){
       throw const ErpApiError(400,'Danh sách điều phối không hợp lệ.');
     }
-    final step=endpoint=='trips'?100:endpoint=='trips/eligible'?200:0;
+    final step=endpoint=='trips'?100:const {'trips/eligible','employees','drivers'}.contains(endpoint)?200:0;
     if(offset<0||offset>100000||
        (step==0&&offset!=0)||(step>0&&offset%step!=0)||
        search.trim().length>80||(endpoint!='trips/eligible'&&search.isNotEmpty)){
@@ -827,7 +827,9 @@ class ErpIdentityClient {
   }
   Future<Map<String,dynamic>> deliveryTripWrite(IdentitySession session,
       String endpoint,Map<String,dynamic> payload,int revision)async{
-    final valid=const {'trips','vehicles','drivers'}.contains(endpoint)||
+    final valid=const {'trips','vehicles','drivers','employees'}.contains(endpoint)||
+      RegExp(r'^employees/[0-9a-f-]{36}/update$').hasMatch(endpoint)||
+      RegExp(r'^drivers/[0-9a-f-]{36}/link$').hasMatch(endpoint)||
       RegExp(r'^trips/[0-9a-f-]{36}/(assign|unassign|reorder|plan|reopen|lock)$')
         .hasMatch(endpoint);
     if(!valid)throw const ErpApiError(400,'Thao tác điều phối không hợp lệ.');

@@ -2,7 +2,7 @@ import 'package:material_ui/material_ui.dart';
 import 'identity_client.dart';
 import 'erp_tokens.dart';
 
-/// T5-B: route planning only; never confirms inventory, delivery, AR or COD.
+/// T5-C: canonical staff-linked drivers in trip planning; no inventory, AR or COD posting.
 class DeliveryTripWorkspace extends StatefulWidget{
  final ErpIdentityClient client;final IdentitySession session;
  const DeliveryTripWorkspace({super.key,required this.client,required this.session});
@@ -10,7 +10,7 @@ class DeliveryTripWorkspace extends StatefulWidget{
 }
 class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
  List<IdentityScope> warehouses=[];
- List<Map<String,dynamic>> trips=[],drivers=[],vehicles=[],eligible=[];
+ List<Map<String,dynamic>> trips=[],drivers=[],vehicles=[],eligible=[],employees=[];
  Map<String,dynamic>? detail;
  String? warehouse,branch,error;
  bool busy=false,loading=true,_loadingMoreTrips=false,_hasMoreTrips=false;
@@ -58,6 +58,7 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
     widget.client.deliveryTripItems(widget.session.token,'drivers',b,w),
     widget.client.deliveryTripItems(widget.session.token,'vehicles',b,w),
     widget.client.deliveryTripItems(widget.session.token,'trips/eligible',b,w),
+    widget.client.deliveryTripItems(widget.session.token,'employees',b,w),
    ]);
    if(!mounted||generation!=epoch)return;
    final refreshed=<Map<String,dynamic>>[...rows[0]];
@@ -71,6 +72,30 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
     refreshed.addAll(lastPage.where((o)=>seen.add(o['id'])));
     nextOffset+=100;
    }
+   // Employee directory is page-scoped by the server. Load all pages
+   // before offering a staff selector; otherwise late-code employees vanish.
+   final employeeRows=<Map<String,dynamic>>[...rows[4]];
+   var lastEmployees=rows[4],employeeOffset=200;
+   while(lastEmployees.length==200&&employeeOffset<=100000){
+    lastEmployees=await widget.client.deliveryTripItems(widget.session.token,
+      'employees',b,w,offset:employeeOffset);
+    if(!mounted||generation!=epoch)return;
+    final seen=employeeRows.map((e)=>e['id']).toSet();
+    employeeRows.addAll(lastEmployees.where((e)=>seen.add(e['id'])));
+    employeeOffset+=200;
+   }
+   // Legacy driver reconciliation must see all pages, including inactive
+   // and unlinked profiles beyond the first 200 active staff-linked drivers.
+   final driverRows=<Map<String,dynamic>>[...rows[1]];
+   var lastDrivers=rows[1],driverOffset=200;
+   while(lastDrivers.length==200&&driverOffset<=100000){
+    lastDrivers=await widget.client.deliveryTripItems(widget.session.token,
+      'drivers',b,w,offset:driverOffset);
+    if(!mounted||generation!=epoch)return;
+    final seen=driverRows.map((d)=>d['id']).toSet();
+    driverRows.addAll(lastDrivers.where((d)=>seen.add(d['id'])));
+    driverOffset+=200;
+   }
    final tid=chosen??detail?['id']?.toString();
    Map<String,dynamic>? selected;
    if(tid!=null){
@@ -78,7 +103,7 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
    }
    if(!mounted||generation!=epoch)return;
    setState((){
-    trips=refreshed;drivers=rows[1];vehicles=rows[2];eligible=rows[3];
+    trips=refreshed;drivers=driverRows;vehicles=rows[2];eligible=rows[3];employees=employeeRows;
     detail=selected;loading=false;
     _nextTripOffset=nextOffset;_hasMoreTrips=lastPage.length==100&&nextOffset<=100000;
    });
@@ -160,26 +185,154 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
   if(ok==true&&mounted)await _write('trips',
    {'plannedDate':day.trim(),'note':note.trim()},0,chosen:null);
  }
- Future<void> _newResource(bool driver)async{
-  var code='',name='',extra='';
+ Future<void> _newEmployee()async{
+  var code='',fullName='',phone='',jobTitle='';
   final ok=await showDialog<bool>(context:context,builder:(c)=>AlertDialog(
-   title:Text(driver?'Thêm tài xế':'Thêm xe'),
+   title:const Text('Thêm nhân viên'),
+   content:SizedBox(width:410,child:Column(mainAxisSize:MainAxisSize.min,children:[
+    TextFormField(onChanged:(v)=>code=v,
+     decoration:const InputDecoration(labelText:'Mã nhân viên')),
+    TextFormField(onChanged:(v)=>fullName=v,
+     decoration:const InputDecoration(labelText:'Họ và tên')),
+    TextFormField(onChanged:(v)=>jobTitle=v,
+     decoration:const InputDecoration(labelText:'Chức vụ (tùy chọn)')),
+    TextFormField(onChanged:(v)=>phone=v,keyboardType:TextInputType.phone,
+     decoration:const InputDecoration(labelText:'Số điện thoại (tùy chọn)')),
+   ])),
+   actions:[TextButton(onPressed:()=>Navigator.pop(c,false),child:const Text('Hủy')),
+    FilledButton(onPressed:()=>Navigator.pop(c,true),child:const Text('Tạo nhân viên'))],
+  ));
+  if(ok==true&&mounted)await _write('employees',{
+   'code':code.trim().toUpperCase(),'fullName':fullName.trim(),
+   if(phone.trim().isNotEmpty)'phone':phone.trim(),
+   if(jobTitle.trim().isNotEmpty)'jobTitle':jobTitle.trim(),
+  },0);
+ }
+ Future<void> _editEmployee(Map<String,dynamic> employee)async{
+  var fullName=employee['fullName']?.toString()??'',
+   phone=employee['phone']?.toString()??'',
+   jobTitle=employee['jobTitle']?.toString()??'',
+   active=employee['active']==true;
+  final result=await showDialog<bool>(context:context,builder:(c)=>
+   StatefulBuilder(builder:(c,refresh)=>AlertDialog(
+    title:Text('Nhân viên · ${employee['code']}'),
+    content:SizedBox(width:410,child:Column(mainAxisSize:MainAxisSize.min,children:[
+     TextFormField(initialValue:fullName,onChanged:(v)=>fullName=v,
+      decoration:const InputDecoration(labelText:'Họ và tên')),
+     TextFormField(initialValue:jobTitle,onChanged:(v)=>jobTitle=v,
+      decoration:const InputDecoration(labelText:'Chức vụ')),
+     TextFormField(initialValue:phone,onChanged:(v)=>phone=v,
+      decoration:const InputDecoration(labelText:'Số điện thoại')),
+     SwitchListTile(value:active,title:const Text('Đang hoạt động'),
+      onChanged:(v)=>refresh(()=>active=v)),
+     const Text('Ngừng hoạt động không xóa lịch sử. Nhân viên còn chuyến chưa kết thúc không thể ngừng.',
+      style:TextStyle(fontSize:12)),
+    ])),
+    actions:[TextButton(onPressed:()=>Navigator.pop(c,false),child:const Text('Hủy')),
+     FilledButton(onPressed:()=>Navigator.pop(c,true),child:const Text('Lưu'))],
+   )));
+  if(result==true&&mounted)await _write(
+   'employees/${employee['id']}/update',{
+    'fullName':fullName.trim(),'active':active,
+    if(phone.trim().isNotEmpty)'phone':phone.trim(),
+    if(jobTitle.trim().isNotEmpty)'jobTitle':jobTitle.trim(),
+   },employee['revision'] as int);
+ }
+ Future<void> _manageEmployees()async{
+  if(!mounted)return;
+  final chosen=await showDialog<Map<String,dynamic>>(context:context,
+   builder:(c)=>AlertDialog(title:const Text('Nhân viên chi nhánh'),
+    content:SizedBox(width:500,height:450,
+     child:ListView(children:employees.map((e)=>ListTile(
+      title:Text(e['fullName']?.toString()??''),
+      subtitle:Text('${e['code']} · ${e['active']==true?'Đang làm việc':'Đã ngừng'}'
+       '${e['linkedDriver']==true?' · Đã liên kết tài xế':''}'),
+      trailing:const Icon(Icons.edit_outlined),
+      onTap:()=>Navigator.pop(c,e),
+     )).toList())),
+    actions:[TextButton(onPressed:()=>Navigator.pop(c),child:const Text('Đóng'))]));
+  if(chosen!=null&&mounted)await _editEmployee(chosen);
+ }
+ Future<void> _newResource(bool driver)async{
+  if(driver){
+   final available=employees.where((e)=>
+     e['active']==true&&e['linkedDriver']!=true).toList();
+   if(available.isEmpty){
+    if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+     content:Text('Chưa có nhân viên đang hoạt động chưa liên kết. Hãy tạo nhân viên trước.')));
+    return;
+   }
+   String chosen=available.first['id'] as String;
+   final ok=await showDialog<bool>(context:context,builder:(c)=>
+    StatefulBuilder(builder:(ctx,refresh)=>AlertDialog(
+     title:const Text('Liên kết tài xế từ nhân viên'),
+     content:SizedBox(width:410,child:DropdownButtonFormField<String>(
+      initialValue:chosen,isExpanded:true,
+      decoration:const InputDecoration(labelText:'Nhân viên đang hoạt động'),
+      items:available.map((e)=>DropdownMenuItem<String>(value:e['id'] as String,
+       child:Text('${e['code']} · ${e['fullName']}',
+        overflow:TextOverflow.ellipsis))).toList(),
+      onChanged:(v)=>refresh(()=>chosen=v??chosen))),
+     actions:[TextButton(onPressed:()=>Navigator.pop(c,false),child:const Text('Hủy')),
+      FilledButton(onPressed:()=>Navigator.pop(c,true),child:const Text('Liên kết'))],
+    )));
+   if(ok==true&&mounted)await _write('drivers',{'employeeId':chosen},0);
+   return;
+  }
+  var code='',name='',plate='';
+  final ok=await showDialog<bool>(context:context,builder:(c)=>AlertDialog(
+   title:const Text('Thêm xe'),
    content:SizedBox(width:380,child:Column(mainAxisSize:MainAxisSize.min,children:[
     TextFormField(onChanged:(value)=>code=value,
-     decoration:const InputDecoration(labelText:'Mã')),
-    TextFormField(onChanged:(value)=>name=value,decoration:InputDecoration(
-     labelText:driver?'Tên tài xế':'Tên phương tiện')),
-    TextFormField(onChanged:(value)=>extra=value,decoration:InputDecoration(
-     labelText:driver?'Điện thoại (không bắt buộc)':'Biển số xe')),
+     decoration:const InputDecoration(labelText:'Mã xe')),
+    TextFormField(onChanged:(value)=>name=value,
+     decoration:const InputDecoration(labelText:'Tên phương tiện')),
+    TextFormField(onChanged:(value)=>plate=value,
+     decoration:const InputDecoration(labelText:'Biển số xe')),
    ])),
    actions:[TextButton(onPressed:()=>Navigator.pop(c,false),child:const Text('Hủy')),
     FilledButton(onPressed:()=>Navigator.pop(c,true),child:const Text('Lưu'))],
   ));
-  if(ok==true&&mounted)await _write(driver?'drivers':'vehicles',{
-   'code':code.trim(),'name':name.trim(),
-   if(driver&&extra.trim().isNotEmpty)'phone':extra.trim(),
-   if(!driver)'licensePlate':extra.trim(),
+  if(ok==true&&mounted)await _write('vehicles',{
+   'code':code.trim(),'name':name.trim(),'licensePlate':plate.trim(),
   },0);
+ }
+ Future<void> _linkLegacyDriver()async{
+  final old=drivers.where((d)=>d['linkedEmployee']!=true).toList();
+  final available=employees.where((e)=>
+    e['active']==true&&e['linkedDriver']!=true).toList();
+  if(old.isEmpty||available.isEmpty)return;
+  String driverId=old.first['id'].toString(),
+   employeeId=available.first['id'].toString();
+  final approved=await showDialog<bool>(context:context,builder:(c)=>
+   StatefulBuilder(builder:(ctx,refresh)=>AlertDialog(
+    title:const Text('Liên kết tài xế cũ với nhân viên'),
+    content:SizedBox(width:460,child:Column(mainAxisSize:MainAxisSize.min,children:[
+     DropdownButtonFormField<String>(
+      initialValue:driverId,isExpanded:true,
+      decoration:const InputDecoration(labelText:'Hồ sơ tài xế cũ chưa liên kết'),
+      items:old.map((d)=>DropdownMenuItem<String>(
+        value:d['id'].toString(),child:Text(
+         '${d['code']} · ${d['name']}',overflow:TextOverflow.ellipsis))).toList(),
+      onChanged:(v)=>refresh(()=>driverId=v??driverId)),
+     const SizedBox(height:12),
+     DropdownButtonFormField<String>(
+      initialValue:employeeId,isExpanded:true,
+      decoration:const InputDecoration(labelText:'Nhân viên xác nhận danh tính'),
+      items:available.map((e)=>DropdownMenuItem<String>(
+        value:e['id'].toString(),child:Text(
+         '${e['code']} · ${e['fullName']}',overflow:TextOverflow.ellipsis))).toList(),
+      onChanged:(v)=>refresh(()=>employeeId=v??employeeId)),
+     const SizedBox(height:10),
+     const Text('Giữ nguyên mã tài xế cũ và lịch sử chuyến. '
+      'Chỉ liên kết sau khi xác minh đúng người.',
+      style:TextStyle(fontSize:12)),
+    ])),
+    actions:[TextButton(onPressed:()=>Navigator.pop(c,false),child:const Text('Hủy')),
+     FilledButton(onPressed:()=>Navigator.pop(c,true),child:const Text('Xác nhận liên kết'))]
+   )));
+  if(approved==true&&mounted)await _write(
+   'drivers/$driverId/link',{'employeeId':employeeId},0);
  }
  Future<void> _assign()async{
   final d=detail,b=branch,w=warehouse,token=widget.session.token;
@@ -496,8 +649,16 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
     else ...[
      const SizedBox(height:10),
      Wrap(spacing:8,runSpacing:8,children:[
+      OutlinedButton.icon(onPressed:busy||!canManage?null:_newEmployee,
+       icon:const Icon(Icons.person_add_alt_1_outlined),label:const Text('Thêm nhân viên')),
+      OutlinedButton.icon(onPressed:busy||!canManage?null:_manageEmployees,
+       icon:const Icon(Icons.groups_outlined),label:const Text('Nhân viên')),
       OutlinedButton.icon(onPressed:busy||!canManage?null:()=>_newResource(true),
-       icon:const Icon(Icons.person_add_alt_1_outlined),label:const Text('Thêm tài xế')),
+       icon:const Icon(Icons.badge_outlined),label:const Text('Liên kết tài xế')),
+      if(drivers.any((d)=>d['linkedEmployee']!=true))
+       OutlinedButton.icon(onPressed:busy||!canManage?null:_linkLegacyDriver,
+        icon:const Icon(Icons.person_search_outlined),
+        label:const Text('Liên kết tài xế cũ')),
       OutlinedButton.icon(onPressed:busy||!canManage?null:()=>_newResource(false),
        icon:const Icon(Icons.local_shipping_outlined),label:const Text('Thêm xe')),
       Text('${trips.length} chuyến · ${eligible.length} đơn sẵn sàng',
