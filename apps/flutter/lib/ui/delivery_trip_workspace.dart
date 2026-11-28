@@ -185,7 +185,8 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
   final d=detail,b=branch,w=warehouse,token=widget.session.token;
   if(d==null||b==null||w==null||eligible.isEmpty)return;
   final chosen=<String>{};
-  final search=TextEditingController();
+  // Dialog owns only plain text, avoiding controller disposal during pop animation.
+  var searchTerm='';
   var displayed=<Map<String,dynamic>>[...eligible];
   var nextOffset=200,hasMore=eligible.length==200,queryBusy=false;
   var submittedQuery='';
@@ -194,7 +195,7 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
   Future<void> fetchEligible(StateSetter refresh,{bool append=false})async{
    if(queryBusy||!mounted||dialogContext?.mounted!=true)return;
    final requested=append?nextOffset:0,
-    term=append?submittedQuery:search.text.trim();
+    term=append?submittedQuery:searchTerm.trim();
    refresh((){queryBusy=true;queryError=null;});
    try{
     final result=await widget.client.deliveryTripItems(token,
@@ -232,7 +233,8 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
      width:(MediaQuery.sizeOf(c).width-48).clamp(280.0,520.0).toDouble(),
      height:(MediaQuery.sizeOf(c).height*.58).clamp(260.0,480.0).toDouble(),
      child:Column(children:[
-      TextField(key:const ValueKey('trip-eligible-search'),controller:search,
+      TextField(key:const ValueKey('trip-eligible-search'),
+       onChanged:(value)=>searchTerm=value,
        textInputAction:TextInputAction.search,
        onSubmitted:(_)=>fetchEligible(update),
        decoration:InputDecoration(
@@ -293,7 +295,6 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
     ],
    ));
   });
-  search.dispose();
   if(ok==true&&mounted&&chosen.isNotEmpty&&branch==b&&warehouse==w){
    await _write('trips/${d['id']}/assign',{'orderIds':chosen.toList()},
     d['revision'] as int);
