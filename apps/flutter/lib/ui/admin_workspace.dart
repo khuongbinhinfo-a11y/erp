@@ -21,15 +21,10 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
   Future<List<IdentityUser>>? usersFuture;
   IdentityScopes? namedScopes;
 
-  static const permissions=<(String,String)>[
-    ('Người dùng','Xem và quản lý tài khoản'),
-    ('Vai trò','Cấp và thu hồi quyền'),
-    ('Danh mục','Xem và quản lý danh mục'),
-    ('Đơn hàng','Xem và tạo đơn hàng'),
-    ('Kho','Xem tồn kho, ghi nhận tồn đầu kỳ'),
-    ('Công nợ','Xem công nợ và ghi nhận thanh toán'),
-    ('Giao hàng','Xem và cập nhật giao hàng'),
-  ];
+  Future<List<Map<String,dynamic>>>? permissionsFuture;
+  Future<List<Map<String,dynamic>>>? auditFuture;
+  bool get canPolicies=>widget.session?.grants.any((g)=>
+    g.permission=='inventory.policy.manage'&&g.warehouseId!=null)??false;
   bool get real=>!widget.previewOnly&&widget.session!=null&&widget.client!=null;
   bool allowed(String code)=>widget.session?.grants.any((g)=>g.permission==code)??false;
   String get token=>widget.session!.token;
@@ -38,6 +33,10 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
     super.initState();
     if(real&&allowed('identity.users.read'))usersFuture=widget.client!.users(token);
     if(real&&allowed('identity.roles.manage'))loadScopes();
+    if(real&&(allowed('identity.users.read')||allowed('identity.roles.manage')))
+      permissionsFuture=widget.client!.permissionCatalog(token);
+    if(real&&allowed('identity.roles.manage'))
+      auditFuture=widget.client!.auditEvents(token);
   }
   void reload(){
     if(real&&allowed('identity.users.read')){
@@ -333,65 +332,99 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
       },
     );
   }
+  Widget permissionMatrix(){
+    if(!real||!(allowed('identity.users.read')||allowed('identity.roles.manage')))
+      return const Text('Không có quyền xem danh mục quyền.');
+    return FutureBuilder<List<Map<String,dynamic>>>(future:permissionsFuture,
+      builder:(ctx,s){
+        if(s.connectionState!=ConnectionState.done)
+          return const Center(child:CircularProgressIndicator());
+        if(s.hasError)return const Text('Không tải được danh mục quyền từ máy chủ.');
+        final items=s.data??[];
+        if(items.isEmpty)return const Text('Máy chủ chưa công bố quyền.');
+        return Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+          const Text('Quyền do máy chủ công bố; chỉ đánh dấu quyền đã cấp, không tự cấp thêm.'),
+          ...items.map((item){
+            final code=item['code']?.toString()??'';
+            final scope=item['scope']?.toString()??'';
+            final grants=widget.session!.grants.where((g)=>g.permission==code).toList();
+            final label=scope=='warehouse'?'Kho':scope=='branch'?'Chi nhánh':'Hệ thống';
+            return ListTile(dense:true,
+              leading:Icon(grants.isEmpty?Icons.lock_outline:Icons.verified_user_outlined),
+              title:Text(erpPermissionLabel(code)),
+              subtitle:Text('$'+'{label} · '+(grants.isEmpty?'Chưa được cấp':
+                grants.map(grantScopeLabel).join(', '))),
+              trailing:Text(grants.isEmpty?'Chưa cấp':'Đã cấp'));
+          }),
+        ]);
+      });
+  }
+  Widget auditTrail(){
+    if(!real||!allowed('identity.roles.manage'))
+      return const Text('Không có quyền xem nhật ký.');
+    return FutureBuilder<List<Map<String,dynamic>>>(future:auditFuture,builder:(ctx,s){
+      if(s.connectionState!=ConnectionState.done)
+        return const Center(child:CircularProgressIndicator());
+      if(s.hasError)return const Text('Không tải được nhật ký máy chủ.');
+      final rows=s.data??[];
+      if(rows.isEmpty)return const Text('Chưa có thao tác nào được ghi nhận.');
+      return Column(children:rows.map((event)=>ListTile(dense:true,
+        leading:const Icon(Icons.history_outlined),
+        title:Text(event['actionCode']?.toString()??''),
+        subtitle:Text((event['actorLogin']?.toString()??'')+' · '+
+          (event['occurredAt']?.toString()??'')),
+        trailing:const Text('Đã ghi nhận'))).toList());
+    });
+  }
   @override Widget build(BuildContext context){
     final mobile=MediaQuery.sizeOf(context).width<720;
     final margin=mobile?16.0:26.0;
+    Widget content;
+    if(selected==0){
+      content=!real||!allowed('identity.roles.manage')
+        ?const Text('Không có quyền quản lý tổ chức.')
+        :OrgDirectoryWorkspace(client:widget.client!,session:widget.session!,
+          onScopesChanged:widget.onDirectoryChanged);
+    }else if(selected==3){
+      content=!real||!canPolicies
+        ?const Text('Không có quyền quản lý chính sách kho.')
+        :OrgDirectoryWorkspace(client:widget.client!,session:widget.session!,
+          policyOnly:true);
+    }else{
+      content=Card(child:Padding(padding:const EdgeInsets.all(18),
+        child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+          Row(children:[
+            Expanded(child:Text(selected==1?'Tài khoản người dùng':
+              selected==2?'Ma trận quyền':'Nhật ký thao tác',
+              style:Theme.of(context).textTheme.titleLarge?.copyWith(
+                fontWeight:FontWeight.w800,color:ErpPalette.of(context).ink))),
+            if(selected==1&&real&&allowed('identity.users.manage'))
+              FilledButton.icon(onPressed:createUser,
+                icon:const Icon(Icons.person_add_alt_1_outlined),
+                label:const Text('Thêm tài khoản')),
+          ]),
+          const SizedBox(height:16),
+          if(selected==1)usersTable()
+          else if(selected==2)permissionMatrix()
+          else auditTrail(),
+        ])));
+    }
     return Column(children:[
       Padding(padding:EdgeInsets.fromLTRB(margin,16,margin,0),
-        child:ErpPageHeader(
-          heading:'Quản trị',subtitle:'Người dùng và phân quyền',
+        child:ErpPageHeader(heading:'Quản trị',
+          subtitle:'Tổ chức, tài khoản, quyền và chính sách',
           icon:Icons.admin_panel_settings_outlined,
-          trailing:ErpHeaderTabs<int>(
-            keyPrefix:'admin',
-            selected:selected,
-            items:const [ErpSectionTab(0,'Tài khoản'),
-              ErpSectionTab(1,'Ma trận quyền'),ErpSectionTab(2,'Chi nhánh & Kho')],
-            onSelected:(value)=>setState(()=>selected=value)))),
+          trailing:ErpHeaderTabs<int>(keyPrefix:'admin',selected:selected,
+            items:const [ErpSectionTab(0,'Tổ chức'),
+              ErpSectionTab(1,'Tài khoản'),ErpSectionTab(2,'Phân quyền'),
+              ErpSectionTab(3,'Chính sách'),ErpSectionTab(4,'Nhật ký')],
+            onSelected:(v)=>setState(()=>selected=v)))),
       Expanded(child:AnimatedSwitcher(
         duration:MediaQuery.of(context).disableAnimations
-          ? Duration.zero : ErpTokens.pageMotion,
-        reverseDuration:MediaQuery.of(context).disableAnimations
-          ? Duration.zero : const Duration(milliseconds:100),
-        layoutBuilder:erpStableSwitcherLayout,
-        transitionBuilder:erpFadeSwitcher,
-        child:SingleChildScrollView(
-          key:ValueKey('admin-content-$selected'),
-          padding:EdgeInsets.fromLTRB(margin,18,margin,26),
-          child:selected==2
-            ? (!real||!allowed('identity.roles.manage')
-                ?const Text('Chỉ quản trị viên chính được quản lý chi nhánh và kho.')
-                :OrgDirectoryWorkspace(client:widget.client!,session:widget.session!,onScopesChanged:widget.onDirectoryChanged))
-            :Card(child:Padding(padding:const EdgeInsets.all(18),
-            child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-              Row(children:[
-                Expanded(child:Text(selected==0?'Tài khoản người dùng':'Danh sách quyền',
-                  style:Theme.of(context).textTheme.titleLarge?.copyWith(
-                    fontWeight:FontWeight.w800,color:ErpPalette.of(context).ink))),
-                if(selected==0)
-                  Tooltip(message:real?'Tạo user mới':'Chưa có quyền tạo user',
-                    child:FilledButton.icon(
-                      onPressed:real&&allowed('identity.users.manage')?createUser:null,
-                      icon:const Icon(Icons.person_add_alt_1_outlined),
-                      label:const Text('Thêm user'))),
-              ]),
-              const SizedBox(height:18),
-              if(selected==0)usersTable() else ...[
-                Text('Quyền được giới hạn theo chi nhánh và kho.',
-                  style:TextStyle(color:ErpPalette.of(context).muted)),
-                const SizedBox(height:12),
-                ...permissions.map((entry)=>Padding(
-                  padding:const EdgeInsets.symmetric(vertical:9),
-                  child:Row(children:[
-                    SizedBox(width:mobile?100:150,child:Text(entry.$1,
-                      style:TextStyle(fontWeight:FontWeight.w600,color:ErpPalette.of(context).ink))),
-                    Expanded(child:Text(entry.$2,
-                      style:TextStyle(color:ErpPalette.of(context).muted))),
-                  ]),
-                )),
-              ],
-            ]))),
-        ),
-      )),
+          ?Duration.zero:ErpTokens.pageMotion,
+        layoutBuilder:erpStableSwitcherLayout,transitionBuilder:erpFadeSwitcher,
+        child:SingleChildScrollView(key:ValueKey('admin-content-$selected'),
+          padding:EdgeInsets.fromLTRB(margin,18,margin,26),child:content))),
     ]);
   }
 }
