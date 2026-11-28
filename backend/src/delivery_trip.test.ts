@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {randomUUID} from "node:crypto";
-import {resolve} from "node:path";
+import {resolve,join} from "node:path";
+import {mkdtempSync,readdirSync,copyFileSync,rmSync} from "node:fs";
+import {tmpdir} from "node:os";
 import type {AddressInfo} from "node:net";
 import {Pool} from "pg";
 import {applyMigrations} from "./migrate.ts";
@@ -16,17 +18,38 @@ test("T5-B trip planner: two orders, driver/vehicle, sequencing, idempotency, lo
  const admin=new Pool({connectionString:source,max:2});
  const dbName="erp_ci_t5b_"+randomUUID().replaceAll("-","").slice(0,12);
  let db:Pool|null=null,app:ReturnType<typeof buildApp>|null=null;
+ let fixtureDirectory:string|null=null;
  try{
   await admin.query('CREATE DATABASE "'+dbName+'"');
   const url=new URL(source!);url.pathname="/"+dbName;
   db=new Pool({connectionString:url.toString(),max:10,query_timeout:25000});
   db.on("error",()=>{});
-  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).applied.length,28);
-  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).skipped.length,28);
+  // Upgrade rehearsal: a real pre-0028 driver keeps the same ID after
+  // additive migration; no new driver can be created detached.
+  const migrationDirectory=resolve(process.cwd(),"db/migrations");
+  fixtureDirectory=mkdtempSync(join(tmpdir(),"erp-t5c-legacy-ci-"));
+  for(const version of readdirSync(migrationDirectory)){
+   if(/^\d{4}_[a-z0-9_]+\.sql$/.test(version)&&
+    version!=="0028_t5c_canonical_employee_driver.sql"){
+    copyFileSync(join(migrationDirectory,version),join(fixtureDirectory,version));
+   }
+  }
+  assert.equal((await applyMigrations(db,fixtureDirectory)).applied.length,27);
   const password="t5b-"+randomUUID();
   const scope=await bootstrapInstallation(db,{code:"t5b",displayName:"Delivery trip test",
     adminLogin:"owner",adminPassword:password});
   const {installationId:t,branchId:b,warehouseId:w}=scope;
+  const legacy=await db.query<{id:string}>(`INSERT INTO delivery_driver
+    (installation_id,branch_id,warehouse_id,code,name,created_by)
+    VALUES($1,$2,$3,'LEGACY01','Hồ sơ cũ',$4) RETURNING id`,
+    [t,b,w,scope.actorId]);
+  const legacyId=legacy.rows[0]!.id;
+  assert.deepEqual((await applyMigrations(db,migrationDirectory)).applied,
+    ["0028_t5c_canonical_employee_driver.sql"]);
+  assert.equal((await applyMigrations(db,migrationDirectory)).skipped.length,28);
+  assert.equal((await db.query(`SELECT count(*)::integer AS n FROM delivery_driver
+    WHERE installation_id=$1 AND id=$2 AND employee_id IS NULL`,
+    [t,legacyId])).rows[0].n,1);
   app=buildApp(()=>isDatabaseReady(db!),async()=>true,{
    pool:db,installationId:t,allowedOrigin:"https://erp.example.test",
    throttleSecret:"test-"+randomUUID()});
@@ -229,6 +252,7 @@ test("T5-B trip planner: two orders, driver/vehicle, sequencing, idempotency, lo
  }finally{
   if(app)await new Promise<void>(ok=>app!.close(()=>ok()));
   if(db)await db.end();
+  if(fixtureDirectory)rmSync(fixtureDirectory,{recursive:true,force:true});
   await admin.query('DROP DATABASE IF EXISTS "'+dbName+'" WITH (FORCE)').catch(()=>{});
   await admin.end();
  }
