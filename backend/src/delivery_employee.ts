@@ -28,7 +28,7 @@ export async function createEmployee(db:PoolClient,c:MutationContext,s:Pick<Trip
   code:input.code,fullName:input.fullName,phone:input.phone??null,
   jobTitle:input.jobTitle??null,department:input.department??null,active:true,revision:0,linkedDriver:false}}};
 }
-export async function updateEmployee(db:PoolClient,c:MutationContext,s:TripScope,
+export async function updateEmployee(db:PoolClient,c:MutationContext,s:Pick<TripScope,"branchId">,
  employeeId:string,input:{fullName:string;phone?:string;jobTitle?:string;department?:string;active:boolean}){
  const current=await db.query<{revision:string;active:boolean}>(`
   SELECT revision::text,active FROM org_employee
