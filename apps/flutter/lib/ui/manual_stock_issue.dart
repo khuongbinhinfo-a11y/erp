@@ -86,8 +86,10 @@ Future<void> showManualStockIssue({
   if(!scopes.containsKey(product))
     scopes[product]=await client.inventoryStockScopes(token,
       branchId:branchId,warehouseId:warehouseId,productId:product);
+  final stock=scopes[product]?['stock'];
   pending.add({...row,'remainingBase':erpInventoryFormatUnits(remaining),
-    'baseUnit':baseUnit});
+    'baseUnit':baseUnit,
+    'availableBase':stock is Map?stock['available']:null});
  }
  if(!context.mounted)return;
  if(pending.isEmpty)throw const ErpApiError(409,'Đơn đã xuất đủ hàng.');
@@ -125,6 +127,14 @@ Future<void> showManualStockIssue({
             style:const TextStyle(fontWeight:FontWeight.w600)),
           Text('Còn phải xuất: '+erpNumberText(row['remainingBase'])+
             ' '+row['baseUnit'].toString()),
+          Text('Tồn khả dụng tại kho: '+
+            (row['availableBase'] is String
+              ?erpNumberText(row['availableBase']):'Chưa xác minh')+
+            ' '+row['baseUnit'].toString(),
+            style:const TextStyle(fontWeight:FontWeight.w600)),
+          if(erpInventoryBaseUnits((row['availableBase']??'').toString())==BigInt.zero)
+            const Text('Hàng chưa có tồn khả dụng. Cần nhập kho trước khi xuất.',
+              style:TextStyle(fontSize:12)),
           TextField(controller:quantities[(row['lineNo'] as num).toInt()],
             inputFormatters:const [ErpGroupedNumberFormatter(maxIntegerDigits:12,maxFractionDigits:6)],
             keyboardType:const TextInputType.numberWithOptions(decimal:true),
@@ -149,6 +159,7 @@ Future<void> showManualStockIssue({
       actions:[TextButton(onPressed:()=>Navigator.pop(dialog),child:const Text('Đóng')),
         FilledButton(key:const ValueKey('manual-issue-confirm'),onPressed:(){
           final result=<Map<String,dynamic>>[];
+          final requestedByProduct=<String,BigInt>{};
           for(final row in pending){
             final n=(row['lineNo'] as num).toInt();
             final qty=erpInventoryBaseUnits(quantities[n]!.text);
@@ -158,7 +169,10 @@ Future<void> showManualStockIssue({
               return;
             }
             if(qty==BigInt.zero)continue;
-            final policy=scopes[row['productId'].toString()]?['policy'];
+            final productId=row['productId'].toString();
+            requestedByProduct[productId]=
+              (requestedByProduct[productId]??BigInt.zero)+qty;
+            final policy=scopes[productId]?['policy'];
             if(policy is Map&&
               ((policy['requireLocation']==true&&(selectedLocation[n]??'').isEmpty)||
                (policy['requireLot']==true&&(selectedLot[n]??'').isEmpty))){
@@ -170,6 +184,26 @@ Future<void> showManualStockIssue({
              if((selectedLot[n]??'').isNotEmpty)'lotId':selectedLot[n]});
           }
           if(result.isEmpty){refresh(()=>dialogError='Nhập ít nhất một dòng cần xuất.');return;}
+          // Warn before POST; backend remains the authoritative atomic stock gate.
+          // Sum repeated product lines so partial issues cannot overdraw in the UI.
+          if(!allowNegative){
+            for(final entry in requestedByProduct.entries){
+              final stock=scopes[entry.key]?['stock'];
+              final available=stock is Map&&stock['available'] is String
+                ?erpInventoryBaseUnits(stock['available'] as String):null;
+              if(available==null){
+                refresh(()=>dialogError=
+                  'Chưa xác minh được tồn khả dụng. Đóng phiếu và tải lại.');
+                return;
+              }
+              if(entry.value>available){
+                refresh(()=>dialogError='Số xuất vượt tồn khả dụng ('+
+                  erpNumberText(erpInventoryFormatUnits(available))+
+                  '). Hãy nhập kho hoặc giảm số xuất.');
+                return;
+              }
+            }
+          }
           if(allowNegative&&result.any((x)=>
              x.containsKey('locationId')||x.containsKey('lotId'))){
              refresh(()=>dialogError='Không xuất âm hàng theo dõi lô hoặc vị trí.');
