@@ -177,10 +177,10 @@ class _TripExecutionPanelState extends State<TripExecutionPanel>{
        FilledButton(onPressed:()=>Navigator.of(sheetContext).pop({
         'orderId':stop['orderId'],'reason':reason.trim(),
         'lines':[for(int i=0;i<lines.length;i++)
-         if(values[i].trim()!='0'&&controls[i].text.trim()!='0.000000')
+         if(values[i].trim()!='0'&&values[i].trim()!='0.000000')
           {'dispatchId':lines[i]['dispatchId'],
            'sourceLine':lines[i]['sourceLine'],
-           'quantityBase':controls[i].text.trim()}]
+           'quantityBase':values[i].trim()}]
        }),child:const Text('Xác nhận đã nhập trả kho'))
       ]))),
    );
