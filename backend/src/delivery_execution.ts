@@ -313,20 +313,20 @@ export async function executeReturn(db:PoolClient,c:MutationContext,s:Scope,
   if(!src||seen.has(k))error("RETURN_SOURCE_INVALID",400);
   seen.add(k);
   const qty=units(line.quantityBase);
-  if(qty<=0n||qty>units(src.issuedBase)-
+  if(qty<=0n||qty>units(src!.issuedBase)-
    (prev.delivered.get(k)??0n)-(prev.returned.get(k)??0n))
    error("RETURN_EXCEEDS_ON_VEHICLE");
   await db.query(`INSERT INTO delivery_trip_return_line
   (installation_id,branch_id,return_id,source_line,dispatch_id,dispatch_source_line,
   product_id,location_id,lot_id,quantity_base)
   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::numeric)`,
-  [c.installationId,s.branchId,retId,i+1,src.dispatchId,src.sourceLine,
-   src.productId,src.locationId,src.lotId,line.quantityBase]);
+  [c.installationId,s.branchId,retId,i+1,src!.dispatchId,src!.sourceLine,
+   src!.productId,src!.locationId,src!.lotId,line.quantityBase]);
   await db.query(`INSERT INTO inventory_ledger
   (installation_id,branch_id,warehouse_id,product_id,kind,source_type,source_id,
   source_line,delta_base,actor_id,request_id)
   VALUES($1,$2,$3,$4,'RETURN','FULFILLMENT',$5,$6,$7::numeric,$8,$9)`,
-  [c.installationId,s.branchId,s.warehouseId,src.productId,retId,i+1,
+  [c.installationId,s.branchId,s.warehouseId,src!.productId,retId,i+1,
    line.quantityBase,c.actorId,c.requestId]);
  }
  const snap=await status(db,c,s,stop,sources);

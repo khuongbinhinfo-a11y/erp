@@ -122,8 +122,8 @@ class ErpIdentityClient {
           'Dữ liệu nhận được không hợp lệ. Vui lòng thử lại.');
       }
       if(decoded is! Map<String,dynamic>)throw const ErpApiError(502,'Phản hồi API không hợp lệ.');
-      if(response.statusCode>=400){
-        final message=switch(response.statusCode){
+      if(response.status>=400){
+        final message=switch(response.status){
           401=>'Sai tài khoản/mật khẩu hoặc phiên đã hết hạn.',
           403=>'Không có quyền sử dụng chức năng này.',
           409=>'Dữ liệu thay đổi hoặc thao tác bị trùng. Hãy tải lại.',
@@ -141,9 +141,9 @@ class ErpIdentityClient {
         // Do not replace its specific message with a misleading "duplicate".
         final serverMessage=fault is Map<String,dynamic> && fault['message'] is String
           ? (fault['message'] as String).trim():null;
-        final specificConflict=response.statusCode==409&&code!=null&&
+        final specificConflict=response.status==409&&code!=null&&
           serverMessage!=null&&serverMessage.isNotEmpty&&serverMessage.length<=240;
-        throw ErpApiError(response.statusCode,
+        throw ErpApiError(response.status,
           specificConflict?serverMessage:message,code:code);
       }
       return decoded;
@@ -157,7 +157,7 @@ class ErpIdentityClient {
         try{
           final probe=await _http.get(origin.resolve('/v1/auth/config'))
             .timeout(const Duration(seconds:4));
-          if(probe.statusCode==200){
+          if(probe.status==200){
             throw const ErpApiError(424,
               'Chưa thể đăng nhập. Vui lòng thử lại.');
           }
@@ -171,7 +171,7 @@ class ErpIdentityClient {
         try{
           final probe=await _http.get(origin.resolve('/v1/auth/config'))
             .timeout(const Duration(seconds:4));
-          if(probe.statusCode==200||probe.statusCode==401||probe.statusCode==503){
+          if(probe.status==200||probe.status==401||probe.status==503){
             throw const ErpApiError(424,
               'Danh mục đang tạm gián đoạn. Vui lòng thử lại.');
           }

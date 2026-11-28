@@ -31,7 +31,7 @@ function parsed(action:Action,raw:Record<string,unknown>):Body{
  if(action==="handover"){
   fields(raw,["branchId","warehouseId","tripId","collectionLines"]);
   if(!Array.isArray(raw.collectionLines)||raw.collectionLines.length<1||raw.collectionLines.length>200)err("COD_HANDOVER_INVALID");
-  const collectionLines=raw.collectionLines.map(item=>{
+  const collectionLines=(raw.collectionLines as unknown[]).map((item:unknown)=>{
    const x=obj(item);fields(x,["collectionId","amount"]);
    if(typeof x.amount!=="string"||!/^[1-9][0-9]{0,15}$/.test(x.amount))err("COD_HANDOVER_INVALID");
    return {collectionId:id(x.collectionId),amount:x.amount as string};
@@ -43,19 +43,19 @@ function parsed(action:Action,raw:Record<string,unknown>):Body{
   fields(raw,["branchId","warehouseId","tripId","orderId","amount","method"]);
   if(typeof raw.amount!=="string"||!/^(0|[1-9][0-9]{0,15})$/.test(raw.amount))err("INVALID_PAYMENT_AMOUNT");
   if(raw.method!=="CASH"&&raw.method!=="BANK_TRANSFER")err("INVALID_PAYMENT_METHOD");
-  return {...s,orderId,amount:raw.amount,method:raw.method};
+  return {...s,orderId,amount:raw.amount as string,method:raw.method as string};
  }
  if(action==="return"){
   fields(raw,["branchId","warehouseId","tripId","orderId","reason","lines"]);
   if(typeof raw.reason!=="string"||raw.reason.trim().length<3||raw.reason.length>500)err("RETURN_REASON_REQUIRED");
   if(!Array.isArray(raw.lines)||raw.lines.length<1||raw.lines.length>1000)err("RETURN_LINES_REQUIRED");
-  const lines=raw.lines.map(item=>{
+  const lines=(raw.lines as unknown[]).map((item:unknown)=>{
    const x=obj(item);fields(x,["dispatchId","sourceLine","quantityBase"]);
    if(!Number.isInteger(x.sourceLine)||typeof x.quantityBase!=="string"||
     !/^(0|[1-9][0-9]{0,17})(?:\\.[0-9]{1,6})?$/.test(x.quantityBase))err("RETURN_QUANTITY_INVALID");
    return {dispatchId:id(x.dispatchId),sourceLine:x.sourceLine as number,quantityBase:x.quantityBase as string};
   });
-  return {...s,orderId,reason:raw.reason.trim(),lines};
+  return {...s,orderId,reason:(raw.reason as string).trim(),lines};
  }
  fields(raw,["branchId","warehouseId","tripId","orderId","result","reasonCode","rescheduledFor","lines"]);
  if(!["DELIVERED_FULL","DELIVERED_PARTIAL","FAILED","RESCHEDULED"].includes(String(raw.result)))err("DELIVERY_ATTEMPT_RESULT_INVALID");

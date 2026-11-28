@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 import 'identity_client.dart';
 import 'erp_tokens.dart';
+import 'trip_execution_panel.dart';
 
 /// T5-C: canonical staff-linked drivers in trip planning; no inventory, AR or COD posting.
 class DeliveryTripWorkspace extends StatefulWidget{
@@ -540,8 +541,12 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
      child:const Text('Mở lại để sửa')),
    ]),
    if(d['status']=='LOCKED')Padding(padding:const EdgeInsets.symmetric(vertical:8),
-    child:Text('Đã khóa. Xuất kho, xác nhận giao và COD thuộc bước tiếp theo.',
+    child:Text('Đã khóa kế hoạch. Thực thi theo hàng xuất thực tế.',
      style:TextStyle(color:p.muted))),
+   if(d['status']=='LOCKED'&&branch!=null&&warehouse!=null)
+    TripExecutionPanel(key:ValueKey('trip-exec-${d['id']}'),
+      client:widget.client,session:widget.session,
+      branchId:branch!,warehouseId:warehouse!,tripId:d['id'] as String),
    const SizedBox(height:10),
    if(stops.isEmpty)const Text('Chưa có điểm giao.')
    else for(int i=0;i<stops.length;i++)
