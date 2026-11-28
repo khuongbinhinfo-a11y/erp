@@ -23,7 +23,7 @@ void main(){
    final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
      httpClient:MockClient((request)async{
       final path=request.url.path;
-      if(path=='/v1/admin/scopes'){
+      if(path=='/v1/admin/policy-scopes'){
         return http.Response(jsonEncode({
          'branches':[{'id':branch,'name':'Chi nhánh chính','code':'MAIN'}],
          'warehouses':[{'id':warehouse,'branchId':branch,'name':'Kho chính','code':'MAIN'}],
@@ -62,13 +62,13 @@ void main(){
        branchId:branch,warehouseId:warehouse),
     ]);
    await tester.pumpWidget(MaterialApp(home:Scaffold(body:SingleChildScrollView(
-     child:OrgDirectoryWorkspace(client:client,session:session)))));
+     child:OrgDirectoryWorkspace(client:client,session:session,policyOnly:true)))));
    await tester.pumpAndSettle();
    expect(find.text('Chi nhánh chính'),findsWidgets);
    expect(find.text('Kho chính'),findsOneWidget);
    expect(find.text('MAIN'),findsNothing);
-   expect(find.text('Thêm chi nhánh'),findsOneWidget);
-   expect(find.text('Thêm kho'),findsOneWidget);
+   expect(find.text('Thêm chi nhánh'),findsNothing);
+   expect(find.text('Thêm kho'),findsNothing);
    await tester.tap(find.text('Xuất âm / giữ hàng'));
    await tester.pumpAndSettle();
    expect(find.text('Cho phép xuất vượt tồn'),findsOneWidget);
