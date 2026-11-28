@@ -103,6 +103,34 @@ class ErpLocalStore {
 
 
 
+  /// T5-D: one unresolved trip posting at a time. Persist exact actor/scope,
+  /// action, body, revision and idempotency key across app restarts.
+  Future<void> saveDeliveryPending(LocalScope scope,String tripId,
+      Map<String,dynamic> command)async{
+    final path=_key(scope,'delivery-execution',tripId);
+    final payload=jsonEncode(command),old=await driver.read(path);
+    if(old==payload)return;
+    if(old!=null||driver is! AtomicLocalDriver)throw const LocalRecoveryConflict();
+    if(!await (driver as AtomicLocalDriver).compareAndSwap(path,null,payload))
+      throw const LocalRecoveryConflict();
+  }
+  Future<Map<String,dynamic>?> deliveryPending(LocalScope scope,String tripId)async{
+    final raw=await driver.read(_key(scope,'delivery-execution',tripId));
+    return raw==null?null:Map<String,dynamic>.from(jsonDecode(raw) as Map);
+  }
+  Future<void> clearDeliveryPending(LocalScope scope,String tripId,String expectedKey)async{
+    final path=_key(scope,'delivery-execution',tripId);
+    if(driver is! AtomicLocalDriver)throw const LocalRecoveryConflict();
+    for(var attempt=0;attempt<12;attempt++){
+      final before=await driver.read(path);
+      if(before==null)return;
+      final entry=Map<String,dynamic>.from(jsonDecode(before) as Map);
+      if(entry['key']!=expectedKey)throw const LocalRecoveryConflict();
+      if(await (driver as AtomicLocalDriver).compareAndSwap(path,before,null))return;
+    }
+    throw const LocalRecoveryConflict();
+  }
+
   // An editor owns one UUID-like token. Lease expiry permits crash recovery,
   // but the old editor can neither autosave nor submit after a takeover.
   static const _cartLease=Duration(seconds:30);

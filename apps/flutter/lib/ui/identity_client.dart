@@ -955,6 +955,120 @@ class ErpIdentityClient {
     _tripMutationKeys.remove(identity);
     return value;
   }
+
+  /// T5-D: recheck the same idempotency receipt after an ambiguous acknowledgement.
+  Future<Map<String,dynamic>> deliveryExecutionRead(IdentitySession session,{
+      required String branchId,required String warehouseId,required String tripId})async{
+    final q=Uri(queryParameters:{'branchId':branchId,'warehouseId':warehouseId,'tripId':tripId}).query;
+    final r=await _request('GET','/v1/delivery/execution/read?$q',token:session.token);
+    return Map<String,dynamic>.from(r['execution'] as Map);
+  }
+
+  Future<List<IdentityScope>> deliveryDriverScopes(IdentitySession session)async{
+    final r=await _request('GET','/v1/delivery/execution/scopes',token:session.token);
+    return (r['warehouses'] as List<dynamic>).map((x)=>
+      IdentityScope.fromJson(Map<String,dynamic>.from(x as Map))).toList();
+  }
+  Future<List<Map<String,dynamic>>> deliveryDriverTrips(IdentitySession session,{
+    required String branchId,required String warehouseId,int offset=0})async{
+    if(offset<0||offset%100!=0||offset>100000){
+      throw const ErpApiError(400,'Trang danh sách chuyến không hợp lệ.');
+    }
+    final q=Uri(queryParameters:{'branchId':branchId,'warehouseId':warehouseId,
+      'offset':offset.toString()}).query;
+    final r=await _request('GET','/v1/delivery/execution/trips?$q',token:session.token);
+    return (r['items'] as List<dynamic>).map((x)=>
+      Map<String,dynamic>.from(x as Map)).toList();
+  }
+  Future<Map<String,dynamic>?> deliveryExecutionRecovery(IdentitySession session,
+      String action,Map<String,dynamic> payload,
+      {required String key,required int revision})async{
+    final r=await _request('POST','/v1/delivery/execution/recovery',
+      token:session.token,body:{'action':action,'body':payload},
+      revision:revision,idempotencyKey:key);
+    return r['receipt']==null?null:Map<String,dynamic>.from(r['receipt'] as Map);
+  }
+  /// Pending attempt/payment survives restarts and account switch. The same
+  /// trip cannot submit a different command until receipt reconciliation.
+  Future<Map<String,dynamic>> deliveryExecutionWrite(IdentitySession session,
+      String action,Map<String,dynamic> payload,int revision)async{
+    if(!const {'start','attempt','return','collect','handover'}.contains(action))
+      throw const ErpApiError(400,'Thao tác giao hàng không hợp lệ.');
+    final b=payload['branchId'],w=payload['warehouseId'],trip=payload['tripId'];
+    final permission=action=='start'||action=='return'?'delivery.update':
+      action=='handover'?'delivery.cod.handover':'delivery.execute';
+    final warehousePermission=action=='return'?'inventory.post':'inventory.read';
+    if(b is! String||w is! String||trip is! String||
+      !session.grants.any((g)=>g.permission==permission&&g.branchId==b)||
+      !session.grants.any((g)=>g.permission==warehousePermission&&
+        g.branchId==b&&g.warehouseId==w))
+      throw const ErpApiError(403,'Chưa được cấp quyền giao hàng tại kho này.');
+    final scope=localScope(session,b,warehouse:w),store=localStore;
+    if(scope==null||store==null)
+      throw const ErpApiError(503,'Chưa có nơi lưu an toàn cho lệnh giao hàng chờ đối soát.');
+    final pending=await store.deliveryPending(scope,trip);
+    late String key;
+    if(pending!=null){
+      final oldKey=pending['key'],oldAction=pending['action'],
+        oldRevision=pending['revision'],oldBody=pending['body'];
+      if(oldKey is! String||oldAction is! String||oldRevision is! int||
+        oldBody is! Map<String,dynamic>)
+        throw const ErpApiError(409,'Lệnh giao hàng đang chờ không hợp lệ. Cần đối soát.');
+      Map<String,dynamic>? recovered;
+      try{
+        recovered=await deliveryExecutionRecovery(session,oldAction,
+          Map<String,dynamic>.from(oldBody),key:oldKey,revision:oldRevision);
+      }on ErpApiError catch(e){
+        if(e.status==409)rethrow;
+        throw const ErpApiError(424,'Chưa kiểm tra được chứng từ trước. Không tạo lệnh mới.');
+      }catch(_){
+        throw const ErpApiError(424,'Chưa kiểm tra được chứng từ trước. Không tạo lệnh mới.');
+      }
+      if(recovered!=null){
+        await store.clearDeliveryPending(scope,trip,oldKey);
+        if(oldAction==action&&oldRevision==revision&&
+           jsonEncode(oldBody)==jsonEncode(payload))return recovered;
+        throw const ErpApiError(409,'Đã đối soát lần trước. Tải lại chuyến trước khi tiếp tục.');
+      }
+      if(oldAction!=action||oldRevision!=revision||
+        jsonEncode(oldBody)!=jsonEncode(payload))
+        throw const ErpApiError(423,'Lệnh trước chưa xác nhận. Hãy đối soát trước khi thao tác khác.');
+      key=oldKey;
+    }else{
+      key=_key();
+      try{
+        await store.saveDeliveryPending(scope,trip,{
+          'action':action,'body':payload,'revision':revision,'key':key});
+      }on LocalRecoveryConflict{
+        throw const ErpApiError(423,'Đang có thao tác giao hàng chưa đối soát ở cửa sổ khác.');
+      }
+    }
+    try{
+      final r=await _request('POST','/v1/delivery/execution/$action',
+        token:session.token,body:payload,revision:revision,idempotencyKey:key);
+      await store.clearDeliveryPending(scope,trip,key);
+      return r;
+    }on ErpApiError catch(e){
+      Map<String,dynamic>? recovered;
+      var checked=false;
+      try{
+        recovered=await deliveryExecutionRecovery(session,action,payload,
+          key:key,revision:revision);
+        checked=true;
+      }catch(_){/* Preserve original key/body until server answers. */}
+      if(recovered!=null){
+        await store.clearDeliveryPending(scope,trip,key);
+        return recovered;
+      }
+      if(checked&&e.status>=400&&e.status<500&&
+        e.status!=408&&e.status!=423&&e.status!=424){
+        await store.clearDeliveryPending(scope,trip,key);
+        rethrow;
+      }
+      throw const ErpApiError(424,
+        'Chưa xác minh được kết quả giao hàng. Lệnh gốc đã lưu an toàn, vui lòng đối soát.');
+    }
+  }
   /// T5-A: canonical server-side stock/delivery and AR facts. No offline posts.
   Future<Map<String,dynamic>> salesExecutionRead(String token,{
       required String branchId,required String warehouseId,required String orderId,

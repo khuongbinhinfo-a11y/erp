@@ -24,8 +24,8 @@ test("T5-A manual delivery, source-matched return, 0-debt and repeat AR payment"
   pool=new Pool({connectionString:uri.toString(),max:10,query_timeout:15000});
   pool.on("error",()=>{});
   const applied=await applyMigrations(pool,resolve(process.cwd(),"db/migrations"));
-  assert.equal(applied.applied.length,29);
-  assert.equal((await applyMigrations(pool,resolve(process.cwd(),"db/migrations"))).skipped.length,29);
+  assert.equal(applied.applied.length,30);
+  assert.equal((await applyMigrations(pool,resolve(process.cwd(),"db/migrations"))).skipped.length,30);
   const password="T5A-"+randomUUID();
   const root=await bootstrapInstallation(pool,{code:"t5a",displayName:"T5-A integration",
     adminLogin:"owner",adminPassword:password});

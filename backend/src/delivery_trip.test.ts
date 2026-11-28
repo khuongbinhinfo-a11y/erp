@@ -31,7 +31,8 @@ test("T5-B trip planner: two orders, driver/vehicle, sequencing, idempotency, lo
   for(const version of readdirSync(migrationDirectory)){
    if(/^\d{4}_[a-z0-9_]+\.sql$/.test(version)&&
     version!=="0028_t5c_canonical_employee_driver.sql"&&
-    version!=="0029_iaa_employee_access.sql"){
+    version!=="0029_iaa_employee_access.sql"&&
+    version!=="0030_t5d_trip_execution.sql"){
     copyFileSync(join(migrationDirectory,version),join(fixtureDirectory,version));
    }
   }
@@ -51,8 +52,9 @@ test("T5-B trip planner: two orders, driver/vehicle, sequencing, idempotency, lo
    [t,b,w,scope.actorId]);
   const hiddenId=hidden.rows[0]!.id;
   assert.deepEqual((await applyMigrations(db,migrationDirectory)).applied,
-    ["0028_t5c_canonical_employee_driver.sql","0029_iaa_employee_access.sql"]);
-  assert.equal((await applyMigrations(db,migrationDirectory)).skipped.length,29);
+    ["0028_t5c_canonical_employee_driver.sql","0029_iaa_employee_access.sql",
+    "0030_t5d_trip_execution.sql"]);
+  assert.equal((await applyMigrations(db,migrationDirectory)).skipped.length,30);
   assert.equal((await db.query(`SELECT count(*)::integer AS n FROM delivery_driver
     WHERE installation_id=$1 AND id=$2 AND employee_id IS NULL`,
     [t,legacyId])).rows[0].n,1);
