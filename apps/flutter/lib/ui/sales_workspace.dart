@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:file_picker/file_picker.dart';
 import 'sales_print_document.dart';
+import 'sales_bulk_selection.dart';
 import 'sales_order_view.dart';
 import 'sales_execution_dialogs.dart';
 import 'sales_print_web_stub.dart' if (dart.library.js_interop) 'sales_print_web.dart';
@@ -3122,32 +3123,55 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     // canonically, or fail the whole print: never silently skip hidden rows.
     final ids=_selectedBulkOrders.toList(growable:false);
     final confirmed=<Map<String,dynamic>>[];
+    var skipped=0;
     try{
       setState(()=>_manualBusy=true);
       for(final id in ids){
         if(!_sameScope(token,branch))return;
         final detail=await widget.client.salesOrder(token,id,branch);
-        if(detail['status']!='CONFIRMED'||detail['versionStatus']!='CONFIRMED'){
-          throw const FormatException('Đơn đã thay đổi, cần tải lại danh sách.');
+        if(!erpBulkPrintEligible(detail)){
+          skipped++;continue;
         }
         confirmed.add(detail);
       }
       if(!_sameScope(token,branch))return;
+      if(confirmed.isEmpty)throw const FormatException(
+        'Không có đơn đã xác nhận đủ điều kiện in. Các đơn đang điều chỉnh chưa in được.');
       await _openHtmlPrint(confirmedSalesBatchPrintDocument(confirmed),
         'Phieu-xuat-kho-${confirmed.length}-don.html');
+      if(skipped>0&&mounted)inform('Đã gửi ${confirmed.length} đơn sang hộp thoại in; '
+        'bỏ qua $skipped đơn chưa xác nhận hoặc đang điều chỉnh.');
     }on FormatException catch(e){
       if(mounted)inform(e.message,error:true);
     }catch(_){
       if(mounted)inform('Không in được toàn bộ đơn đã chọn. Kiểm tra lại trạng thái và quyền.',error:true);
     }finally{if(mounted)setState(()=>_manualBusy=false);}
   }
-  bool _bulkSelectable(Map<String,dynamic> row)=>
-    row['status']=='CONFIRMED'&&row['versionStatus']=='CONFIRMED';
+  void _toggleVisibleBulk(List<String> ids){
+    final updated=erpBulkToggleVisible(_selectedBulkOrders,ids);
+    setState((){
+      _selectedBulkOrders..clear()..addAll(updated);
+    });
+  }
+  Widget _bulkSelectAllCheckbox(List<String> pageIds){
+    final total=pageIds.length;
+    final checked=pageIds.where(_selectedBulkOrders.contains).length;
+    return Tooltip(message:'Chọn hoặc bỏ chọn tất cả đơn đang hiển thị',
+      child:Checkbox(
+        key:const ValueKey('sales-bulk-header-select-all'),
+        tristate:true,
+        value:checked==0?false:checked==total?true:null,
+        visualDensity:VisualDensity.compact,
+        materialTapTargetSize:MaterialTapTargetSize.shrinkWrap,
+        onChanged:_navigationLocked||total==0?null:(_)=>_toggleVisibleBulk(pageIds),
+      ));
+  }
   Widget _manualCheckbox(Map<String,dynamic> row){
     if(!_bulkMode)return const SizedBox.shrink();
-    final id=row['id']?.toString(),allowed=_bulkSelectable(row);
-    return Checkbox(value:id!=null&&_selectedBulkOrders.contains(id),
-      onChanged:_navigationLocked||id==null||!allowed?null:(value){
+    final id=row['id'];
+    return Checkbox(value:id is String&&_selectedBulkOrders.contains(id),
+      key:id is String?ValueKey('sales-bulk-row-$id'):null,
+      onChanged:_navigationLocked||id is! String||id.isEmpty?null:(value){
         setState((){if(value==true){_selectedBulkOrders.add(id);}
         else{_selectedBulkOrders.remove(id);}});
       });
@@ -3888,6 +3912,12 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     final shown=orders.where((o)=>erpSalesMatchesFilter(o,_orderFilter)&&
       (_deliveryFilter=='all'||erpSalesDeliveryChoice(o)==_deliveryFilter)&&
       (_paymentFilter=='all'||o['paymentStatus']==_paymentFilter)).toList();
+    final visibleIds=erpBulkSelectableIds(shown);
+    final allVisibleSelected=visibleIds.isNotEmpty&&
+      visibleIds.every(_selectedBulkOrders.contains);
+    final printableSelected=orders.where((o)=>
+      o['id'] is String&&_selectedBulkOrders.contains(o['id'])&&
+      erpBulkPrintEligible(o)).length;
     return Padding(
       padding:EdgeInsets.all(retail?8:18),
       child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
@@ -4015,16 +4045,20 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
               Text('Đã chọn ${_selectedBulkOrders.length} đơn',
                 style:const TextStyle(fontWeight:FontWeight.w700)),
               TextButton.icon(key:const ValueKey('sales-bulk-select-all'),
-                onPressed:_navigationLocked?null:()=>setState((){
-                  for(final row in shown){
-                    if(_bulkSelectable(row)&&row['id'] is String)
-                      _selectedBulkOrders.add(row['id'] as String);
-                  }
-                }),icon:const Icon(Icons.select_all,size:16),
-                label:const Text('Chọn đơn đã xác nhận trong kết quả hiện tại')),
-              if(_selectedBulkOrders.isNotEmpty)TextButton(
-                onPressed:_navigationLocked?null:()=>setState(()=>_selectedBulkOrders.clear()),
-                child:const Text('Bỏ chọn')),
+                onPressed:_navigationLocked||visibleIds.isEmpty?null:
+                  ()=>_toggleVisibleBulk(visibleIds),
+                icon:Icon(allVisibleSelected?
+                  Icons.deselect_outlined:Icons.select_all,size:16),
+                label:Text(allVisibleSelected?'Bỏ chọn trang này':
+                  'Chọn tất cả (${visibleIds.length})')),
+              if(_selectedBulkOrders.isNotEmpty)...[
+                Text('$printableSelected đơn đủ điều kiện in',
+                  style:TextStyle(fontSize:12,color:ErpPalette.of(context).muted)),
+                TextButton(
+                  onPressed:_navigationLocked?null:
+                    ()=>setState(()=>_selectedBulkOrders.clear()),
+                  child:const Text('Bỏ chọn toàn bộ')),
+              ],
             ]),
             const SizedBox(height:6),
             Wrap(spacing:8,runSpacing:8,children:[
@@ -4157,7 +4191,10 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
           headingRowColor:WidgetStatePropertyAll(ErpPalette.of(context).mint),
           headingTextStyle:TextStyle(fontWeight:FontWeight.w700,color:ErpPalette.of(context).ink),
           columns:[
-            if(_bulkMode)const DataColumn(label:Text('Chọn')),
+            if(_bulkMode)DataColumn(label:Row(mainAxisSize:MainAxisSize.min,children:[
+              _bulkSelectAllCheckbox(visibleIds),
+              const Text('Chọn tất cả'),
+            ])),
             const DataColumn(label:Text('Số đơn / Ngày')),
             const DataColumn(label:Text('Khách hàng / Kho')),
             const DataColumn(label:Text('Thành tiền'),numeric:true),
