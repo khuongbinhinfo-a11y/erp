@@ -67,9 +67,10 @@ void main() {
         client:client,session:session))));
     await tester.pumpAndSettle();
     expect(requests,contains('/v1/admin/scopes'));
-    expect(requests,contains('/v1/admin/users'));
+    expect(requests,isNot(contains('/v1/admin/users')));
     await tester.tap(find.text('Tài khoản').last);
     await tester.pumpAndSettle();
+    expect(requests,contains('/v1/admin/users'));
     await tester.tap(find.byTooltip('Cấp quyền'));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('admin-grant-selector')));
