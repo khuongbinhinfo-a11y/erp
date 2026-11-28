@@ -259,12 +259,15 @@ export async function transition(db:PoolClient,c:MutationContext,s:TripScope,tri
  const v=await db.query<{ok:boolean}>(`SELECT EXISTS(SELECT 1 FROM delivery_vehicle
  WHERE installation_id=$1 AND branch_id=$2 AND warehouse_id=$3
  AND id=$4 AND active) AS ok`,[c.installationId,s.branchId,s.warehouseId,veh]);
- const d=await db.query<{ok:boolean}>(`SELECT EXISTS(SELECT 1 FROM delivery_driver d JOIN org_employee e
-   ON e.installation_id=d.installation_id AND e.branch_id=d.branch_id
-   AND e.id=d.employee_id AND e.active
+ // Employee deactivation locks e FOR UPDATE. Planning locks the same
+ // canonical row FOR SHARE, so a concurrent inactive transition cannot race.
+ const d=await db.query<{id:string}>(`SELECT e.id FROM delivery_driver d
+ JOIN org_employee e ON e.installation_id=d.installation_id
+  AND e.branch_id=d.branch_id AND e.id=d.employee_id
  WHERE d.installation_id=$1 AND d.branch_id=$2 AND d.warehouse_id=$3
- AND d.id=$4 AND d.active) AS ok`,[c.installationId,s.branchId,s.warehouseId,drv]);
- if(!v.rows[0]?.ok||!d.rows[0]?.ok)throw bad("TRIP_INACTIVE_RESOURCE");
+  AND d.id=$4 AND d.active AND e.active
+ FOR SHARE OF e,d`,[c.installationId,s.branchId,s.warehouseId,drv]);
+ if(!v.rows[0]?.ok||!d.rowCount)throw bad("TRIP_INACTIVE_RESOURCE");
  const status=action==="plan"?"PLANNED":"LOCKED";
  const revision=await changed(db,c,s,tripId,status,
  action==="plan"?veh:null,action==="plan"?drv:null,day??null,note??null);
