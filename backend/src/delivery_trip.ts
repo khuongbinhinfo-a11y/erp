@@ -1,7 +1,9 @@
 import type {PoolClient} from "pg";
 import {requireRevision,type MutationContext} from "./mutation.ts";
 export class DeliveryTripFault extends Error {
- constructor(public httpStatus:number,public code:string){super(code);}
+ readonly httpStatus:number;
+ readonly code:string;
+ constructor(httpStatus:number,code:string){super(code);this.httpStatus=httpStatus;this.code=code;}
 }
 export type TripScope={branchId:string;warehouseId:string};
 type TripRow={id:string;status:string;revision:string;vehicle_id:string|null;driver_id:string|null};
