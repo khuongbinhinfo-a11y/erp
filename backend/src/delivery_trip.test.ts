@@ -21,8 +21,8 @@ test("T5-B trip planner: two orders, driver/vehicle, sequencing, idempotency, lo
   const url=new URL(source!);url.pathname="/"+dbName;
   db=new Pool({connectionString:url.toString(),max:10,query_timeout:25000});
   db.on("error",()=>{});
-  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).applied.length,27);
-  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).skipped.length,27);
+  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).applied.length,28);
+  assert.equal((await applyMigrations(db,resolve(process.cwd(),"db/migrations"))).skipped.length,28);
   const password="t5b-"+randomUUID();
   const scope=await bootstrapInstallation(db,{code:"t5b",displayName:"Delivery trip test",
     adminLogin:"owner",adminPassword:password});
@@ -88,7 +88,37 @@ test("T5-B trip planner: two orders, driver/vehicle, sequencing, idempotency, lo
     "GET",undefined,token)).status,400);
   assert.equal((await call("/v1/delivery/trips/eligible"+qs+"&q="+
     "a".repeat(81),"GET",undefined,token)).status,400);
-  const dr=await post("/v1/delivery/drivers",{...s,code:"D01",name:"Tài xế Một"});
+  // Canonical employee exists separately from app_user/login and is scoped.
+  assert.equal((await call("/v1/delivery/employees"+qs)).status,401);
+  const staff=await post("/v1/delivery/employees",{
+    ...s,code:"NV01",fullName:"Tài xế Một",phone:"0912345678",jobTitle:"Lái xe"});
+  assert.equal(staff.status,201,JSON.stringify(staff.data));
+  assert.equal(staff.data.employee.active,true);
+  assert.equal((await post("/v1/delivery/employees",{
+    ...s,code:"NV01",fullName:"Nhân viên trùng"})).status,409);
+  const staffRows=await call("/v1/delivery/employees"+qs,"GET",undefined,token);
+  assert.equal(staffRows.status,200,JSON.stringify(staffRows.data));
+  assert.equal(staffRows.data.items[0].id,staff.data.employee.id);
+  assert.equal(staffRows.data.items[0].linkedDriver,false);
+  assert.equal((await post("/v1/delivery/drivers",
+    {...s,code:"D01",name:"Tài xế Một"})).status,400,
+    "Detached driver creation must be rejected");
+  assert.equal((await post("/v1/delivery/drivers",
+    {...s,employeeId:randomUUID()})).status,409);
+  const dr=await post("/v1/delivery/drivers",
+    {...s,employeeId:staff.data.employee.id});
+  assert.equal((await post("/v1/delivery/drivers",
+    {...s,employeeId:staff.data.employee.id})).status,409,
+    "Exactly one active driver profile per canonical employee");
+  assert.equal((await call("/v1/delivery/drivers"+qs,"GET",undefined,token))
+    .data.items[0].employeeId,staff.data.employee.id);
+  const inactive=await post("/v1/delivery/employees",{
+    ...s,code:"NV02",fullName:"Nhân viên nghỉ"});
+  assert.equal(inactive.status,201,JSON.stringify(inactive.data));
+  assert.equal((await post("/v1/delivery/employees/"+inactive.data.employee.id+"/update",{
+    ...s,fullName:"Nhân viên nghỉ",active:false},0)).status,200);
+  assert.equal((await post("/v1/delivery/drivers",{
+    ...s,employeeId:inactive.data.employee.id})).status,409);
   const car=await post("/v1/delivery/vehicles",{...s,code:"C01",name:"Xe tải",licensePlate:"63A-12345"});
   assert.equal(dr.status,201,JSON.stringify(dr.data));
   assert.equal(car.status,201,JSON.stringify(car.data));
@@ -126,6 +156,9 @@ test("T5-B trip planner: two orders, driver/vehicle, sequencing, idempotency, lo
   const lock=await post(path+"/lock",s,5);
   assert.equal(lock.status,200,JSON.stringify(lock.data));
   assert.equal(lock.data.status,"LOCKED");
+  assert.equal((await post("/v1/delivery/employees/"+staff.data.employee.id+"/update",{
+    ...s,fullName:"Tài xế Một",active:false},0)).status,409,
+    "Cannot disable employee while a locked delivery trip is outstanding");
   assert.equal((await post(path+"/reorder",{...s,orderIds:reversed},6)).status,409);
   const another=await post("/v1/delivery/trips",body);
   assert.equal(another.status,201);
