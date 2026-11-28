@@ -191,6 +191,20 @@ test("R3 real PostgreSQL: on-hand, hold, release, no oversell, exact replay, RBA
   assert.equal(held.status,200);assert.equal(held.body.items.length,1);
   assert.equal(held.body.hasMore,false);
   assert.equal(held.body.items[0].state,"ACTIVE");
+  // The eye in order preview must see only other ACTIVE holds of this SKU,
+  // filtered on the server before pagination, never across branch/warehouse.
+  const byProduct=await call("/v1/inventory/reservations?branchId="+b+
+   "&warehouseId="+w+"&productId="+productId,"GET",undefined,token);
+  assert.equal(byProduct.status,200,JSON.stringify(byProduct.body));
+  assert.equal(byProduct.body.items.length,1);
+  assert.equal(byProduct.body.items[0].orderId,heldOrder);
+  const noProduct=await call("/v1/inventory/reservations?branchId="+b+
+   "&warehouseId="+w+"&productId="+randomUUID(),"GET",undefined,token);
+  assert.equal(noProduct.status,200);
+  assert.deepEqual(noProduct.body.items,[]);
+  const invalidProduct=await call("/v1/inventory/reservations?branchId="+b+
+   "&warehouseId="+w+"&productId=invalid","GET",undefined,token);
+  assert.equal(invalidProduct.status,400);
   // Regression for Codex P2: 105 newer RELEASED events must not conceal an old ACTIVE hold.
   const smallOrder=await make("/v1/sales/orders",{...orderData,
     lines:[{productId,quantity:"1"}]});
