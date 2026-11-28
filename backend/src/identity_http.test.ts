@@ -80,7 +80,7 @@ test("P0 auth HTTP: bootstrap once, login throttle, RBAC user grants, revoke, au
       const org=await call("/v1/admin/organization","GET",undefined,token);
       assert.equal(org.status,200);
       assert.deepEqual(org.body.organization,{code:"tenant-ci",displayName:"Synthetic CI Tenant"});
-      assert.equal(org.body.organization.installationId,undefined,
+      assert.equal("installationId" in org.body.organization,false,
         "organization contract exposes canonical display fields, not cross-tenant IDs");
       const catalog=await call("/v1/admin/permissions","GET",undefined,token);
       assert.equal(catalog.status,200);
