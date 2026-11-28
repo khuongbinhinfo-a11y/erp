@@ -19,9 +19,10 @@ function str(v:unknown,max:number,required=true):string{
  return (v as string).trim();
 }
 function date(v:unknown):string{
- const x=str(v,10);
+ const x=str(v,10),parsed=new Date(x+"T00:00:00Z");
  if(!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(x)||
-  new Date(x+"T00:00:00Z").toISOString().slice(0,10)!==x)reject("INVALID_DATE");
+  !Number.isFinite(parsed.getTime())||parsed.toISOString().slice(0,10)!==x)
+   reject("INVALID_DATE");
  return x;
 }
 function scope(r:Record<string,unknown>):TripScope{
