@@ -49,6 +49,25 @@ class _ErpShellState extends State<ErpShell> {
   String? _checkedUpdateSession;
   bool _initialLayout=false;
   CompanySection _mobileSection=CompanySection.overview;
+  IdentitySession? _scopeSession;
+  IdentitySession? get activeSession=>
+    _scopeSession?.token==widget.session?.token?_scopeSession:widget.session;
+  Future<void> _refreshDirectorySession()async{
+    final prior=widget.session,client=widget.client;
+    if(prior==null||client==null)return;
+    try{
+      final fresh=await client.refresh(prior);
+      if(mounted&&widget.session?.token==prior.token){
+        setState((){
+          _scopeSession=fresh;
+          visibleModules=List<int>.generate(erpFeatures.length,(i)=>i)
+            .where((i)=>widget.previewOnly||hasModuleAccess(i)).toList();
+        });
+      }
+    }on ErpApiError catch(e){
+      if(mounted)ErpToast.show(context,e.message,isError:true);
+    }
+  }
 
 
   @override
@@ -75,7 +94,10 @@ class _ErpShellState extends State<ErpShell> {
   void didUpdateWidget(covariant ErpShell oldWidget){
     super.didUpdateWidget(oldWidget);
     if(oldWidget.session?.token!=widget.session?.token||
-       oldWidget.previewOnly!=widget.previewOnly)companyNavigationLocked=false;
+       oldWidget.previewOnly!=widget.previewOnly){
+      companyNavigationLocked=false;
+      _scopeSession=null;
+    }
     if(oldWidget.session!=widget.session||oldWidget.previewOnly!=widget.previewOnly){
       _scheduleQuietUpdateCheck();
       if(oldWidget.session?.actorId!=widget.session?.actorId)_mobileSection=CompanySection.overview;
@@ -144,7 +166,7 @@ class _ErpShellState extends State<ErpShell> {
   ]);
 
   bool canCompanySection(CompanySection section)=>visibleModules.contains(0)&&
-    erpCanViewCompanySection(section,widget.session?.grants??const [],previewOnly:widget.previewOnly);
+    erpCanViewCompanySection(section,activeSession?.grants??const [],previewOnly:widget.previewOnly);
 
   void _selectSection(CompanySection section){
     if(!canCompanySection(section))return;
@@ -227,9 +249,9 @@ class _ErpShellState extends State<ErpShell> {
     final mobile=_isMobile(context);
     if(erpPosStandalone&&!widget.previewOnly){
       // The new tab restores normal same-origin authentication; no URL token.
-      return Scaffold(body:widget.session!=null&&widget.client!=null&&hasModuleAccess(3)
+      return Scaffold(body:activeSession!=null&&widget.client!=null&&hasModuleAccess(3)
         ?RetailPosWorkspace(key:const ValueKey('erp-pos-dedicated-tab'),
-          client:widget.client!,session:widget.session!)
+          client:widget.client!,session:activeSession!)
         :const Center(child:Text('Không có quyền truy cập quầy Bán Lẻ.')));
     }
     final posFullscreen=mobile&&selected==3&&!widget.previewOnly;
@@ -301,8 +323,8 @@ class _ErpShellState extends State<ErpShell> {
         previewOnly: widget.previewOnly,
         mobileNavigation:mobile,requestedSection:mobile?_mobileSection:null,
         onSectionChanged:(section){if(mounted&&section!=_mobileSection)setState(()=>_mobileSection=section);},
-        grants: widget.session?.grants ?? const [],
-        session: widget.session,
+        grants: activeSession?.grants ?? const [],
+        session: activeSession,
         client: widget.client,
         onNavigationLockChanged:(locked){
           if(mounted&&companyNavigationLocked!=locked){
@@ -311,15 +333,16 @@ class _ErpShellState extends State<ErpShell> {
         });
     } else if (selected == 2) {
       content = AdminWorkspace(
-        previewOnly: widget.previewOnly, client: widget.client, session: widget.session);
+        previewOnly: widget.previewOnly, client: widget.client,
+        session: activeSession,onDirectoryChanged:_refreshDirectorySession);
     } else if(selected==3){
       // Dedicated supermarket-style POS surface: no distribution order list
       // or order form is mounted in the Bán Lẻ module.
-      content=widget.previewOnly||widget.client==null||widget.session==null
+      content=widget.previewOnly||widget.client==null||activeSession==null
         ?const _MobileRetailEntry()
         :RetailPosWorkspace(
             key:const ValueKey('erp-mobile-retail-workspace'),
-            client:widget.client!,session:widget.session!,
+            client:widget.client!,session:activeSession!,
             onOpenTab:erpPosWebSupported&&!erpPosStandalone?erpOpenPosTab:null,
             onExit:mobile&&visibleModules.any((i)=>i!=3)
               ?()=>select(visibleModules.firstWhere((i)=>i!=3)):null);
@@ -337,7 +360,7 @@ class _ErpShellState extends State<ErpShell> {
   }
 
   bool hasModuleAccess(int index){
-    final grants=widget.session?.grants??const <IdentityGrant>[];
+    final grants=activeSession?.grants??const <IdentityGrant>[];
     bool allowed(String prefix)=>grants.any((g)=>g.permission.startsWith(prefix));
     return switch(index){
       0=>allowed('catalog.')||allowed('orders.')||allowed('inventory.')||allowed('finance.')||allowed('purchase.')||allowed('reports.'),
