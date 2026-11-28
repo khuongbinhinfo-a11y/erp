@@ -5,6 +5,7 @@ import {resolveSession} from "./auth.ts";
 import {hasPermission} from "./rbac.ts";
 import {executeMutation,MutationFault,requireRevision,type MutationContext} from "./mutation.ts";
 import {createEmployee,updateEmployee} from "./delivery_employee.ts";
+import {DeliveryTripFault} from "./delivery_trip.ts";
 import {validIdempotencyKey} from "./contracts.ts";
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -229,6 +230,7 @@ export async function handleOrgEmployeeHttp(req:IncomingMessage,res:ServerRespon
   fail(404,"NOT_FOUND");
  }catch(e){
   if(e instanceof StaffFault){fault(res,e.status,e.code,rid,cors);return;}
+  if(e instanceof DeliveryTripFault){fault(res,e.httpStatus,e.code,rid,cors);return;}
   if(e instanceof MutationFault){fault(res,e.httpStatus,e.code,rid,cors);return;}
   if(e&&typeof e==="object"&&"code" in e){
    const code=String(e.code);

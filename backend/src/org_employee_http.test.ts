@@ -70,6 +70,12 @@ test("IA-A: staff belongs to Company branch, not delivery; user link and RBAC ar
   assert.equal((await write("/v1/org/employees","POST",{
    branchId:b,code:"NV01",fullName:"Tên trùng",
   })).status,409);
+  // Regression Codex P2: canonical staff endpoint must preserve domain 404, not turn it into 503.
+  const missing=await write("/v1/org/employees/"+randomUUID(),"PATCH",{
+   branchId:b,fullName:"Không có nhân viên",active:false,
+  },token,0);
+  assert.equal(missing.status,404,JSON.stringify(missing.data));
+  assert.equal(missing.data.error.code,"EMPLOYEE_NOT_FOUND");
   const change=await write("/v1/org/employees/"+eid,"PATCH",{
    branchId:b,fullName:"Nhân viên kế toán mới",department:"Phòng kế toán",
    jobTitle:"Kế toán trưởng",phone:"",active:true,
