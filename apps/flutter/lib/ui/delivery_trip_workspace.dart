@@ -13,7 +13,8 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
  List<Map<String,dynamic>> trips=[],drivers=[],vehicles=[],eligible=[];
  Map<String,dynamic>? detail;
  String? warehouse,branch,error;
- bool busy=false,loading=true;int generation=0;
+ bool busy=false,loading=true,_loadingMoreTrips=false,_hasMoreTrips=false;
+ int generation=0,_nextTripOffset=0;
  @override void initState(){super.initState();_start();}
  String get today{
   final d=DateTime.now();
@@ -48,9 +49,9 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
   }
  }
  Future<void> _load({String? chosen})async{
-  final b=branch,w=warehouse,epoch=++generation;
+  final b=branch,w=warehouse,epoch=++generation,priorRows=trips.length;
   if(b==null||w==null)return;
-  setState((){loading=true;error=null;});
+  setState((){loading=true;error=null;_loadingMoreTrips=false;});
   try{
    final rows=await Future.wait([
     widget.client.deliveryTripItems(widget.session.token,'trips',b,w),
@@ -59,14 +60,27 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
     widget.client.deliveryTripItems(widget.session.token,'trips/eligible',b,w),
    ]);
    if(!mounted||generation!=epoch)return;
+   final refreshed=<Map<String,dynamic>>[...rows[0]];
+   var lastPage=rows[0],nextOffset=100;
+   // Preserve loaded pages after writes; older draft trips must not disappear.
+   while(lastPage.length==100&&refreshed.length<priorRows&&nextOffset<=100000){
+    lastPage=await widget.client.deliveryTripItems(widget.session.token,
+      'trips',b,w,offset:nextOffset);
+    if(!mounted||generation!=epoch)return;
+    final seen=refreshed.map((o)=>o['id']).toSet();
+    refreshed.addAll(lastPage.where((o)=>seen.add(o['id'])));
+    nextOffset+=100;
+   }
    final tid=chosen??detail?['id']?.toString();
    Map<String,dynamic>? selected;
-   if(tid!=null&&rows[0].any((x)=>x['id']==tid))
+   if(tid!=null){
     selected=await widget.client.deliveryTripDetail(widget.session.token,b,w,tid);
+   }
    if(!mounted||generation!=epoch)return;
    setState((){
-    trips=rows[0];drivers=rows[1];vehicles=rows[2];eligible=rows[3];
+    trips=refreshed;drivers=rows[1];vehicles=rows[2];eligible=rows[3];
     detail=selected;loading=false;
+    _nextTripOffset=nextOffset;_hasMoreTrips=lastPage.length==100&&nextOffset<=100000;
    });
   }on ErpApiError catch(e){
    if(mounted&&generation==epoch)setState((){error=e.message;loading=false;});
@@ -75,6 +89,27 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
     error='Không thể tải điều phối. Kiểm tra backend/migration T5-B.';loading=false;
    });
   }
+ }
+ Future<void> _loadMoreTrips()async{
+  final b=branch,w=warehouse,epoch=generation,offset=_nextTripOffset;
+  if(b==null||w==null||loading||busy||_loadingMoreTrips||
+     !_hasMoreTrips||offset>100000)return;
+  setState(()=>_loadingMoreTrips=true);
+  try{
+   final page=await widget.client.deliveryTripItems(
+     widget.session.token,'trips',b,w,offset:offset);
+   if(!mounted||generation!=epoch||b!=branch||w!=warehouse)return;
+   setState((){
+    final seen=trips.map((o)=>o['id']).toSet();
+    trips=[...trips,...page.where((o)=>seen.add(o['id']))];
+    _nextTripOffset=offset+100;
+    _hasMoreTrips=page.length==100&&_nextTripOffset<=100000;
+   });
+  }on ErpApiError catch(e){
+   if(mounted&&generation==epoch)setState(()=>error=e.message);
+  }catch(_){
+   if(mounted&&generation==epoch)setState(()=>error='Không tải được trang chuyến tiếp theo.');
+  }finally{if(mounted&&generation==epoch)setState(()=>_loadingMoreTrips=false);}
  }
  Future<void> _choose(Map<String,dynamic> trip)async{
   final b=branch,w=warehouse,epoch=++generation;
@@ -266,6 +301,15 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
         maxLines:1,overflow:TextOverflow.ellipsis),
      ])),const Icon(Icons.chevron_right,size:18)]),
     )),
+   if(_hasMoreTrips)Padding(padding:const EdgeInsets.only(top:12),
+    child:OutlinedButton.icon(
+      key:const ValueKey('trip-load-more'),
+      onPressed:_loadingMoreTrips||busy?null:_loadMoreTrips,
+      icon:_loadingMoreTrips?
+       const SizedBox(width:16,height:16,child:CircularProgressIndicator(strokeWidth:2)):
+       const Icon(Icons.expand_more),
+      label:Text(_loadingMoreTrips?'Đang tải':'Tải thêm 100 chuyến'),
+    )),
   ]);
  }
  Widget tripDetail(){
@@ -350,7 +394,8 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
        child:Text('${w.name} · ${w.code}'))).toList(),
       onChanged:busy?null:(w){
        if(w==null)return;final x=warehouses.firstWhere((a)=>a.id==w);
-       setState((){warehouse=w;branch=x.branchId;detail=null;});_load();
+       setState((){warehouse=w;branch=x.branchId;detail=null;trips=[];
+        _nextTripOffset=0;_hasMoreTrips=false;});_load();
       })),
     if(error!=null)Padding(padding:const EdgeInsets.all(10),
      child:Text(error!,style:TextStyle(color:p.danger))),
