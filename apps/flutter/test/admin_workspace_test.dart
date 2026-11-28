@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/services.dart';
@@ -99,4 +100,56 @@ void main() {
     expect(find.text('Ma trận quyền'),findsOneWidget);
     expect(find.text('Đã cấp'),findsWidgets);
   });
+  testWidgets('IA-B account switch invalidates pending user rows and admin caches',
+    (tester)async{
+    final oldUsers=Completer<http.Response>();
+    const headers={'content-type':'application/json; charset=utf-8'};
+    final requests=<String>[];
+    final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+      httpClient:MockClient((req)async{
+        requests.add('${req.headers['authorization']} ${req.url.path}');
+        if(req.url.path=='/v1/admin/users'){
+          if(req.headers['authorization']=='Bearer old-token')return oldUsers.future;
+          return http.Response(jsonEncode({'users':[{
+            'id':'00000000-0000-4000-8000-000000000019',
+            'loginName':'new_account','revision':0,'disabled':false,
+          }]}),200,headers:headers);
+        }
+        throw StateError('Unexpected path ${req.url.path}');
+      }));
+    addTearDown(client.dispose);
+    tester.view.devicePixelRatio=1;
+    tester.view.physicalSize=const Size(1280,900);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    IdentitySession session(String actor,String token)=>IdentitySession(
+      actorId:actor,installationId:actor,token:token,
+      expiresAt:DateTime.now().add(const Duration(hours:1)),
+      grants:const [IdentityGrant(roleId:'viewer',permission:'identity.users.read')]);
+    Widget screen(IdentitySession session)=>MaterialApp(
+      theme:erpTheme(touch:false),
+      home:Scaffold(body:AdminWorkspace(previewOnly:false,
+        client:client,session:session)));
+    await tester.pumpWidget(screen(session(
+      '00000000-0000-4000-8000-000000000001','old-token')));
+    await tester.tap(find.text('Tài khoản').last);
+    await tester.pump();
+    expect(requests,contains('Bearer old-token /v1/admin/users'));
+    await tester.pumpWidget(screen(session(
+      '00000000-0000-4000-8000-000000000002','new-token')));
+    await tester.pumpAndSettle();
+    expect(find.text('Không có quyền quản lý tổ chức.'),findsOneWidget);
+    oldUsers.complete(http.Response(jsonEncode({'users':[{
+      'id':'00000000-0000-4000-8000-000000000017',
+      'loginName':'old_account','revision':0,'disabled':false,
+    }]}),200,headers:headers));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Tài khoản').last);
+    await tester.pumpAndSettle();
+    expect(find.text('new_account'),findsOneWidget);
+    expect(find.text('old_account'),findsNothing);
+    expect(requests,contains('Bearer new-token /v1/admin/users'));
+    expect(tester.takeException(),isNull);
+  });
+
 }
