@@ -64,7 +64,7 @@ void main(){
    await tester.pumpWidget(MaterialApp(home:Scaffold(body:SingleChildScrollView(
      child:OrgDirectoryWorkspace(client:client,session:session,policyOnly:true)))));
    await tester.pumpAndSettle();
-   expect(find.text('Chi nhánh chính'),findsWidgets);
+   expect(find.text('Chi nhánh chính'),findsNothing);
    expect(find.text('Kho chính'),findsOneWidget);
    expect(find.text('MAIN'),findsNothing);
    expect(find.text('Thêm chi nhánh'),findsNothing);
