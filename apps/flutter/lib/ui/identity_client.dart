@@ -829,6 +829,7 @@ class ErpIdentityClient {
       String endpoint,Map<String,dynamic> payload,int revision)async{
     final valid=const {'trips','vehicles','drivers','employees'}.contains(endpoint)||
       RegExp(r'^employees/[0-9a-f-]{36}/update$').hasMatch(endpoint)||
+      RegExp(r'^drivers/[0-9a-f-]{36}/link$').hasMatch(endpoint)||
       RegExp(r'^trips/[0-9a-f-]{36}/(assign|unassign|reorder|plan|reopen|lock)$')
         .hasMatch(endpoint);
     if(!valid)throw const ErpApiError(400,'Thao tác điều phối không hợp lệ.');
