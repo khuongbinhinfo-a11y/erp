@@ -16,6 +16,7 @@ void main(){
       (tester)async{
     var writes=0,detailReads=0;
     final eligibleOffsets=<String>[];
+    final pagedQueries=<String>[];
     final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
       httpClient:MockClient((req)async{
         if(req.method!='GET')writes++;
@@ -37,6 +38,7 @@ void main(){
             data={'items':[]};
           case '/v1/delivery/trips/eligible':
             eligibleOffsets.add(req.url.queryParameters['offset']??'0');
+            pagedQueries.add(req.url.queryParameters['q']??'');
             final filtered=List.generate(201,(i)=> {
               'id':'00000000-0000-4000-8000-${i.toString().padLeft(12,'0')}',
               'documentNo':'SO-20261128-${i.toString().padLeft(6,'0')}',
@@ -94,12 +96,16 @@ void main(){
     expect(find.text('Thêm 100 đơn'),findsOneWidget,
       reason:'Select all must respect the atomic 100-order API limit.');
     expect(find.text('Thêm 101 đơn'),findsNothing);
+    // Merely typing must not silently change the submitted search applied
+    // to existing rows/page offset. The Load More request must use q=''.
+    await tester.enterText(find.byKey(const ValueKey('trip-eligible-search')),
+      'SO-20261128-000200');
     await tester.tap(find.byKey(const ValueKey('trip-eligible-load-more')));
     await tester.pumpAndSettle();
     expect(eligibleOffsets,contains('200'),
       reason:'Load more must fetch the 201st eligible order from the backend');
-    await tester.enterText(find.byKey(const ValueKey('trip-eligible-search')),
-      'SO-20261128-000200');
+    expect(pagedQueries.last,isEmpty,
+      reason:'An unsubmitted query must not combine with offset=200');
     await tester.testTextInput.receiveAction(TextInputAction.search);
     await tester.pumpAndSettle();
     expect(find.textContaining('Điểm giao 201'),findsOneWidget);
