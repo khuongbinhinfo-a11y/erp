@@ -51,14 +51,12 @@ export async function tripResources(db:PoolClient,t:string,s:TripScope,type:"dri
   LIMIT 200`,[t,s.branchId,s.warehouseId])).rows;
 }
 export async function createResource(db:PoolClient,c:MutationContext,s:TripScope,
- kind:"drivers"|"vehicles",v:{code:string;name:string;phone?:string;licensePlate?:string}){
- const table=kind==="drivers"?"delivery_driver":"delivery_vehicle";
- const column=kind==="drivers"?"phone":"license_plate";
- const x=kind==="drivers"?v.phone??null:v.licensePlate;
- const q=await db.query(`INSERT INTO ${table}
- (installation_id,branch_id,warehouse_id,code,name,${column},created_by)
- VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id,code,name,active`,
- [c.installationId,s.branchId,s.warehouseId,v.code,v.name,x,c.actorId]);
+ kind:"vehicles",v:{code:string;name:string;licensePlate:string}){
+ requireRevision(c.expectedRevision,0);
+ const q=await db.query(`INSERT INTO delivery_vehicle
+  (installation_id,branch_id,warehouse_id,code,name,license_plate,created_by)
+  VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id,code,name,active`,
+ [c.installationId,s.branchId,s.warehouseId,v.code,v.name,v.licensePlate,c.actorId]);
  return {status:201,body:{resource:q.rows[0]}};
 }
 export async function tripList(db:PoolClient,t:string,s:TripScope,offset=0){
