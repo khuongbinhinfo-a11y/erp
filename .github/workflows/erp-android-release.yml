@@ -1,6 +1,6 @@
 name: ERP Android signed release
 on:
-  # T3-C v6 signed build after reviewed CI-green main merge marker. Latest remains gated.
+  # T5-A v7 signed build after reviewed CI-green main merge marker. OTA latest remains gated by owner approval and device UAT.
   workflow_run:
     workflows: ['ERP quality gates']
     types: [completed]
@@ -34,14 +34,14 @@ jobs:
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_branch == 'main' &&
       github.event.workflow_run.conclusion == 'success' &&
-      contains(github.event.workflow_run.head_commit.message, '[erp-apk-t3c-v6]')))
+      contains(github.event.workflow_run.head_commit.message, '[erp-apk-t5a-v7]')))
     runs-on: ubuntu-latest
     environment: android-release
     env:
       GH_TOKEN: ${{ github.token }}
       APPROVED_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.approved_sha }}
-      BUILD_NUMBER: ${{ github.event_name == 'workflow_run' && '6' || inputs.build_number }}
-      VERSION_NAME: ${{ github.event_name == 'workflow_run' && '0.6.0' || inputs.version_name }}
+      BUILD_NUMBER: ${{ github.event_name == 'workflow_run' && '7' || inputs.build_number }}
+      VERSION_NAME: ${{ github.event_name == 'workflow_run' && '0.7.0' || inputs.version_name }}
     steps:
       - uses: actions/checkout@v4
         with:
