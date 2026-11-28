@@ -129,6 +129,10 @@ BEGIN
   AND id=CASE WHEN TG_OP='DELETE' THEN OLD.trip_id ELSE NEW.trip_id END FOR UPDATE;
  IF trip_state IS DISTINCT FROM 'DRAFT' THEN RAISE EXCEPTION 'Only draft trip can change stops'; END IF;
  IF TG_OP='DELETE' THEN RETURN OLD; END IF;
+ -- On UPDATE every immutable stop field was compared above, so only
+ -- sequence_no can change. A stale remaining order must not block cleanup
+ -- or re-numbering while its trip is still DRAFT.
+ IF TG_OP='UPDATE' THEN RETURN NEW; END IF;
  SELECT o.current_version,o.status,v.state,c.delivery_choice,c.warehouse_id,
   o.fulfillment_status,o.delivery_status,o.payment_status
  INTO current_version,order_status,version_state,delivery_mode,order_wh,fulfillment,delivery,payment
