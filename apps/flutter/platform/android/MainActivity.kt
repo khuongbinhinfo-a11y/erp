@@ -63,7 +63,7 @@ class MainActivity : FlutterActivity() {
                             try {
                                 if (isFinishing || isDestroyed) throw IllegalStateException()
                                 val manager = getSystemService(Context.PRINT_SERVICE) as PrintManager
-                                val title = if (salesOrder) "Đơn bán hàng" else "Phiếu bán lẻ"
+                                val title = if (salesOrder) "Phiếu xuất kho" else "Phiếu bán lẻ"
                                 manager.print("ERP - $title", page.createPrintDocumentAdapter(title),
                                     PrintAttributes.Builder()
                                         .setMediaSize(if (salesOrder) PrintAttributes.MediaSize.ISO_A4 else PrintAttributes.MediaSize.ISO_A5).build())
