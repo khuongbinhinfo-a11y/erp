@@ -131,8 +131,10 @@ export async function handleDeliveryTripHttp(req:IncomingMessage,res:ServerRespo
   if(master){
    const kind=master[1] as "drivers"|"vehicles";
    only(raw,["branchId","warehouseId","code","name","phone","licensePlate"]);
+   // Exclude absent optional fields: canonicalMutationPayload rejects undefined.
    const v={code:str(raw.code,48),name:str(raw.name,120),
-     ...(kind==="drivers"?{phone:raw.phone==null?undefined:str(raw.phone,15,false)}:
+     ...(kind==="drivers"?
+       (raw.phone==null?{}:{phone:str(raw.phone,15,false)}):
        {licensePlate:str(raw.licensePlate,32)})};
    action="delivery."+kind+".create";
    payload={...s,...v};
