@@ -72,9 +72,9 @@ export async function createDirectoryWarehouse(pool:Pool,ctx:MutationContext){
  const code=text(data.code,"CODE"),name=text(data.name,"NAME");
  if(ctx.expectedRevision!==0)throw new DirectoryFault(409,"REVISION_CONFLICT");
  return executeMutation(pool,ctx,{
-  authorize:async db=>isDirectoryOwner(db,ctx.installationId,ctx.actorId)&&
-    hasPermission(db,{installationId:ctx.installationId,actorId:ctx.actorId,
-      permission:"catalog.read",branchId}),
+  authorize:async db=>(await isDirectoryOwner(db,ctx.installationId,ctx.actorId))&&
+    (await hasPermission(db,{installationId:ctx.installationId,actorId:ctx.actorId,
+      permission:"catalog.read",branchId})),
   execute:async db=>{
    const branch=await db.query(`SELECT 1 FROM branch WHERE installation_id=$1 AND id=$2
      FOR SHARE`,[ctx.installationId,branchId]);
