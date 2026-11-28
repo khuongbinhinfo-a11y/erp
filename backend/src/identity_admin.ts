@@ -53,10 +53,16 @@ export async function userAccess(db:PoolClient,installationId:string,userId:stri
 }
 export async function listUsers(db:PoolClient,installationId:string,actorId:string){
   if(!await hasPermission(db,{installationId,actorId,permission:"identity.users.read"}))throw new MutationFault("FORBIDDEN",403);
-  const r=await db.query<{id:string;login_name:string;disabled:boolean;revision:string}>(
-    "SELECT id,login_name,disabled,revision::text FROM app_user WHERE installation_id=$1 ORDER BY created_at,id LIMIT 100",
+  const r=await db.query<{id:string;login_name:string;disabled:boolean;revision:string;employeeId:string|null;employeeName:string|null;employeeBranchId:string|null}>(
+    `SELECT u.id,u.login_name,u.disabled,u.revision::text,
+     e.id AS "employeeId",e.full_name AS "employeeName",e.branch_id AS "employeeBranchId"
+     FROM app_user u LEFT JOIN org_employee e
+     ON e.installation_id=u.installation_id AND e.account_user_id=u.id
+     WHERE u.installation_id=$1 ORDER BY u.created_at,u.id LIMIT 100`,
     [installationId]);
-  return r.rows.map(x=>({id:x.id,loginName:x.login_name,disabled:x.disabled,revision:Number(x.revision)}));
+  return r.rows.map(x=>({id:x.id,loginName:x.login_name,disabled:x.disabled,
+    employeeId:x.employeeId,employeeName:x.employeeName,employeeBranchId:x.employeeBranchId,
+    revision:Number(x.revision)}));
 }
 export async function listScopes(db:PoolClient,installationId:string,actorId:string,offset=0){
   if(!Number.isSafeInteger(offset)||offset<0||offset>100000)

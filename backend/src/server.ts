@@ -11,6 +11,7 @@ import { handleExecutionHttp } from "./sales_execution_http.ts";
 import { handlePosHttp } from "./pos_http.ts";
 import { handleInventoryHttp } from "./inventory_http.ts";
 import { handleDeliveryTripHttp } from "./delivery_trip_http.ts";
+import { handleOrgEmployeeHttp } from "./org_employee_http.ts";
 import { handleTransferHttp } from "./transfer_http.ts";
 import { handleStocktakeHttp } from "./stocktake_http.ts";
 import { handlePurchasingHttp } from "./purchasing_http.ts";
@@ -88,6 +89,11 @@ export function buildApp(
     }
     if (url.pathname.startsWith("/v1/app/releases/")) {
       void handleAppReleaseHttp(req,res,id,url,identityOptions,checkReady);
+      return;
+    }
+    if (url.pathname.startsWith("/v1/org/employees") ||
+        (url.pathname.startsWith("/v1/admin/users/") && url.pathname.endsWith("/employee"))) {
+      void handleOrgEmployeeHttp(req,res,id,url,identityOptions,checkReady);
       return;
     }
     if (url.pathname.startsWith("/v1/auth/") || url.pathname.startsWith("/v1/admin/")) {
