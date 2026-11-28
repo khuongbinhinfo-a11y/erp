@@ -62,7 +62,7 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
   await tester.pumpAndSettle();
   await tester.tap(admin);
   await tester.pumpAndSettle();
-  expect(find.text('Người dùng và phân quyền'), findsOneWidget);
+  expect(find.text('Tổ chức, tài khoản, quyền và chính sách'), findsOneWidget);
   expect(find.text('Chưa có dữ liệu'), findsOneWidget);
   // The non-modal startup toast closes before interacting with pinned tabs.
   await tester.pump(const Duration(seconds: 5));
@@ -138,7 +138,7 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
     expect(find.byKey(const ValueKey('nav-0')), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('nav-2')));
     await tester.pumpAndSettle();
-    expect(find.text('Người dùng và phân quyền'), findsOneWidget);
+    expect(find.text('Tổ chức, tài khoản, quyền và chính sách'), findsOneWidget);
   });
 
   testWidgets('desktop sidebar floats on three canvas edges and animates collapse',
@@ -247,7 +247,7 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(MaterialApp(home:ErpShell(session:session,previewOnly:false)));
-    expect(find.text('Người dùng và phân quyền'),findsOneWidget);
+    expect(find.text('Tổ chức, tài khoản, quyền và chính sách'),findsOneWidget);
     expect(find.text('Tổng quan điều hành'),findsNothing);
   });
   testWidgets('current username remains beside logout; collapse control stays at logo',
