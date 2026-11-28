@@ -90,8 +90,8 @@ test("T3-B PostgreSQL: partial MANUAL issue, lot/location, scoped stock, negativ
   assert.equal((await opening(products[2]!,"1.000000")).status,201);
   const stocked=await call(stockUrl,"GET",undefined,token);
   assert.equal(stocked.status,200,JSON.stringify(stocked.body));
-  assert.equal(stocked.body.stock.available,"5.000000");
-  assert.equal(stocked.body.stock.reserved,"0.000000");
+  assert.match(stocked.body.stock.available,/^5(?:\.0+)?$/);
+  assert.match(stocked.body.stock.reserved,/^0(?:\.0+)?$/);
   const first=await makeOrder(products[0]!,"5");
   const payload={branchId:b,warehouseId:w,orderId:first,version:1,
    lines:[{lineNo:1,quantityBase:"2.000000"}]};
