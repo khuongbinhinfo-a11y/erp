@@ -91,18 +91,25 @@ test("T5-B trip planner: two orders, driver/vehicle, sequencing, idempotency, lo
   let trip=await call(path+qs,"GET",undefined,token);
   assert.equal(trip.status,200,JSON.stringify(trip.data));
   assert.equal(trip.data.trip.stops.length,2);
+  const removed=await post(path+"/unassign",{...s,orderIds:[a]},1);
+  assert.equal(removed.status,200,JSON.stringify(removed.data));
+  assert.equal(removed.data.revision,2);
+  const reassigned=await post(path+"/assign",{...s,orderIds:[a]},2);
+  assert.equal(reassigned.status,200,JSON.stringify(reassigned.data));
+  assert.equal(reassigned.data.revision,3);
+  trip=await call(path+qs,"GET",undefined,token);
   const reversed=trip.data.trip.stops.map((x:any)=>x.orderId).reverse();
-  assert.equal((await post(path+"/reorder",{...s,orderIds:reversed},1)).status,200);
+  assert.equal((await post(path+"/reorder",{...s,orderIds:reversed},3)).status,200);
   trip=await call(path+qs,"GET",undefined,token);
   assert.deepEqual(trip.data.trip.stops.map((x:any)=>x.orderId),reversed);
   const plan=await post(path+"/plan",{...s,driverId:dr.data.resource.id,
-    vehicleId:car.data.resource.id,plannedDate:"2026-11-28",note:"Đã kiểm tuyến"},2);
+    vehicleId:car.data.resource.id,plannedDate:"2026-11-28",note:"Đã kiểm tuyến"},4);
   assert.equal(plan.status,200,JSON.stringify(plan.data));
   assert.equal(plan.data.status,"PLANNED");
-  const lock=await post(path+"/lock",s,3);
+  const lock=await post(path+"/lock",s,5);
   assert.equal(lock.status,200,JSON.stringify(lock.data));
   assert.equal(lock.data.status,"LOCKED");
-  assert.equal((await post(path+"/reorder",{...s,orderIds:reversed},4)).status,409);
+  assert.equal((await post(path+"/reorder",{...s,orderIds:reversed},6)).status,409);
   const another=await post("/v1/delivery/trips",body);
   assert.equal(another.status,201);
   assert.equal((await post("/v1/delivery/trips/"+another.data.id+"/assign",
@@ -135,7 +142,7 @@ test("T5-B trip planner: two orders, driver/vehicle, sequencing, idempotency, lo
   assert.equal(ar.rows[0]?.n,"0");
   const events=await db.query<{n:string}>(`SELECT count(*)::text AS n FROM delivery_trip_event
     WHERE installation_id=$1 AND branch_id=$2 AND trip_id=$3`,[t,b,tid]);
-  assert.equal(events.rows[0]?.n,"5");
+  assert.equal(events.rows[0]?.n,"7");
   await assert.rejects(db.query(`UPDATE delivery_trip_event SET detail='{}'
     WHERE installation_id=$1 AND branch_id=$2 AND trip_id=$3`,[t,b,tid]));
  }finally{
