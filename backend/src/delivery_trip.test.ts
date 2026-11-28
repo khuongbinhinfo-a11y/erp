@@ -160,6 +160,37 @@ test("T5-B trip planner: two orders, driver/vehicle, sequencing, idempotency, lo
     ...s,fullName:"Tài xế Một",active:false},0)).status,409,
     "Cannot disable employee while a locked delivery trip is outstanding");
   assert.equal((await post(path+"/reorder",{...s,orderIds:reversed},6)).status,409);
+  // Concurrency: employee deactivation and planning must serialize on
+  // the same canonical employee row. Exactly one may succeed.
+  const raceEmployee=await post("/v1/delivery/employees",{
+    ...s,code:"NV03",fullName:"Tài xế đồng thời"});
+  assert.equal(raceEmployee.status,201);
+  const raceDriver=await post("/v1/delivery/drivers",{
+    ...s,employeeId:raceEmployee.data.employee.id});
+  assert.equal(raceDriver.status,201);
+  const raceOrder=await make("Đường C, Mỹ Tho, Việt Nam");
+  const raceTrip=await post("/v1/delivery/trips",body);
+  assert.equal(raceTrip.status,201);
+  assert.equal((await post("/v1/delivery/trips/"+raceTrip.data.id+"/assign",
+    {...s,orderIds:[raceOrder]},0)).status,200);
+  const raced=await Promise.all([
+    post("/v1/delivery/trips/"+raceTrip.data.id+"/plan",
+      {...s,driverId:raceDriver.data.resource.id,vehicleId:car.data.resource.id,
+       plannedDate:"2026-11-28"},1),
+    post("/v1/delivery/employees/"+raceEmployee.data.employee.id+"/update",
+      {...s,fullName:"Tài xế đồng thời",active:false},0)
+  ]);
+  assert.deepEqual(raced.map(x=>x.status).sort(),[200,409],
+    "Plan and employee disable must not both ACK");
+  const employeeState=await db.query<{active:boolean}>(`
+    SELECT active FROM org_employee WHERE installation_id=$1 AND branch_id=$2
+      AND id=$3`,[t,b,raceEmployee.data.employee.id]);
+  const racePlan=await call("/v1/delivery/trips/"+raceTrip.data.id+qs,
+    "GET",undefined,token);
+  assert.equal(racePlan.status,200);
+  assert.equal(racePlan.data.trip.status==="PLANNED"&&employeeState.rows[0]?.active,
+    racePlan.data.trip.status==="PLANNED",
+    "A planned trip cannot reference an inactive employee");
   const another=await post("/v1/delivery/trips",body);
   assert.equal(another.status,201);
   assert.equal((await post("/v1/delivery/trips/"+another.data.id+"/assign",
