@@ -5,6 +5,7 @@ import 'erp_display.dart';
 import 'erp_navigation_ui.dart';
 import 'identity_client.dart';
 import 'erp_toast.dart';
+import 'org_directory_workspace.dart';
 
 class AdminWorkspace extends StatefulWidget {
   final bool previewOnly;
@@ -258,7 +259,7 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
             keyPrefix:'admin',
             selected:selected,
             items:const [ErpSectionTab(0,'Tài khoản'),
-              ErpSectionTab(1,'Ma trận quyền')],
+              ErpSectionTab(1,'Ma trận quyền'),ErpSectionTab(2,'Chi nhánh & Kho')],
             onSelected:(value)=>setState(()=>selected=value)))),
       Expanded(child:AnimatedSwitcher(
         duration:MediaQuery.of(context).disableAnimations
@@ -270,7 +271,11 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
         child:SingleChildScrollView(
           key:ValueKey('admin-content-$selected'),
           padding:EdgeInsets.fromLTRB(margin,18,margin,26),
-          child:Card(child:Padding(padding:const EdgeInsets.all(18),
+          child:selected==2
+            ? (!real||!allowed('identity.roles.manage')
+                ?const Text('Chỉ quản trị viên chính được quản lý chi nhánh và kho.')
+                :OrgDirectoryWorkspace(client:widget.client!,session:widget.session!))
+            :Card(child:Padding(padding:const EdgeInsets.all(18),
             child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
               Row(children:[
                 Expanded(child:Text(selected==0?'Tài khoản người dùng':'Danh sách quyền',
