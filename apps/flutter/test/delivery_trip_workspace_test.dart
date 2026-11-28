@@ -33,12 +33,21 @@ void main(){
               'status':'DRAFT','revision':0,'plannedDate':'2026-11-28',
               'stopCount':1}]};
           case '/v1/delivery/drivers':
-            data={'items':[{'id':'00000000-0000-4000-8000-000000000091',
-              'code':'TX01','name':'Tài xế Thử','active':true}]};
+            data={'items':[
+              {'id':'00000000-0000-4000-8000-000000000091',
+                'code':'TX01','name':'Tài xế Một','active':true},
+              {'id':'00000000-0000-4000-8000-000000000093',
+                'code':'TX02','name':'Tài xế Hai','active':true},
+            ]};
           case '/v1/delivery/vehicles':
-            data={'items':[{'id':'00000000-0000-4000-8000-000000000092',
-              'code':'XE01','name':'Xe thử','licensePlate':'59C-12345',
-              'active':true}]};
+            data={'items':[
+              {'id':'00000000-0000-4000-8000-000000000092',
+                'code':'XE01','name':'Xe Một','licensePlate':'59C-12345',
+                'active':true},
+              {'id':'00000000-0000-4000-8000-000000000094',
+                'code':'XE02','name':'Xe Hai','licensePlate':'59C-54321',
+                'active':true},
+            ]};
           case '/v1/delivery/trips/eligible':
             eligibleOffsets.add(req.url.queryParameters['offset']??'0');
             pagedQueries.add(req.url.queryParameters['q']??'');
@@ -57,6 +66,8 @@ void main(){
             detailReads++;
             data={'trip':{'id':tid,'tripNo':'TG-20261128-000001',
               'status':'DRAFT','revision':0,'plannedDate':'2026-11-28',
+              'driverId':'00000000-0000-4000-8000-000000000093',
+              'vehicleId':'00000000-0000-4000-8000-000000000094',
               'stops':[{'orderId':oid,'documentNo':'SO-20261128-000001',
                 'customerName':'Khách A','deliveryAddress':'Đường A, Mỹ Tho'}]}};
           default:
@@ -136,6 +147,22 @@ void main(){
     await cancelFocusedDialog(find.byKey(const ValueKey('trip-create')));
     await cancelFocusedDialog(find.widgetWithText(OutlinedButton,'Thêm tài xế'));
     await cancelFocusedDialog(find.widgetWithText(OutlinedButton,'Thêm xe'));
-    await cancelFocusedDialog(find.byKey(const ValueKey('trip-plan')));
+    // Reopened trip's second (not first) driver/vehicle must remain selected.
+    await tester.tap(find.byKey(const ValueKey('trip-plan')));
+    await tester.pumpAndSettle();
+    final formFields=find.descendant(
+      of:find.byType(AlertDialog),
+      matching:find.byType(DropdownButtonFormField<String>));
+    final dropdowns=tester.widgetList<DropdownButtonFormField<String>>(formFields).toList();
+    expect(dropdowns.length,2);
+    expect(dropdowns[0].initialValue,'00000000-0000-4000-8000-000000000093');
+    expect(dropdowns[1].initialValue,'00000000-0000-4000-8000-000000000094');
+    await tester.enterText(find.descendant(
+      of:find.byType(AlertDialog),matching:find.byType(TextFormField)).first,
+      '2026-11-29');
+    await tester.tap(find.widgetWithText(TextButton,'Hủy').last);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(),isNull);
+    expect(writes,0);
   });
 }
