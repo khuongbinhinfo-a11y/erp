@@ -775,7 +775,7 @@ void main(){
     expect(tester.widget<Checkbox>(
       find.byKey(const ValueKey('sales-bulk-row-$editing'))).value,isTrue);
     expect(find.text('Đã chọn 2 đơn'),findsOneWidget);
-    expect(find.text('1 đơn đủ điều kiện in'),findsOneWidget);
+    expect(find.textContaining('1 đơn đã xác nhận trong danh sách đã tải'),findsOneWidget);
     expect(writes,0,reason:'Selection cannot post stock, deliveries or money');
     await tester.ensureVisible(find.byKey(
       const ValueKey('sales-bulk-header-select-all')));
