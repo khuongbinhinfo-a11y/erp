@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createHash } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import { signIn,signOut,resolveSession,AuthDenied,AuthThrottled,validThrottleSecret } from "./auth.ts";
-import { userAccess,listUsers,listScopes,listGrants,createUser,updateUser,addGrant,revokeGrant,IdentityError } from "./identity_admin.ts";
+import { userAccess,listUsers,listScopes,listPolicyScopes,listPermissionCatalog,listAuditEvents,listGrants,createUser,updateUser,addGrant,revokeGrant,IdentityError } from "./identity_admin.ts";
 import { MutationFault } from "./mutation.ts";
 import { createDirectoryBranch,createDirectoryWarehouse,DirectoryFault } from "./org_directory.ts";
 import { validIdempotencyKey } from "./contracts.ts";
@@ -130,6 +130,28 @@ export async function handleIdentityHttp(
         send(res,200,{actorId:actor.actorId,installationId:tenant,loginName:identity.rows[0].loginName,
           expiresAt:identity.rows[0].expiresAt.toISOString(),grants:permissions,requestId:id},id,corsOrigin);
       }finally{db.release();}
+      return;
+    }
+    if(path==="/v1/admin/permissions"&&req.method==="GET"){
+      const db=await pool.connect();
+      try{send(res,200,{permissions:await listPermissionCatalog(db,tenant,actor.actorId),requestId:id},id,corsOrigin);}
+      finally{db.release();}
+      return;
+    }
+    if(path==="/v1/admin/audit"&&req.method==="GET"){
+      const db=await pool.connect();
+      try{send(res,200,{events:await listAuditEvents(db,tenant,actor.actorId),requestId:id},id,corsOrigin);}
+      finally{db.release();}
+      return;
+    }
+    if(path==="/v1/admin/policy-scopes"&&req.method==="GET"){
+      const requestUrl=new URL(req.url??"/","http://erp.local");
+      const rawOffset=requestUrl.searchParams.get("offset")??"0";
+      if(!/^(0|[1-9][0-9]{0,5})$/.test(rawOffset))
+        throw new IdentityError(400,"INVALID_PAGINATION");
+      const db=await pool.connect();
+      try{send(res,200,{...await listPolicyScopes(db,tenant,actor.actorId,Number(rawOffset)),requestId:id},id,corsOrigin);}
+      finally{db.release();}
       return;
     }
     if(path==="/v1/admin/users"&&req.method==="GET"){
