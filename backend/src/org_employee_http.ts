@@ -10,7 +10,9 @@ import {validIdempotencyKey} from "./contracts.ts";
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TOKEN=/^Bearer ([A-Za-z0-9_-]{43})$/;
 class StaffFault extends Error{
- constructor(readonly status:number,readonly code:string){super(code);}
+ readonly status:number;
+ readonly code:string;
+ constructor(status:number,code:string){super(code);this.status=status;this.code=code;}
 }
 function fail(status:number,code:string):never{throw new StaffFault(status,code);}
 function uuid(v:unknown):string{
