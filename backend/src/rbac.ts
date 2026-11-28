@@ -45,6 +45,8 @@ export const PERMISSIONS = {
   "pos.return": "branch",
   "delivery.read": "branch",
   "delivery.update": "branch",
+  "delivery.execute": "branch",
+  "delivery.cod.handover": "branch",
 } as const;
 
 export type Permission = keyof typeof PERMISSIONS;
