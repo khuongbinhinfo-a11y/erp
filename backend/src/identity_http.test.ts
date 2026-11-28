@@ -77,6 +77,16 @@ test("P0 auth HTTP: bootstrap once, login throttle, RBAC user grants, revoke, au
         "demo session remains valid across browser restarts, logout still revokes");
       assert.ok((session.body.grants as any[]).some(x=>x.permission==="identity.users.manage"));
       assert.ok((session.body.grants as any[]).some(x=>x.permission==="inventory.read"&&x.warehouseId===root.warehouseId));
+      const catalog=await call("/v1/admin/permissions","GET",undefined,token);
+      assert.equal(catalog.status,200);
+      assert.ok((catalog.body.permissions as any[]).some(p=>
+        p.code==="inventory.policy.manage"&&p.scope==="warehouse"));
+      assert.ok((catalog.body.permissions as any[]).some(p=>
+        p.code==="org.employees.read"&&p.scope==="branch"));
+      assert.equal((await call("/v1/admin/audit","GET",undefined,token)).status,200);
+      const policyScopes=await call("/v1/admin/policy-scopes","GET",undefined,token);
+      assert.equal(policyScopes.status,200);
+      assert.ok((policyScopes.body.warehouses as any[]).some(w=>w.id===root.warehouseId));
       const scopes=await call("/v1/admin/scopes","GET",undefined,token);
       assert.equal(scopes.status,200);
       assert.equal(scopes.body.branches[0].id,root.branchId);
@@ -149,6 +159,10 @@ test("P0 auth HTTP: bootstrap once, login throttle, RBAC user grants, revoke, au
         {"idempotency-key":"evil-branch-"+randomUUID(),"if-match":"0"})).status,403);
 
       assert.equal((await call("/v1/admin/users","GET",undefined,bobToken)).status,403);
+      assert.equal((await call("/v1/admin/permissions","GET",undefined,bobToken)).status,403);
+      assert.equal((await call("/v1/admin/audit","GET",undefined,bobToken)).status,403);
+      assert.equal((await call("/v1/admin/policy-scopes","GET",undefined,bobToken)).status,403);
+
       const scope={permission:"inventory.read",branchId:root.branchId,warehouseId:root.warehouseId};
       const grant=await call("/v1/admin/users/"+bobId+"/grants","POST",scope,token,
         {"if-match":"0","idempotency-key":"grant-"+randomUUID()});
@@ -160,12 +174,25 @@ test("P0 auth HTTP: bootstrap once, login throttle, RBAC user grants, revoke, au
       assert.equal((await call("/v1/admin/users/"+bobId+"/grants","POST",
         {permission:"inventory.post",branchId:root.branchId,warehouseId:root.warehouseId},bobToken,
         {"if-match":"1","idempotency-key":"badgrant-"+randomUUID()})).status,403);
+      const policyGrant=await call("/v1/admin/users/"+bobId+"/grants","POST",
+        {permission:"inventory.policy.manage",branchId:root.branchId,warehouseId:root.warehouseId},
+        token,{"if-match":"1","idempotency-key":"policy-grant-"+randomUUID()});
+      assert.equal(policyGrant.status,201);
+      const scoped=await call("/v1/admin/policy-scopes","GET",undefined,bobToken);
+      assert.equal(scoped.status,200);
+      assert.deepEqual((scoped.body.warehouses as any[]).map(w=>w.id),[root.warehouseId]);
+      assert.equal((await call("/v1/admin/scopes","GET",undefined,bobToken)).status,403);
+      assert.equal((await call("/v1/admin/audit","GET",undefined,bobToken)).status,403);
       const revoke=await call("/v1/admin/users/"+bobId+"/grants/"+roleId,"DELETE",undefined,token,
-        {"if-match":"1","idempotency-key":"revoke-"+randomUUID()});
+        {"if-match":"2","idempotency-key":"revoke-"+randomUUID()});
       assert.equal(revoke.status,200,JSON.stringify(revoke.body));
+      const policyRevoke=await call("/v1/admin/users/"+bobId+"/grants/"+
+        String(policyGrant.body.roleId),"DELETE",undefined,token,
+        {"if-match":"3","idempotency-key":"policy-revoke-"+randomUUID()});
+      assert.equal(policyRevoke.status,200);
       assert.equal((await call("/v1/auth/session","GET",undefined,bobToken)).body.grants.length,0);
       const disable=await call("/v1/admin/users/"+bobId,"PATCH",{disabled:true},token,
-        {"if-match":"2","idempotency-key":"disable-"+randomUUID()});
+        {"if-match":"4","idempotency-key":"disable-"+randomUUID()});
       assert.equal(disable.status,200);
       assert.equal((await call("/v1/auth/session","GET",undefined,bobToken)).status,401);
       assert.equal((await call("/v1/auth/login","POST",createPayload)).status,401);
@@ -177,7 +204,7 @@ test("P0 auth HTTP: bootstrap once, login throttle, RBAC user grants, revoke, au
       const audited=await pool.query<{total:string}>(
         "SELECT count(*)::text AS total FROM audit_event WHERE installation_id=$1",
         [root.installationId]);
-      assert.equal(audited.rows[0]!.total,"7",
+      assert.equal(audited.rows[0]!.total,"9",
         "create/grant/revoke/disable plus branch/warehouse/policy mutations audited once");
       const throttles=await pool.query<{count:string}>(
         "SELECT count(*)::text AS count FROM auth_login_throttle WHERE installation_id=$1 AND failed_count>=5",
