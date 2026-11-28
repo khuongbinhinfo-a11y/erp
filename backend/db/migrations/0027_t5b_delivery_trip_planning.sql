@@ -154,8 +154,10 @@ CREATE TRIGGER delivery_trip_stop_guard BEFORE INSERT OR UPDATE OR DELETE ON del
 
 CREATE FUNCTION erp_t5b_locked_order_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
- IF TG_OP='UPDATE' AND (NEW.current_version,NEW.status,NEW.delivery_status)
-  IS NOT DISTINCT FROM (OLD.current_version,OLD.status,OLD.delivery_status) THEN RETURN NEW; END IF;
+ -- Lock freezes the COMMERCIAL order/version only. Future T5-C dispatch,
+ -- actual delivery and COD must still be posted through their own ledgers.
+ IF TG_OP='UPDATE' AND (NEW.current_version,NEW.status)
+  IS NOT DISTINCT FROM (OLD.current_version,OLD.status) THEN RETURN NEW; END IF;
  IF EXISTS(
   SELECT 1 FROM delivery_trip_stop s JOIN delivery_trip t
    ON t.installation_id=s.installation_id AND t.branch_id=s.branch_id AND t.id=s.trip_id
