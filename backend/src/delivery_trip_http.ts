@@ -7,6 +7,7 @@ import {executeMutation,MutationFault,type MutationContext} from "./mutation.ts"
 import {DeliveryTripFault,tripResources,createResource,tripList,tripEligible,
  tripDetail,createTrip,assignOrders,removeOrders,reorder,transition,
  type TripScope} from "./delivery_trip.ts";
+import {employees,createEmployee,updateEmployee,linkDriver} from "./delivery_employee.ts";
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TOKEN=/^Bearer ([A-Za-z0-9_-]{43})$/;
 function reject(code:string,status=400):never{throw new DeliveryTripFault(status,code);}
@@ -106,6 +107,12 @@ export async function handleDeliveryTripHttp(req:IncomingMessage,res:ServerRespo
   if(!version.rows[0]?.ok){
    fault(res,503,"TRIP_MIGRATION_REQUIRED",rid,cors);return;
   }
+  const employeeVersion=await pool.query<{ok:boolean}>(`SELECT EXISTS(
+    SELECT 1 FROM schema_migrations
+    WHERE version='0028_t5c_canonical_employee_driver.sql') AS ok`);
+  if(!employeeVersion.rows[0]?.ok){
+   fault(res,503,"EMPLOYEE_MIGRATION_REQUIRED",rid,cors);return;
+  }
   const token=typeof req.headers.authorization==="string"?
     TOKEN.exec(req.headers.authorization)?.[1]:undefined;
   const cdb=await pool.connect();let actor:string|undefined;
@@ -119,7 +126,10 @@ export async function handleDeliveryTripHttp(req:IncomingMessage,res:ServerRespo
    try{
     if(!await permitted(db,t,actor,s,false))reject("FORBIDDEN",403);
     let result:unknown;
-    if(url.pathname==="/v1/delivery/vehicles")result={items:await tripResources(db,t,s,"vehicles")};
+    if(url.pathname==="/v1/delivery/employees")
+     result={items:await employees(db,t,s.branchId,pagedOffset(url,200))};
+    else if(url.pathname==="/v1/delivery/vehicles")
+     result={items:await tripResources(db,t,s,"vehicles")};
     else if(url.pathname==="/v1/delivery/drivers")result={items:await tripResources(db,t,s,"drivers")};
     else if(url.pathname==="/v1/delivery/trips/eligible"){
      const query=(url.searchParams.get("q")??"").trim();
@@ -139,23 +149,60 @@ export async function handleDeliveryTripHttp(req:IncomingMessage,res:ServerRespo
   }
   if(req.method!=="POST")reject("NOT_FOUND",404);
   const raw=await readBody(req),s=scope(raw);
-  const master=/^\/v1\/delivery\/(drivers|vehicles)$/.exec(url.pathname);
+  const master=/^\/v1\/delivery\/(drivers|vehicles|employees)$/.exec(url.pathname);
+  const employeeUpdate=/^\/v1\/delivery\/employees\/([0-9a-f-]{36})\/update$/i.exec(url.pathname);
   const sub=/^\/v1\/delivery\/trips\/([0-9a-f-]{36})\/(assign|unassign|reorder|plan|reopen|lock)$/.exec(url.pathname);
   let action:string,payload:Record<string,unknown>;
   if(master){
-   const kind=master[1] as "drivers"|"vehicles";
-   only(raw,["branchId","warehouseId","code","name","phone","licensePlate"]);
-   // Exclude absent optional fields: canonicalMutationPayload rejects undefined.
-   const v={code:str(raw.code,48),name:str(raw.name,120),
-     ...(kind==="drivers"?
-       (raw.phone==null?{}:{phone:str(raw.phone,15,false)}):
-       {licensePlate:str(raw.licensePlate,32)})};
+   const kind=master[1] as "drivers"|"vehicles"|"employees";
+   let execute:(db:PoolClient,m:MutationContext)=>Promise<{status:number;body:unknown}>;
+   if(kind==="drivers"){
+    only(raw,["branchId","warehouseId","employeeId"]);
+    const employeeId=id(raw.employeeId);
+    payload={...s,employeeId};
+    execute=(db,m)=>linkDriver(db,m,s,employeeId);
+   }else if(kind==="employees"){
+    only(raw,["branchId","warehouseId","code","fullName","phone","jobTitle"]);
+    const code=str(raw.code,48),fullName=str(raw.fullName,120);
+    if(!/^[A-Za-z0-9_-]{1,48}$/.test(code))reject("EMPLOYEE_CODE_INVALID");
+    const phone=raw.phone==null?undefined:str(raw.phone,15,false);
+    if(phone!==undefined&&!/^\+?[0-9]{9,15}$/.test(phone))reject("EMPLOYEE_PHONE_INVALID");
+    const jobTitle=raw.jobTitle==null?undefined:str(raw.jobTitle,100,false);
+    const input={code,fullName,...(phone===undefined?{}:{phone}),
+      ...(jobTitle===undefined?{}:{jobTitle})};
+    payload={...s,...input};
+    execute=(db,m)=>createEmployee(db,m,s,input);
+   }else{
+    only(raw,["branchId","warehouseId","code","name","licensePlate"]);
+    const v={code:str(raw.code,48),name:str(raw.name,120),
+      licensePlate:str(raw.licensePlate,32)};
+    payload={...s,...v};
+    execute=(db,m)=>createResource(db,m,s,"vehicles",v);
+   }
    action="delivery."+kind+".create";
-   payload={...s,...v};
    const c=context(req,t,actor,rid,action,payload);
    const out=await executeMutation(pool,c,{
     authorize:(db)=>permitted(db,t,actor!,s,true),
-    execute:(db,m)=>createResource(db,m,s,kind,v)
+    execute
+   });
+   send(res,out.status,out.body,rid,cors);return;
+  }
+  if(employeeUpdate){
+   only(raw,["branchId","warehouseId","fullName","phone","jobTitle","active"]);
+   const employeeId=id(employeeUpdate[1]),fullName=str(raw.fullName,120);
+   if(typeof raw.active!=="boolean")reject("EMPLOYEE_ACTIVE_REQUIRED");
+   const phone=raw.phone==null?undefined:str(raw.phone,15,false);
+   if(phone!==undefined&&!/^\+?[0-9]{9,15}$/.test(phone))reject("EMPLOYEE_PHONE_INVALID");
+   const jobTitle=raw.jobTitle==null?undefined:str(raw.jobTitle,100,false);
+   const input={fullName,active:raw.active as boolean,
+     ...(phone===undefined?{}:{phone}),
+     ...(jobTitle===undefined?{}:{jobTitle})};
+   payload={...s,employeeId,...input};
+   action="delivery.employees.update";
+   const c=context(req,t,actor,rid,action,payload);
+   const out=await executeMutation(pool,c,{
+    authorize:(db)=>permitted(db,t,actor!,s,true),
+    execute:(db,m)=>updateEmployee(db,m,s,employeeId,input)
    });
    send(res,out.status,out.body,rid,cors);return;
   }
