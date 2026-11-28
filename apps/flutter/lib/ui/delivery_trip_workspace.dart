@@ -194,8 +194,13 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
        TextButton.icon(key:const ValueKey('trip-select-all-orders'),
          onPressed:()=>update((){
            final first=eligible.take(100).map((x)=>x['id'] as String).toList();
-           if(first.every(chosen.contains))chosen.removeAll(first);
-           else chosen.addAll(first);
+           // Select-all is a bounded replacement, not a union that may
+           // exceed the API's atomic 100-order assignment limit.
+           if(first.length==chosen.length&&first.every(chosen.contains)){
+             chosen.clear();
+           }else{
+             chosen..clear()..addAll(first);
+           }
          }),
          icon:const Icon(Icons.select_all,size:16),
          label:const Text('Chọn tất cả (tối đa 100)')),
