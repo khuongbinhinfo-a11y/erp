@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
@@ -83,4 +84,54 @@ void main(){
    expect(mutations.single['warehouseId'],warehouse);
    expect(tester.takeException(),isNull);
  });
+ testWidgets('IA-B organization displays canonical tenant and discards previous session responses',
+   (tester)async{
+   final oldScopes=Completer<http.Response>();
+   final calls=<String>[];
+   const headers={'content-type':'application/json; charset=utf-8'};
+   final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+     httpClient:MockClient((req)async{
+       calls.add('${req.headers['authorization']} ${req.url.path}');
+       if(req.url.path=='/v1/admin/scopes'){
+         if(req.headers['authorization']=='Bearer old-token')return oldScopes.future;
+         return http.Response(jsonEncode({'branches':[
+           {'id':branch,'name':'CN mới','code':'NEW'}],
+           'warehouses':[],'hasMoreBranches':false,'hasMoreWarehouses':false,
+         }),200,headers:headers);
+       }
+       if(req.url.path=='/v1/admin/organization'){
+         return http.Response(jsonEncode({'organization':{
+           'code':'B-NEW','displayName':'Doanh nghiệp mới'
+         }}),200,headers:headers);
+       }
+       throw StateError('Unexpected request ${req.url.path}');
+     }));
+   addTearDown(client.dispose);
+   tester.view.devicePixelRatio=1;
+   tester.view.physicalSize=const Size(1100,850);
+   addTearDown(tester.view.resetDevicePixelRatio);
+   addTearDown(tester.view.resetPhysicalSize);
+   IdentitySession session(String id,String token)=>IdentitySession(
+     actorId:id,token:token,installationId:id,
+     expiresAt:DateTime.now().add(const Duration(hours:1)),
+     grants:const [IdentityGrant(roleId:'admin',permission:'identity.roles.manage')]);
+   Widget screen(IdentitySession current)=>MaterialApp(home:Scaffold(
+     body:SingleChildScrollView(child:OrgDirectoryWorkspace(client:client,session:current))));
+   await tester.pumpWidget(screen(session(actor,'old-token')));
+   await tester.pump();
+   await tester.pumpWidget(screen(session('00000000-0000-4000-8000-000000000005','new-token')));
+   await tester.pumpAndSettle();
+   expect(find.text('Doanh nghiệp mới'),findsOneWidget);
+   expect(find.textContaining('B-NEW'),findsOneWidget);
+   expect(find.text('CN mới'),findsOneWidget);
+   oldScopes.complete(http.Response(jsonEncode({'branches':[
+     {'id':branch,'name':'CN cũ','code':'OLD'}],
+     'warehouses':[]}),200,headers:headers));
+   await tester.pumpAndSettle();
+   expect(find.text('CN cũ'),findsNothing);
+   expect(find.text('Doanh nghiệp mới'),findsOneWidget);
+   expect(calls,contains('Bearer new-token /v1/admin/organization'));
+   expect(tester.takeException(),isNull);
+ });
+
 }
