@@ -62,16 +62,18 @@ export async function createResource(db:PoolClient,c:MutationContext,s:TripScope
 export async function tripList(db:PoolClient,t:string,s:TripScope,offset=0){
  return (await db.query(`SELECT t.id,t.trip_no AS "tripNo",t.status,t.revision::integer,
  t.planned_date::text AS "plannedDate",t.note,t.vehicle_id AS "vehicleId",
- t.driver_id AS "driverId",d.name AS "driverName",
+ t.driver_id AS "driverId",COALESCE(e.full_name,d.name) AS "driverName",
  v.license_plate AS "licensePlate",count(st.order_id)::integer AS "stopCount"
  FROM delivery_trip t LEFT JOIN delivery_driver d ON
   d.installation_id=t.installation_id AND d.branch_id=t.branch_id AND d.id=t.driver_id
+ LEFT JOIN org_employee e ON e.installation_id=d.installation_id
+  AND e.branch_id=d.branch_id AND e.id=d.employee_id
  LEFT JOIN delivery_vehicle v ON v.installation_id=t.installation_id
   AND v.branch_id=t.branch_id AND v.id=t.vehicle_id
  LEFT JOIN delivery_trip_stop st ON st.installation_id=t.installation_id
   AND st.branch_id=t.branch_id AND st.trip_id=t.id
  WHERE t.installation_id=$1 AND t.branch_id=$2 AND t.warehouse_id=$3
- GROUP BY t.installation_id,t.branch_id,t.id,d.name,v.license_plate
+ GROUP BY t.installation_id,t.branch_id,t.id,d.name,e.full_name,v.license_plate
  ORDER BY t.created_at DESC,t.id DESC LIMIT 100 OFFSET $4`,
  [t,s.branchId,s.warehouseId,offset])).rows;
 }
@@ -100,9 +102,11 @@ export async function tripEligible(db:PoolClient,t:string,s:TripScope,offset=0,s
 export async function tripDetail(db:PoolClient,t:string,s:TripScope,id:string){
  const h=await db.query(`SELECT t.id,t.trip_no AS "tripNo",t.status,t.revision::integer,
  t.planned_date::text AS "plannedDate",t.note,t.vehicle_id AS "vehicleId",
- t.driver_id AS "driverId",d.name AS "driverName",v.license_plate AS "licensePlate"
+ t.driver_id AS "driverId",COALESCE(e.full_name,d.name) AS "driverName",v.license_plate AS "licensePlate"
  FROM delivery_trip t LEFT JOIN delivery_driver d ON
   d.installation_id=t.installation_id AND d.branch_id=t.branch_id AND d.id=t.driver_id
+ LEFT JOIN org_employee e ON e.installation_id=d.installation_id
+  AND e.branch_id=d.branch_id AND e.id=d.employee_id
  LEFT JOIN delivery_vehicle v ON v.installation_id=t.installation_id
   AND v.branch_id=t.branch_id AND v.id=t.vehicle_id
  WHERE t.installation_id=$1 AND t.branch_id=$2 AND t.warehouse_id=$3 AND t.id=$4`,
