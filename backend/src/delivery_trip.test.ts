@@ -96,6 +96,25 @@ test("T5-B trip planner: two orders, driver/vehicle, sequencing, idempotency, lo
   const a=await make("Đường A, Mỹ Tho, Việt Nam");
   const b2=await make("Đường B, Mỹ Tho, Việt Nam");
   const s={branchId:b,warehouseId:w},qs="?"+new URLSearchParams(s);
+  assert.equal((await call("/v1/delivery/scopes")).status,401,
+    "unauthenticated sessions cannot discover delivery warehouse names");
+  const directory=await call("/v1/delivery/scopes","GET",undefined,token);
+  assert.equal(directory.status,200,JSON.stringify(directory.data));
+  assert.ok((directory.data.warehouses as any[]).some(x=>
+    x.id===w&&x.branchId===b));
+  assert.ok((directory.data.branches as any[]).some(x=>x.id===b));
+  assert.equal((await call("/v1/delivery/scopes?offset=1","GET",undefined,token)).status,400,
+    "invalid page offset cannot change the bounded scope listing");
+  // New accounts receive no installation or warehouse grants by default.
+  const visitorPass="IaC-"+randomUUID();
+  assert.equal((await post("/v1/admin/users",{
+    loginName:"delivery_guest",password:visitorPass
+  })).status,201);
+  const visitor=await call("/v1/auth/login","POST",
+    {loginName:"delivery_guest",password:visitorPass});
+  assert.equal(visitor.status,200,JSON.stringify(visitor.data));
+  assert.equal((await call("/v1/delivery/scopes","GET",undefined,
+    visitor.data.token as string)).status,403);
   assert.equal((await call("/v1/delivery/trips"+qs)).status,401);
   const elig=await call("/v1/delivery/trips/eligible"+qs,"GET",undefined,token);
   assert.equal(elig.status,200,JSON.stringify(elig.data));
