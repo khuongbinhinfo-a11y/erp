@@ -63,16 +63,18 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
   await tester.tap(admin);
   await tester.pumpAndSettle();
   expect(find.text('Tổ chức, tài khoản, quyền và chính sách'), findsOneWidget);
-  expect(find.text('Chưa có dữ liệu'), findsOneWidget);
+  expect(find.text('Không có quyền quản lý tổ chức.'), findsOneWidget);
   // The non-modal startup toast closes before interacting with pinned tabs.
   await tester.pump(const Duration(seconds: 5));
   await tester.pump(const Duration(milliseconds: 250));
   expect(find.byKey(const ValueKey('erp-startup-toast')), findsNothing);
   await tester.tap(find.byKey(const ValueKey('admin-1')));
   await tester.pumpAndSettle();
-  expect(find.text('Danh sách quyền'), findsOneWidget);
-  expect(find.textContaining('Xem tồn kho, ghi nhận tồn đầu kỳ'), findsOneWidget);
-  expect(find.textContaining('inventory.read'), findsNothing);
+  expect(find.text('Tài khoản người dùng'), findsOneWidget);
+  expect(find.text('Chưa có dữ liệu'), findsOneWidget);
+  await tester.tap(find.byKey(const ValueKey('admin-2')));
+  await tester.pumpAndSettle();
+  expect(find.text('Không có quyền xem danh mục quyền.'), findsOneWidget);
 });
 
   testWidgets('old persistent notices are replaced by a dismissible upper-right toast', (tester) async {
