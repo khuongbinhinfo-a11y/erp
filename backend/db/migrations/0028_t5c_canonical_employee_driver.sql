@@ -37,6 +37,16 @@ BEGIN
     (OLD.installation_id,OLD.branch_id,OLD.id,OLD.code,OLD.created_by,OLD.created_at)
  THEN RAISE EXCEPTION 'Employee identity is immutable'; END IF;
  IF NEW.revision<>OLD.revision+1 THEN RAISE EXCEPTION 'Employee revision required'; END IF;
+ -- Direct SQL writers must not deactivate a canonical driver while an
+ -- assigned trip is planned or locked. Application also locks this row.
+ IF OLD.active AND NOT NEW.active AND EXISTS(
+  SELECT 1 FROM delivery_driver d JOIN delivery_trip t
+    ON t.installation_id=d.installation_id AND t.branch_id=d.branch_id
+    AND t.warehouse_id=d.warehouse_id AND t.driver_id=d.id
+  WHERE d.installation_id=OLD.installation_id
+    AND d.branch_id=OLD.branch_id AND d.employee_id=OLD.id
+    AND t.status IN ('PLANNED','LOCKED')
+ ) THEN RAISE EXCEPTION 'Employee has an outstanding trip'; END IF;
  RETURN NEW;
 END;
 $$;
@@ -50,6 +60,7 @@ ALTER TABLE delivery_driver ADD CONSTRAINT driver_canonical_employee_fk
 CREATE UNIQUE INDEX delivery_driver_one_active_employee ON delivery_driver
  (installation_id,employee_id) WHERE employee_id IS NOT NULL AND active;
 CREATE FUNCTION erp_t5c_driver_employee_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE active_employee boolean;
 BEGIN
  IF TG_OP='INSERT' AND NEW.employee_id IS NULL
  THEN RAISE EXCEPTION 'New drivers require a canonical employee'; END IF;
@@ -58,6 +69,13 @@ BEGIN
    THEN RAISE EXCEPTION 'Driver employee link is immutable'; END IF;
    IF OLD.employee_id IS NULL AND NEW.employee_id IS NULL AND NEW.active
    THEN RAISE EXCEPTION 'Unlinked legacy driver must be linked before reactivation'; END IF;
+ END IF;
+ IF NEW.active AND NEW.employee_id IS NOT NULL THEN
+  SELECT active INTO active_employee FROM org_employee
+   WHERE installation_id=NEW.installation_id AND branch_id=NEW.branch_id
+     AND id=NEW.employee_id FOR SHARE;
+  IF active_employee IS DISTINCT FROM true
+  THEN RAISE EXCEPTION 'Active driver requires active employee'; END IF;
  END IF;
  RETURN NEW;
 END;
