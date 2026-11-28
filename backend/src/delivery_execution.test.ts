@@ -138,12 +138,16 @@ test("T5-D: real PG dispatch, driver attempt, custody return, AR, COD and handov
   assert.equal(wrong.status,404);
   const retBody={...body,orderId,reason:"Hàng khách chưa nhận",
    lines:[{...src,quantityBase:"1"}]};
-  const returned=await write(exec+"return",retBody,partial.data.revision);
+  const retKey="return-"+randomUUID();
+  const returned=await write(exec+"return",retBody,partial.data.revision,retKey);
   assert.equal(returned.status,201,JSON.stringify(returned.data));
+  assert.deepEqual((await write(exec+"return",retBody,partial.data.revision,retKey)).data,returned.data);
   assert.equal(returned.data.returned,"1.000000");
   assert.equal(returned.data.onVehicle,"1.000000");
   assert.equal(returned.data.due,"2000");
-  assert.equal((await write(exec+"return",retBody,returned.data.revision)).status,409);
+  assert.equal((await write(exec+"return",{
+   ...retBody,lines:[{...src,quantityBase:"2"}]},returned.data.revision)).status,409,
+   "must reject a return larger than actual goods still on the truck");
   const failAttempt=await write(exec+"attempt",{
    ...body,orderId,result:"FAILED",reasonCode:"CUSTOMER_ABSENT"},returned.data.revision);
   assert.equal(failAttempt.status,201,JSON.stringify(failAttempt.data));

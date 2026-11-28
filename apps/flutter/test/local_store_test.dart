@@ -39,6 +39,28 @@ void main(){
       'body':{'orderId':order,'amount':'200','warehouseId':'w'}});
     expect((await bTab.executionPending(a,order))?['key'],'payment-3');
   });
+  test('T5-D attempts and COD intents survive restart and cannot cross warehouse or actor',()async{
+    final shared=Memory(),first=ErpLocalStore(shared),next=ErpLocalStore(shared);
+    const trip='11111111-1111-4111-8111-111111111111';
+    const other=LocalScope(origin:'https://erp.example',installation:'i',
+      actor:'a',branch:'b',warehouse:'other');
+    final pending={'key':'attempt-once','action':'attempt','revision':5,
+      'body':{'tripId':trip,'result':'DELIVERED_PARTIAL','quantity':'2'}};
+    await first.saveDeliveryPending(a,trip,pending);
+    expect((await next.deliveryPending(a,trip))?['key'],'attempt-once');
+    expect(await next.deliveryPending(b,trip),isNull);
+    expect(await next.deliveryPending(other,trip),isNull);
+    await first.saveDeliveryPending(a,trip,pending);
+    await expectLater(next.saveDeliveryPending(a,trip,{...pending,'key':'new-key'}),
+      throwsA(isA<LocalRecoveryConflict>()));
+    await expectLater(next.clearDeliveryPending(a,trip,'new-key'),
+      throwsA(isA<LocalRecoveryConflict>()));
+    await next.clearDeliveryPending(a,trip,'attempt-once');
+    expect(await first.deliveryPending(a,trip),isNull);
+    await next.saveDeliveryPending(a,trip,{...pending,'action':'collect',
+      'key':'cod-once','body':{'amount':'3000'}});
+    expect((await first.deliveryPending(a,trip))?['action'],'collect');
+  });
   test('pending POS payment is durable, actor scoped and CAS fenced',()async{
     final driver=Memory(),first=ErpLocalStore(driver),second=ErpLocalStore(driver);
     final command={'key':'pos-k-1','body':{'amount':'1000','quantity':'2'}};

@@ -93,7 +93,7 @@ class ErpIdentityClient {
   ErpIdentityClient({this.apiOrigin=erpApiOrigin,http.Client? httpClient,this.localStore}):_http=httpClient??http.Client();
   bool get configured=>Uri.tryParse(apiOrigin)?.scheme=='https'&&
     Uri.tryParse(apiOrigin)?.host.isNotEmpty==true;
-  void dispose(){_deliveryExecutionKeys.clear();_staffMutationKeys.clear();_tripMutationKeys.clear();_r1Pending.clear();_mediaPending.clear();_inventoryPending.clear();_purchasePending.clear();_transferPending.clear();_stocktakePending.clear();_http.close();}
+  void dispose(){_staffMutationKeys.clear();_tripMutationKeys.clear();_r1Pending.clear();_mediaPending.clear();_inventoryPending.clear();_purchasePending.clear();_transferPending.clear();_stocktakePending.clear();_http.close();}
   String _key()=>'erp-'+DateTime.now().microsecondsSinceEpoch.toString()+'-${++_sequence}';
   Future<Map<String,dynamic>> _request(String method,String path,{
     String? token,Map<String,dynamic>? body,int? revision,String? idempotencyKey,
@@ -957,7 +957,6 @@ class ErpIdentityClient {
   }
 
   /// T5-D: recheck the same idempotency receipt after an ambiguous acknowledgement.
-  final Map<String,String> _deliveryExecutionKeys=<String,String>{};
   Future<Map<String,dynamic>> deliveryExecutionRead(IdentitySession session,{
       required String branchId,required String warehouseId,required String tripId})async{
     final q=Uri(queryParameters:{'branchId':branchId,'warehouseId':warehouseId,'tripId':tripId}).query;
@@ -981,39 +980,93 @@ class ErpIdentityClient {
     return (r['items'] as List<dynamic>).map((x)=>
       Map<String,dynamic>.from(x as Map)).toList();
   }
+  Future<Map<String,dynamic>?> deliveryExecutionRecovery(IdentitySession session,
+      String action,Map<String,dynamic> payload,
+      {required String key,required int revision})async{
+    final r=await _request('POST','/v1/delivery/execution/recovery',
+      token:session.token,body:{'action':action,'body':payload},
+      revision:revision,idempotencyKey:key);
+    return r['receipt']==null?null:Map<String,dynamic>.from(r['receipt'] as Map);
+  }
+  /// Pending attempt/payment survives restarts and account switch. The same
+  /// trip cannot submit a different command until receipt reconciliation.
   Future<Map<String,dynamic>> deliveryExecutionWrite(IdentitySession session,
       String action,Map<String,dynamic> payload,int revision)async{
     if(!const {'start','attempt','return','collect','handover'}.contains(action))
       throw const ErpApiError(400,'Thao tác giao hàng không hợp lệ.');
-    final b=payload['branchId'],w=payload['warehouseId'];
+    final b=payload['branchId'],w=payload['warehouseId'],trip=payload['tripId'];
     final permission=action=='start'||action=='return'?'delivery.update':
       action=='handover'?'delivery.cod.handover':'delivery.execute';
     final warehousePermission=action=='return'?'inventory.post':'inventory.read';
-    if(b is! String||w is! String||
+    if(b is! String||w is! String||trip is! String||
       !session.grants.any((g)=>g.permission==permission&&g.branchId==b)||
       !session.grants.any((g)=>g.permission==warehousePermission&&
-       g.branchId==b&&g.warehouseId==w))
+        g.branchId==b&&g.warehouseId==w))
       throw const ErpApiError(403,'Chưa được cấp quyền giao hàng tại kho này.');
-    final fingerprint=jsonEncode([session.installationId,session.actorId,action,revision,payload]);
-    final key=_deliveryExecutionKeys.putIfAbsent(fingerprint,_key);
+    final scope=localScope(session,b,warehouse:w),store=localStore;
+    if(scope==null||store==null)
+      throw const ErpApiError(503,'Chưa có nơi lưu an toàn cho lệnh giao hàng chờ đối soát.');
+    final pending=await store.deliveryPending(scope,trip);
+    late String key;
+    if(pending!=null){
+      final oldKey=pending['key'],oldAction=pending['action'],
+        oldRevision=pending['revision'],oldBody=pending['body'];
+      if(oldKey is! String||oldAction is! String||oldRevision is! int||
+        oldBody is! Map<String,dynamic>)
+        throw const ErpApiError(409,'Lệnh giao hàng đang chờ không hợp lệ. Cần đối soát.');
+      Map<String,dynamic>? recovered;
+      try{
+        recovered=await deliveryExecutionRecovery(session,oldAction,
+          Map<String,dynamic>.from(oldBody),key:oldKey,revision:oldRevision);
+      }on ErpApiError catch(e){
+        if(e.status==409)rethrow;
+        throw const ErpApiError(424,'Chưa kiểm tra được chứng từ trước. Không tạo lệnh mới.');
+      }catch(_){
+        throw const ErpApiError(424,'Chưa kiểm tra được chứng từ trước. Không tạo lệnh mới.');
+      }
+      if(recovered!=null){
+        await store.clearDeliveryPending(scope,trip,oldKey);
+        if(oldAction==action&&oldRevision==revision&&
+           jsonEncode(oldBody)==jsonEncode(payload))return recovered;
+        throw const ErpApiError(409,'Đã đối soát lần trước. Tải lại chuyến trước khi tiếp tục.');
+      }
+      if(oldAction!=action||oldRevision!=revision||
+        jsonEncode(oldBody)!=jsonEncode(payload))
+        throw const ErpApiError(423,'Lệnh trước chưa xác nhận. Hãy đối soát trước khi thao tác khác.');
+      key=oldKey;
+    }else{
+      key=_key();
+      try{
+        await store.saveDeliveryPending(scope,trip,{
+          'action':action,'body':payload,'revision':revision,'key':key});
+      }on LocalRecoveryConflict{
+        throw const ErpApiError(423,'Đang có thao tác giao hàng chưa đối soát ở cửa sổ khác.');
+      }
+    }
     try{
       final r=await _request('POST','/v1/delivery/execution/$action',
         token:session.token,body:payload,revision:revision,idempotencyKey:key);
-      _deliveryExecutionKeys.remove(fingerprint);
+      await store.clearDeliveryPending(scope,trip,key);
       return r;
     }on ErpApiError catch(e){
-      if(e.status==0||e.status==502||e.status==503||e.status==504){
-        try{
-          final receipt=await _request('POST','/v1/delivery/execution/recovery',
-            token:session.token,body:{'action':action,'body':payload},
-            revision:revision,idempotencyKey:key);
-          if(receipt['receipt'] is Map){
-            _deliveryExecutionKeys.remove(fingerprint);
-            return Map<String,dynamic>.from(receipt['receipt'] as Map);
-          }
-        }catch(_){/* original key/body/revision remain for next retry */ }
+      Map<String,dynamic>? recovered;
+      var checked=false;
+      try{
+        recovered=await deliveryExecutionRecovery(session,action,payload,
+          key:key,revision:revision);
+        checked=true;
+      }catch(_){/* Preserve original key/body until server answers. */}
+      if(recovered!=null){
+        await store.clearDeliveryPending(scope,trip,key);
+        return recovered;
       }
-      rethrow;
+      if(checked&&e.status>=400&&e.status<500&&
+        e.status!=408&&e.status!=423&&e.status!=424){
+        await store.clearDeliveryPending(scope,trip,key);
+        rethrow;
+      }
+      throw const ErpApiError(424,
+        'Chưa xác minh được kết quả giao hàng. Lệnh gốc đã lưu an toàn, vui lòng đối soát.');
     }
   }
   /// T5-A: canonical server-side stock/delivery and AR facts. No offline posts.

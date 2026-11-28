@@ -63,7 +63,6 @@ class _DriverTripWorkspaceState extends State<DriverTripWorkspace>{
   }
  }
  @override Widget build(BuildContext context){
-  final narrow=MediaQuery.sizeOf(context).width<700;
   return Padding(padding:const EdgeInsets.all(12),
    child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
     Wrap(spacing:12,runSpacing:8,alignment:WrapAlignment.spaceBetween,children:[
