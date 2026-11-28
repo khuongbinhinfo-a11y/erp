@@ -144,42 +144,42 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
   }
  }
  Future<void> _newTrip()async{
-  final day=TextEditingController(text:today),note=TextEditingController();
+  // Controller-free fields outlive dialog pop animations safely.
+  var day=today,note='';
   final ok=await showDialog<bool>(context:context,builder:(c)=>AlertDialog(
    title:const Text('Tạo chuyến giao'),
    content:SizedBox(width:380,child:Column(mainAxisSize:MainAxisSize.min,children:[
-    TextField(controller:day,decoration:const InputDecoration(labelText:'Ngày giao YYYY-MM-DD')),
-    TextField(controller:note,maxLength:500,
+    TextFormField(initialValue:day,onChanged:(value)=>day=value,
+     decoration:const InputDecoration(labelText:'Ngày giao YYYY-MM-DD')),
+    TextFormField(initialValue:note,onChanged:(value)=>note=value,maxLength:500,
      decoration:const InputDecoration(labelText:'Ghi chú (không bắt buộc)')),
    ])),
    actions:[TextButton(onPressed:()=>Navigator.pop(c,false),child:const Text('Hủy')),
     FilledButton(onPressed:()=>Navigator.pop(c,true),child:const Text('Tạo chuyến'))],
   ));
   if(ok==true&&mounted)await _write('trips',
-   {'plannedDate':day.text.trim(),'note':note.text.trim()},0,chosen:null);
-  day.dispose();note.dispose();
+   {'plannedDate':day.trim(),'note':note.trim()},0,chosen:null);
  }
  Future<void> _newResource(bool driver)async{
-  final code=TextEditingController(),name=TextEditingController(),
-   extra=TextEditingController();
+  var code='',name='',extra='';
   final ok=await showDialog<bool>(context:context,builder:(c)=>AlertDialog(
    title:Text(driver?'Thêm tài xế':'Thêm xe'),
    content:SizedBox(width:380,child:Column(mainAxisSize:MainAxisSize.min,children:[
-    TextField(controller:code,decoration:const InputDecoration(labelText:'Mã')),
-    TextField(controller:name,decoration:InputDecoration(
+    TextFormField(onChanged:(value)=>code=value,
+     decoration:const InputDecoration(labelText:'Mã')),
+    TextFormField(onChanged:(value)=>name=value,decoration:InputDecoration(
      labelText:driver?'Tên tài xế':'Tên phương tiện')),
-    TextField(controller:extra,decoration:InputDecoration(
+    TextFormField(onChanged:(value)=>extra=value,decoration:InputDecoration(
      labelText:driver?'Điện thoại (không bắt buộc)':'Biển số xe')),
    ])),
    actions:[TextButton(onPressed:()=>Navigator.pop(c,false),child:const Text('Hủy')),
     FilledButton(onPressed:()=>Navigator.pop(c,true),child:const Text('Lưu'))],
   ));
   if(ok==true&&mounted)await _write(driver?'drivers':'vehicles',{
-   'code':code.text.trim(),'name':name.text.trim(),
-   if(driver&&extra.text.trim().isNotEmpty)'phone':extra.text.trim(),
-   if(!driver)'licensePlate':extra.text.trim(),
+   'code':code.trim(),'name':name.trim(),
+   if(driver&&extra.trim().isNotEmpty)'phone':extra.trim(),
+   if(!driver)'licensePlate':extra.trim(),
   },0);
-  code.dispose();name.dispose();extra.dispose();
  }
  Future<void> _assign()async{
   final d=detail,b=branch,w=warehouse,token=widget.session.token;
@@ -310,8 +310,8 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
    return;
   }
   String? driver=ds.first['id'] as String,vehicle=vs.first['id'] as String;
-  final day=TextEditingController(text:d['plannedDate']?.toString()??today);
-  final note=TextEditingController(text:d['note']?.toString()??'');
+  var day=d['plannedDate']?.toString()??today;
+  var note=d['note']?.toString()??'';
   final ok=await showDialog<bool>(context:context,builder:(c)=>StatefulBuilder(
    builder:(c,refresh)=>AlertDialog(
     title:const Text('Phân xe và tài xế'),
@@ -326,8 +326,9 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
       items:vs.map((x)=>DropdownMenuItem(value:x['id'] as String,
        child:Text('${x['licensePlate']} · ${x['name']}'))).toList(),
       onChanged:(x)=>refresh(()=>vehicle=x)),
-     TextField(controller:day,decoration:const InputDecoration(labelText:'Ngày giao')),
-     TextField(controller:note,maxLength:500,
+     TextFormField(initialValue:day,onChanged:(value)=>day=value,
+      decoration:const InputDecoration(labelText:'Ngày giao')),
+     TextFormField(initialValue:note,onChanged:(value)=>note=value,maxLength:500,
       decoration:const InputDecoration(labelText:'Ghi chú')),
     ])),
     actions:[TextButton(onPressed:()=>Navigator.pop(c,false),child:const Text('Hủy')),
@@ -335,9 +336,8 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
       child:const Text('Lưu kế hoạch'))],
    )));
   if(ok==true&&mounted)await _write('trips/${d['id']}/plan',{
-   'driverId':driver,'vehicleId':vehicle,'plannedDate':day.text.trim(),
-   'note':note.text.trim()},d['revision'] as int);
-  day.dispose();note.dispose();
+   'driverId':driver,'vehicleId':vehicle,'plannedDate':day.trim(),
+   'note':note.trim()},d['revision'] as int);
  }
  Future<void> _reorder(int index,int delta)async{
   final d=detail,stops=(detail?['stops'] as List?)??[];
