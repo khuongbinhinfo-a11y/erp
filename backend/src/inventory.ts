@@ -144,7 +144,7 @@ export async function movements(db:PoolClient,t:string,s:WarehouseScope,offset=0
 }
 /** Each page includes only one reservation lifecycle; released history cannot hide ACTIVE holds. */
 export async function reservations(db:PoolClient,t:string,s:WarehouseScope,
- state:"ACTIVE"|"RELEASED"="ACTIVE",offset=0){
+ state:"ACTIVE"|"RELEASED"="ACTIVE",offset=0,productId?:string){
  const modern=await hasInventoryGuardSchema(db);
  const backorder=modern?'r.backordered_base::text':"'0.000000'::text";
  const r=await db.query(
@@ -159,8 +159,9 @@ export async function reservations(db:PoolClient,t:string,s:WarehouseScope,
     JOIN sales_order o ON o.installation_id=r.installation_id
       AND o.branch_id=r.branch_id AND o.id=r.order_id
     WHERE r.installation_id=$1 AND r.branch_id=$2 AND r.warehouse_id=$3 AND r.state=$4
+    AND ($6::uuid IS NULL OR r.product_id=$6::uuid)
     ORDER BY r.created_at DESC,r.id DESC LIMIT 101 OFFSET $5`,
-    [t,s.branchId,s.warehouseId,state,offset]);
+    [t,s.branchId,s.warehouseId,state,offset,productId??null]);
  return {items:r.rows.slice(0,100),hasMore:r.rows.length>100};
 }
 export async function openStock(db:PoolClient,ctx:MutationContext,input:OpeningInput){
