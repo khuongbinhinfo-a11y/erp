@@ -101,7 +101,10 @@ String _renderSheet(Map<String,dynamic> order){
   meta('Địa chỉ',address,full:true);
   meta('Kho',shipping['warehouseName']??order['warehouseName']);
   meta('Giao nhận',delivery[shipping['deliveryChoice']]);
-  meta('Thanh toán',collection[shipping['collectionPolicy']]);
+  final collectionLabel=collection[shipping['collectionPolicy']];
+  final terms=shipping['paymentTermsDays'];
+  meta('Thanh toán',terms==null||collectionLabel==null?collectionLabel:
+    '$collectionLabel · $terms ngày');
   meta('Ngày giao dự kiến',_date(shipping['requestedDeliveryDate']));
   out.write('</div>');
   out.write('<table><thead><tr><th>STT</th><th>Tên sản phẩm</th><th>SKU</th>'
