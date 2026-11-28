@@ -79,9 +79,19 @@ test("T3-B PostgreSQL: partial MANUAL issue, lot/location, scoped stock, negativ
   };
   const opening=async(p:string,qty:string)=>write("/v1/inventory/openings",{
    branchId:b,warehouseId:w,productId:p,quantity:qty});
+  const stockUrl="/v1/inventory/stock-scopes?branchId="+b+
+   "&warehouseId="+w+"&productId="+products[0];
+  const noStock=await call(stockUrl,"GET",undefined,token);
+  assert.equal(noStock.status,200,JSON.stringify(noStock.body));
+  assert.equal(noStock.body.stock.available,"0",
+   "UI must see zero stock rather than a generic duplicate on issuing");
   assert.equal((await opening(products[0]!,"5.000000")).status,201);
   assert.equal((await opening(products[1]!,"6.000000")).status,201);
   assert.equal((await opening(products[2]!,"1.000000")).status,201);
+  const stocked=await call(stockUrl,"GET",undefined,token);
+  assert.equal(stocked.status,200,JSON.stringify(stocked.body));
+  assert.equal(stocked.body.stock.available,"5.000000");
+  assert.equal(stocked.body.stock.reserved,"0.000000");
   const first=await makeOrder(products[0]!,"5");
   const payload={branchId:b,warehouseId:w,orderId:first,version:1,
    lines:[{lineNo:1,quantityBase:"2.000000"}]};
