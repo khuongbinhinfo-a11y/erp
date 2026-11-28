@@ -184,7 +184,9 @@ export async function handleInventoryHttp(req:IncomingMessage,res:ServerResponse
    const db=await pool.connect();
    try{
     if(!await hasPermission(db,{installationId:tenant,actorId,
-       permission:"inventory.read",...s}))
+       permission:"inventory.read",...s}) &&
+       !await hasPermission(db,{installationId:tenant,actorId,
+       permission:"inventory.policy.manage",...s}))
       throw new InventoryFault(403,"INVENTORY_READ_DENIED");
     send(res,200,{policy:await readInventoryGuardPolicy(db,tenant,s),requestId:id},id,cors);
    }finally{db.release();}

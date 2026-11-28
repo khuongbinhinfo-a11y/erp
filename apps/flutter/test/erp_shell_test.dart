@@ -62,17 +62,17 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
   await tester.pumpAndSettle();
   await tester.tap(admin);
   await tester.pumpAndSettle();
-  expect(find.text('Người dùng và phân quyền'), findsOneWidget);
-  expect(find.text('Chưa có dữ liệu'), findsOneWidget);
+  expect(find.text('Tổ chức, tài khoản, quyền và chính sách'), findsOneWidget);
+  expect(find.text('Không có quyền quản lý tổ chức.'), findsOneWidget);
   // The non-modal startup toast closes before interacting with pinned tabs.
   await tester.pump(const Duration(seconds: 5));
   await tester.pump(const Duration(milliseconds: 250));
   expect(find.byKey(const ValueKey('erp-startup-toast')), findsNothing);
   await tester.tap(find.byKey(const ValueKey('admin-1')));
   await tester.pumpAndSettle();
-  expect(find.text('Danh sách quyền'), findsOneWidget);
-  expect(find.textContaining('Xem tồn kho, ghi nhận tồn đầu kỳ'), findsOneWidget);
-  expect(find.textContaining('inventory.read'), findsNothing);
+  expect(find.text('Tài khoản người dùng'), findsOneWidget);
+  expect(find.text('Chưa có dữ liệu'), findsOneWidget);
+  expect(find.byKey(const ValueKey('admin-2')),findsOneWidget);
 });
 
   testWidgets('old persistent notices are replaced by a dismissible upper-right toast', (tester) async {
@@ -138,7 +138,7 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
     expect(find.byKey(const ValueKey('nav-0')), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('nav-2')));
     await tester.pumpAndSettle();
-    expect(find.text('Người dùng và phân quyền'), findsOneWidget);
+    expect(find.text('Tổ chức, tài khoản, quyền và chính sách'), findsOneWidget);
   });
 
   testWidgets('desktop sidebar floats on three canvas edges and animates collapse',
@@ -233,6 +233,28 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
     expect(find.text('Đăng nhập hệ thống'),findsOneWidget);
   });
 
+  testWidgets('IA-B policy-only grant opens Administration but never Company', (tester) async {
+    tester.view.devicePixelRatio=1;
+    tester.view.physicalSize=const Size(1280,800);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final session=IdentitySession(
+      actorId:'00000000-0000-4000-8000-000000000003',
+      token:'example-token-not-for-network',
+      expiresAt:DateTime.now().add(const Duration(hours:1)),
+      grants:const [
+        IdentityGrant(roleId:'policy-role',permission:'inventory.policy.manage',
+          branchId:'00000000-0000-4000-8000-000000000001',
+          warehouseId:'00000000-0000-4000-8000-000000000002'),
+      ]);
+    await tester.pumpWidget(MaterialApp(home:ErpShell(
+      session:session,previewOnly:false)));
+    expect(find.byKey(const ValueKey('nav-0')),findsNothing);
+    expect(find.byKey(const ValueKey('nav-2')),findsOneWidget);
+    expect(find.text('Tổ chức, tài khoản, quyền và chính sách'),findsOneWidget);
+    expect(find.text('Không có quyền quản lý tổ chức.'),findsOneWidget);
+  });
+
   testWidgets('authenticated module menu hides unauthorized Company features', (tester) async {
     final session=IdentitySession(
       actorId:'00000000-0000-4000-8000-000000000001',
@@ -247,7 +269,7 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(MaterialApp(home:ErpShell(session:session,previewOnly:false)));
-    expect(find.text('Người dùng và phân quyền'),findsOneWidget);
+    expect(find.text('Tổ chức, tài khoản, quyền và chính sách'),findsOneWidget);
     expect(find.text('Tổng quan điều hành'),findsNothing);
   });
   testWidgets('current username remains beside logout; collapse control stays at logo',

@@ -233,6 +233,31 @@ class ErpIdentityClient {
     required String branchId,required String code,required String name,required String key})=>
     _request('POST','/v1/admin/directory/warehouses',token:token,
       body:{'branchId':branchId,'code':code,'name':name},revision:0,idempotencyKey:key);
+  Future<IdentityScopes> policyScopes(String token)async{
+    final branches=<IdentityScope>[],warehouses=<IdentityScope>[];
+    for(var offset=0;offset<=100000;offset+=100){
+      final path=offset==0?'/v1/admin/policy-scopes':
+        '/v1/admin/policy-scopes?offset=$offset';
+      final r=await _request('GET',path,token:token);
+      branches.addAll((r['branches'] as List<dynamic>).map(
+        (v)=>IdentityScope.fromJson(v as Map<String,dynamic>)));
+      warehouses.addAll((r['warehouses'] as List<dynamic>).map(
+        (v)=>IdentityScope.fromJson(v as Map<String,dynamic>)));
+      if(r['hasMoreBranches']!=true&&r['hasMoreWarehouses']!=true)
+        return IdentityScopes(branches,warehouses);
+    }
+    throw const ErpApiError(503,'Danh mục phạm vi chính sách vượt giới hạn.');
+  }
+  Future<List<Map<String,dynamic>>> permissionCatalog(String token)async{
+    final r=await _request('GET','/v1/admin/permissions',token:token);
+    return (r['permissions'] as List<dynamic>).map(
+      (v)=>Map<String,dynamic>.from(v as Map)).toList();
+  }
+  Future<List<Map<String,dynamic>>> auditEvents(String token)async{
+    final r=await _request('GET','/v1/admin/audit',token:token);
+    return (r['events'] as List<dynamic>).map(
+      (v)=>Map<String,dynamic>.from(v as Map)).toList();
+  }
   Future<IdentityScopes> scopes(String token)async{
     final branches=<IdentityScope>[],warehouses=<IdentityScope>[];
     List<IdentityScope> parse(dynamic v)=>(v as List<dynamic>).map((x)=>

@@ -81,6 +81,45 @@ export async function listScopes(db:PoolClient,installationId:string,actorId:str
     hasMoreBranches:a.rows.length>100,hasMoreWarehouses:b.rows.length>100,
   };
 }
+/** Scope listing for a warehouse policy editor. Never expose unrelated warehouses. */
+export async function listPolicyScopes(db:PoolClient,installationId:string,actorId:string,offset=0){
+  if(!Number.isSafeInteger(offset)||offset<0||offset>100000)
+    throw new IdentityError(400,"INVALID_PAGINATION");
+  const grants=(await userAccess(db,installationId,actorId)).filter(
+    g=>g.permission==="inventory.policy.manage"&&g.branchId&&g.warehouseId);
+  if(grants.length===0)throw new MutationFault("FORBIDDEN",403);
+  const branchIds=[...new Set(grants.map(g=>g.branchId!))];
+  const warehouseIds=[...new Set(grants.map(g=>g.warehouseId!))];
+  const branches=await db.query(
+    "SELECT id,code,name FROM branch WHERE installation_id=$1 AND id=ANY($2::uuid[]) ORDER BY code,id LIMIT 101 OFFSET $3",
+    [installationId,branchIds,offset]);
+  const warehouses=await db.query(
+    'SELECT id,branch_id AS "branchId",code,name FROM warehouse WHERE installation_id=$1 AND id=ANY($2::uuid[]) AND branch_id=ANY($3::uuid[]) ORDER BY code,id LIMIT 101 OFFSET $4',
+    [installationId,warehouseIds,branchIds,offset]);
+  return {branches:branches.rows.slice(0,100),warehouses:warehouses.rows.slice(0,100),
+    hasMoreBranches:branches.rows.length>100,hasMoreWarehouses:warehouses.rows.length>100};
+}
+/** The permission catalog is sourced from the backend allowlist, not UI constants. */
+export async function listPermissionCatalog(db:PoolClient,installationId:string,actorId:string){
+  if(!await hasPermission(db,{installationId,actorId,permission:"identity.users.read"}) &&
+     !await hasPermission(db,{installationId,actorId,permission:"identity.roles.manage"}))
+    throw new MutationFault("FORBIDDEN",403);
+  return Object.entries(PERMISSIONS).map(([code,scope])=>({code,scope}));
+}
+/** Redacted, read-only and installation-scoped audit timeline. */
+export async function listAuditEvents(db:PoolClient,installationId:string,actorId:string){
+  if(!await hasPermission(db,{installationId,actorId,permission:"identity.roles.manage"}))
+    throw new MutationFault("FORBIDDEN",403);
+  const result=await db.query(
+    `SELECT e.id,e.action_code AS "actionCode",e.event_code AS "eventCode",
+      e.request_id AS "requestId",e.occurred_at AS "occurredAt",
+      u.login_name AS "actorLogin"
+      FROM audit_event e JOIN app_user u
+      ON u.installation_id=e.installation_id AND u.id=e.actor_id
+      WHERE e.installation_id=$1 ORDER BY e.occurred_at DESC,e.id DESC LIMIT 50`,
+    [installationId]);
+  return result.rows;
+}
 export async function listGrants(db:PoolClient,installationId:string,actorId:string,target:string){
   if(!UUID.test(target))throw new IdentityError(400,"INVALID_INPUT");
   if(!await hasPermission(db,{installationId,actorId,permission:"identity.users.read"}))throw new MutationFault("FORBIDDEN",403);
