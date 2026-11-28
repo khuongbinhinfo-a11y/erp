@@ -7,7 +7,7 @@ import {executeMutation,MutationFault,type MutationContext} from "./mutation.ts"
 import {DeliveryTripFault,tripResources,createResource,tripList,tripEligible,
  tripDetail,createTrip,assignOrders,removeOrders,reorder,transition,
  type TripScope} from "./delivery_trip.ts";
-import {employees,createEmployee,updateEmployee,linkDriver} from "./delivery_employee.ts";
+import {employees,createEmployee,updateEmployee,linkDriver,linkExistingDriver} from "./delivery_employee.ts";
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TOKEN=/^Bearer ([A-Za-z0-9_-]{43})$/;
 function reject(code:string,status=400):never{throw new DeliveryTripFault(status,code);}
@@ -151,6 +151,7 @@ export async function handleDeliveryTripHttp(req:IncomingMessage,res:ServerRespo
   const raw=await readBody(req),s=scope(raw);
   const master=/^\/v1\/delivery\/(drivers|vehicles|employees)$/.exec(url.pathname);
   const employeeUpdate=/^\/v1\/delivery\/employees\/([0-9a-f-]{36})\/update$/i.exec(url.pathname);
+  const legacyLink=/^\/v1\/delivery\/drivers\/([0-9a-f-]{36})\/link$/i.exec(url.pathname);
   const sub=/^\/v1\/delivery\/trips\/([0-9a-f-]{36})\/(assign|unassign|reorder|plan|reopen|lock)$/.exec(url.pathname);
   let action:string,payload:Record<string,unknown>;
   if(master){
@@ -203,6 +204,18 @@ export async function handleDeliveryTripHttp(req:IncomingMessage,res:ServerRespo
    const out=await executeMutation(pool,c,{
     authorize:(db)=>permitted(db,t,actor!,s,true),
     execute:(db,m)=>updateEmployee(db,m,s,employeeId,input)
+   });
+   send(res,out.status,out.body,rid,cors);return;
+  }
+  if(legacyLink){
+   only(raw,["branchId","warehouseId","employeeId"]);
+   const driverId=id(legacyLink[1]),employeeId=id(raw.employeeId);
+   payload={...s,driverId,employeeId};
+   action="delivery.drivers.link";
+   const c=context(req,t,actor,rid,action,payload);
+   const out=await executeMutation(pool,c,{
+    authorize:(db)=>permitted(db,t,actor!,s,true),
+    execute:(db,m)=>linkExistingDriver(db,m,s,driverId,employeeId)
    });
    send(res,out.status,out.body,rid,cors);return;
   }
