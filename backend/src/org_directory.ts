@@ -6,7 +6,9 @@ import { hasPermission } from "./rbac.ts";
 const CODE=/^[A-Z0-9][A-Z0-9_-]{0,63}$/;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export class DirectoryFault extends Error {
- constructor(readonly status:number,readonly code:string){super(code);}
+ readonly status:number;
+ readonly code:string;
+ constructor(status:number,code:string){super(code);this.status=status;this.code=code;}
 }
 function text(value:unknown,label:"CODE"|"NAME"){
  if(typeof value!=="string")throw new DirectoryFault(400,"INVALID_"+label);
