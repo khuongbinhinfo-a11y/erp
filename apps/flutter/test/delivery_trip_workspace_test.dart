@@ -35,7 +35,12 @@ void main(){
           case '/v1/delivery/vehicles':
             data={'items':[]};
           case '/v1/delivery/trips/eligible':
-            data={'items':[]};
+            data={'items':List.generate(101,(i)=> {
+              'id':'00000000-0000-4000-8000-${i.toString().padLeft(12,'0')}',
+              'documentNo':'SO-20261128-${i.toString().padLeft(6,'0')}',
+              'customerName':'Điểm giao ${i+1}',
+              'deliveryAddress':'Địa chỉ ${i+1}',
+            })};
           case '/v1/delivery/trips/$tid':
             detailReads++;
             data={'trip':{'id':tid,'tripNo':'TG-20261128-000001',
@@ -75,5 +80,15 @@ void main(){
     expect(find.textContaining('Khách A · SO-20261128-000001'),findsOneWidget);
     expect(find.text('Phân xe, tài xế'),findsOneWidget);
     expect(writes,0,reason:'Reading a trip cannot dispatch, stock-out or collect money');
+    await tester.tap(find.byKey(const ValueKey('trip-add-orders')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('trip-select-all-orders')));
+    await tester.pumpAndSettle();
+    expect(find.text('Thêm 100 đơn'),findsOneWidget,
+      reason:'Select all must respect the atomic 100-order API limit.');
+    expect(find.text('Thêm 101 đơn'),findsNothing);
+    await tester.tap(find.widgetWithText(TextButton,'Hủy').last);
+    await tester.pumpAndSettle();
+    expect(writes,0);
   });
 }
