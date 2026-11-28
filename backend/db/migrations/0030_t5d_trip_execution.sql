@@ -249,10 +249,11 @@ BEGIN
   AND s.trip_id=header_trip AND s.order_id=header_order
   AND s.order_version=version_ref AND t.warehouse_id=wh_ref
  ) THEN RAISE EXCEPTION 'Delivery quantity source out of scope'; END IF;
- IF TG_TABLE_NAME='delivery_trip_return_line' AND
-  (NEW.product_id<>product_ref OR NEW.location_id IS DISTINCT FROM location_ref
-   OR NEW.lot_id IS DISTINCT FROM lot_ref)
- THEN RAISE EXCEPTION 'Returned goods must preserve exact issue identity'; END IF;
+ IF TG_TABLE_NAME='delivery_trip_return_line' THEN
+  IF NEW.product_id<>product_ref OR NEW.location_id IS DISTINCT FROM location_ref
+   OR NEW.lot_id IS DISTINCT FROM lot_ref
+  THEN RAISE EXCEPTION 'Returned goods must preserve exact issue identity'; END IF;
+ END IF;
  SELECT coalesce(sum(l.quantity_base),0) INTO delivered
  FROM delivery_trip_attempt_line l JOIN delivery_trip_attempt a
  ON a.installation_id=l.installation_id AND a.branch_id=l.branch_id AND a.id=l.attempt_id

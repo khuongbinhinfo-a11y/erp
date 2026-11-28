@@ -340,7 +340,7 @@ class _ErpShellState extends State<ErpShell> {
     } else if(selected==4&&!widget.previewOnly&&
         widget.client!=null&&activeSession!=null){
       // Share the canonical trip backend and UI with Công Ty → Giao nhận.
-      final canDispatch=activeSession.grants.any((g)=>
+      final canDispatch=activeSession!.grants.any((g)=>
         g.permission=='delivery.read');
       content=SingleChildScrollView(child:canDispatch
         ?DeliveryTripWorkspace(

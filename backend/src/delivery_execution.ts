@@ -78,7 +78,7 @@ async function totals(db:PoolClient,c:MutationContext,s:Scope,stop:Stop){
  return {delivered:map(posted.rows),returned:map(returns.rows)};
 }
 const issueKey=(x:{dispatchId:string;sourceLine:number})=>x.dispatchId+":"+x.sourceLine;
-async function ledgerBalance(db:PoolClient,c:MutationContext,stop:Stop){
+async function ledgerBalance(db:PoolClient,c:MutationContext,s:Scope,stop:Stop){
  const r=await db.query<{due:string;paid:string}>(`SELECT
  coalesce(sum(CASE WHEN kind='SALE' THEN amount ELSE 0 END),0)::text AS due,
  coalesce(-sum(CASE WHEN kind='PAYMENT' THEN amount ELSE 0 END),0)::text AS paid
@@ -342,7 +342,7 @@ export async function executeCollect(db:PoolClient,c:MutationContext,s:Scope,
  if(!/^(0|[1-9][0-9]{0,15})$/.test(amountText))error("INVALID_PAYMENT_AMOUNT",400);
  if(method!=="CASH"&&method!=="BANK_TRANSFER")error("INVALID_PAYMENT_METHOD",400);
  const amount=BigInt(amountText);
- const balance=await ledgerBalance(db,{...c,payload:{branchId:s.branchId}},stop);
+ const balance=await ledgerBalance(db,c,s,stop);
  const remaining=balance.due-balance.paid;
  if(remaining<0n)error("RECEIVABLE_RECONCILIATION_REQUIRED");
  if(amount>remaining)error("PAYMENT_EXCEEDS_REMAINING");
@@ -357,9 +357,9 @@ export async function executeCollect(db:PoolClient,c:MutationContext,s:Scope,
   FROM customer_receivable_ledger l LEFT JOIN payment_allocation a
   ON a.installation_id=l.installation_id AND a.branch_id=l.branch_id AND a.sale_ledger_id=l.id
   WHERE l.installation_id=$1 AND l.branch_id=$2 AND l.order_id=$3 AND l.kind='SALE'
-  GROUP BY l.id ORDER BY l.id FOR UPDATE OF l`,[c.installationId,s.branchId,orderId]);
-  // PostgreSQL rejects FOR UPDATE on GROUP BY; source order row was already
-  // locked, and receipt allocation guard locks individual SALE rows at COMMIT.
+  GROUP BY l.id ORDER BY l.id`,[c.installationId,s.branchId,orderId]);
+  // The canonical order lock serializes payment writes; the deferred allocation
+  // guard also locks individual SALE rows to reject over-allocation.
   const receipt=await db.query<{id:string}>(`INSERT INTO payment_receipt
   (installation_id,branch_id,checkout_id,fulfillment_id,order_id,method,amount,actor_id,request_id)
   VALUES($1,$2,NULL,$3,$4,$5,$6::numeric,$7,$8) RETURNING id`,
@@ -396,6 +396,7 @@ export async function executeCollect(db:PoolClient,c:MutationContext,s:Scope,
 export async function executeHandover(db:PoolClient,c:MutationContext,s:Scope,
  input:{collectionId:string;amount:string}[]){
  const tr=await requireDeparted(db,c,s);
+ requireRevision(c.expectedRevision,tr.revision);
  if(!tr.driverId||!input.length||input.length>200)error("COD_HANDOVER_INVALID",400);
  const id=randomUUID(),seen=new Set<string>();
  await db.query(`INSERT INTO delivery_cod_handover
