@@ -9,7 +9,8 @@ class OrgDirectoryWorkspace extends StatefulWidget {
  final ErpIdentityClient client;
  final IdentitySession session;
  final Future<void> Function()? onScopesChanged;
- const OrgDirectoryWorkspace({super.key,required this.client,required this.session,this.onScopesChanged});
+ final bool policyOnly;
+ const OrgDirectoryWorkspace({super.key,required this.client,required this.session,this.onScopesChanged,this.policyOnly=false});
  @override State<OrgDirectoryWorkspace> createState()=>_OrgDirectoryWorkspaceState();
 }
 class _OrgDirectoryWorkspaceState extends State<OrgDirectoryWorkspace>{
@@ -36,7 +37,9 @@ class _OrgDirectoryWorkspaceState extends State<OrgDirectoryWorkspace>{
   if(!mounted)return;
   setState(()=>loading=true);
   try{
-   final result=await widget.client.scopes(widget.session.token);
+   final result=widget.policyOnly
+     ?await widget.client.policyScopes(widget.session.token)
+     :await widget.client.scopes(widget.session.token);
    if(mounted)setState((){directory=result;error=null;});
   }on ErpApiError catch(e){if(mounted)setState(()=>error=e.message);}
   catch(_){if(mounted)setState(()=>error='Không tải được danh sách chi nhánh/kho.');}
@@ -202,14 +205,17 @@ class _OrgDirectoryWorkspaceState extends State<OrgDirectoryWorkspace>{
   final branches=directory?.branches??[];
   final warehouses=directory?.warehouses??[];
   return Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-   const Text('Chi nhánh & Kho',style:TextStyle(fontSize:18,fontWeight:FontWeight.w700)),
+   Text(widget.policyOnly?'Chính sách kho':'Tổ chức · Chi nhánh và Kho',
+    style:const TextStyle(fontSize:18,fontWeight:FontWeight.w700)),
    const SizedBox(height:8),
-   const Text('Tên chi nhánh và kho hiển thị bằng tiếng Việt; mã nội bộ được giữ nguyên để bảo toàn chứng từ.'),
+   Text(widget.policyOnly
+    ?'Chỉ hiển thị kho có quyền quản lý chính sách. Tồn kho và chứng từ nằm tại Công Ty → Kho.'
+    :'Danh mục dùng chung cho vận hành kho. Mã nội bộ không đổi để bảo toàn chứng từ.'),
    const SizedBox(height:12),
    Wrap(spacing:10,runSpacing:8,children:[
-    FilledButton.icon(onPressed:busy||loading?null:createBranch,
+    if(!widget.policyOnly)FilledButton.icon(onPressed:busy||loading?null:createBranch,
      icon:const Icon(Icons.add_business_outlined),label:const Text('Thêm chi nhánh')),
-    FilledButton.icon(onPressed:busy||loading||branches.isEmpty?null:createWarehouse,
+    if(!widget.policyOnly)FilledButton.icon(onPressed:busy||loading||branches.isEmpty?null:createWarehouse,
      icon:const Icon(Icons.warehouse_outlined),label:const Text('Thêm kho')),
     IconButton(onPressed:busy?null:load,tooltip:'Tải lại chi nhánh/kho',
      icon:const Icon(Icons.refresh)),
@@ -218,11 +224,12 @@ class _OrgDirectoryWorkspaceState extends State<OrgDirectoryWorkspace>{
    if(error!=null)Padding(padding:const EdgeInsets.only(top:8),
      child:Text(error!,style:const TextStyle(color:Colors.red))),
    const SizedBox(height:16),
-   const Text('Danh sách chi nhánh',style:TextStyle(fontWeight:FontWeight.bold)),
-   ...branches.map((b)=>ListTile(dense:true,leading:const Icon(Icons.business_outlined),
+   if(!widget.policyOnly)const Text('Danh sách chi nhánh',style:TextStyle(fontWeight:FontWeight.bold)),
+   if(!widget.policyOnly)...branches.map((b)=>ListTile(dense:true,leading:const Icon(Icons.business_outlined),
     title:Text(b.name),subtitle:Text(b.code=='MAIN'?'Chi nhánh mặc định':'Mã: ${b.code}'))),
-   const Divider(),
-   const Text('Kho trực thuộc',style:TextStyle(fontWeight:FontWeight.bold)),
+   if(!widget.policyOnly)const Divider(),
+   Text(widget.policyOnly?'Kho được cấp quyền':'Kho trực thuộc',
+    style:const TextStyle(fontWeight:FontWeight.bold)),
    if(warehouses.isEmpty)const Padding(padding:EdgeInsets.all(12),child:Text('Chưa có kho.')),
    ...warehouses.map((w){
     final branch=branches.where((b)=>b.id==w.branchId).firstOrNull;
@@ -233,7 +240,7 @@ class _OrgDirectoryWorkspaceState extends State<OrgDirectoryWorkspace>{
        Text('${w.code=='MAIN'?'Kho mặc định':'Mã ${w.code}'} · ${branch?.name??"Chi nhánh chưa xác định"}',
         style:const TextStyle(fontSize:12)),
        const SizedBox(height:6),
-       Wrap(spacing:8,runSpacing:6,children:[
+       if(widget.policyOnly)Wrap(spacing:8,runSpacing:6,children:[
         OutlinedButton.icon(onPressed:busy?null:()=>policy(w),
          icon:const Icon(Icons.tune_outlined),label:const Text('Xuất âm / giữ hàng')),
         OutlinedButton.icon(onPressed:busy?null:()=>tracking(w),
@@ -242,7 +249,7 @@ class _OrgDirectoryWorkspaceState extends State<OrgDirectoryWorkspace>{
       ]))));
    }),
    const SizedBox(height:12),
-   const Text('Không dùng lô/vị trí: mở “Lô / vị trí theo sản phẩm” → chọn sản phẩm → “Chính sách yêu cầu lô/vị trí” → bỏ hai dấu bắt buộc. Kho mới mặc định không bắt buộc.',
+   if(widget.policyOnly)const Text('Không dùng lô/vị trí: mở “Lô / vị trí theo sản phẩm” → chọn sản phẩm → “Chính sách yêu cầu lô/vị trí” → bỏ hai dấu bắt buộc. Kho mới mặc định không bắt buộc.',
     style:TextStyle(fontSize:12)),
   ]);
  }
