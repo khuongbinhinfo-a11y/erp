@@ -180,13 +180,15 @@ class _OrgDirectoryWorkspaceState extends State<OrgDirectoryWorkspace>{
   if(session==null||!mounted)return;
   bool can(String p)=>session.grants.any((g)=>g.permission==p&&
     g.branchId==b&&g.warehouseId==warehouse.id);
-  if(!can('inventory.policy.manage')&&!can('inventory.post')){
-   notice('Không có quyền quản lý lô/vị trí.',bad:true);return;
+  if(!can('inventory.policy.manage')){
+   notice('Không có quyền quản lý chính sách lô/vị trí.',bad:true);return;
   }
   try{
    await showStockScopeSetup(context:context,client:widget.client,session:session,
      branchId:b,warehouseId:warehouse.id,
-     canManagePolicy:can('inventory.policy.manage'),canAssign:can('inventory.post'),
+     // Stock quantity assignment is intentionally kept in InventoryWorkspace,
+     // which persists in-flight intents across navigation to prevent double posting.
+     canManagePolicy:true,canAssign:false,
      onSubmit:(action,payload,revision)async{
       await widget.client.inventoryAction(session.token,action,payload,
        key:requestKey('tracking/$action',payload,revision:revision),revision:revision);
