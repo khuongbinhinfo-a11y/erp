@@ -5,6 +5,28 @@ import 'package:erp_distribution/ui/identity_client.dart';
 import 'package:erp_distribution/ui/erp_tokens.dart';
 
 void main(){
+  test('IA-C delivery rights intersect only at the same branch and warehouse',(){
+    const a='00000000-0000-4000-8000-000000000001';
+    const b='00000000-0000-4000-8000-000000000002';
+    const w='00000000-0000-4000-8000-000000000011';
+    const unrelated=[
+      IdentityGrant(roleId:'d',permission:'delivery.read',branchId:a),
+      IdentityGrant(roleId:'o',permission:'orders.read',branchId:a),
+      IdentityGrant(roleId:'i',permission:'inventory.read',branchId:b,warehouseId:w),
+    ];
+    expect(erpCanDispatchTrips(unrelated),isFalse);
+    expect(erpCanViewCompanySection(CompanySection.deliveryTrips,unrelated),isFalse);
+    const scoped=[
+      IdentityGrant(roleId:'d',permission:'delivery.read',branchId:a),
+      IdentityGrant(roleId:'o',permission:'orders.read',branchId:a),
+      IdentityGrant(roleId:'i',permission:'inventory.read',branchId:a,warehouseId:w),
+    ];
+    expect(erpCanDispatchTrips(scoped),isTrue);
+    expect(erpCanViewCompanySection(CompanySection.deliveryTrips,scoped),isTrue);
+    expect(erpCanViewCompanySection(CompanySection.receivables,scoped),isFalse);
+    expect(erpCanViewCompanySection(CompanySection.reports,scoped),isFalse);
+  });
+
   testWidgets('Company groups real pages under tier 1 and tier 2 without fake modules',
     (tester)async{
       tester.view.devicePixelRatio=1;

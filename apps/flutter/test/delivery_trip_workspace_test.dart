@@ -14,7 +14,7 @@ const oid='00000000-0000-4000-8000-000000000027';
 void main(){
   testWidgets('T5-B trip dispatcher lists scoped routes, order stops and does not post on read',
       (tester)async{
-    var writes=0,detailReads=0;
+    var writes=0,detailReads=0,scopedDirectoryReads=0;
     final eligibleOffsets=<String>[];
     final pagedQueries=<String>[];
     final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
@@ -25,7 +25,8 @@ void main(){
         }
         Object data;
         switch(req.url.path){
-          case '/v1/admin/scopes':
+          case '/v1/delivery/scopes':
+            scopedDirectoryReads++;
             data={'branches':[{'id':b,'code':'MAIN','name':'Chi nhánh chính'}],
               'warehouses':[{'id':w,'branchId':b,'code':'K01','name':'Kho trung tâm'}]};
           case '/v1/delivery/trips':
@@ -98,6 +99,7 @@ void main(){
         child:DeliveryTripWorkspace(client:client,session:session)))));
     await tester.pumpAndSettle();
     expect(find.text('Điều phối giao hàng'),findsOneWidget);
+    expect(scopedDirectoryReads,1,reason:'Trip view never calls identity-admin scopes');
     expect(find.byKey(const ValueKey('trip-create')),findsOneWidget);
     expect(find.byKey(const ValueKey('trip-row-$tid')),findsOneWidget);
     expect(writes,0);

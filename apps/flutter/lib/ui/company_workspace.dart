@@ -66,6 +66,16 @@ extension CompanySectionGroup on CompanySection {
   };
 }
 
+/// A trip entry must not combine delivery rights from one branch with
+/// warehouse access from another branch.
+bool erpCanDispatchTrips(List<IdentityGrant> grants){
+  final delivery=grants.where((g)=>g.permission=='delivery.read'&&g.branchId!=null)
+    .map((g)=>g.branchId).toSet();
+  final orders=grants.where((g)=>g.permission=='orders.read'&&g.branchId!=null)
+    .map((g)=>g.branchId).toSet();
+  return grants.any((g)=>g.permission=='inventory.read'&&g.warehouseId!=null&&
+    delivery.contains(g.branchId)&&orders.contains(g.branchId));
+}
 bool erpCanViewCompanySection(CompanySection target,List<IdentityGrant> grants,{bool previewOnly=false}){
     if(previewOnly)return true;
     final p=grants.map((x)=>x.permission).toSet();
@@ -79,12 +89,12 @@ bool erpCanViewCompanySection(CompanySection target,List<IdentityGrant> grants,{
       CompanySection.transfers=>has('inventory.transfer.read')||has('inventory.transfer.create'),
       CompanySection.stocktakes=>has('inventory.stocktake.read')||has('inventory.stocktake.create'),
       CompanySection.orders=>has('orders.read')||has('orders.create'),
-      CompanySection.deliveryTrips=>has('delivery.read')&&has('inventory.read')&&has('orders.read'),
+      CompanySection.deliveryTrips=>erpCanDispatchTrips(grants),
       CompanySection.employees=>has('org.employees.read')||has('org.employees.manage'),
-      CompanySection.receivables=>has('finance.receivables.read')||has('finance.payments.record'),
-      // Reports have no released API yet; a catalog.read grant must never
-      // implicitly expose finance or stock reporting.
-      CompanySection.reports=>has('reports.read'),
+      // AR collection and reports have no released standalone query API.
+      // Payments remain available through canonical sales execution only.
+      CompanySection.receivables=>false,
+      CompanySection.reports=>false,
     };
 }
 
@@ -108,6 +118,7 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
   CompanySection section = CompanySection.overview;
   bool salesNavigationLocked=false;
   Map<String,dynamic>? _warehouseOrder;
+  ({String branchId,String warehouseId})? _deliveryScope;
   @override void initState(){
     super.initState();
     final requested=widget.requestedSection;
@@ -115,10 +126,15 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
   }
   @override void didUpdateWidget(covariant CompanyWorkspace oldWidget){
     super.didUpdateWidget(oldWidget);
-    if(oldWidget.session?.token!=widget.session?.token||oldWidget.client!=widget.client)_warehouseOrder=null;
+    if(oldWidget.session?.token!=widget.session?.token||
+       oldWidget.session?.actorId!=widget.session?.actorId||
+       oldWidget.session?.installationId!=widget.session?.installationId||
+       oldWidget.client!=widget.client){
+      _warehouseOrder=null;_deliveryScope=null;section=CompanySection.overview;
+    }
     final requested=widget.requestedSection;
     if(requested!=null&&requested!=section&&requested!=oldWidget.requestedSection&&canView(requested)&&!salesNavigationLocked){
-      section=requested;filter='';search.clear();_warehouseOrder=null;
+      section=requested;filter='';search.clear();_warehouseOrder=null;_deliveryScope=null;
     }
   }
   bool canView(CompanySection target)=>erpCanViewCompanySection(target,widget.grants,previewOnly:widget.previewOnly);
@@ -138,6 +154,16 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
     super.dispose();
   }
 
+  void openDelivery(String branch,String warehouse){
+    if(salesNavigationLocked||!canView(CompanySection.deliveryTrips))return;
+    final scopes=widget.grants;
+    if(!scopes.any((g)=>g.permission=='delivery.read'&&g.branchId==branch)||
+       !scopes.any((g)=>g.permission=='orders.read'&&g.branchId==branch)||
+       !scopes.any((g)=>g.permission=='inventory.read'&&
+          g.branchId==branch&&g.warehouseId==warehouse))return;
+    setState(()=>_deliveryScope=(branchId:branch,warehouseId:warehouse));
+    select(CompanySection.deliveryTrips);
+  }
   void select(CompanySection value) {
     if(!canView(value)||section==value)return;
     if(section==CompanySection.orders&&value!=section&&salesNavigationLocked){
@@ -147,6 +173,7 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
     setState(() {
       section = value;
       if(value!=CompanySection.warehouses)_warehouseOrder=null;
+      if(value!=CompanySection.deliveryTrips)_deliveryScope=null;
       filter = '';
       search.clear();
     });
@@ -194,7 +221,7 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
           key: ValueKey('company-content-${active.name}'),
           padding: EdgeInsets.fromLTRB(margin, widget.mobileNavigation?4:18, margin, 26),
           child: active == CompanySection.overview
-            ? _Overview(onSelect: select,
+            ? _Overview(onSelect: select,previewOnly:widget.previewOnly,
                 areas: sections.where((s) => s != CompanySection.overview).toList())
             : (active == CompanySection.orders && !widget.previewOnly &&
                 widget.client != null && widget.session != null)
@@ -209,6 +236,11 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
                     setState(()=>_warehouseOrder=order);
                     select(CompanySection.warehouses);
                   },
+                  onOpenDelivery:(order){
+                    final ship=order['shipping'];
+                    if(ship is Map&&order['branchId'] is String&&ship['warehouseId'] is String)
+                      openDelivery(order['branchId'] as String,ship['warehouseId'] as String);
+                  },
                   onOpenCatalog:(area)=>select(switch(area){
                     'customers'=>CompanySection.customers,
                     'products'=>CompanySection.products,
@@ -218,11 +250,15 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
                 widget.client != null && widget.session != null)
               ? InventoryWorkspace(key:ValueKey(_warehouseOrder==null?'inventory-workspace':
                   'inventory-workspace-${_warehouseOrder!['id']}'),
-                  client:widget.client!,session:widget.session!,initialOrder:_warehouseOrder)
+                  client:widget.client!,session:widget.session!,initialOrder:_warehouseOrder,
+                  onOpenDelivery:openDelivery)
             : (active == CompanySection.deliveryTrips && !widget.previewOnly &&
                 widget.client != null && widget.session != null)
-              ? DeliveryTripWorkspace(key:const ValueKey('delivery-trip-workspace'),
-                  client:widget.client!,session:widget.session!)
+              ? DeliveryTripWorkspace(
+                  key:ValueKey('delivery-trip-workspace-${_deliveryScope?.warehouseId??'all'}'),
+                  client:widget.client!,session:widget.session!,
+                  initialBranchId:_deliveryScope?.branchId,
+                  initialWarehouseId:_deliveryScope?.warehouseId)
             : (active == CompanySection.employees && !widget.previewOnly &&
                 widget.client != null && widget.session != null)
               ? StaffWorkspace(key:const ValueKey('staff-workspace'),
@@ -262,9 +298,10 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
 }
 
 class _Overview extends StatelessWidget {
+  final bool previewOnly;
   final ValueChanged<CompanySection> onSelect;
   final List<CompanySection> areas;
-  const _Overview({required this.onSelect,required this.areas});
+  const _Overview({required this.onSelect,required this.areas,required this.previewOnly});
 
   @override
   Widget build(BuildContext context) {
@@ -282,7 +319,7 @@ class _Overview extends StatelessWidget {
       )),
       const SizedBox(height: 6),
       const SizedBox(height: 16),
-      LayoutBuilder(builder: (context, constraints) {
+      if(previewOnly)LayoutBuilder(builder: (context, constraints) {
         const spacing = 12.0;
         final cardWidth = (constraints.maxWidth - (cols - 1) * spacing) / cols;
         return Wrap(

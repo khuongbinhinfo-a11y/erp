@@ -3,6 +3,7 @@ import type {Pool,PoolClient} from "pg";
 import type {IdentityOptions} from "./identity_http.ts";
 import {resolveSession} from "./auth.ts";
 import {hasPermission} from "./rbac.ts";
+import {userAccess} from "./identity_admin.ts";
 import {executeMutation,MutationFault,type MutationContext} from "./mutation.ts";
 import {DeliveryTripFault,tripResources,createResource,tripList,tripEligible,
  tripDetail,createTrip,assignOrders,removeOrders,reorder,transition,
@@ -119,6 +120,41 @@ export async function handleDeliveryTripHttp(req:IncomingMessage,res:ServerRespo
   try{actor=token?(await resolveSession(cdb,t,token))?.actorId:undefined;}
   finally{cdb.release();}
   if(!actor){fault(res,401,"AUTH_REQUIRED",rid,cors);return;}
+  if(req.method==="GET"&&url.pathname==="/v1/delivery/scopes"){
+   // Only exact branch/warehouse grants for the canonical trip backend.
+   // This directory is not the identity.roles.manage administration API.
+   const db=await pool.connect();
+   try{
+    const grants=await userAccess(db,t,actor);
+    const delivery=new Set(grants.filter(g=>g.permission==="delivery.read"&&g.branchId)
+      .map(g=>g.branchId));
+    const orders=new Set(grants.filter(g=>g.permission==="orders.read"&&g.branchId)
+      .map(g=>g.branchId));
+    const scopes=grants.filter(g=>g.permission==="inventory.read"&&g.branchId&&g.warehouseId&&
+      delivery.has(g.branchId)&&orders.has(g.branchId));
+    if(!scopes.length)reject("FORBIDDEN",403);
+    const offset=pagedOffset(url,100);
+    const branches=scopes.map(g=>g.branchId!),warehouses=scopes.map(g=>g.warehouseId!);
+    const data=await db.query<{
+      id:string;branchId:string;code:string;name:string;branchCode:string;branchName:string
+    }>(`SELECT w.id,w.branch_id AS "branchId",w.code,w.name,
+       b.code AS "branchCode",b.name AS "branchName"
+       FROM warehouse w JOIN branch b ON b.installation_id=w.installation_id AND b.id=w.branch_id
+       JOIN unnest($2::uuid[],$3::uuid[]) AS granted(branch_id,warehouse_id)
+         ON granted.branch_id=w.branch_id AND granted.warehouse_id=w.id
+       WHERE w.installation_id=$1
+       ORDER BY w.code,w.id LIMIT 101 OFFSET $4`,
+      [t,branches,warehouses,offset]);
+    const page=data.rows.slice(0,100);
+    const unique=new Map<string,{id:string;code:string;name:string}>();
+    for(const w of page)unique.set(w.branchId,
+      {id:w.branchId,code:w.branchCode,name:w.branchName});
+    send(res,200,{branches:[...unique.values()],
+      warehouses:page.map(w=>({id:w.id,branchId:w.branchId,code:w.code,name:w.name})),
+      hasMoreBranches:false,hasMoreWarehouses:data.rows.length>100,requestId:rid},rid,cors);
+    return;
+   }finally{db.release();}
+  }
   if(req.method==="GET"){
    const s=scope({branchId:url.searchParams.get("branchId"),
      warehouseId:url.searchParams.get("warehouseId")});
