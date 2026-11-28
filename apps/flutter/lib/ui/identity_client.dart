@@ -804,7 +804,7 @@ class ErpIdentityClient {
   Future<Map<String,dynamic>> deliveryTripWrite(IdentitySession session,
       String endpoint,Map<String,dynamic> payload,int revision)async{
     final valid=const {'trips','vehicles','drivers'}.contains(endpoint)||
-      RegExp(r'^trips/[0-9a-f-]{36}/(assign|unassign|reorder|plan|reopen|lock)
+      RegExp(r'^trips/[0-9a-f-]{36}/(assign|unassign|reorder|plan|reopen|lock)$')
         .hasMatch(endpoint);
     if(!valid)throw const ErpApiError(400,'Thao tác điều phối không hợp lệ.');
     final b=payload['branchId'],w=payload['warehouseId'];
