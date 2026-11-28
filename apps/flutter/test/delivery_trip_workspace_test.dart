@@ -33,9 +33,12 @@ void main(){
               'status':'DRAFT','revision':0,'plannedDate':'2026-11-28',
               'stopCount':1}]};
           case '/v1/delivery/drivers':
-            data={'items':[]};
+            data={'items':[{'id':'00000000-0000-4000-8000-000000000091',
+              'code':'TX01','name':'Tài xế Thử','active':true}]};
           case '/v1/delivery/vehicles':
-            data={'items':[]};
+            data={'items':[{'id':'00000000-0000-4000-8000-000000000092',
+              'code':'XE01','name':'Xe thử','licensePlate':'59C-12345',
+              'active':true}]};
           case '/v1/delivery/trips/eligible':
             eligibleOffsets.add(req.url.queryParameters['offset']??'0');
             pagedQueries.add(req.url.queryParameters['q']??'');
@@ -116,5 +119,23 @@ void main(){
     await tester.tap(find.widgetWithText(TextButton,'Hủy').last);
     await tester.pumpAndSettle();
     expect(writes,0);
+
+    // Regression: focused fields remain owned by Flutter until each
+    // AlertDialog's reverse transition has fully unmounted.
+    Future<void> cancelFocusedDialog(Finder trigger)async{
+      await tester.tap(trigger);
+      await tester.pumpAndSettle();
+      final fields=find.byType(TextFormField);
+      expect(fields,findsWidgets);
+      await tester.enterText(fields.first,'Test nhập rồi hủy');
+      await tester.tap(find.widgetWithText(TextButton,'Hủy').last);
+      await tester.pumpAndSettle();
+      expect(tester.takeException(),isNull);
+      expect(writes,0,reason:'Cancelling a draft dialog must not POST');
+    }
+    await cancelFocusedDialog(find.byKey(const ValueKey('trip-create')));
+    await cancelFocusedDialog(find.widgetWithText(OutlinedButton,'Thêm tài xế'));
+    await cancelFocusedDialog(find.widgetWithText(OutlinedButton,'Thêm xe'));
+    await cancelFocusedDialog(find.byKey(const ValueKey('trip-plan')));
   });
 }
