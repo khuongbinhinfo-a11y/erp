@@ -5,7 +5,9 @@ import 'erp_tokens.dart';
 /// T5-C: canonical staff-linked drivers in trip planning; no inventory, AR or COD posting.
 class DeliveryTripWorkspace extends StatefulWidget{
  final ErpIdentityClient client;final IdentitySession session;
- const DeliveryTripWorkspace({super.key,required this.client,required this.session});
+ final String? initialBranchId,initialWarehouseId;
+ const DeliveryTripWorkspace({super.key,required this.client,required this.session,
+  this.initialBranchId,this.initialWarehouseId});
  @override State<DeliveryTripWorkspace> createState()=>_DeliveryTripWorkspaceState();
 }
 class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
@@ -16,6 +18,23 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
  bool busy=false,loading=true,_loadingMoreTrips=false,_hasMoreTrips=false;
  int generation=0,_nextTripOffset=0;
  @override void initState(){super.initState();_start();}
+ String _accessStamp(IdentitySession value){
+  final grants=value.grants.map((g)=>[
+   g.permission,g.branchId??'',g.warehouseId??''].join('/')).toList()..sort();
+  return [value.installationId,value.actorId,value.token,...grants].join('|');
+ }
+ @override void didUpdateWidget(covariant DeliveryTripWorkspace old){
+  super.didUpdateWidget(old);
+  if(old.client!=widget.client||_accessStamp(old.session)!=_accessStamp(widget.session)||
+    old.initialBranchId!=widget.initialBranchId||
+    old.initialWarehouseId!=widget.initialWarehouseId){
+   ++generation;
+   warehouses=[];trips=[];drivers=[];vehicles=[];eligible=[];
+   employees=[];detail=null;warehouse=null;branch=null;
+   _nextTripOffset=0;_hasMoreTrips=false;
+   _start();
+  }
+ }
  String get today{
   final d=DateTime.now();
   String n(int x)=>x.toString().padLeft(2,'0');
@@ -31,12 +50,17 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
   final epoch=++generation;
   setState((){loading=true;error=null;});
   try{
-   final scopes=await widget.client.scopes(widget.session.token);
+   final scopes=await widget.client.deliveryScopes(widget.session.token);
    if(!mounted||generation!=epoch)return;
    final allowed=scopes.warehouses.where(canWarehouse).toList();
-   final current=allowed.where((x)=>x.id==warehouse).firstOrNull??allowed.firstOrNull;
+   final requested=widget.initialWarehouseId;
+   final current=requested!=null
+    ?allowed.where((x)=>x.id==requested&&x.branchId==widget.initialBranchId).firstOrNull
+    :allowed.where((x)=>x.id==warehouse).firstOrNull??allowed.firstOrNull;
    setState((){
     warehouses=allowed;warehouse=current?.id;branch=current?.branchId;
+    if(requested!=null&&current==null)
+     error='Không có quyền điều phối kho được chọn.';
    });
    if(current==null)setState(()=>loading=false);
    else await _load();
