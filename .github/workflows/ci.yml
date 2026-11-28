@@ -169,7 +169,7 @@ jobs:
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='catalog_price_list' AND column_name IN ('effective_from','effective_to','priority')" | grep -qx 3
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM public.schema_migrations WHERE version='0019_p0_price_order_parity.sql'" | grep -qx 1
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.columns WHERE table_name='catalog_sku_price_rule' AND column_name IN ('imported_gross_amount','imported_discount_rate')" | grep -qx 2
-          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM public.schema_migrations" | grep -qx 27
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM public.schema_migrations" | grep -qx 28
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('catalog_brand','catalog_product_category','catalog_customer_location')" | grep -qx 3
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM schema_migrations WHERE version='0020_catalog_hierarchy_locations.sql'" | grep -qx 1
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM schema_migrations WHERE version='0021_t0_partial_reservation_policy.sql'" | grep -qx 1
@@ -179,6 +179,8 @@ jobs:
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM schema_migrations WHERE version='0025_t3c_trip_preparation_dispatch.sql'" | grep -qx 1
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM schema_migrations WHERE version='0026_t5a_sales_execution.sql'" | grep -qx 1
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM schema_migrations WHERE version='0027_t5b_delivery_trip_planning.sql'" | grep -qx 1
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM schema_migrations WHERE version='0028_t5c_canonical_employee_driver.sql'" | grep -qx 1
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='org_employee'" | grep -qx 1
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('delivery_vehicle','delivery_driver','delivery_trip_counter','delivery_trip','delivery_trip_stop','delivery_trip_event')" | grep -qx 6
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgname IN ('delivery_trip_header_guard','delivery_trip_stop_guard','delivery_trip_locked_order_guard','delivery_trip_event_immutable')" | grep -qx 4
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('sales_manual_return','sales_manual_return_line','sales_manual_delivery_line')" | grep -qx 3
