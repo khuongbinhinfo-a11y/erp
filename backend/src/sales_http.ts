@@ -610,7 +610,7 @@ async function listing(db:PoolClient,t:string,b:string,search:string,actor:strin
       ${modern?'AND (sc.warehouse_id IS NULL OR sc.warehouse_id=ANY($4::uuid[]))':''}
       AND ($3='' OR o.document_no ILIKE '%'||$3||'%' OR c.code ILIKE '%'||$3||'%'
         OR c.name ILIKE '%'||$3||'%' ${modern?"OR sc.walk_in_name ILIKE '%'||$3||'%'":""})
-    ORDER BY o.created_at DESC,o.id DESC LIMIT 100 OFFSET ${modern?5:4}`,[t,b,search,...(modern?[warehouseIds]:[]),offset]);
+    ORDER BY o.created_at DESC,o.id DESC LIMIT 100 OFFSET $${modern?5:4}`,[t,b,search,...(modern?[warehouseIds]:[]),offset]);
   return r.rows;
 }
 async function orderWarehouseAllowed(db:PoolClient,t:string,b:string,id:string,actor:string){
