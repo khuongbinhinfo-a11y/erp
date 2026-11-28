@@ -106,7 +106,8 @@ void main(){
       reason:'Load more must fetch the 201st eligible order from the backend');
     expect(pagedQueries.last,isEmpty,
       reason:'An unsubmitted query must not combine with offset=200');
-    await tester.testTextInput.receiveAction(TextInputAction.search);
+    await tester.tap(find.byTooltip('Tìm đơn chờ gán'));
+    await tester.pumpAndSettle();
     await tester.pumpAndSettle();
     expect(find.textContaining('Điểm giao 201'),findsOneWidget);
     expect(find.textContaining('Điểm giao 1 ·'),findsNothing);
