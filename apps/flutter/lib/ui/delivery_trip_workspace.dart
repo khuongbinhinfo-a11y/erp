@@ -84,6 +84,18 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
     employeeRows.addAll(lastEmployees.where((e)=>seen.add(e['id'])));
     employeeOffset+=200;
    }
+   // Legacy driver reconciliation must see all pages, including inactive
+   // and unlinked profiles beyond the first 200 active staff-linked drivers.
+   final driverRows=<Map<String,dynamic>>[...rows[1]];
+   var lastDrivers=rows[1],driverOffset=200;
+   while(lastDrivers.length==200&&driverOffset<=100000){
+    lastDrivers=await widget.client.deliveryTripItems(widget.session.token,
+      'drivers',b,w,offset:driverOffset);
+    if(!mounted||generation!=epoch)return;
+    final seen=driverRows.map((d)=>d['id']).toSet();
+    driverRows.addAll(lastDrivers.where((d)=>seen.add(d['id'])));
+    driverOffset+=200;
+   }
    final tid=chosen??detail?['id']?.toString();
    Map<String,dynamic>? selected;
    if(tid!=null){
@@ -91,7 +103,7 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
    }
    if(!mounted||generation!=epoch)return;
    setState((){
-    trips=refreshed;drivers=rows[1];vehicles=rows[2];eligible=rows[3];employees=employeeRows;
+    trips=refreshed;drivers=driverRows;vehicles=rows[2];eligible=rows[3];employees=employeeRows;
     detail=selected;loading=false;
     _nextTripOffset=nextOffset;_hasMoreTrips=lastPage.length==100&&nextOffset<=100000;
    });
