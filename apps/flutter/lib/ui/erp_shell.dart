@@ -4,6 +4,7 @@ import 'package:material_ui/material_ui.dart';
 import 'erp_tokens.dart';
 import 'erp_navigation_ui.dart';
 import 'company_workspace.dart';
+import 'delivery_trip_workspace.dart';
 import 'retail_pos_workspace.dart';
 import 'pos_window_stub.dart' if (dart.library.js_interop) 'pos_window_web.dart';
 import 'admin_workspace.dart';
@@ -335,6 +336,11 @@ class _ErpShellState extends State<ErpShell> {
       content = AdminWorkspace(
         previewOnly: widget.previewOnly, client: widget.client,
         session: activeSession,onDirectoryChanged:_refreshDirectorySession);
+    } else if(selected==4&&!widget.previewOnly&&
+        widget.client!=null&&activeSession!=null){
+      // Share the canonical trip backend and UI with Công Ty → Giao nhận.
+      content=DeliveryTripWorkspace(key:const ValueKey('erp-delivery-canonical'),
+        client:widget.client!,session:activeSession!);
     } else if(selected==3){
       // Dedicated supermarket-style POS surface: no distribution order list
       // or order form is mounted in the Bán Lẻ module.
@@ -364,11 +370,11 @@ class _ErpShellState extends State<ErpShell> {
     bool allowed(String prefix)=>grants.any((g)=>g.permission.startsWith(prefix));
     return switch(index){
       0=>allowed('catalog.')||allowed('orders.')||grants.any((g)=>g.permission.startsWith('inventory.')&&g.permission!='inventory.policy.manage')||allowed('finance.')||allowed('purchase.')||allowed('reports.')||allowed('org.employees.'),
-      1=>allowed('orders.')||allowed('catalog.'),
+      1=>false, // MCP integration has no independent released UI
       2=>allowed('identity.')||grants.any((g)=>g.permission=='inventory.policy.manage'&&g.warehouseId!=null),
       3=>allowed('orders.create'),
-      4=>allowed('delivery.'),
-      5=>allowed('orders.create'),
+      4=>erpCanDispatchTrips(grants),
+      5=>false, // Ordering entry is not a released workflow
       _=>false,
     };
   }
