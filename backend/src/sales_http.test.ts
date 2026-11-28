@@ -170,6 +170,9 @@ test("B1: real PostgreSQL order lifecycle, immutable versions, RBAC, replay and 
     const detail=await call("/v1/sales/orders/"+id+"?branchId="+b,"GET",undefined,token);
     assert.equal(detail.status,200);
     assert.equal(detail.body.order.total,"21600");
+    assert.equal(detail.body.order.customerCode,"C-001");
+    assert.ok(Number.isFinite(Date.parse(detail.body.order.confirmedAt)),
+      "A4 print must use the confirmed timestamp from canonical order version");
     assert.equal(detail.body.order.lines[0].unitPrice,"12000.0000");
     assert.equal(detail.body.order.history.length,1);
     await assert.rejects(pool.query(
