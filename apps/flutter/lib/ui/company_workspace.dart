@@ -118,6 +118,7 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
   CompanySection section = CompanySection.overview;
   bool salesNavigationLocked=false;
   Map<String,dynamic>? _warehouseOrder;
+  ({String branchId,String warehouseId})? _deliveryScope;
   @override void initState(){
     super.initState();
     final requested=widget.requestedSection;
@@ -125,10 +126,15 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
   }
   @override void didUpdateWidget(covariant CompanyWorkspace oldWidget){
     super.didUpdateWidget(oldWidget);
-    if(oldWidget.session?.token!=widget.session?.token||oldWidget.client!=widget.client)_warehouseOrder=null;
+    if(oldWidget.session?.token!=widget.session?.token||
+       oldWidget.session?.actorId!=widget.session?.actorId||
+       oldWidget.session?.installationId!=widget.session?.installationId||
+       oldWidget.client!=widget.client){
+      _warehouseOrder=null;_deliveryScope=null;section=CompanySection.overview;
+    }
     final requested=widget.requestedSection;
     if(requested!=null&&requested!=section&&requested!=oldWidget.requestedSection&&canView(requested)&&!salesNavigationLocked){
-      section=requested;filter='';search.clear();_warehouseOrder=null;
+      section=requested;filter='';search.clear();_warehouseOrder=null;_deliveryScope=null;
     }
   }
   bool canView(CompanySection target)=>erpCanViewCompanySection(target,widget.grants,previewOnly:widget.previewOnly);
@@ -148,6 +154,16 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
     super.dispose();
   }
 
+  void openDelivery(String branch,String warehouse){
+    if(salesNavigationLocked||!canView(CompanySection.deliveryTrips))return;
+    final scopes=widget.grants;
+    if(!scopes.any((g)=>g.permission=='delivery.read'&&g.branchId==branch)||
+       !scopes.any((g)=>g.permission=='orders.read'&&g.branchId==branch)||
+       !scopes.any((g)=>g.permission=='inventory.read'&&
+          g.branchId==branch&&g.warehouseId==warehouse))return;
+    setState(()=>_deliveryScope=(branchId:branch,warehouseId:warehouse));
+    select(CompanySection.deliveryTrips);
+  }
   void select(CompanySection value) {
     if(!canView(value)||section==value)return;
     if(section==CompanySection.orders&&value!=section&&salesNavigationLocked){
@@ -157,6 +173,7 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
     setState(() {
       section = value;
       if(value!=CompanySection.warehouses)_warehouseOrder=null;
+      if(value!=CompanySection.deliveryTrips)_deliveryScope=null;
       filter = '';
       search.clear();
     });
@@ -219,6 +236,11 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
                     setState(()=>_warehouseOrder=order);
                     select(CompanySection.warehouses);
                   },
+                  onOpenDelivery:(order){
+                    final ship=order['shipping'];
+                    if(ship is Map&&order['branchId'] is String&&ship['warehouseId'] is String)
+                      openDelivery(order['branchId'] as String,ship['warehouseId'] as String);
+                  },
                   onOpenCatalog:(area)=>select(switch(area){
                     'customers'=>CompanySection.customers,
                     'products'=>CompanySection.products,
@@ -228,11 +250,15 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
                 widget.client != null && widget.session != null)
               ? InventoryWorkspace(key:ValueKey(_warehouseOrder==null?'inventory-workspace':
                   'inventory-workspace-${_warehouseOrder!['id']}'),
-                  client:widget.client!,session:widget.session!,initialOrder:_warehouseOrder)
+                  client:widget.client!,session:widget.session!,initialOrder:_warehouseOrder,
+                  onOpenDelivery:openDelivery)
             : (active == CompanySection.deliveryTrips && !widget.previewOnly &&
                 widget.client != null && widget.session != null)
-              ? DeliveryTripWorkspace(key:const ValueKey('delivery-trip-workspace'),
-                  client:widget.client!,session:widget.session!)
+              ? DeliveryTripWorkspace(
+                  key:ValueKey('delivery-trip-workspace-${_deliveryScope?.warehouseId??'all'}'),
+                  client:widget.client!,session:widget.session!,
+                  initialBranchId:_deliveryScope?.branchId,
+                  initialWarehouseId:_deliveryScope?.warehouseId)
             : (active == CompanySection.employees && !widget.previewOnly &&
                 widget.client != null && widget.session != null)
               ? StaffWorkspace(key:const ValueKey('staff-workspace'),
