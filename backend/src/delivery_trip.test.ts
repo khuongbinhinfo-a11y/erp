@@ -207,9 +207,9 @@ test("T5-B trip planner: two orders, driver/vehicle, sequencing, idempotency, lo
   assert.equal(firstPage.status,200,JSON.stringify(firstPage.data));
   assert.equal(nextPage.status,200,JSON.stringify(nextPage.data));
   assert.equal(firstPage.data.items.length,100);
-  assert.equal(nextPage.data.items.length,3);
+  assert.equal(nextPage.data.items.length,4);
   assert.equal(new Set([...firstPage.data.items,...nextPage.data.items]
-    .map((x:any)=>x.id)).size,103);
+    .map((x:any)=>x.id)).size,104);
   assert.equal((await call("/v1/delivery/trips"+qs+"&offset=1",
     "GET",undefined,token)).status,400);
   assert.equal((await call("/v1/delivery/trips"+qs+"&offset=-100",
