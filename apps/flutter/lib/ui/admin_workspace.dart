@@ -61,7 +61,7 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
         if(warehouse.id==grant.warehouseId){
           final branchName=current.branches.where((x)=>x.id==warehouse.branchId)
             .map((x)=>x.name).firstOrNull;
-          return 'Kho '+warehouse.name+' ('+warehouse.code+')'+
+          return 'Kho '+warehouse.name+(warehouse.code=='MAIN'?'':' ('+warehouse.code+')')+
             (branchName==null?'':' · '+branchName);
         }
       }
@@ -70,7 +70,7 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
     if(grant.branchId!=null){
       if(current==null)return 'Đang tải tên chi nhánh';
       for(final branch in current.branches){
-        if(branch.id==grant.branchId)return 'Chi nhánh '+branch.name+' ('+branch.code+')';
+        if(branch.id==grant.branchId)return 'Chi nhánh '+branch.name+(branch.code=='MAIN'?'':' ('+branch.code+')');
       }
       return 'Chi nhánh không còn khả dụng';
     }
