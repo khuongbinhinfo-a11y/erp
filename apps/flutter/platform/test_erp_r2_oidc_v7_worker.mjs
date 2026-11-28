@@ -26,7 +26,7 @@ async function withJwt(fn,patch={}){
     repository_id:"1466503632",repository_owner_id:"269412638",
     environment:"android-r2-publish",
     sub:"repo:khuongbinhinfo-a11y@269412638/erp@1466503632:environment:android-r2-publish",
-    workflow_ref:"khuongbinhinfo-a11y/erp/.github/workflows/erp-android-t3c-v7-stage.yml@refs/heads/main",
+    workflow_ref:"khuongbinhinfo-a11y/erp/.github/workflows/erp-android-t5a-v7-stage.yml@refs/heads/main",
     ref:"refs/heads/main",event_name:"workflow_run",sha:SOURCE,...patch
   };
   const header=b64(JSON.stringify({alg:"RS256",kid:"test-only"}));
