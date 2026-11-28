@@ -339,8 +339,9 @@ class _ErpShellState extends State<ErpShell> {
     } else if(selected==4&&!widget.previewOnly&&
         widget.client!=null&&activeSession!=null){
       // Share the canonical trip backend and UI with Công Ty → Giao nhận.
-      content=DeliveryTripWorkspace(key:const ValueKey('erp-delivery-canonical'),
-        client:widget.client!,session:activeSession!);
+      content=SingleChildScrollView(child:DeliveryTripWorkspace(
+        key:const ValueKey('erp-delivery-canonical'),
+        client:widget.client!,session:activeSession!));
     } else if(selected==3){
       // Dedicated supermarket-style POS surface: no distribution order list
       // or order form is mounted in the Bán Lẻ module.
