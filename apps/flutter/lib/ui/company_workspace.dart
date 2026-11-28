@@ -66,6 +66,16 @@ extension CompanySectionGroup on CompanySection {
   };
 }
 
+/// A trip entry must not combine delivery rights from one branch with
+/// warehouse access from another branch.
+bool erpCanDispatchTrips(List<IdentityGrant> grants){
+  final delivery=grants.where((g)=>g.permission=='delivery.read'&&g.branchId!=null)
+    .map((g)=>g.branchId).toSet();
+  final orders=grants.where((g)=>g.permission=='orders.read'&&g.branchId!=null)
+    .map((g)=>g.branchId).toSet();
+  return grants.any((g)=>g.permission=='inventory.read'&&g.warehouseId!=null&&
+    delivery.contains(g.branchId)&&orders.contains(g.branchId));
+}
 bool erpCanViewCompanySection(CompanySection target,List<IdentityGrant> grants,{bool previewOnly=false}){
     if(previewOnly)return true;
     final p=grants.map((x)=>x.permission).toSet();
@@ -79,12 +89,12 @@ bool erpCanViewCompanySection(CompanySection target,List<IdentityGrant> grants,{
       CompanySection.transfers=>has('inventory.transfer.read')||has('inventory.transfer.create'),
       CompanySection.stocktakes=>has('inventory.stocktake.read')||has('inventory.stocktake.create'),
       CompanySection.orders=>has('orders.read')||has('orders.create'),
-      CompanySection.deliveryTrips=>has('delivery.read')&&has('inventory.read')&&has('orders.read'),
+      CompanySection.deliveryTrips=>erpCanDispatchTrips(grants),
       CompanySection.employees=>has('org.employees.read')||has('org.employees.manage'),
-      CompanySection.receivables=>has('finance.receivables.read')||has('finance.payments.record'),
-      // Reports have no released API yet; a catalog.read grant must never
-      // implicitly expose finance or stock reporting.
-      CompanySection.reports=>has('reports.read'),
+      // AR collection and reports have no released standalone query API.
+      // Payments remain available through canonical sales execution only.
+      CompanySection.receivables=>false,
+      CompanySection.reports=>false,
     };
 }
 
@@ -194,7 +204,7 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
           key: ValueKey('company-content-${active.name}'),
           padding: EdgeInsets.fromLTRB(margin, widget.mobileNavigation?4:18, margin, 26),
           child: active == CompanySection.overview
-            ? _Overview(onSelect: select,
+            ? _Overview(onSelect: select,previewOnly:widget.previewOnly,
                 areas: sections.where((s) => s != CompanySection.overview).toList())
             : (active == CompanySection.orders && !widget.previewOnly &&
                 widget.client != null && widget.session != null)
@@ -262,9 +272,10 @@ class _CompanyWorkspaceState extends State<CompanyWorkspace> {
 }
 
 class _Overview extends StatelessWidget {
+  final bool previewOnly;
   final ValueChanged<CompanySection> onSelect;
   final List<CompanySection> areas;
-  const _Overview({required this.onSelect,required this.areas});
+  const _Overview({required this.onSelect,required this.areas,required this.previewOnly});
 
   @override
   Widget build(BuildContext context) {
@@ -282,7 +293,7 @@ class _Overview extends StatelessWidget {
       )),
       const SizedBox(height: 6),
       const SizedBox(height: 16),
-      LayoutBuilder(builder: (context, constraints) {
+      if(previewOnly)LayoutBuilder(builder: (context, constraints) {
         const spacing = 12.0;
         final cardWidth = (constraints.maxWidth - (cols - 1) * spacing) / cols;
         return Wrap(
