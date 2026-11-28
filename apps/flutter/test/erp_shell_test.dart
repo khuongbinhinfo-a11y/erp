@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -253,6 +256,48 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
     expect(find.byKey(const ValueKey('nav-2')),findsOneWidget);
     expect(find.text('Tổ chức, tài khoản, quyền và chính sách'),findsOneWidget);
     expect(find.text('Không có quyền quản lý tổ chức.'),findsOneWidget);
+  });
+
+  testWidgets('IA-C authenticated delivery reuses canonical trip surface without admin scopes',
+    (tester)async{
+    tester.view.devicePixelRatio=1;
+    tester.view.physicalSize=const Size(1280,800);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    const branch='00000000-0000-4000-8000-000000000001';
+    const warehouse='00000000-0000-4000-8000-000000000002';
+    final requests=<String>[];
+    final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
+      httpClient:MockClient((req)async{
+        requests.add(req.url.path);
+        if(req.url.path=='/v1/delivery/scopes'){
+          return http.Response(jsonEncode({
+            'branches':[],'warehouses':[],
+            'hasMoreBranches':false,'hasMoreWarehouses':false,
+          }),200,headers:const {'content-type':'application/json'});
+        }
+        return http.Response('{}',404);
+      }));
+    addTearDown(client.dispose);
+    final session=IdentitySession(actorId:'00000000-0000-4000-8000-000000000010',
+      token:'test-token',installationId:'00000000-0000-4000-8000-000000000011',
+      expiresAt:DateTime.now().add(const Duration(hours:1)),grants:const [
+        IdentityGrant(roleId:'d',permission:'delivery.read',branchId:branch),
+        IdentityGrant(roleId:'o',permission:'orders.read',branchId:branch),
+        IdentityGrant(roleId:'i',permission:'inventory.read',branchId:branch,warehouseId:warehouse),
+      ]);
+    await tester.pumpWidget(MaterialApp(home:ErpShell(
+      session:session,client:client,previewOnly:false)));
+    expect(find.byKey(const ValueKey('nav-1')),findsNothing,
+      reason:'Unreleased MCP must not appear as an operational module');
+    expect(find.byKey(const ValueKey('nav-5')),findsNothing,
+      reason:'Unreleased Ordering must not show a fabricated worklist');
+    await tester.tap(find.byKey(const ValueKey('nav-4')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('erp-delivery-canonical')),findsOneWidget);
+    expect(find.text('Điều phối giao hàng'),findsOneWidget);
+    expect(requests,contains('/v1/delivery/scopes'));
+    expect(requests, isNot(contains('/v1/admin/scopes')));
   });
 
   testWidgets('authenticated module menu hides unauthorized Company features', (tester) async {
