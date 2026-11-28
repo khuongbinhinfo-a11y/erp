@@ -8,6 +8,7 @@ const SHA2="c1c047754b69e466467c7997c6dd2cb752b806a5a8e4f2d1609524b59102b7c0";
 const SHA3="5bce59f3dea1143f148632f5bfc17552b2f4dd3d6a10d56cf5f4e4ef7c23f9f0";
 const SHA4="1ad76237794d167df8d9b7fbe928879def8952c7451731e81bcc4421a0c12370";
 const SHA5="d050f77e19fa1ce4ba4ac4011442ed7955f7342252f2805ad9db61ddfe0616cf";
+const SHA6="c0865670dd95065358aa0028ffc5e08af1609d4740f5ea4b74b9b879b0c8140c";
 const manifest={schema:1,versionCode:2,versionName:"0.2.0",
   packageName:"vn.erpdistribution.erp_distribution",sha256:SHA2,signerSha256:SIGNER,
   size:63769586,objectKey:"releases/2/erp-2.apk",sourceSha:"9963be10fd6d648474b826bcb5e917adbde03b5c",
@@ -21,6 +22,9 @@ const manifest4={...manifest,versionCode:4,versionName:"0.4.0",
 const manifest5={...manifest,versionCode:5,versionName:"0.5.0",
   sha256:SHA5,size:64605474,objectKey:"releases/5/erp-5.apk",
   sourceSha:"d97e58e9ea437420285cb9a563bf7bb4005f14f4",notes:"ERP UX-C Android 0.5.0"};
+const manifest6={...manifest,versionCode:6,versionName:"0.6.0",
+  sha256:SHA6,size:64949914,objectKey:"releases/6/erp-6.apk",
+  sourceSha:"be18bcb12e97b78b9752b881e561ab90777ca5fd",notes:"ERP T3-C Android 0.6.0"};
 const meta=(size,sha)=>({size,customMetadata:{sha256:sha,signersha256:SIGNER}});
 const store={
   "releases/1/erp-1.apk":meta(63425634,SHA1),
@@ -30,6 +34,8 @@ const store={
     signersha256:SIGNER,sourcesha:"a3e2c8f514b23865cc3b6795230939189f092feb"}},
   "releases/5/erp-5.apk":{size:64605474,customMetadata:{sha256:SHA5,
     signersha256:SIGNER,sourcesha:"d97e58e9ea437420285cb9a563bf7bb4005f14f4"}},
+  "releases/6/erp-6.apk":{size:64949914,customMetadata:{sha256:SHA6,
+    signersha256:SIGNER,sourcesha:"be18bcb12e97b78b9752b881e561ab90777ca5fd"}},
   "releases/latest.json":{size:JSON.stringify(manifest).length}
 };
 let calls=[];
@@ -139,7 +145,7 @@ test("v4 latest relay verifies published manifest only when pointer is approved 
   assert.equal((await worker.fetch(new Request(BASE+"/releases/latest.json"),mismatched)).status,409);
 });
 test("arbitrary R2 files, writes and queries are denied",async()=>{
-  for(const path of ["/releases/6/erp-6.apk","/releases/2/manifest.json","/private","/releases/latest.json?a=1"]){
+  for(const path of ["/releases/7/erp-7.apk","/releases/2/manifest.json","/private","/releases/latest.json?a=1"]){
     assert.equal((await worker.fetch(new Request(BASE+path),env)).status,404);
   }
   for(const method of ["POST","PUT","DELETE"])assert.equal(
@@ -193,4 +199,26 @@ test("UX-C latest relay validates v5 hash, signer, object, source and version",a
       key==="releases/5/erp-5.apk"?{...store[key],customMetadata:{...store[key].customMetadata,sourcesha:"b".repeat(40)}}:store[key]||null
   }};
   assert.equal((await worker.fetch(new Request(BASE+"/releases/latest.json"),wrong)).status,409);
+});
+
+test("signed T3-C v6 immutable APK is UAT-downloadable, latest remains v5 until approved",async()=>{
+  for(const path of ["/ERP-Android-0.6.0.apk","/releases/6/erp-6.apk"]){
+    const res=await worker.fetch(new Request(BASE+path),env);
+    assert.equal(res.status,200);
+    assert.equal(res.headers.get("x-erp-sha256"),SHA6);
+    assert.equal(res.headers.get("content-length"),"64949914");
+  }
+  const part=await worker.fetch(new Request(BASE+"/releases/6/erp-6.apk",{headers:{range:"bytes=64949904-"}}),env);
+  assert.equal(part.status,206);
+  assert.equal(part.headers.get("content-range"),"bytes 64949904-64949913/64949914");
+  const check={ERP_ANDROID_RELEASES:{
+    head:async key=>key==="releases/latest.json"?{size:JSON.stringify(manifest6).length}:store[key]||null,
+    get:async key=>key==="releases/latest.json"?{text:async()=>JSON.stringify(manifest6)}:
+      store[key]?{...store[key],body:new Response("apk-stream").body}:null
+  }};
+  const rel=await worker.fetch(new Request(BASE+"/releases/latest.json"),check);
+  assert.equal(rel.status,200);assert.deepEqual(await rel.json(),manifest6);
+  const bad={ERP_ANDROID_RELEASES:{...check.ERP_ANDROID_RELEASES,
+    get:async key=>key==="releases/latest.json"?{text:async()=>JSON.stringify({...manifest6,sourceSha:"f".repeat(40)})}:null}};
+  assert.equal((await worker.fetch(new Request(BASE+"/releases/latest.json"),bad)).status,409);
 });

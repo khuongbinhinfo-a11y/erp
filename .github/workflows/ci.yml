@@ -86,6 +86,8 @@ jobs:
         run: node --test apps/flutter/platform/test_erp_r2_oidc_v5_worker.mjs
       - name: Test T3-C Android R2 v6 OIDC immutable staging
         run: node --test apps/flutter/platform/test_erp_r2_oidc_v6_worker.mjs
+      - name: Test T5-A Android R2 v7 OIDC immutable staging
+        run: node --test apps/flutter/platform/test_erp_r2_oidc_v7_worker.mjs
       - name: Test public APK exact-key read-only download gate
         run: node --test apps/flutter/platform/test_erp_r2_download_worker.mjs
       - name: Typecheck backend
