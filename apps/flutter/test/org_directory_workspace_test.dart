@@ -78,7 +78,7 @@ void main(){
    await tester.pumpAndSettle();
    await tester.tap(find.text('Lưu chính sách'));
    await tester.pumpAndSettle();
-   expect(mutations,single);
+   expect(mutations,hasLength(1));
    expect(mutations.single['negativeIssueMode'],'ALLOW');
    expect(mutations.single['warehouseId'],warehouse);
    expect(tester.takeException(),isNull);
