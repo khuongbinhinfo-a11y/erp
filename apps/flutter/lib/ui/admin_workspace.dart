@@ -33,16 +33,27 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
     super.initState();
     if(real&&allowed('identity.users.read'))usersFuture=widget.client!.users(token);
     if(real&&allowed('identity.roles.manage'))loadScopes();
-    if(real&&(allowed('identity.users.read')||allowed('identity.roles.manage')))
-      permissionsFuture=widget.client!.permissionCatalog(token);
-    if(real&&allowed('identity.roles.manage'))
-      auditFuture=widget.client!.auditEvents(token);
+
   }
   void reload(){
     if(real&&allowed('identity.users.read')){
       setState(()=>usersFuture=widget.client!.users(token));
     }
     if(real&&allowed('identity.roles.manage'))loadScopes();
+  }
+  void selectTab(int value){
+    if(!mounted)return;
+    setState((){
+      selected=value;
+      if(real&&value==2&&(allowed('identity.users.read')||allowed('identity.roles.manage')))
+        permissionsFuture=widget.client!.permissionCatalog(token);
+      if(real&&value==4&&allowed('identity.roles.manage'))
+        auditFuture=widget.client!.auditEvents(token);
+    });
+  }
+  void refreshAudit(){
+    if(real&&allowed('identity.roles.manage')&&mounted)
+      setState(()=>auditFuture=widget.client!.auditEvents(token));
   }
   Future<void> loadScopes() async {
     try {
@@ -398,6 +409,9 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
               selected==2?'Ma trận quyền':'Nhật ký thao tác',
               style:Theme.of(context).textTheme.titleLarge?.copyWith(
                 fontWeight:FontWeight.w800,color:ErpPalette.of(context).ink))),
+            if(selected==4&&real&&allowed('identity.roles.manage'))
+              IconButton(tooltip:'Tải lại nhật ký',icon:const Icon(Icons.refresh),
+                onPressed:refreshAudit),
             if(selected==1&&real&&allowed('identity.users.manage'))
               FilledButton.icon(onPressed:createUser,
                 icon:const Icon(Icons.person_add_alt_1_outlined),
@@ -418,7 +432,7 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
             items:const [ErpSectionTab(0,'Tổ chức'),
               ErpSectionTab(1,'Tài khoản'),ErpSectionTab(2,'Phân quyền'),
               ErpSectionTab(3,'Chính sách'),ErpSectionTab(4,'Nhật ký')],
-            onSelected:(v)=>setState(()=>selected=v)))),
+            onSelected:selectTab))),
       Expanded(child:AnimatedSwitcher(
         duration:MediaQuery.of(context).disableAnimations
           ?Duration.zero:ErpTokens.pageMotion,
