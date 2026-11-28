@@ -40,6 +40,14 @@ void main(){
   expect(result,contains('<th class="num">CK</th>'));
   expect(result,contains('<th class="num">Thuế</th>'));
  });
+ test('Print retains the confirmed customer credit term',(){
+  final original=_order('SO-20261128-000001');
+  final copy={...original,
+    'shipping':{...original['shipping'] as Map,
+      'collectionPolicy':'CREDIT_TERMS','paymentTermsDays':30}};
+  final result=confirmedSalesPrintDocument(copy);
+  expect(result,contains('Công nợ theo hạn · 30 ngày'));
+ });
  test('Bulk print has separate full A4 slip per selected confirmed order',(){
   final result=confirmedSalesBatchPrintDocument([
     _order('SO-20261128-000001'),_order('SO-20261128-000002')]);
