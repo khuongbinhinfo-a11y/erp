@@ -805,7 +805,7 @@ class ErpIdentityClient {
     if(!const ['trips','drivers','vehicles','employees','trips/eligible'].contains(endpoint)){
       throw const ErpApiError(400,'Danh sách điều phối không hợp lệ.');
     }
-    final step=endpoint=='trips'?100:const {'trips/eligible','employees'}.contains(endpoint)?200:0;
+    final step=endpoint=='trips'?100:const {'trips/eligible','employees','drivers'}.contains(endpoint)?200:0;
     if(offset<0||offset>100000||
        (step==0&&offset!=0)||(step>0&&offset%step!=0)||
        search.trim().length>80||(endpoint!='trips/eligible'&&search.isNotEmpty)){
