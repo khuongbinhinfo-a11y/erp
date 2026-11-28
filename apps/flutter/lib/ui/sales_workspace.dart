@@ -123,6 +123,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   String? branchId,error,missingCatalog;
   bool loading=true,saving=false,_loadingMore=false,_hasMoreOrders=false;
   int _nextOrdersOffset=0;
+  String _loadedOrdersQuery='';
   int generation=0,sequence=0;
   final search=TextEditingController();
   String _orderFilter='all',_deliveryFilter='all',_paymentFilter='all';
@@ -274,6 +275,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       pendingConfirmKey=null;pendingUpdate=null;pendingUpdateKey=null;
       pendingCreateAutoConfirm=false;localRecoveryBusy=false;localRecoveryBlocked=false;pendingNeedsReceipt=false;
       _loadingMore=false;_hasMoreOrders=false;_nextOrdersOffset=0;
+      _loadedOrdersQuery='';
       _retailOpenedOnce=false;loadBranches();_syncDelay=15;_scheduleRecovery();
     }
   }
@@ -305,13 +307,13 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   }
   Future<void> reload()async{
     final branch=branchId;if(branch==null)return;
-    final id=++generation;
+    final id=++generation,query=search.text;
     setState((){loading=true;error=null;_loadingMore=false;_hasMoreOrders=false;_nextOrdersOffset=0;});
     try{
-      final values=await widget.client.salesOrders(widget.session.token,branch,query:search.text);
+      final values=await widget.client.salesOrders(widget.session.token,branch,query:query);
       if(mounted&&generation==id){
         setState((){
-          orders=values;loading=false;
+          orders=values;loading=false;_loadedOrdersQuery=query;
           _nextOrdersOffset=100;
           _hasMoreOrders=values.length==100;
         });
@@ -336,12 +338,14 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   Future<void> _loadMoreOrders()async{
     final branch=branchId,token=widget.session.token;
     if(branch==null||loading||_loadingMore||!_hasMoreOrders||_navigationLocked)return;
-    final request=generation,offset=_nextOrdersOffset,query=search.text;
+    // Load successive pages with the same submitted query; a partially
+    // edited search input does not change the result set until reload().
+    final request=generation,offset=_nextOrdersOffset,query=_loadedOrdersQuery;
     if(offset>100000||offset%100!=0)return;
     setState(()=>_loadingMore=true);
     try{
       final values=await widget.client.salesOrders(token,branch,query:query,offset:offset);
-      if(!_sameScope(token,branch)||request!=generation||query!=search.text)return;
+      if(!_sameScope(token,branch)||request!=generation||query!=_loadedOrdersQuery)return;
       setState((){
         final seen=orders.map((o)=>o['id']).toSet();
         orders=[...orders,...values.where((o)=>seen.add(o['id']))];
