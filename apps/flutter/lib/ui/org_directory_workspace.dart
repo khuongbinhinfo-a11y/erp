@@ -202,7 +202,7 @@ class _OrgDirectoryWorkspaceState extends State<OrgDirectoryWorkspace>{
   return Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
    const Text('Chi nhánh & Kho',style:TextStyle(fontSize:18,fontWeight:FontWeight.w700)),
    const SizedBox(height:8),
-   const Text('Mã MAIN của chi nhánh/kho chính là mã nội bộ; tên hiển thị được dùng trong nghiệp vụ.'),
+   const Text('Tên chi nhánh và kho hiển thị bằng tiếng Việt; mã nội bộ được giữ nguyên để bảo toàn chứng từ.'),
    const SizedBox(height:12),
    Wrap(spacing:10,runSpacing:8,children:[
     FilledButton.icon(onPressed:busy||loading?null:createBranch,
