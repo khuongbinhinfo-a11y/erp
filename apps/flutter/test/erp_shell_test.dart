@@ -295,6 +295,10 @@ testWidgets('Quản trị shows roles as read-only and does not invent users', (
     await tester.tap(find.byKey(const ValueKey('nav-4')));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('erp-delivery-canonical')),findsOneWidget);
+    expect(find.ancestor(
+      of:find.byKey(const ValueKey('erp-delivery-canonical')),
+      matching:find.byType(SingleChildScrollView)),findsWidgets,
+      reason:'The canonical trip planner must scroll in the shell on mobile and desktop');
     expect(find.text('Điều phối giao hàng'),findsOneWidget);
     expect(requests,contains('/v1/delivery/scopes'));
     expect(requests, isNot(contains('/v1/admin/scopes')));
