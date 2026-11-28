@@ -309,7 +309,13 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
    setState(()=>error='Phải khai báo tài xế và xe đang hoạt động trước khi phân chuyến.');
    return;
   }
-  String? driver=ds.first['id'] as String,vehicle=vs.first['id'] as String;
+  // Reopened plans retain their existing assignments. Never silently change
+  // a driver or vehicle just because the user edits only the delivery date.
+  final savedDriver=d['driverId']?.toString(),savedVehicle=d['vehicleId']?.toString();
+  String? driver=savedDriver==null?ds.first['id'] as String:
+    (ds.any((x)=>x['id']==savedDriver)?savedDriver:null);
+  String? vehicle=savedVehicle==null?vs.first['id'] as String:
+    (vs.any((x)=>x['id']==savedVehicle)?savedVehicle:null);
   var day=d['plannedDate']?.toString()??today;
   var note=d['note']?.toString()??'';
   final ok=await showDialog<bool>(context:context,builder:(c)=>StatefulBuilder(
@@ -326,13 +332,18 @@ class _DeliveryTripWorkspaceState extends State<DeliveryTripWorkspace>{
       items:vs.map((x)=>DropdownMenuItem(value:x['id'] as String,
        child:Text('${x['licensePlate']} · ${x['name']}'))).toList(),
       onChanged:(x)=>refresh(()=>vehicle=x)),
+     if(savedDriver!=null&&driver==null)const Text(
+      'Tài xế cũ đã ngừng hoạt động. Chọn tài xế thay thế.'),
+     if(savedVehicle!=null&&vehicle==null)const Text(
+      'Xe cũ đã ngừng hoạt động. Chọn xe thay thế.'),
      TextFormField(initialValue:day,onChanged:(value)=>day=value,
       decoration:const InputDecoration(labelText:'Ngày giao')),
      TextFormField(initialValue:note,onChanged:(value)=>note=value,maxLength:500,
       decoration:const InputDecoration(labelText:'Ghi chú')),
     ])),
     actions:[TextButton(onPressed:()=>Navigator.pop(c,false),child:const Text('Hủy')),
-     FilledButton(onPressed:()=>Navigator.pop(c,true),
+     FilledButton(onPressed:driver==null||vehicle==null?null:
+       ()=>Navigator.pop(c,true),
       child:const Text('Lưu kế hoạch'))],
    )));
   if(ok==true&&mounted)await _write('trips/${d['id']}/plan',{
