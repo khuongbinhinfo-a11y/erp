@@ -71,7 +71,7 @@ void main(){
    await tester.pumpAndSettle();
    if(action!='Xác nhận giao')expect(find.byType(TextFormField),findsWidgets);
    else expect(find.textContaining('Kết quả giao'),findsWidgets);
-   await tester.pageBack();
+   await tester.tapAt(const Offset(8,8)); // dismiss modal barrier, no POST
    await tester.pumpAndSettle();
    expect(tester.takeException(),isNull,reason:'No disposed controller during reverse animation');
    expect(writes,0,reason:'Cancelled action cannot create a server mutation');
