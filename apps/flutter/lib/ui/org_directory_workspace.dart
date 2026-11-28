@@ -15,13 +15,23 @@ class OrgDirectoryWorkspace extends StatefulWidget {
 }
 class _OrgDirectoryWorkspaceState extends State<OrgDirectoryWorkspace>{
  IdentityScopes? directory;
+ Map<String,dynamic>? organization;
+ int _loadGeneration=0;
  String? error;
  bool busy=false,loading=false;
  final Map<String,String> keys={};
  @override void initState(){super.initState();load();}
  @override void didUpdateWidget(covariant OrgDirectoryWorkspace old){
   super.didUpdateWidget(old);
-  if(old.session.token!=widget.session.token){directory=null;keys.clear();load();}
+  if(old.session.token!=widget.session.token||
+     old.session.actorId!=widget.session.actorId||
+     old.session.installationId!=widget.session.installationId||
+     old.client!=widget.client||old.policyOnly!=widget.policyOnly){
+    // Never allow stale async results to cross a session or scope switch.
+    _loadGeneration++;
+    directory=null;organization=null;error=null;keys.clear();
+    load();
+  }
  }
  String _fingerprint(String action,Object payload,int revision)=>
    '$action:$revision:${jsonEncode(payload)}';
@@ -35,15 +45,20 @@ class _OrgDirectoryWorkspaceState extends State<OrgDirectoryWorkspace>{
  }
  Future<void> load()async{
   if(!mounted)return;
+  final generation=++_loadGeneration;
+  final client=widget.client,token=widget.session.token,policyOnly=widget.policyOnly;
+  bool current()=>mounted&&generation==_loadGeneration&&
+    widget.session.token==token&&widget.policyOnly==policyOnly;
   setState(()=>loading=true);
   try{
-   final result=widget.policyOnly
-     ?await widget.client.policyScopes(widget.session.token)
-     :await widget.client.scopes(widget.session.token);
-   if(mounted)setState((){directory=result;error=null;});
-  }on ErpApiError catch(e){if(mounted)setState(()=>error=e.message);}
-  catch(_){if(mounted)setState(()=>error='Không tải được danh sách chi nhánh/kho.');}
-  finally{if(mounted)setState(()=>loading=false);}
+   final result=policyOnly
+     ?await client.policyScopes(token)
+     :await client.scopes(token);
+   final company=policyOnly?null:await client.organization(token);
+   if(current())setState((){directory=result;organization=company;error=null;});
+  }on ErpApiError catch(e){if(current())setState(()=>error=e.message);}
+  catch(_){if(current())setState(()=>error='Không tải được dữ liệu tổ chức.');}
+  finally{if(current())setState(()=>loading=false);}
  }
  Future<({String code,String name})?> inputDialog(String title)async{
   final code=TextEditingController(),name=TextEditingController();
@@ -212,6 +227,13 @@ class _OrgDirectoryWorkspaceState extends State<OrgDirectoryWorkspace>{
     ?'Chỉ hiển thị kho có quyền quản lý chính sách. Tồn kho và chứng từ nằm tại Công Ty → Kho.'
     :'Danh mục dùng chung cho vận hành kho. Mã nội bộ không đổi để bảo toàn chứng từ.'),
    const SizedBox(height:12),
+   if(!widget.policyOnly&&organization!=null)
+    Card(child:ListTile(
+     leading:const Icon(Icons.business_outlined),
+     title:Text(organization!['displayName']?.toString()??'',
+      style:const TextStyle(fontWeight:FontWeight.w700)),
+     subtitle:Text('Doanh nghiệp · Mã cài đặt: ${organization!['code']??''}'),
+    )),
    Wrap(spacing:10,runSpacing:8,children:[
     if(!widget.policyOnly)FilledButton.icon(onPressed:busy||loading?null:createBranch,
      icon:const Icon(Icons.add_business_outlined),label:const Text('Thêm chi nhánh')),
