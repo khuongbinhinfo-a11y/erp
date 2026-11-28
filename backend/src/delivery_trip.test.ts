@@ -71,6 +71,23 @@ test("T5-B trip planner: two orders, driver/vehicle, sequencing, idempotency, lo
   const elig=await call("/v1/delivery/trips/eligible"+qs,"GET",undefined,token);
   assert.equal(elig.status,200,JSON.stringify(elig.data));
   assert.deepEqual(new Set(elig.data.items.map((x:any)=>x.id)),new Set([a,b2]));
+  // Search and pagination never leak outside the active installation/warehouse.
+  const searched=await call("/v1/delivery/trips/eligible"+qs+
+    "&q="+encodeURIComponent("Đường B"),"GET",undefined,token);
+  assert.equal(searched.status,200,JSON.stringify(searched.data));
+  assert.deepEqual(searched.data.items.map((x:any)=>x.id),[b2]);
+  const emptySearch=await call("/v1/delivery/trips/eligible"+qs+"&q=ZZZZNO",
+    "GET",undefined,token);
+  assert.equal(emptySearch.status,200,JSON.stringify(emptySearch.data));
+  assert.deepEqual(emptySearch.data.items,[]);
+  const page200=await call("/v1/delivery/trips/eligible"+qs+"&offset=200",
+    "GET",undefined,token);
+  assert.equal(page200.status,200,JSON.stringify(page200.data));
+  assert.deepEqual(page200.data.items,[]);
+  assert.equal((await call("/v1/delivery/trips/eligible"+qs+"&offset=1",
+    "GET",undefined,token)).status,400);
+  assert.equal((await call("/v1/delivery/trips/eligible"+qs+"&q="+
+    "a".repeat(81),"GET",undefined,token)).status,400);
   const dr=await post("/v1/delivery/drivers",{...s,code:"D01",name:"Tài xế Một"});
   const car=await post("/v1/delivery/vehicles",{...s,code:"C01",name:"Xe tải",licensePlate:"63A-12345"});
   assert.equal(dr.status,201,JSON.stringify(dr.data));
