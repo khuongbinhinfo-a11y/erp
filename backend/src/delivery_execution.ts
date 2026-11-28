@@ -357,7 +357,7 @@ export async function executeCollect(db:PoolClient,c:MutationContext,s:Scope,
   FROM customer_receivable_ledger l LEFT JOIN payment_allocation a
   ON a.installation_id=l.installation_id AND a.branch_id=l.branch_id AND a.sale_ledger_id=l.id
   WHERE l.installation_id=$1 AND l.branch_id=$2 AND l.order_id=$3 AND l.kind='SALE'
-  GROUP BY l.id ORDER BY l.id`,[c.installationId,s.branchId,orderId]);
+  GROUP BY l.id,l.amount ORDER BY l.id`,[c.installationId,s.branchId,orderId]);
   // The canonical order lock serializes payment writes; the deferred allocation
   // guard also locks individual SALE rows to reject over-allocation.
   const receipt=await db.query<{id:string}>(`INSERT INTO payment_receipt
