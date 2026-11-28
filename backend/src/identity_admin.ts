@@ -81,6 +81,16 @@ export async function listScopes(db:PoolClient,installationId:string,actorId:str
     hasMoreBranches:a.rows.length>100,hasMoreWarehouses:b.rows.length>100,
   };
 }
+/** Canonical installation information is readable only by organization administrators. */
+export async function readOrganization(db:PoolClient,installationId:string,actorId:string){
+  if(!await hasPermission(db,{installationId,actorId,permission:"identity.roles.manage"}))
+    throw new MutationFault("FORBIDDEN",403);
+  const found=await db.query<{code:string;displayName:string}>(
+    'SELECT code,display_name AS "displayName" FROM installation WHERE id=$1',
+    [installationId]);
+  if(!found.rows[0])throw new IdentityError(404,"NOT_FOUND");
+  return found.rows[0];
+}
 /** Scope listing for a warehouse policy editor. Never expose unrelated warehouses. */
 export async function listPolicyScopes(db:PoolClient,installationId:string,actorId:string,offset=0){
   if(!Number.isSafeInteger(offset)||offset<0||offset>100000)
