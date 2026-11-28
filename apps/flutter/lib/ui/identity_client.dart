@@ -140,7 +140,7 @@ class ErpIdentityClient {
         final specificConflict=response.statusCode==409&&code!=null&&
           serverMessage!=null&&serverMessage.isNotEmpty&&serverMessage.length<=240;
         throw ErpApiError(response.statusCode,
-          specificConflict?serverMessage!:message,code:code);
+          specificConflict?serverMessage:message,code:code);
       }
       return decoded;
     }on ErpApiError{rethrow;}
