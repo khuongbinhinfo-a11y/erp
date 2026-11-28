@@ -47,6 +47,7 @@ function fail(res:ServerResponse,status:number,code:string,id:string,origin?:str
   STOCK_SCOPE_REQUIRED_OR_UNAVAILABLE:"Lô hoặc vị trí bắt buộc chưa hợp lệ, hoặc lô đã hết hạn.",
   NEGATIVE_ISSUE_DENIED:"Nhân viên không có quyền xuất âm kho.",
   RELEASE_ORDER_HOLDS_FIRST:"Đơn còn giữ hàng. Cần giải phóng trước khi xuất trực tiếp.",
+  INVENTORY_UNIQUE_CONFLICT:"Phát sinh xung đột ràng buộc chứng từ kho. Chưa thể xác nhận xuất kho; tải lại và đối soát trước khi thử lại.",
  } as Record<string,string>)[code]??(code==="ORDER_DIRECT_ISSUE_ONLY"
   ?"Đơn giao thủ công hoặc tại quầy không giữ hàng theo chuyến.":status===401?"Phiên đăng nhập không hợp lệ":
   status===403?"Bạn không có quyền trên kho này.":
@@ -161,7 +162,9 @@ export async function handleInventoryHttp(req:IncomingMessage,res:ServerResponse
      const state=url.searchParams.get("state")??"ACTIVE";
      if(!["ACTIVE","RELEASED"].includes(state))
       throw new InventoryFault(400,"INVALID_RESERVATION_STATE");
-     const page=await reservations(db,tenant,s,state as "ACTIVE"|"RELEASED",offset);
+     const product=url.searchParams.get("productId");
+     const page=await reservations(db,tenant,s,state as "ACTIVE"|"RELEASED",
+      offset,product==null?undefined:uuid(product));
      send(res,200,{...page,requestId:id},id,cors);
     }else{
      const page=url.pathname.endsWith("/balances")
@@ -475,7 +478,7 @@ export async function handleInventoryHttp(req:IncomingMessage,res:ServerResponse
   if(err instanceof InventoryFault){fail(res,err.status,err.code,id,cors);return;}
   if(err instanceof MutationFault){fail(res,err.httpStatus,err.code,id,cors);return;}
   if(err&&typeof err==="object"&&"code" in err){
-   if(err.code==="23505"){fail(res,409,"DUPLICATE_STOCK_DOCUMENT",id,cors);return;}
+   if(err.code==="23505"){fail(res,409,"INVENTORY_UNIQUE_CONFLICT",id,cors);return;}
    if(err.code==="P0001"){fail(res,409,"INVALID_STOCK_REFERENCE",id,cors);return;}
    if(err.code==="23503"||err.code==="23514"){
     fail(res,409,"INVALID_STOCK_REFERENCE",id,cors);return;}

@@ -28,6 +28,7 @@ IdentitySession loggedIn()=>IdentitySession(actorId:user,token:'local-test-token
 void main(){
   testWidgets('Desktop preview refreshes from canonical order after confirm, never mutates on select', (tester)async{
     var writes=0,details=0,confirmed=false;
+    const previewWarehouse='00000000-0000-4000-8000-000000000009';
     final grants=[...rights,
       IdentityGrant(roleId:'confirm',permission:'orders.confirm',branchId:branch)];
     final client=ErpIdentityClient(apiOrigin:'https://erp.example.test',
@@ -53,9 +54,21 @@ void main(){
             'versionStatus':confirmed?'CONFIRMED':'DRAFT','revision':confirmed?2:1,
             'fulfillmentStatus':'NOT_ALLOCATED','deliveryStatus':'NOT_DISPATCHED',
             'paymentStatus':'NOT_DUE','shipping':{'deliveryChoice':'MANUAL',
-              'warehouseName':'Kho chính'},'lines':[{'sku':'SP01','productName':'Sản phẩm A',
+              'warehouseName':'Kho chính','warehouseId':previewWarehouse},'lines':[{'sku':'SP01','productId':product,'productName':'Sản phẩm A',
               'unitCode':'cái','quantity':'2','unitPrice':'6000','lineTotal':'12000'}],
             'history':[]}});
+        }
+        if(request.url.path=='/v1/inventory/reservations'){
+          expect(request.method,'GET');
+          expect(request.url.queryParameters['productId'],product);
+          expect(request.url.queryParameters['warehouseId'],previewWarehouse);
+          expect(request.url.queryParameters['state'],'ACTIVE');
+          return reply({'items':[
+            {'orderId':order,'documentNo':'SO-01','quantityBase':'2.000000'},
+            {'orderId':'00000000-0000-4000-8000-000000000010',
+              'documentNo':'SO-02','quantityBase':'3.000000',
+              'backorderedBase':'0.000000'}],
+            'hasMore':false});
         }
         if(request.url.path=='/v1/sales/orders/$order/confirm'){
           expect(request.method,'POST');
@@ -87,6 +100,14 @@ void main(){
     expect(find.text('Chi tiết đơn hàng'),findsOneWidget);
     expect(find.text('SỐ LƯỢNG'),findsOneWidget);
     expect(find.text('Sản phẩm A'),findsOneWidget);
+    expect(find.byKey(const ValueKey('sales-preview-held-orders-0')),findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('sales-preview-held-orders-0')));
+    await tester.pumpAndSettle();
+    expect(find.text('SO-02'),findsOneWidget,
+      reason:'Show another order holding stock, not a same-order entry');
+    expect(find.text('Đã giữ: 3 · Chờ hàng: 0'),findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton,'Đóng'));
+    await tester.pumpAndSettle();
     expect(find.text('Đơn: Đang lập'),findsOneWidget);
     expect(writes,0,reason:'Selecting an order must never mutate inventory or sales');
     await tester.tap(find.widgetWithText(FilledButton,'Xác nhận'));

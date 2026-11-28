@@ -3189,7 +3189,7 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       g.permission==permission&&g.branchId==branchId&&g.warehouseId==warehouse);
     if(action=='issue'||action=='return'){
       if(!warehousePermission('inventory.post'))return false;
-      if(action=='issue')return branchPermission('orders.read');
+      if(action=='issue')return branchPermission('orders.update');
       return branchPermission('orders.update')&&branchPermission('delivery.update');
     }
     if(action=='complete')return branchPermission('orders.read')&&
@@ -3426,6 +3426,58 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     }
   }
 
+  /// Read only: show the other confirmed orders currently holding this product.
+  /// The server filters by warehouse/product BEFORE pagination and enforces RBAC.
+  Future<void> _showHeldOrders(Map<String,dynamic> order,Map<String,dynamic> line)async{
+    final branch=branchId,token=widget.session.token,shipping=order['shipping'];
+    final product=line['productId'],orderId=order['id'];
+    if(branch==null||shipping is! Map||
+      shipping['warehouseId'] is! String||product is! String||
+      orderId is! String)return;
+    final warehouse=shipping['warehouseId'] as String;
+    if(!widget.session.grants.any((g)=>g.permission=='inventory.read'&&
+       g.branchId==branch&&g.warehouseId==warehouse))return;
+    try{
+      final holds=<Map<String,dynamic>>[];
+      var offset=0;
+      while(true){
+        final page=await widget.client.inventoryPage(token,'reservations',
+          branchId:branch,warehouseId:warehouse,state:'ACTIVE',
+          productId:product,offset:offset);
+        if(!_sameScope(token,branch))return;
+        holds.addAll(page.items.where((r)=>r['orderId']!=orderId));
+        if(!page.hasMore)break;
+        offset+=100;
+        if(offset>100000)throw const ErpApiError(409,
+          'Có quá nhiều phiếu giữ hàng. Mở Kho → Hàng đã giữ để xem tiếp.');
+      }
+      if(!mounted||!_sameScope(token,branch))return;
+      await showDialog<void>(context:context,builder:(dialog)=>AlertDialog(
+        title:Text('Đơn khác đang giữ · '+(line['productName']??line['sku']??'Sản phẩm').toString(),
+          style:const TextStyle(fontSize:17,fontWeight:FontWeight.w700)),
+        content:SizedBox(width:510,child:holds.isEmpty
+          ?const Text('Không có đơn khác đang giữ sản phẩm này tại kho đã chọn.')
+          :ConstrainedBox(constraints:const BoxConstraints(maxHeight:360),
+            child:ListView.separated(shrinkWrap:true,itemCount:holds.length,
+              separatorBuilder:(_,__)=>const Divider(height:1),
+              itemBuilder:(ctx,i){
+                final hold=holds[i];
+                return ListTile(dense:true,
+                  title:Text((hold['documentNo']??'Đơn chưa có số').toString()),
+                  subtitle:Text('Đã giữ: '+erpGroupedDecimalText(hold['quantityBase'])+
+                    (hold['backorderedBase']==null?'':' · Chờ hàng: '+
+                    erpGroupedDecimalText(hold['backorderedBase']))));
+              }))),
+        actions:[TextButton(onPressed:()=>Navigator.pop(dialog),
+          child:const Text('Đóng'))],
+      ));
+    }on ErpApiError catch(e){
+      if(mounted)inform(e.message,error:true);
+    }catch(_){
+      if(mounted)inform('Không xem được đơn đang giữ hàng. Hãy kiểm tra lại.',error:true);
+    }
+  }
+
   Widget _previewPane(BuildContext context){
     final p=ErpPalette.of(context),item=_previewOrder;
     if(_selectedOrderId==null)return Center(child:Padding(
@@ -3616,6 +3668,16 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
                         if(sku.isNotEmpty&&sku!=title)
                           Text(sku,maxLines:1,overflow:TextOverflow.ellipsis,
                             style:TextStyle(fontSize:10,color:p.muted)),
+                        if(shipping['warehouseId'] is String&&line['productId'] is String&&
+                          widget.session.grants.any((g)=>g.permission=='inventory.read'&&
+                            g.branchId==branchId&&g.warehouseId==shipping['warehouseId']))
+                          Align(alignment:Alignment.centerLeft,child:IconButton(
+                            key:ValueKey('sales-preview-held-orders-$index'),
+                            tooltip:'Xem đơn khác đang giữ sản phẩm',
+                            icon:const Icon(Icons.visibility_outlined,size:17),
+                            padding:EdgeInsets.zero,
+                            constraints:const BoxConstraints(minWidth:32,minHeight:27),
+                            onPressed:()=>_showHeldOrders(item,Map<String,dynamic>.from(line)))),
                       ])),
                     column(erpGroupedDecimalText(line['quantity'])+' '+
                       (line['unitCode']??'').toString(),19,right:true),
