@@ -3093,6 +3093,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   Future<void> _openHtmlPrint(String html,String filename)async{
     if(erpSalesWebPrintSupported){erpOpenSalesPrint(html);return;}
     if(erpAndroidUpdateSupported){
+      if(html.length>1900000)throw const FormatException(
+        'Bản in quá lớn. Chọn ít đơn hơn để in lần lượt.');
       final opened=await const MethodChannel('erp/pos_receipt').invokeMethod<bool>(
         'printSalesOrder',{'html':html});
       if(opened!=true)throw const FormatException('Không mở được trình in');
@@ -3112,8 +3114,9 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   Future<void> _printSelectedOrders()async{
     final branch=branchId,token=widget.session.token;
     if(branch==null||_navigationLocked||_selectedBulkOrders.isEmpty)return;
-    final ids=orders.where((o)=>_selectedBulkOrders.contains(o['id']))
-      .map((o)=>o['id']).whereType<String>().toList(growable:false);
+    // Selection spans pagination and search. Resolve every captured ID
+    // canonically, or fail the whole print: never silently skip hidden rows.
+    final ids=_selectedBulkOrders.toList(growable:false);
     final confirmed=<Map<String,dynamic>>[];
     try{
       setState(()=>_manualBusy=true);
@@ -3128,6 +3131,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
       if(!_sameScope(token,branch))return;
       await _openHtmlPrint(confirmedSalesBatchPrintDocument(confirmed),
         'Phieu-xuat-kho-${confirmed.length}-don.html');
+    }on FormatException catch(e){
+      if(mounted)inform(e.message,error:true);
     }catch(_){
       if(mounted)inform('Không in được toàn bộ đơn đã chọn. Kiểm tra lại trạng thái và quyền.',error:true);
     }finally{if(mounted)setState(()=>_manualBusy=false);}
@@ -3225,9 +3230,8 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
   Future<void> _batchManual(String action)async{
     if(_navigationLocked||branchId==null||_selectedBulkOrders.isEmpty)return;
     final branch=branchId!,token=widget.session.token;
-    final chosen=orders.where((o)=>_selectedBulkOrders.contains(o['id']))
-      .toList(growable:false);
-    if(chosen.isEmpty){inform('Hãy chọn đơn hàng cần xử lý.',error:true);return;}
+    final chosenIds=_selectedBulkOrders.toList(growable:false);
+    if(chosenIds.isEmpty){inform('Hãy chọn đơn hàng cần xử lý.',error:true);return;}
     final prompt=action=='issue'?'Xuất kho':
       action=='complete'?'Hoàn thành thực giao':'Thu đủ công nợ theo từng đơn';
     var paymentMethod='CASH';
@@ -3264,13 +3268,13 @@ class _SalesWorkspaceState extends State<SalesWorkspace> {
     setState(()=>_manualBusy=true);
     final outcomes=<({String id,String label,bool success,String message})>[];
     try{
-      for(final row in chosen){
+      for(final id in chosenIds){
         if(!_sameScope(token,branch))break;
-        final label=(row['documentNo']??row['customerName']??'Đơn').toString(),
-          id=row['id'] as String;
+        var label=orders.where((o)=>o['id']==id).firstOrNull?['documentNo']?.toString()??id;
         try{
           // Server re-read BEFORE every write; list totals/prices can be stale.
           final detail=await widget.client.salesOrder(token,id,branch);
+          label=(detail['documentNo']??detail['customerName']??id).toString();
           final shipping=detail['shipping'];
           if(shipping is! Map||shipping['deliveryChoice']!='MANUAL'||
             shipping['warehouseId'] is! String||
