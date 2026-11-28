@@ -133,7 +133,14 @@ class ErpIdentityClient {
         final fault=decoded['error'];
         final code=fault is Map<String,dynamic> && fault['code'] is String
           ? fault['code'] as String : null;
-        throw ErpApiError(response.statusCode,message,code:code);
+        // The server owns 409 business rules (e.g. no available stock).
+        // Do not replace its specific message with a misleading "duplicate".
+        final serverMessage=fault is Map<String,dynamic> && fault['message'] is String
+          ? (fault['message'] as String).trim():null;
+        final specificConflict=response.statusCode==409&&code!=null&&
+          serverMessage!=null&&serverMessage.isNotEmpty&&serverMessage.length<=240;
+        throw ErpApiError(response.statusCode,
+          specificConflict?serverMessage:message,code:code);
       }
       return decoded;
     }on ErpApiError{rethrow;}

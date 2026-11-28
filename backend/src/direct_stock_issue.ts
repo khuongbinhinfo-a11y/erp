@@ -131,7 +131,10 @@ export async function stockScopes(db:PoolClient,t:string,s:WarehouseScope,p:stri
   require_lot AS "requireLot",revision::text FROM inventory_product_tracking
   WHERE installation_id=$1 AND branch_id=$2 AND warehouse_id=$3 AND product_id=$4`,
   [t,s.branchId,s.warehouseId,p]);
+ // Stock is the same canonical warehouse balance used by posting; this
+ // read-only snapshot is advisory. The issue transaction rechecks it.
  return {locations:locations.rows,lots:lots.rows,scopes:scoped.rows,
+  stock:await balance(db,t,s,p),
   policy:tracking.rows[0]??{requireLocation:false,requireLot:false,revision:"0"}};
 }
 export async function directIssueHistory(db:PoolClient,t:string,s:WarehouseScope,orderId:string){
