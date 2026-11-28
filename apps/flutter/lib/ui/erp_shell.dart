@@ -365,7 +365,7 @@ class _ErpShellState extends State<ErpShell> {
     return switch(index){
       0=>allowed('catalog.')||allowed('orders.')||allowed('inventory.')||allowed('finance.')||allowed('purchase.')||allowed('reports.')||allowed('org.employees.'),
       1=>allowed('orders.')||allowed('catalog.'),
-      2=>allowed('identity.'),
+      2=>allowed('identity.')||grants.any((g)=>g.permission=='inventory.policy.manage'&&g.warehouseId!=null),
       3=>allowed('orders.create'),
       4=>allowed('delivery.'),
       5=>allowed('orders.create'),
