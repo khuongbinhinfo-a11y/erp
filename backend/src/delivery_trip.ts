@@ -40,7 +40,7 @@ export async function tripResources(db:PoolClient,t:string,s:TripScope,type:"dri
  // Legacy 0027 drivers remain visible for reconciliation, but unlinked drivers
  // must never be considered eligible for a new plan or locked trip.
  return (await db.query(`SELECT d.id,COALESCE(e.code,d.code) AS code,
-  COALESCE(e.full_name,d.name) AS name,COALESCE(e.phone,d.phone) AS phone,
+  COALESCE(e.full_name,d.name) AS name,CASE WHEN e.id IS NULL THEN d.phone ELSE e.phone END AS phone,
   d.employee_id AS "employeeId",(d.active AND COALESCE(e.active,false)) AS active,
   (e.id IS NOT NULL) AS "linkedEmployee"
   FROM delivery_driver d LEFT JOIN org_employee e ON
