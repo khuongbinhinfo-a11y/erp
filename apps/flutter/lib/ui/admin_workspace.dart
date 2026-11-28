@@ -11,7 +11,8 @@ class AdminWorkspace extends StatefulWidget {
   final bool previewOnly;
   final ErpIdentityClient? client;
   final IdentitySession? session;
-  const AdminWorkspace({super.key,this.previewOnly=true,this.client,this.session});
+  final Future<void> Function()? onDirectoryChanged;
+  const AdminWorkspace({super.key,this.previewOnly=true,this.client,this.session,this.onDirectoryChanged});
   @override State<AdminWorkspace> createState()=>_AdminWorkspaceState();
 }
 
@@ -274,7 +275,7 @@ class _AdminWorkspaceState extends State<AdminWorkspace>{
           child:selected==2
             ? (!real||!allowed('identity.roles.manage')
                 ?const Text('Chỉ quản trị viên chính được quản lý chi nhánh và kho.')
-                :OrgDirectoryWorkspace(client:widget.client!,session:widget.session!))
+                :OrgDirectoryWorkspace(client:widget.client!,session:widget.session!,onScopesChanged:widget.onDirectoryChanged))
             :Card(child:Padding(padding:const EdgeInsets.all(18),
             child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
               Row(children:[
