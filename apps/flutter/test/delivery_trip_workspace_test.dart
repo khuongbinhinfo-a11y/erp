@@ -39,6 +39,10 @@ void main(){
               {'id':'00000000-0000-4000-8000-000000000093',
                 'code':'TX02','name':'Tài xế Hai','active':true},
             ]};
+          case '/v1/delivery/employees':
+            data={'items':[{'id':'00000000-0000-4000-8000-000000000095',
+              'code':'NV01','fullName':'Tài xế dự phòng',
+              'active':true,'revision':0,'linkedDriver':false}]};
           case '/v1/delivery/vehicles':
             data={'items':[
               {'id':'00000000-0000-4000-8000-000000000092',
@@ -145,7 +149,15 @@ void main(){
       expect(writes,0,reason:'Cancelling a draft dialog must not POST');
     }
     await cancelFocusedDialog(find.byKey(const ValueKey('trip-create')));
-    await cancelFocusedDialog(find.widgetWithText(OutlinedButton,'Thêm tài xế'));
+    await cancelFocusedDialog(find.widgetWithText(OutlinedButton,'Thêm nhân viên'));
+    // Driver is selected from the canonical employee registry, never typed.
+    await tester.tap(find.widgetWithText(OutlinedButton,'Liên kết tài xế'));
+    await tester.pumpAndSettle();
+    expect(find.text('Liên kết tài xế từ nhân viên'),findsOneWidget);
+    expect(find.textContaining('NV01 · Tài xế dự phòng'),findsWidgets);
+    await tester.tap(find.widgetWithText(TextButton,'Hủy').last);
+    await tester.pumpAndSettle();
+    expect(writes,0);
     await cancelFocusedDialog(find.widgetWithText(OutlinedButton,'Thêm xe'));
     // Reopened trip's second (not first) driver/vehicle must remain selected.
     await tester.tap(find.byKey(const ValueKey('trip-plan')));
