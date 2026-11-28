@@ -162,6 +162,12 @@ test("T5-B trip planner: two orders, driver/vehicle, sequencing, idempotency, lo
     ...s,fullName:"Nhân viên nghỉ",active:false},0)).status,200);
   assert.equal((await post("/v1/delivery/drivers",{
     ...s,employeeId:inactive.data.employee.id})).status,409);
+  await assert.rejects(db.query(`INSERT INTO delivery_driver
+    (installation_id,branch_id,warehouse_id,code,name,employee_id,created_by)
+    VALUES($1,$2,$3,'BYPASS01','Không hợp lệ',$4,$5)`,
+    [t,b,w,inactive.data.employee.id,scope.actorId]),
+    /Active driver requires active employee/,
+    "Database rejects inactive employee drivers even from direct SQL");
   const car=await post("/v1/delivery/vehicles",{...s,code:"C01",name:"Xe tải",licensePlate:"63A-12345"});
   assert.equal(dr.status,201,JSON.stringify(dr.data));
   assert.equal(car.status,201,JSON.stringify(car.data));
@@ -202,6 +208,11 @@ test("T5-B trip planner: two orders, driver/vehicle, sequencing, idempotency, lo
   assert.equal((await post("/v1/delivery/employees/"+staff.data.employee.id+"/update",{
     ...s,fullName:"Tài xế Một",active:false},1)).status,409,
     "Cannot disable employee while a locked delivery trip is outstanding");
+  await assert.rejects(db.query(`UPDATE org_employee SET active=false,
+    revision=revision+1,updated_at=now()
+    WHERE installation_id=$1 AND branch_id=$2 AND id=$3`,
+    [t,b,staff.data.employee.id]),/Employee has an outstanding trip/,
+    "Even direct SQL cannot deactivate a staff member with a locked trip");
   assert.equal((await post(path+"/reorder",{...s,orderIds:reversed},6)).status,409);
   // Concurrency: employee deactivation and planning must serialize on
   // the same canonical employee row. Exactly one may succeed.
