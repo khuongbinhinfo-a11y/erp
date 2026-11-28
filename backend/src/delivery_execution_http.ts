@@ -98,7 +98,7 @@ async function permitted(db:PoolClient,t:string,actor:string,s:Scope,action:Acti
  const required=action==="start"?["delivery.update","orders.read"]:
   action==="return"?["delivery.update","orders.read"]:
   action==="handover"?["delivery.cod.handover","finance.payments.record"]:
-  action==="read"?["orders.read"]:["delivery.execute"];
+  action==="read"?[]:["delivery.execute"];
  for(const permission of required)if(!await hasPermission(db,{installationId:t,actorId:actor,
   permission,branchId:s.branchId}))return false;
  if(!await hasPermission(db,{installationId:t,actorId:actor,
@@ -106,7 +106,9 @@ async function permitted(db:PoolClient,t:string,actor:string,s:Scope,action:Acti
   branchId:s.branchId,warehouseId:s.warehouseId}))return false;
  if(action==="read"){
   if(await hasPermission(db,{installationId:t,actorId:actor,
-   permission:"delivery.read",branchId:s.branchId}))return true;
+   permission:"delivery.read",branchId:s.branchId})&&
+   await hasPermission(db,{installationId:t,actorId:actor,
+   permission:"orders.read",branchId:s.branchId}))return true;
   if(!await hasPermission(db,{installationId:t,actorId:actor,
    permission:"delivery.execute",branchId:s.branchId}))return false;
   const r=await db.query<{yes:boolean}>(`SELECT EXISTS(SELECT 1 FROM delivery_trip t
@@ -138,6 +140,62 @@ export async function handleDeliveryExecutionHttp(req:IncomingMessage,res:Server
   try{actor=bearer?(await resolveSession(db,t,bearer))?.actorId:undefined;}
   finally{db.release();}
   if(!actor)err("AUTH_REQUIRED",401);
+
+  if(req.method==="GET"&&url.pathname==="/v1/delivery/execution/scopes"){
+   const x=await pool.connect();
+   try{
+    const rows=await x.query<{id:string;branchId:string;name:string;code:string}>(`
+      SELECT DISTINCT w.id,w.branch_id AS "branchId",w.name,w.code
+      FROM delivery_trip t JOIN delivery_driver d ON d.installation_id=t.installation_id
+        AND d.branch_id=t.branch_id AND d.id=t.driver_id
+      JOIN org_employee e ON e.installation_id=d.installation_id
+        AND e.branch_id=d.branch_id AND e.id=d.employee_id
+      JOIN warehouse w ON w.installation_id=t.installation_id
+        AND w.branch_id=t.branch_id AND w.id=t.warehouse_id
+      WHERE t.installation_id=$1 AND e.account_user_id=$2
+        AND t.status='LOCKED' AND d.active AND e.active
+      ORDER BY w.name,w.id`,[t,actor]);
+    const allowed=[];
+    for(const w of rows.rows){
+     if(await hasPermission(x,{installationId:t,actorId:actor!,permission:"delivery.execute",
+      branchId:w.branchId})&&await hasPermission(x,{installationId:t,actorId:actor!,
+      permission:"inventory.read",branchId:w.branchId,warehouseId:w.id}))allowed.push(w);
+    }
+    send(res,200,{warehouses:allowed,requestId:rid},rid,cors);
+   }finally{x.release();}
+   return;
+  }
+  if(req.method==="GET"&&url.pathname==="/v1/delivery/execution/trips"){
+   const branchId=id(url.searchParams.get("branchId")),
+    warehouseId=id(url.searchParams.get("warehouseId"));
+   const offsetRaw=url.searchParams.get("offset")??"0";
+   if(!/^(0|[1-9][0-9]{0,5})$/.test(offsetRaw)||Number(offsetRaw)%100!==0)
+    err("INVALID_OFFSET");
+   const x=await pool.connect();
+   try{
+    if(!await hasPermission(x,{installationId:t,actorId:actor!,
+      permission:"delivery.execute",branchId})||
+      !await hasPermission(x,{installationId:t,actorId:actor!,
+      permission:"inventory.read",branchId,warehouseId}))err("FORBIDDEN",403);
+    const rows=await x.query(`SELECT t.id,t.trip_no AS "tripNo",
+      t.planned_date::text AS "plannedDate",t.status,
+      count(st.order_id)::integer AS "stopCount"
+      FROM delivery_trip t JOIN delivery_driver d ON d.installation_id=t.installation_id
+       AND d.branch_id=t.branch_id AND d.id=t.driver_id
+      JOIN org_employee e ON e.installation_id=d.installation_id
+       AND e.branch_id=d.branch_id AND e.id=d.employee_id
+      LEFT JOIN delivery_trip_stop st ON st.installation_id=t.installation_id
+       AND st.branch_id=t.branch_id AND st.trip_id=t.id
+      WHERE t.installation_id=$1 AND t.branch_id=$2 AND t.warehouse_id=$3
+      AND e.account_user_id=$4 AND t.status='LOCKED' AND d.active AND e.active
+      GROUP BY t.installation_id,t.branch_id,t.id
+      ORDER BY t.planned_date DESC,t.id DESC LIMIT 101 OFFSET $5`,
+      [t,branchId,warehouseId,actor,Number(offsetRaw)]);
+    send(res,200,{items:rows.rows.slice(0,100),
+      hasMore:rows.rows.length>100,requestId:rid},rid,cors);
+   }finally{x.release();}
+   return;
+  }
   if(req.method==="GET"&&url.pathname==="/v1/delivery/execution/read"){
    const s=scope({branchId:url.searchParams.get("branchId"),warehouseId:url.searchParams.get("warehouseId"),
     tripId:url.searchParams.get("tripId")});

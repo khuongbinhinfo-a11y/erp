@@ -294,21 +294,23 @@ CREATE CONSTRAINT TRIGGER t5d_return_commit AFTER INSERT ON delivery_trip_return
 -- Existing payment receipt guard now recognizes TRIP fulfillment; the same
 -- shared payment_allocation and customer AR checks still apply.
 CREATE OR REPLACE FUNCTION erp_t5a_receipt_commit_guard() RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE matching_order uuid;payment_count integer;payment_amount numeric;allocated_amount numeric;
+DECLARE matching_order uuid;receipt_mode text;payment_count integer;payment_amount numeric;allocated_amount numeric;
 BEGIN
  IF NEW.fulfillment_id IS NULL THEN RETURN NULL; END IF;
- SELECT order_id INTO matching_order FROM sales_fulfillment WHERE
+ SELECT order_id,mode INTO matching_order,receipt_mode FROM sales_fulfillment WHERE
  installation_id=NEW.installation_id AND branch_id=NEW.branch_id
  AND id=NEW.fulfillment_id AND mode IN ('MANUAL','TRIP');
  IF matching_order IS NULL OR matching_order<>NEW.order_id
- THEN RAISE EXCEPTION 'Payment receipt must match fulfilled order'; END IF;
+ THEN RAISE EXCEPTION '% receipt must match fulfilled order',
+ CASE WHEN receipt_mode='TRIP' THEN 'TRIP' ELSE 'MANUAL' END; END IF;
  SELECT coalesce(sum(allocated),0) INTO allocated_amount FROM payment_allocation
  WHERE installation_id=NEW.installation_id AND branch_id=NEW.branch_id AND receipt_id=NEW.id;
  SELECT count(*),coalesce(-sum(amount),0) INTO payment_count,payment_amount
  FROM customer_receivable_ledger WHERE installation_id=NEW.installation_id
  AND branch_id=NEW.branch_id AND order_id=NEW.order_id AND kind='PAYMENT' AND source_id=NEW.id;
  IF allocated_amount<>NEW.amount OR payment_count<>1 OR payment_amount<>NEW.amount
- THEN RAISE EXCEPTION 'Receipt must match one posted payment and allocation'; END IF;
+ THEN RAISE EXCEPTION '% receipt must match one posted payment and allocation',
+ CASE WHEN receipt_mode='TRIP' THEN 'TRIP' ELSE 'MANUAL' END; END IF;
  RETURN NULL;
 END $$;
 

@@ -964,6 +964,23 @@ class ErpIdentityClient {
     final r=await _request('GET','/v1/delivery/execution/read?$q',token:session.token);
     return Map<String,dynamic>.from(r['execution'] as Map);
   }
+
+  Future<List<IdentityScope>> deliveryDriverScopes(IdentitySession session)async{
+    final r=await _request('GET','/v1/delivery/execution/scopes',token:session.token);
+    return (r['warehouses'] as List<dynamic>).map((x)=>
+      IdentityScope.fromJson(Map<String,dynamic>.from(x as Map))).toList();
+  }
+  Future<List<Map<String,dynamic>>> deliveryDriverTrips(IdentitySession session,{
+    required String branchId,required String warehouseId,int offset=0})async{
+    if(offset<0||offset%100!=0||offset>100000){
+      throw const ErpApiError(400,'Trang danh sách chuyến không hợp lệ.');
+    }
+    final q=Uri(queryParameters:{'branchId':branchId,'warehouseId':warehouseId,
+      'offset':offset.toString()}).query;
+    final r=await _request('GET','/v1/delivery/execution/trips?$q',token:session.token);
+    return (r['items'] as List<dynamic>).map((x)=>
+      Map<String,dynamic>.from(x as Map)).toList();
+  }
   Future<Map<String,dynamic>> deliveryExecutionWrite(IdentitySession session,
       String action,Map<String,dynamic> payload,int revision)async{
     if(!const {'start','attempt','return','collect','handover'}.contains(action))

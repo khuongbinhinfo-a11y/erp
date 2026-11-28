@@ -204,7 +204,7 @@ export async function executionRead(db:PoolClient,c:MutationContext,s:Scope){
  LEFT JOIN delivery_cod_handover_line l ON l.installation_id=c.installation_id
  AND l.branch_id=c.branch_id AND l.collection_id=c.id
  WHERE c.installation_id=$1 AND c.branch_id=$2 AND c.trip_id=$3
- GROUP BY c.id,p.method ORDER BY c.collected_at,c.id`,[c.installationId,s.branchId,s.tripId]);
+ GROUP BY c.id,c.order_id,c.amount,c.collected_at,p.method ORDER BY c.collected_at,c.id`,[c.installationId,s.branchId,s.tripId]);
  return {tripId:s.tripId,tripNo:tr.tripNo,revision:tr.revision,
   status:departure.rowCount?"DEPARTED":tr.status,driverId:tr.driverId,
   stops:out,collections:money.rows};

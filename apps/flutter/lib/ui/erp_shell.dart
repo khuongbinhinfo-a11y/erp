@@ -5,6 +5,7 @@ import 'erp_tokens.dart';
 import 'erp_navigation_ui.dart';
 import 'company_workspace.dart';
 import 'delivery_trip_workspace.dart';
+import 'driver_trip_workspace.dart';
 import 'retail_pos_workspace.dart';
 import 'pos_window_stub.dart' if (dart.library.js_interop) 'pos_window_web.dart';
 import 'admin_workspace.dart';
@@ -339,9 +340,15 @@ class _ErpShellState extends State<ErpShell> {
     } else if(selected==4&&!widget.previewOnly&&
         widget.client!=null&&activeSession!=null){
       // Share the canonical trip backend and UI with Công Ty → Giao nhận.
-      content=SingleChildScrollView(child:DeliveryTripWorkspace(
-        key:const ValueKey('erp-delivery-canonical'),
-        client:widget.client!,session:activeSession!));
+      final canDispatch=activeSession.grants.any((g)=>
+        g.permission=='delivery.read');
+      content=SingleChildScrollView(child:canDispatch
+        ?DeliveryTripWorkspace(
+          key:const ValueKey('erp-delivery-canonical'),
+          client:widget.client!,session:activeSession!)
+        :DriverTripWorkspace(
+          key:const ValueKey('erp-driver-canonical'),
+          client:widget.client!,session:activeSession!));
     } else if(selected==3){
       // Dedicated supermarket-style POS surface: no distribution order list
       // or order form is mounted in the Bán Lẻ module.
