@@ -78,3 +78,39 @@ export async function linkDriver(db:PoolClient,c:MutationContext,s:TripScope,
    e.id,c.actorId]);
  return {status:201,body:{resource:result.rows[0]}};
 }
+
+/** Explicit history-preserving reconciliation of a pre-0028 driver profile.
+ * Never relabel or delete the original driver/trip; operator selects employee.
+ * Both driver and employee locks serialize simultaneous migration/assignment.
+ */
+export async function linkExistingDriver(db:PoolClient,c:MutationContext,s:TripScope,
+ driverId:string,employeeId:string){
+ requireRevision(c.expectedRevision,0);
+ const previous=await db.query<{id:string;code:string;name:string;active:boolean}>(`
+  SELECT id,code,name,active FROM delivery_driver
+  WHERE installation_id=$1 AND branch_id=$2 AND warehouse_id=$3
+    AND id=$4 AND employee_id IS NULL FOR UPDATE`,
+  [c.installationId,s.branchId,s.warehouseId,driverId]);
+ if(!previous.rows[0])fail("LEGACY_DRIVER_NOT_AVAILABLE");
+ const employee=await db.query<{id:string;code:string;full_name:string;phone:string|null}>(`
+  SELECT id,code,full_name,phone FROM org_employee
+  WHERE installation_id=$1 AND branch_id=$2 AND id=$3 AND active
+  FOR UPDATE`,[c.installationId,s.branchId,employeeId]);
+ if(!employee.rows[0])fail("DRIVER_EMPLOYEE_NOT_AVAILABLE");
+ const already=await db.query(`SELECT 1 FROM delivery_driver
+  WHERE installation_id=$1 AND employee_id=$2 AND active LIMIT 1`,
+  [c.installationId,employeeId]);
+ if(already.rowCount)fail("DRIVER_EMPLOYEE_ALREADY_LINKED");
+ const changed=await db.query(`UPDATE delivery_driver SET employee_id=$5
+  WHERE installation_id=$1 AND branch_id=$2 AND warehouse_id=$3
+    AND id=$4 AND employee_id IS NULL
+  RETURNING id,code,name,active,employee_id AS "employeeId"`,
+  [c.installationId,s.branchId,s.warehouseId,driverId,employeeId]);
+ if(!changed.rowCount)fail("LEGACY_DRIVER_CHANGED");
+ // The canonical employee is joined for UI/trip. Historic driver code and
+ // documents remain untouched to protect already-locked trip lineage.
+ return {status:200,body:{resource:{...changed.rows[0],
+  employeeCode:employee.rows[0].code,
+  employeeName:employee.rows[0].full_name,
+  employeePhone:employee.rows[0].phone}}};
+}
