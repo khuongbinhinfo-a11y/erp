@@ -263,6 +263,26 @@ class ErpIdentityClient {
     return (r['events'] as List<dynamic>).map(
       (v)=>Map<String,dynamic>.from(v as Map)).toList();
   }
+  /// Trip scope directory is distinct from the identity-admin grant directory.
+  /// No other branch or warehouse can be selected through this client.
+  Future<IdentityScopes> deliveryScopes(String token)async{
+    final branches=<String,IdentityScope>{},warehouses=<String,IdentityScope>{};
+    for(var offset=0;offset<=100000;offset+=100){
+      final suffix=offset==0?'':'?offset=$offset';
+      final r=await _request('GET','/v1/delivery/scopes$suffix',token:token);
+      for(final item in (r['branches'] as List<dynamic>)){
+        final x=IdentityScope.fromJson(item as Map<String,dynamic>);
+        branches[x.id]=x;
+      }
+      for(final item in (r['warehouses'] as List<dynamic>)){
+        final x=IdentityScope.fromJson(item as Map<String,dynamic>);
+        warehouses[x.id]=x;
+      }
+      if(r['hasMoreWarehouses']!=true)
+        return IdentityScopes(branches.values.toList(),warehouses.values.toList());
+    }
+    throw const ErpApiError(503,'Danh sách kho điều phối vượt giới hạn.');
+  }
   Future<IdentityScopes> scopes(String token)async{
     final branches=<IdentityScope>[],warehouses=<IdentityScope>[];
     List<IdentityScope> parse(dynamic v)=>(v as List<dynamic>).map((x)=>
