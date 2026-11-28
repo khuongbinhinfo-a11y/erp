@@ -14,7 +14,9 @@ class InventoryWorkspace extends StatefulWidget {
   final ErpIdentityClient client;
   final IdentitySession session;
   final Map<String,dynamic>? initialOrder;
-  const InventoryWorkspace({super.key,required this.client,required this.session,this.initialOrder});
+  final void Function(String branch,String warehouse)? onOpenDelivery;
+  const InventoryWorkspace({super.key,required this.client,required this.session,
+    this.initialOrder,this.onOpenDelivery});
   @override State<InventoryWorkspace> createState()=>_InventoryWorkspaceState();
 }
 class _InventoryWorkspaceState extends State<InventoryWorkspace> {
@@ -537,6 +539,15 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
           onPressed:busy||hasPending?null:configureStockScopes,
           icon:const Icon(Icons.layers_outlined),
           label:const Text('Lô và vị trí')),
+        if(widget.onOpenDelivery!=null&&branchId!=null&&warehouseId!=null&&
+          widget.session.grants.any((g)=>g.permission=='delivery.read'&&g.branchId==branchId)&&
+          widget.session.grants.any((g)=>g.permission=='orders.read'&&g.branchId==branchId)&&
+          can('inventory.read'))OutlinedButton.icon(
+          key:const ValueKey('inventory-open-delivery'),
+          onPressed:busy||hasPending?null:
+            ()=>widget.onOpenDelivery!(branchId!,warehouseId!),
+          icon:const Icon(Icons.route_outlined),
+          label:const Text('Điều phối giao')),
         if(can('inventory.post'))OutlinedButton.icon(
           key:const ValueKey('inventory-manual-issue'),
           onPressed:busy||hasPending?null:()=>issueDirect(),
