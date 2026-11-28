@@ -107,6 +107,26 @@ test("T5-B trip planner: two orders, driver/vehicle, sequencing, idempotency, lo
   assert.equal(another.status,201);
   assert.equal((await post("/v1/delivery/trips/"+another.data.id+"/assign",
     {...s,orderIds:[a]},0)).status,409);
+  // 100+ routes must remain accessible, including older PLANNED/DRAFT trips.
+  // Seed additional trip fixtures only in this isolated ephemeral CI DB.
+  await db.query(`INSERT INTO delivery_trip
+    (installation_id,branch_id,warehouse_id,trip_no,planned_date,created_by)
+    SELECT $1,$2,$3,'TG-20261129-'||lpad(n::text,6,'0'),
+      DATE '2026-11-29',$4 FROM generate_series(1,101) AS g(n)`,
+    [t,b,w,scope.actorId]);
+  const firstPage=await call("/v1/delivery/trips"+qs,"GET",undefined,token);
+  const nextPage=await call("/v1/delivery/trips"+qs+"&offset=100","GET",undefined,token);
+  assert.equal(firstPage.status,200,JSON.stringify(firstPage.data));
+  assert.equal(nextPage.status,200,JSON.stringify(nextPage.data));
+  assert.equal(firstPage.data.items.length,100);
+  assert.equal(nextPage.data.items.length,3);
+  assert.equal(new Set([...firstPage.data.items,...nextPage.data.items]
+    .map((x:any)=>x.id)).size,103);
+  assert.equal((await call("/v1/delivery/trips"+qs+"&offset=1",
+    "GET",undefined,token)).status,400);
+  assert.equal((await call("/v1/delivery/trips"+qs+"&offset=-100",
+    "GET",undefined,token)).status,400);
+  assert.equal((await call(path+qs,"GET",undefined,token)).status,200);
   const ledger=await db.query<{n:string}>(`SELECT count(*)::text AS n FROM inventory_ledger
     WHERE installation_id=$1 AND branch_id=$2`,[t,b]);
   assert.equal(ledger.rows[0]?.n,"0");
