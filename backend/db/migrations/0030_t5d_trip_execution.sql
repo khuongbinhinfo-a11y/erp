@@ -354,3 +354,113 @@ INSERT INTO role_permission(installation_id,role_id,permission_code)
  SELECT r.installation_id,r.id,'delivery.cod.handover' FROM app_role r
  WHERE r.code='PRIMARY_OWNER_MAIN' OR r.code LIKE 'OWNER_BRANCH_%'
  ON CONFLICT DO NOTHING;
+
+
+-- Deferred terminal attempt invariants also catch direct SQL callers:
+-- exactly one result per remaining physical issue source, no orphan or
+-- fabricated sale AR, no premature delivery/return. Serial mutations lock
+-- the canonical order before posting in the same transaction.
+CREATE FUNCTION erp_t5d_attempt_commit_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE src record; prior_delivery numeric; prior_return numeric;
+ current_qty numeric; remaining_qty numeric; total_delivered numeric:=0;
+ total_remaining numeric:=0; source_count integer:=0; actual_count integer;
+ posted_amount numeric; posted_count integer;
+BEGIN
+ SELECT count(*),coalesce(sum(amount),0) INTO posted_count,posted_amount
+ FROM customer_receivable_ledger WHERE installation_id=NEW.installation_id
+  AND branch_id=NEW.branch_id AND order_id=NEW.order_id AND kind='SALE'
+  AND source_id=NEW.id;
+ IF posted_amount<>NEW.amount OR
+   (NEW.amount>0 AND posted_count<>1) OR
+   (NEW.amount=0 AND posted_count<>0)
+ THEN RAISE EXCEPTION 'Delivery attempt and canonical sale AR do not reconcile'; END IF;
+ IF NEW.result IN ('FAILED','RESCHEDULED') AND NEW.amount<>0
+ THEN RAISE EXCEPTION 'Unsuccessful delivery cannot generate receivable'; END IF;
+ FOR src IN SELECT l.dispatch_id,l.source_line,l.quantity_base
+ FROM sales_trip_dispatch h JOIN sales_trip_dispatch_line l
+ ON l.installation_id=h.installation_id AND l.branch_id=h.branch_id AND l.dispatch_id=h.id
+ JOIN delivery_trip_stop st ON st.installation_id=h.installation_id
+  AND st.branch_id=h.branch_id AND st.order_id=h.order_id
+  AND st.order_version=h.version_no
+ WHERE st.installation_id=NEW.installation_id AND st.branch_id=NEW.branch_id
+  AND st.trip_id=NEW.trip_id AND st.order_id=NEW.order_id
+ ORDER BY l.dispatch_id,l.source_line LOOP
+  SELECT coalesce(sum(l.quantity_base),0) INTO prior_delivery
+  FROM delivery_trip_attempt_line l JOIN delivery_trip_attempt a
+   ON a.installation_id=l.installation_id AND a.branch_id=l.branch_id AND a.id=l.attempt_id
+  WHERE a.installation_id=NEW.installation_id AND a.branch_id=NEW.branch_id
+   AND a.trip_id=NEW.trip_id AND a.order_id=NEW.order_id AND a.id<>NEW.id
+   AND l.dispatch_id=src.dispatch_id AND l.source_line=src.source_line;
+  SELECT coalesce(sum(l.quantity_base),0) INTO prior_return
+  FROM delivery_trip_return_line l JOIN delivery_trip_return r
+   ON r.installation_id=l.installation_id AND r.branch_id=l.branch_id AND r.id=l.return_id
+  WHERE r.installation_id=NEW.installation_id AND r.branch_id=NEW.branch_id
+   AND r.trip_id=NEW.trip_id AND r.order_id=NEW.order_id
+   AND l.dispatch_id=src.dispatch_id AND l.dispatch_source_line=src.source_line;
+  SELECT coalesce(sum(quantity_base),0) INTO current_qty
+  FROM delivery_trip_attempt_line WHERE installation_id=NEW.installation_id
+   AND branch_id=NEW.branch_id AND attempt_id=NEW.id
+   AND dispatch_id=src.dispatch_id AND source_line=src.source_line;
+  remaining_qty:=src.quantity_base-prior_delivery-prior_return;
+  IF remaining_qty<0 OR current_qty<0 OR current_qty>remaining_qty
+  THEN RAISE EXCEPTION 'Delivery quantity exceeds remaining physical issue'; END IF;
+  IF remaining_qty>0 THEN
+   source_count:=source_count+1;
+   IF NOT EXISTS(SELECT 1 FROM delivery_trip_attempt_line
+     WHERE installation_id=NEW.installation_id AND branch_id=NEW.branch_id
+      AND attempt_id=NEW.id AND dispatch_id=src.dispatch_id
+      AND source_line=src.source_line)
+   THEN RAISE EXCEPTION 'Delivery attempt must cover every remaining issue line'; END IF;
+  ELSIF EXISTS(SELECT 1 FROM delivery_trip_attempt_line
+     WHERE installation_id=NEW.installation_id AND branch_id=NEW.branch_id
+      AND attempt_id=NEW.id AND dispatch_id=src.dispatch_id
+      AND source_line=src.source_line)
+   THEN RAISE EXCEPTION 'Delivery attempt includes an already settled issue line';
+  END IF;
+  IF NEW.result='DELIVERED_FULL' AND current_qty<>remaining_qty
+  THEN RAISE EXCEPTION 'Full delivery must cover remaining physical issue'; END IF;
+  total_delivered:=total_delivered+current_qty;
+  total_remaining:=total_remaining+remaining_qty-current_qty;
+ END LOOP;
+ SELECT count(*) INTO actual_count FROM delivery_trip_attempt_line
+ WHERE installation_id=NEW.installation_id AND branch_id=NEW.branch_id AND attempt_id=NEW.id;
+ IF source_count=0 OR actual_count<>source_count
+ THEN RAISE EXCEPTION 'Delivery attempt has invalid source line set'; END IF;
+ IF NEW.result='DELIVERED_FULL' AND (total_delivered<=0 OR total_remaining<>0)
+ THEN RAISE EXCEPTION 'Full delivery quantity mismatch'; END IF;
+ IF NEW.result='DELIVERED_PARTIAL' AND (total_delivered<=0 OR total_remaining<=0)
+ THEN RAISE EXCEPTION 'Partial delivery requires delivered and remaining quantity'; END IF;
+ IF NEW.result IN ('FAILED','RESCHEDULED') AND total_delivered<>0
+ THEN RAISE EXCEPTION 'Failed delivery cannot record delivered quantity'; END IF;
+ RETURN NULL;
+END $$;
+CREATE CONSTRAINT TRIGGER t5d_attempt_commit_guard AFTER INSERT ON delivery_trip_attempt
+ DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION erp_t5d_attempt_commit_guard();
+
+CREATE FUNCTION erp_t5d_return_header_commit_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF NOT EXISTS(SELECT 1 FROM delivery_trip_return_line l
+  WHERE l.installation_id=NEW.installation_id AND l.branch_id=NEW.branch_id
+   AND l.return_id=NEW.id)
+ THEN RAISE EXCEPTION 'Trip return must contain actual goods and matching ledger'; END IF;
+ RETURN NULL;
+END $$;
+CREATE CONSTRAINT TRIGGER t5d_return_header_commit AFTER INSERT ON delivery_trip_return
+ DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION erp_t5d_return_header_commit_guard();
+
+CREATE FUNCTION erp_t5d_cod_collection_commit_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE receipt_amount numeric;receipt_method text;receipt_order uuid;active_driver uuid;
+BEGIN
+ SELECT amount,method,order_id INTO receipt_amount,receipt_method,receipt_order
+ FROM payment_receipt WHERE installation_id=NEW.installation_id
+  AND branch_id=NEW.branch_id AND id=NEW.receipt_id;
+ SELECT driver_id INTO active_driver FROM delivery_trip WHERE
+ installation_id=NEW.installation_id AND branch_id=NEW.branch_id AND id=NEW.trip_id;
+ IF receipt_amount IS DISTINCT FROM NEW.amount OR receipt_method<>'CASH'
+  OR receipt_order IS DISTINCT FROM NEW.order_id
+  OR active_driver IS DISTINCT FROM NEW.driver_id
+ THEN RAISE EXCEPTION 'Cash custody must match canonical collected payment and trip driver'; END IF;
+ RETURN NULL;
+END $$;
+CREATE CONSTRAINT TRIGGER t5d_collection_commit AFTER INSERT ON delivery_cod_collection
+ DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION erp_t5d_cod_collection_commit_guard();

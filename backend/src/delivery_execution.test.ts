@@ -148,9 +148,16 @@ test("T5-D: real PG dispatch, driver attempt, custody return, AR, COD and handov
   assert.equal((await write(exec+"return",{
    ...retBody,lines:[{...src,quantityBase:"2"}]},returned.data.revision)).status,409,
    "must reject a return larger than actual goods still on the truck");
-  const failAttempt=await write(exec+"attempt",{
-   ...body,orderId,result:"FAILED",reasonCode:"CUSTOMER_ABSENT"},returned.data.revision);
-  assert.equal(failAttempt.status,201,JSON.stringify(failAttempt.data));
+  // Two devices, two distinct keys, same If-Match revision: at most one
+  // terminal attempt may commit. The losing request must reconcile first.
+  const raceBody={...body,orderId,result:"FAILED",reasonCode:"CUSTOMER_ABSENT"};
+  const [raceA,raceB]=await Promise.all([
+   write(exec+"attempt",raceBody,returned.data.revision,"device-a-"+randomUUID()),
+   write(exec+"attempt",raceBody,returned.data.revision,"device-b-"+randomUUID())
+  ]);
+  assert.deepEqual([raceA.status,raceB.status].sort((a,b)=>a-b),[201,409],
+   "concurrent devices must not create duplicate attempt facts");
+  const failAttempt=raceA.status===201?raceA:raceB;
   assert.equal(failAttempt.data.due,"2000");
   const finish=await write(exec+"attempt",{
    ...body,orderId,result:"DELIVERED_FULL"},failAttempt.data.revision);

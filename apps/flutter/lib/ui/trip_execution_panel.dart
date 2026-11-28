@@ -79,10 +79,8 @@ class _TripExecutionPanelState extends State<TripExecutionPanel>{
   final lines=available(stop);if(lines.isEmpty)return;
   String result='DELIVERED_FULL',reason='CUSTOMER_ABSENT';
   DateTime next=DateTime.now().add(const Duration(days:1));
-  final controls=[for(final x in lines)
-   TextEditingController(text:x['onVehicleBase']?.toString()??'0')];
-  try{
-   final payload=await showModalBottomSheet<Map<String,dynamic>>(context:context,
+  final values=[for(final _ in lines)'0'];
+  final payload=await showModalBottomSheet<Map<String,dynamic>>(context:context,
     isScrollControlled:true,showDragHandle:true,builder:(sheetContext)=>
     StatefulBuilder(builder:(sheetContext,refresh)=>Padding(
      padding:EdgeInsets.fromLTRB(16,4,16,
@@ -107,7 +105,7 @@ class _TripExecutionPanelState extends State<TripExecutionPanel>{
         const SizedBox(height:10),
         for(int i=0;i<lines.length;i++)Padding(
          padding:const EdgeInsets.only(bottom:8),
-         child:TextFormField(controller:controls[i],
+         child:TextFormField(initialValue:values[i],onChanged:(v)=>values[i]=v,
           keyboardType:const TextInputType.numberWithOptions(decimal:true),
           decoration:InputDecoration(isDense:true,
            labelText:'${lines[i]['productName']} · ${lines[i]['baseUnit']}',
@@ -143,7 +141,7 @@ class _TripExecutionPanelState extends State<TripExecutionPanel>{
           for(int i=0;i<lines.length;i++){
            'dispatchId':lines[i]['dispatchId'],
            'sourceLine':lines[i]['sourceLine'],
-           'deliveredBase':controls[i].text.trim()
+           'deliveredBase':values[i].trim()
           }],
          if(result=='FAILED'||result=='RESCHEDULED')'reasonCode':reason,
          if(result=='RESCHEDULED')'rescheduledFor':_stamp(next)
@@ -152,14 +150,12 @@ class _TripExecutionPanelState extends State<TripExecutionPanel>{
       ]))),
     ));
    if(payload!=null)await _write('attempt',payload,stop['revision'] as int);
-  }finally{for(final c in controls){c.dispose();}}
  }
  Future<void> _returnGoods(Map<String,dynamic> stop)async{
   final lines=available(stop);if(lines.isEmpty)return;
-  final reason=TextEditingController();
-  final controls=[for(int i=0;i<lines.length;i++)TextEditingController(text:'0')];
-  try{
-   final payload=await showModalBottomSheet<Map<String,dynamic>>(
+  var reason='';
+  final values=[for(final _ in lines)'0'];
+  final payload=await showModalBottomSheet<Map<String,dynamic>>(
     context:context,isScrollControlled:true,showDragHandle:true,
     builder:(sheetContext)=>Padding(
      padding:EdgeInsets.fromLTRB(16,4,16,MediaQuery.viewInsetsOf(sheetContext).bottom+16),
@@ -170,18 +166,18 @@ class _TripExecutionPanelState extends State<TripExecutionPanel>{
         style:Theme.of(sheetContext).textTheme.titleMedium),
        const SizedBox(height:10),
        for(int i=0;i<lines.length;i++)TextFormField(
-        controller:controls[i],keyboardType:const TextInputType.numberWithOptions(decimal:true),
+        initialValue:values[i],onChanged:(v)=>values[i]=v,keyboardType:const TextInputType.numberWithOptions(decimal:true),
         decoration:InputDecoration(isDense:true,
          labelText:'${lines[i]['productName']} · ${lines[i]['baseUnit']}',
          helperText:'Còn trên xe: ${lines[i]['onVehicleBase']}')),
        const SizedBox(height:8),
-       TextFormField(controller:reason,decoration:const InputDecoration(
+       TextFormField(onChanged:(v)=>reason=v,decoration:const InputDecoration(
         isDense:true,labelText:'Lý do nhập trả')),
        const SizedBox(height:12),
        FilledButton(onPressed:()=>Navigator.of(sheetContext).pop({
-        'orderId':stop['orderId'],'reason':reason.text.trim(),
+        'orderId':stop['orderId'],'reason':reason.trim(),
         'lines':[for(int i=0;i<lines.length;i++)
-         if(controls[i].text.trim()!='0'&&controls[i].text.trim()!='0.000000')
+         if(values[i].trim()!='0'&&controls[i].text.trim()!='0.000000')
           {'dispatchId':lines[i]['dispatchId'],
            'sourceLine':lines[i]['sourceLine'],
            'quantityBase':controls[i].text.trim()}]
@@ -189,13 +185,11 @@ class _TripExecutionPanelState extends State<TripExecutionPanel>{
       ]))),
    );
    if(payload!=null)await _write('return',payload,stop['revision'] as int);
-  }finally{reason.dispose();for(final c in controls){c.dispose();}}
  }
  Future<void> _collect(Map<String,dynamic> stop)async{
-  final amount=TextEditingController(text:stop['remaining']?.toString()??'0');
+  var amount=stop['remaining']?.toString()??'0';
   String method='CASH';
-  try{
-   final payload=await showModalBottomSheet<Map<String,dynamic>>(
+  final payload=await showModalBottomSheet<Map<String,dynamic>>(
     context:context,isScrollControlled:true,showDragHandle:true,
     builder:(sheetContext)=>StatefulBuilder(builder:(sheetContext,refresh)=>
      Padding(padding:EdgeInsets.fromLTRB(16,8,16,MediaQuery.viewInsetsOf(sheetContext).bottom+16),
@@ -205,7 +199,8 @@ class _TripExecutionPanelState extends State<TripExecutionPanel>{
        Text('Thu tiền · ${stop['documentNo']}',style:Theme.of(sheetContext).textTheme.titleMedium),
        Text('Còn phải thu: ${stop['remaining']} đ'),
        const SizedBox(height:12),
-       TextFormField(controller:amount,keyboardType:TextInputType.number,
+       TextFormField(initialValue:amount,onChanged:(v)=>amount=v,
+        keyboardType:TextInputType.number,
         decoration:const InputDecoration(labelText:'Tiền thực nhận (0 = ghi nợ)',isDense:true)),
        const SizedBox(height:8),
        DropdownButtonFormField<String>(initialValue:method,
@@ -216,12 +211,11 @@ class _TripExecutionPanelState extends State<TripExecutionPanel>{
         ],onChanged:(v)=>refresh(()=>method=v??method)),
        const SizedBox(height:12),
        FilledButton(onPressed:()=>Navigator.of(sheetContext).pop({
-        'orderId':stop['orderId'],'amount':amount.text.trim(),'method':method}),
+        'orderId':stop['orderId'],'amount':amount.trim(),'method':method}),
         child:const Text('Ghi nhận thực thu')),
       ]))),
     ));
    if(payload!=null)await _write('collect',payload,stop['revision'] as int);
-  }finally{amount.dispose();}
  }
  Future<void> _handover()async{
   final collections=(execution?['collections'] as List?)??[];
