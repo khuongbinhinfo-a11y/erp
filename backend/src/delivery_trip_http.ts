@@ -35,8 +35,8 @@ function rec(v:unknown):Record<string,unknown>{
 function only(v:Record<string,unknown>,keys:string[]):void{
  if(Object.keys(v).some(k=>!keys.includes(k)))reject("UNEXPECTED_FIELD");
 }
-function ids(v:unknown):string[]{
- if(!Array.isArray(v)||!v.length||v.length>100)reject("INVALID_ORDER_SELECTION");
+function ids(v:unknown,limit=100):string[]{
+ if(!Array.isArray(v)||!v.length||v.length>limit)reject("INVALID_ORDER_SELECTION");
  const a=v.map(id);
  if(new Set(a).size!==a.length)reject("DUPLICATE_SELECTED_ORDER");
  return a;
@@ -165,8 +165,7 @@ export async function handleDeliveryTripHttp(req:IncomingMessage,res:ServerRespo
   let plannedDate:string|undefined,note:string|undefined;
   if(["assign","unassign","reorder"].includes(kind)){
    only(raw,["branchId","warehouseId","orderIds"]);
-   orderIds=ids(raw.orderIds);
-   if(kind==="reorder"&&orderIds.length>200)reject("TOO_MANY_STOPS");
+   orderIds=ids(raw.orderIds,kind==="reorder"?200:100);
   }else if(kind==="plan"){
    only(raw,["branchId","warehouseId","vehicleId","driverId","plannedDate","note"]);
    vehicleId=id(raw.vehicleId);driverId=id(raw.driverId);
