@@ -88,7 +88,7 @@ export async function createDirectoryWarehouse(pool:Pool,ctx:MutationContext){
    const warehouseId=created.rows[0]!.id;
    const assign=await db.query(`
      INSERT INTO user_role_warehouse(installation_id,user_id,role_id,branch_id,warehouse_id)
-     SELECT DISTINCT ur.installation_id,ur.user_id,ur.role_id,ur.branch_id,$4
+     SELECT DISTINCT ur.installation_id,ur.user_id,ur.role_id,ur.branch_id,$4::uuid
      FROM user_role ur JOIN role_permission rp
        ON rp.installation_id=ur.installation_id AND rp.role_id=ur.role_id
      WHERE ur.installation_id=$1 AND ur.branch_id=$2 AND ur.user_id=$3
